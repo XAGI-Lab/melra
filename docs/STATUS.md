@@ -11,14 +11,13 @@ Version: `0.3.0-alpha.8`
 - ✅ **Gate green**: `pnpm check`, `pnpm e2e`, `pnpm security:audit` all pass
 - ✅ **Install paths documented**: npm, container, release tarball, source
 - ✅ **Registry install verified end to end**: `npx @melra/cli@alpha doctor` passes every check on a clean npm cache, and the same path serves all 11 MCP tools over stdio
+- ✅ **Release artifacts published**: GitHub release v0.3.0-alpha.8 with 6 assets, container at `ghcr.io/xagi-lab/melra:alpha`, all 14 npm packages on the `alpha` and `latest` dist-tags with provenance attestation
 
-The most recent fully published release is `0.3.0-alpha.6`: all 14 npm packages
-on the `alpha` and `latest` dist-tags with provenance attestation, a GitHub
-release with 6 assets, and a container image. `0.3.0-alpha.7` published its
-container image only — its `artifacts` job failed on a stale `uv.lock` before
-reaching the registry, which is the defect `0.3.0-alpha.8` fixes. Treat the
-published-artifact rows above as pending until the `0.3.0-alpha.8` Release run
-reports green.
+`0.3.0-alpha.7` is the one gap in that history: its container image built, but
+the `artifacts` job failed on a stale `uv.lock` before reaching the registry, so
+no npm packages or GitHub release exist for that tag. `0.3.0-alpha.8` carries the
+fix, and `pnpm versions:check` now fails on the mismatch locally instead of
+leaving it for a tag push to discover.
 
 ## Requires Project Action
 

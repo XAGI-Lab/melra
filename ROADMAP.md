@@ -62,9 +62,26 @@ memory stay with the model and the harness above.
 - [x] Explicit episode-order expansion and query-aware speaker matching.
 - [x] Public LoCoMo objective-retrieval harness and result artifact.
 - [x] Configurable retention policies and automatic compaction.
-- [ ] Semantic embeddings and hybrid retrieval.
-- [ ] Freshness, conflict resolution, and consolidation.
-- [ ] Prompt-injection and memory-poisoning classifiers.
+
+Three items sat here for a while that the feature test disqualifies, and leaving
+them as promises was the wrong call:
+
+- **Semantic embeddings and hybrid retrieval.** Embedding search exists to serve
+  a model's fuzzy phrasing; deterministic software querying effect history asks
+  exact and structured questions. The kernel ships the retrieval a caller can
+  reason about without a model — lexical and phrase matching, freshness,
+  provenance confidence, and head diversity — and a harness that wants vectors
+  indexes what `memory search` and export already return.
+- **Conflict resolution and consolidation.** Deciding which of two contradictory
+  facts is true, or merging several into one, is judgement. The kernel gives the
+  caller the mechanism instead: supersession chains record that one memory
+  replaced another and every read path filters the superseded one out.
+- **Prompt-injection and memory-poisoning classifiers.** A classifier is a model,
+  and a probabilistic gate is the wrong shape for this boundary anyway. Poisoned
+  memory in MELRA still has to become an effect request that passes policy,
+  echoes an approval phrase, and satisfies declared evidence — none of which
+  cares where the idea came from. Classifying text is the harness's job; refusing
+  the effect is the kernel's.
 
 ### Developer experience and release
 
