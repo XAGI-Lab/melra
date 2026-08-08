@@ -30,9 +30,19 @@ host evidence and unverified claims are listed in [VALIDATION.md](VALIDATION.md)
 
 ## MCP and SDK compatibility
 
-The server exposes ten `melra_*` tools: six task/evidence tools and four
+The server exposes eleven `melra_*` tools: six task/evidence tools and five
 workflow tools. Unknown fields are rejected. The retired product prefix is not
 an alias.
+
+`MELRA_HARNESS_TOOLS=1` additionally exposes plain-vocabulary aliases
+(`write_file`, `approve`, and so on) for harnesses that expect ordinary tool
+names. They are a translation layer over the same pipeline, not a second path:
+a client that only knows the kernel vocabulary sees the same eleven tools it
+always did.
+
+`melra conformance` checks a live endpoint rather than a build and reports the
+level it earned; [CONFORMANCE.md](CONFORMANCE.md) defines the levels and their
+limits. An implementation claiming compatibility should publish that report.
 
 The normative automated clients are:
 
@@ -70,17 +80,20 @@ reproducible package artifact.
 ## Workflow compatibility and limits
 
 The implemented node types are operation, approval, condition, parallel,
-bounded loop, checkpoint, and compensation. Human-input and delegation nodes
-are future work.
+bounded loop, checkpoint, compensation, human input, and delegation. The last
+two block on a person or an outside worker; a delegation node's declared
+evidence still decides its outcome, so a delegate reporting "done" is not
+evidence.
 
 Current limits include 500 nodes per definition, 100 dependencies per node,
 100 loop iterations, 20 parallel branches, 50 requests per branch/body, and
 50 submitted approvals per advance.
 
-One server process may host multiple workflows. Multiple server processes must
-not share one `MELRA_HOME`; cross-process leases are not present in this alpha.
-Within one process, advances for the same workflow are serialized while
-declared parallel branches execute concurrently.
+One server process may host multiple workflows. Within one process, advances
+for the same workflow are serialized while declared parallel branches execute
+concurrently. Across processes the same job is done by an expiring SQLite
+lease taken before any adapter runs, so a second holder is refused with
+`workflow_lease_held` rather than duplicating an effect.
 
 ## Language interoperability
 

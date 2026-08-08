@@ -29,6 +29,7 @@
     "benchmark:browser:check": "uv run --project benchmarks/browser-agent --group test ruff check benchmarks/browser-agent && uv run --project benchmarks/browser-agent --group test pytest benchmarks/browser-agent",
     "benchmark:browser:verify-upstream": "uv run --project benchmarks/browser-agent melra-browser-bench verify-upstream",
     "evals": "pnpm --filter @melra/evals evaluate",
+    "conformance": "pnpm build && tsx apps/cli/src/index.ts conformance",
     "python:check": "uv run --project sdk-py ruff check sdk-py && uv run --project sdk-py pytest sdk-py",
     "python:audit": "node scripts/python-audit.mjs",
     "security:audit": "pnpm audit --prod --audit-level moderate && pnpm python:audit",

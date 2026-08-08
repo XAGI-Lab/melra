@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -173,6 +173,42 @@ describe("melra CLI", () => {
     ).toBe(true);
   });
 
+  it("earns level 3 against its own server, and level 1 without guardrails", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-cli-"));
+    roots.push(root);
+    const env = {
+      ...process.env,
+      MELRA_HOME: join(root, ".melra"),
+      MELRA_WORKSPACE: root,
+    };
+    const result = await execute(process.execPath, [entry, "conformance"], {
+      cwd: root,
+      env,
+    });
+    const report = JSON.parse(result.stdout) as {
+      level: number;
+      checks: Array<{ name: string; passed: boolean; detail: string }>;
+      uncleanedProbeFile?: string;
+    };
+    expect(report.checks.filter((check) => !check.passed)).toEqual([]);
+    expect(report.level).toBe(3);
+    // The suite writes a real file through the kernel, so it owes the workspace
+    // the same file back. A leftover probe is a bug in the suite, not a detail.
+    expect(report.uncleanedProbeFile).toBeUndefined();
+    expect(
+      (await readdir(root)).filter((name) => name.startsWith("melra-conformance-")),
+    ).toEqual([]);
+
+    // Unhinged is supposed to cost the governed levels and keep the typed one.
+    // If it ever reached L2 the flag would not be doing what it says.
+    const unhinged = await execute(
+      process.execPath,
+      [entry, "conformance", "--level", "1"],
+      { cwd: root, env: { ...env, MELRA_UNHINGED: "1" } },
+    );
+    expect(JSON.parse(unhinged.stdout).level).toBe(1);
+  });
+
   it("keeps Node's SQLite warning out of every invocation", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-cli-"));
     roots.push(root);
@@ -321,7 +357,8 @@ describe("melra CLI", () => {
     expect(JSON.parse(flagged.stdout).unhinged).toBe(true);
   });
 
-  it("initializes a safe local policy and client configuration", async () => {    const root = await mkdtemp(join(tmpdir(), "melra-cli-"));
+  it("initializes a safe local policy and client configuration", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-cli-"));
     roots.push(root);
     const home = join(root, ".melra");
     const result = await execute(

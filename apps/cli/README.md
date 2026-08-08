@@ -27,6 +27,11 @@ Individual steps are still available: `melra doctor` checks readiness and writes
 nothing, `melra init` writes the policy and config without checking. Run
 `melra help` for the full command list.
 
+`melra conformance` checks a running endpoint rather than a build — its own
+stdio server by default, or `--url` for a loopback HTTP one — and reports the
+level it earned: L1 typed effects, L2 governed effects, L3 verified effects.
+The report says what the level does not prove as plainly as what it does.
+
 The CLI starts with a local policy that allows reads outright and gates every
 mutation: a consequential operation requires declared evidence and an exact,
 task-scoped approval phrase before it runs.

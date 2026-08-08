@@ -304,8 +304,20 @@ but not in the shape the protocol should eventually name.
       that harness's process is gone, still refuses a wrong phrase, and is
       finished by the second on the first's terms; the third reads back the same
       receipt id and `VERIFIED_SUCCESS` certificate.
-- [ ] Compatibility suite a harness can run to demonstrate it does not bypass
+- [x] Compatibility suite a harness can run to demonstrate it does not bypass
       the kernel, and a published conformance level a runtime can claim.
+      `melra conformance` is a black-box client, not a build check: it connects
+      over stdio or loopback HTTP, drives one probe effect through the whole
+      pipeline, and reports the highest level with no failed check at or below
+      it — L1 typed effects, L2 governed effects, L3 verified effects, defined
+      in [docs/CONFORMANCE.md](docs/CONFORMANCE.md). It never touches the
+      endpoint's disk, so a remote endpoint can be checked the same way: the
+      probe is read back *through* the kernel. `--level` is how a runtime claims
+      one; exit is non-zero when the endpoint falls short. The report carries a
+      `notProven` list naming what a level does not establish, and the first
+      entry is the P2 bypass problem below — this suite can show that an
+      endpoint governs the effects it is asked for, and cannot show that the
+      harness has no second way to reach the same disk.
 
 ### P2 — hard capability boundary
 

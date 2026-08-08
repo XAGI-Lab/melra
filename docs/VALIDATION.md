@@ -152,6 +152,7 @@ corepack enable
 pnpm install --frozen-lockfile
 pnpm check
 pnpm evals
+pnpm conformance
 pnpm --filter @melra/evals evaluate:durable-core -- --publishable
 pnpm e2e
 pnpm pack:check
@@ -177,6 +178,22 @@ MELRA_COMMAND=/tmp/melra-check/node_modules/.bin/melra \
 Evaluation reports are generated under `evals/results/` and are intentionally
 ignored by Git because timestamps and local paths vary. Release evidence must
 be attached to the immutable release or workflow run.
+
+## Conformance level
+
+`melra conformance` reached **L3 verified effects** — 14 of 14 checks — against
+this build's own stdio server on macOS arm64, Node 24.10.0, with the probe file
+written, read back through the kernel, and cleaned up. With
+`MELRA_UNHINGED=1` the same endpoint reaches L1 and stops there, which is the
+intended cost of the flag rather than a regression. Both results are asserted in
+`apps/cli/test/cli.test.ts`, so they are re-checked on every CI platform rather
+than resting on this one observation.
+
+The level definitions, the check list, and — importantly — the `notProven`
+boundary are published in [CONFORMANCE.md](CONFORMANCE.md). A level says the
+endpoint governs the effects it is asked for. It does not say the harness on the
+other side lacks a second, ungoverned path to the same disk; that is the P2 gap
+listed under known limitations below.
 
 ## Security behavior covered
 

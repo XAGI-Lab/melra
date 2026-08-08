@@ -43,6 +43,7 @@ import {
   parseCliEnvironment,
   serverLaunch,
 } from "./environment.js";
+import { runConformance } from "./conformance.js";
 
 async function existingPolicyPath(env: CliEnvironment): Promise<string | undefined> {
   if (env.policyPath !== undefined) return env.policyPath;
@@ -650,6 +651,7 @@ function help(): void {
 Usage:
   melra setup [--client <claude|cursor|vscode|codex|generic>]
   melra doctor
+  melra conformance [--url <mcp-url> --token <token>] [--level <1|2|3>]
   melra init --client <claude|cursor|vscode|codex|generic>
   melra serve [--http] [--port <port>] [--open]
   melra run --request <task.json>
@@ -673,6 +675,9 @@ Flags:
                    Prints a bearer token; every request must carry it.
   --port <port>    HTTP port (default: 7457, or MELRA_HTTP_PORT).
   --open           Open the console in your browser once it is listening.
+  --url <mcp-url>  Endpoint for 'conformance'. Default: spawn 'melra serve'.
+  --level <1|2|3>  Conformance level being claimed (default: 3). The run exits
+                   non-zero if the endpoint falls short of it.
 
 Environment:
   MELRA_WORKSPACE  Workspace boundary (default: current directory)
@@ -711,6 +716,23 @@ async function main(): Promise<void> {
     case "doctor": {
       rejectUnknownFlags(args, []);
       const { report, failed } = await doctor(env);
+      output(report);
+      process.exitCode = failed ? 1 : 0;
+      return;
+    }
+    case "conformance": {
+      rejectUnknownFlags(args, ["--url", "--token", "--level"]);
+      const level = argument("--level", args);
+      if (level !== undefined && !["1", "2", "3"].includes(level)) {
+        throw new Error("--level must be 1, 2, or 3");
+      }
+      const url = argument("--url", args);
+      const token = argument("--token", args);
+      const { report, failed } = await runConformance({
+        ...(url === undefined ? {} : { url }),
+        ...(token === undefined ? {} : { token }),
+        ...(level === undefined ? {} : { claim: Number(level) }),
+      });
       output(report);
       process.exitCode = failed ? 1 : 0;
       return;

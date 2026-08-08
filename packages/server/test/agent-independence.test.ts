@@ -191,9 +191,8 @@ describe("one kernel underneath two harnesses", () => {
     );
     expect(stored.policyDecision.effect).toBe(viaKernel.policyDecision.effect);
     expect(stored.policyDecision.risk).toBe(viaKernel.policyDecision.risk);
-    expect(stored.policyDecision.decision).toBe(
-      viaKernel.policyDecision.decision,
-    );
+    expect(stored.policyDecision.outcome).toBe(viaKernel.policyDecision.outcome);
+    expect(stored.policyDecision.outcome).toBe("confirm");
     // Two plans of the same effect are two tasks. The kernel does not merge
     // them, and neither approval can run the other.
     expect(stored.id).not.toBe(viaKernel.id);

@@ -427,6 +427,7 @@ pnpm melra setup
 <tr><td>See which clients you approved over HTTP</td><td><code>melra clients</code></td></tr>
 <tr><td>Advance a durable workflow</td><td><code>melra workflow advance &lt;workflow-id&gt;</code></td></tr>
 <tr><td>Test a policy file</td><td><code>melra policy test</code></td></tr>
+<tr><td>Check an endpoint's conformance level</td><td><code>melra conformance</code></td></tr>
 </table>
 
 Mutations pause for an exact, expiring, task-scoped approval phrase. See
@@ -755,6 +756,7 @@ examples/                   runnable task examples
 | 📦 [Installation & client setup](docs/INSTALLATION.md) | 🧭 [Capabilities & limits](docs/CAPABILITIES.md) | 🏛️ [Architecture](docs/ARCHITECTURE.md) |
 | 🔬 [Research & benchmarks](docs/research/README.md) | 🔗 [Compatibility policy](docs/COMPATIBILITY.md) | ✅ [Validation evidence](docs/VALIDATION.md) |
 | 🛡️ [Threat model](docs/THREAT_MODEL.md) | 🗺️ [Roadmap](ROADMAP.md) | 📝 [Changelog](CHANGELOG.md) |
+| 🎖️ [Conformance levels](docs/CONFORMANCE.md) | | |
 
 ---
 

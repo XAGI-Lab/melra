@@ -52,6 +52,9 @@ importers:
       '@melra/storage-sqlite':
         specifier: workspace:*
         version: link:../../packages/storage-sqlite
+      '@modelcontextprotocol/sdk':
+        specifier: 1.30.0
+        version: 1.30.0(zod@4.4.3)
 
   evals:
     dependencies:

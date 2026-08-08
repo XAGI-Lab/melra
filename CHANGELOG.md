@@ -32,6 +32,22 @@ All notable changes are documented here. The format follows
   certificate. Policy, durable state, approvals and receipts belong to the
   kernel, not to whichever client opened the session.
 
+- **`melra conformance`, and published conformance levels.** A runtime that
+  speaks these tools is asking to be trusted with real effects, and having the
+  right tool names is not that claim. The new command is a black-box client: it
+  connects over stdio or loopback HTTP (`--url`, `--token`), drives one probe
+  effect through the whole pipeline, and reports the highest level it earned —
+  L1 typed effects, L2 governed effects, L3 verified effects, defined in
+  [docs/CONFORMANCE.md](docs/CONFORMANCE.md). Fourteen checks, including that
+  two refused executions leave no file behind and that an approved mutation is
+  only `verified_success` with passing evidence. It never reads the endpoint's
+  disk — the probe is read back through the kernel — so a remote endpoint is
+  checked the same way as a local one. `--level` is how a runtime claims a
+  level: the exit code is non-zero when the endpoint falls short. Every report
+  carries a `notProven` list naming what the level does not establish, starting
+  with the bypass problem the suite cannot see from outside. `pnpm conformance`
+  runs it from source.
+
 ## [0.3.0-alpha.9] - 2026-08-09
 
 ### Added
