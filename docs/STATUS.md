@@ -11,8 +11,8 @@ Version: `0.3.0-alpha.10`
 - ✅ **Gate green**: `pnpm check`, `pnpm e2e`, `pnpm security:audit` all pass
 - ✅ **Conformance L3 verified effects**: `melra conformance` reports 14/14 checks against this build's own stdio server, and L1 under `MELRA_UNHINGED=1` — both asserted in CI. Levels and their limits: [CONFORMANCE.md](CONFORMANCE.md)
 - ✅ **Install paths documented**: npm, container, release tarball, source
-- ✅ **Registry install verified end to end**: `npx @melra/cli@alpha doctor` passes every check on a clean npm cache, and the same path serves all 11 MCP tools over stdio
-- ✅ **Release artifacts published**: GitHub release v0.3.0-alpha.9 with 6 assets, container at `ghcr.io/xagi-lab/melra:alpha`, all 14 npm packages on the `alpha` and `latest` dist-tags with provenance attestation. `0.3.0-alpha.10` is tagged; this line moves once its release run is green.
+- ✅ **Registry install verified end to end**: the `installed` job on ubuntu, macOS and Windows installs the just-published `@melra/cli` from npm, passes `melra doctor`, and drives a real stdio session to `verified_success`; `npx -y @melra/cli@alpha conformance` in an empty directory earns level 3 (14/14)
+- ✅ **Release artifacts published**: GitHub release v0.3.0-alpha.10 with 6 assets, container at `ghcr.io/xagi-lab/melra:alpha` and `:v0.3.0-alpha.10` (linux/amd64 + linux/arm64), all 14 npm packages on the `alpha` and `latest` dist-tags with provenance attestation
 
 `0.3.0-alpha.7` is the one gap in that history: its container image built, but
 the `artifacts` job failed on a stale `uv.lock` before reaching the registry, so

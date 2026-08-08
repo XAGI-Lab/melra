@@ -189,6 +189,11 @@ intended cost of the flag rather than a regression. Both results are asserted in
 `apps/cli/test/cli.test.ts`, so they are re-checked on every CI platform rather
 than resting on this one observation.
 
+The published package earns the same level: `npx -y @melra/cli@alpha
+conformance` in an empty directory reported level 3, 14 of 14, exit 0, no
+leftover probe file — so L3 is a property of the tarball an end user installs,
+not only of a source checkout.
+
 The level definitions, the check list, and — importantly — the `notProven`
 boundary are published in [CONFORMANCE.md](CONFORMANCE.md). A level says the
 endpoint governs the effects it is asked for. It does not say the harness on the
@@ -292,6 +297,17 @@ exercised in the then-current versions of:
 - VS Code’s MCP support;
 - at least one additional independent MCP inspector or client.
 
+The two HTML surfaces — the console at `/` and the OAuth consent page at
+`/oauth/authorize` — are covered at the HTTP level against a live `melra serve
+--http`: the console is served with its posture line, workflow list and
+`EventSource` tail; the consent page names the client, its id, redirect and
+registration time, carries `client_id`, `redirect_uri`, `state` and
+`code_challenge` through to the POST, escapes a hostile client name
+(`<img src=x onerror=…>` arrives as text, not markup), and its deny button
+returns `302` to the client's redirect with `error=access_denied`. **Neither
+page has been rendered in a real browser here**, so layout, focus order and
+contrast are unverified; that stays part of the manual gate above.
+
 The released artifact itself is now covered on all three supported platforms.
 Every tag runs an `installed` job on `ubuntu-latest`, `macos-latest`, and
 `windows-latest` after publishing: each runner checks out nothing but
@@ -303,9 +319,11 @@ digest. It asserts the reported version against the tag, so a cached older build
 cannot pass for the new one. That is evidence about the tarball an end user
 installs, which is a different claim from CI building the source tree.
 
-The same script run against `@melra/cli@0.3.0-alpha.9` pulled from the registry
-on macOS arm64 (Node.js 24.10.0) reported `version 0.3.0-alpha.9`, 11 tools,
-`verified_success`, and `VERIFIED_SUCCESS`.
+On `v0.3.0-alpha.10` that job passed on all three runners against the package as
+published: `version 0.3.0-alpha.10`, 11 tools, `verified_success`,
+`VERIFIED_SUCCESS`, digest
+`83e1103f1de5029ac34c2e9a5c785546d1e35d225ecfff1a6f07971586643c6b`
+(macos-latest; run 31278184093).
 
 Before `1.0`, an independent security review must resolve all critical
 findings.
