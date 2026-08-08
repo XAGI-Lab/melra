@@ -268,9 +268,12 @@ findings.
 
 ## Known alpha limitations
 
-- Stdio and loopback HTTP are the transports. The HTTP surface is guarded by a
-  bearer token, not by OAuth or per-client identity; treat the token as equal to
-  shell access on the host.
+- Stdio and loopback HTTP are the transports. The HTTP surface takes the
+  operator's bearer token, or a token an OAuth 2.1 client got after a person
+  approved it in a browser; treat the operator's token as equal to shell access
+  on the host. An approved client is named on every receipt it produces, which
+  makes an effect history attributable — it does not make one client's authority
+  narrower than another's.
 - One task contains one typed operation; workflows are the bounded composition
   layer.
 - Only filesystem predicates can currently reconcile an interrupted mutation

@@ -71,7 +71,7 @@ shouldn't have to.**
 > end, but APIs may change before `1.0`. Use an isolated workspace, keep domain
 > and command allowlists narrow, and review every consequential approval.
 
-### Durable Core Alpha — `0.3.0-alpha.8`
+### Durable Core Alpha — `0.3.0-alpha.9`
 
 | Shipped in this source release | Evidence |
 |---|---|

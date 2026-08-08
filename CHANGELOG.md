@@ -6,6 +6,8 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0-alpha.9] - 2026-08-09
+
 ### Added
 
 - **`melra serve --http --open`.** Opens the console once the server is
@@ -887,7 +889,10 @@ All notable changes are documented here. The format follows
 - Cross-scope memory overwrite and deletion protection.
 - Patched transitive HTTP adapter enforced through a package override.
 
-[Unreleased]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.6...HEAD
+[Unreleased]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.9...HEAD
+[0.3.0-alpha.9]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.8...v0.3.0-alpha.9
+[0.3.0-alpha.8]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.7...v0.3.0-alpha.8
+[0.3.0-alpha.7]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.6...v0.3.0-alpha.7
 [0.3.0-alpha.6]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.5...v0.3.0-alpha.6
 [0.3.0-alpha.5]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.4...v0.3.0-alpha.5
 [0.3.0-alpha.4]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.3...v0.3.0-alpha.4

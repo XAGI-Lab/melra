@@ -1,6 +1,6 @@
 {
   "name": "@melra/storage-sqlite",
-  "version": "0.3.0-alpha.8",
+  "version": "0.3.0-alpha.9",
   "description": "Transactional SQLite task, workflow, event, payload, and evidence storage for MELRA.",
   "license": "Apache-2.0",
   "repository": {

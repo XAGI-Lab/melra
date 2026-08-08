@@ -1,6 +1,6 @@
 {
   "name": "@melra/protocol",
-  "version": "0.3.0-alpha.8",
+  "version": "0.3.0-alpha.9",
   "description": "Versioned task, workflow, capability, policy, and evidence contracts for MELRA.",
   "license": "Apache-2.0",
   "repository": {

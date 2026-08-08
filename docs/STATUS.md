@@ -1,21 +1,21 @@
 # Project Status
 
-Last updated: 2026-08-08
+Last updated: 2026-08-09
 
-Version: `0.3.0-alpha.8`
+Version: `0.3.0-alpha.9`
 
 ## Engineering Complete
 
-- ✅ **All 313 tests passing** (311 Vitest, 2 Python pytest)
+- ✅ **All 333 tests passing** (331 Vitest, 2 Python pytest)
 - ✅ **Versions consistent** across the root manifest, every `apps/*` and `packages/*` manifest, the protocol constant, sdk-py, and both uv locks (`pnpm versions:check`)
 - ✅ **Gate green**: `pnpm check`, `pnpm e2e`, `pnpm security:audit` all pass
 - ✅ **Install paths documented**: npm, container, release tarball, source
 - ✅ **Registry install verified end to end**: `npx @melra/cli@alpha doctor` passes every check on a clean npm cache, and the same path serves all 11 MCP tools over stdio
-- ✅ **Release artifacts published**: GitHub release v0.3.0-alpha.8 with 6 assets, container at `ghcr.io/xagi-lab/melra:alpha`, all 14 npm packages on the `alpha` and `latest` dist-tags with provenance attestation
+- ✅ **Release artifacts published**: GitHub release v0.3.0-alpha.9 with 6 assets, container at `ghcr.io/xagi-lab/melra:alpha`, all 14 npm packages on the `alpha` and `latest` dist-tags with provenance attestation
 
 `0.3.0-alpha.7` is the one gap in that history: its container image built, but
 the `artifacts` job failed on a stale `uv.lock` before reaching the registry, so
-no npm packages or GitHub release exist for that tag. `0.3.0-alpha.8` carries the
+no npm packages or GitHub release exist for that tag. `0.3.0-alpha.8` carried the
 fix, and `pnpm versions:check` now fails on the mismatch locally instead of
 leaving it for a tag push to discover.
 
@@ -32,22 +32,23 @@ leaving it for a tag push to discover.
 
 **Current state:** Automated compatibility claim is official MCP SDK over stdio (TypeScript + Python). Named graphical clients remain release-gated until manually exercised.
 
-**Action:** Install `npx @melra/cli@alpha` or download the `v0.3.0-alpha.8` release artifact, configure each client per docs/INSTALLATION.md, verify discovery/plan/execute/receipt cycle.
+**Action:** Install `npx @melra/cli@alpha` or download the `v0.3.0-alpha.9` release artifact, configure each client per docs/INSTALLATION.md, verify discovery/plan/execute/receipt cycle.
 
 ### Independent Security Review
 
 **From VALIDATION.md:**
 > Before `1.0`, a clean released artifact must pass on supported Linux, macOS, and Windows machines, and an independent security review must resolve all critical findings.
 
-**Current state:** Threat model reviewed for 0.3.0-alpha.8, no independent audit yet.
+**Current state:** Threat model reviewed for 0.3.0-alpha.9, no independent audit yet.
 
 **Action:** Engage external security reviewer when approaching beta/1.0.
 
 ## Known Alpha Scope Limits
 
 Documented in docs/VALIDATION.md "Known alpha limitations":
-- Stdio and loopback HTTP transports; the HTTP surface is token-guarded, not
-  OAuth, and carries no per-client identity
+- Stdio and loopback HTTP transports. The HTTP surface takes the operator's
+  token, or an OAuth 2.1 client a person approved in a browser; it is not
+  reachable off loopback and is not multi-tenant
 - Browser sessions thrown away per run unless `MELRA_BROWSER_PROFILE` names a
   directory to keep
 - Computer OCR/visual targeting roadmap; element targeting works on macOS and

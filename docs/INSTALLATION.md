@@ -49,7 +49,7 @@ npx @melra/cli@alpha setup
 ```
 
 `@alpha` is the dist-tag for the current alpha. Drop it once a stable release
-exists, or pin an exact version such as `@melra/cli@0.3.0-alpha.8`. To keep a
+exists, or pin an exact version such as `@melra/cli@0.3.0-alpha.9`. To keep a
 resolved copy on the machine instead of resolving on every run:
 
 ```bash
@@ -72,7 +72,7 @@ docker run --rm ghcr.io/xagi-lab/melra:alpha doctor
 
 Images are published for `linux/amd64` and `linux/arm64` with build
 provenance and an SBOM attested to the registry. Use `:alpha` for the latest
-alpha or pin an exact tag such as `:v0.3.0-alpha.8`. See
+alpha or pin an exact tag such as `:v0.3.0-alpha.9`. See
 [Docker](#docker) below for the hardened `serve` invocation an MCP client
 should use.
 

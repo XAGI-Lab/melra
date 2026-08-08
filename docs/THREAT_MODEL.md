@@ -1,6 +1,6 @@
 # Threat model
 
-Status: reviewed for `0.3.0-alpha.8`; independent review pending.
+Status: reviewed for `0.3.0-alpha.9`; independent review pending.
 
 ## Assets
 
@@ -54,6 +54,9 @@ process running unhinged. See
 | Secret persistence | executable payload encryption plus redacted projections, events, receipts, and logs | novel secret formats may not match redaction patterns; key loss is unrecoverable |
 | Memory poisoning | explicit mutation approval, scopes, provenance | content-level poisoning classifier is not implemented |
 | Receipt tampering | canonical digests and task-linked certificate | receipts and projections are not encrypted or externally signed |
+| A local process taking the HTTP surface | bearer token compared in constant time, loopback binding, read-only JSON API | anything running as the same OS user can read the token from the process that holds it |
+| A client granting itself HTTP access | registration grants nothing; a person approves in a browser, PKCE S256 binds the code, loopback-or-private redirect URIs keep the code on the machine, codes are single-use | approval is a human judgement about a name the client chose for itself |
+| An approved client acting as another | the issued token names one client, and an MCP session id is bound to the caller that opened it | every principal a request declares beneath the authenticated one is still a claim |
 | Payload substitution | AES-256-GCM with identity/purpose-bound additional data | host compromise can read the key and database |
 | Dependency compromise | lockfiles, dependency review, CodeQL, SBOM | upstream compromise before detection remains possible |
 | Release substitution | checksums and signed GitHub/Sigstore provenance | trust still depends on GitHub identity and workflow protection |

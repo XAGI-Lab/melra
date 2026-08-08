@@ -1,6 +1,6 @@
 {
   "name": "@melra/cli",
-  "version": "0.3.0-alpha.8",
+  "version": "0.3.0-alpha.9",
   "description": "MELRA autonomy kernel and command-line interface.",
   "license": "Apache-2.0",
   "repository": {

@@ -1,6 +1,6 @@
 {
   "name": "@melra/receipt-schema",
-  "version": "0.3.0-alpha.8",
+  "version": "0.3.0-alpha.9",
   "description": "Canonical receipts, redaction, and execution certificates for MELRA.",
   "license": "Apache-2.0",
   "repository": {

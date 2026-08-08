@@ -1,6 +1,6 @@
 # Capabilities and limits
 
-This document describes `0.3.0-alpha.8`.
+This document describes `0.3.0-alpha.9`.
 
 ## MCP tools
 

@@ -1,6 +1,6 @@
 {
   "name": "@melra/memory",
-  "version": "0.3.0-alpha.8",
+  "version": "0.3.0-alpha.9",
   "description": "Scoped and redacted operational memory for the MELRA kernel.",
   "license": "Apache-2.0",
   "repository": {

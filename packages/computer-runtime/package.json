@@ -1,6 +1,6 @@
 {
   "name": "@melra/computer-runtime",
-  "version": "0.3.0-alpha.8",
+  "version": "0.3.0-alpha.9",
   "description": "Computer-use reference effect adapter for the MELRA kernel.",
   "license": "Apache-2.0",
   "repository": {
