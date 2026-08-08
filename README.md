@@ -26,7 +26,7 @@ shouldn't have to.**
 
 <!-- Evidence -->
 <img src="https://img.shields.io/badge/evals-42_scenarios_passing-22c55e?style=flat-square&logo=checkmarx&logoColor=white" alt="42 deterministic evaluation scenarios passing" />
-<img src="https://img.shields.io/badge/tests-331_passing-22c55e?style=flat-square&logo=vitest&logoColor=white" alt="331 JavaScript tests passing" />
+<img src="https://img.shields.io/badge/tests-336_passing-22c55e?style=flat-square&logo=vitest&logoColor=white" alt="336 JavaScript tests passing" />
 <img src="https://img.shields.io/badge/MCP_E2E-13_passing-22c55e?style=flat-square&logo=testcafe&logoColor=white" alt="13 real MCP end-to-end cases passing" />
 <img src="https://img.shields.io/badge/runtime_vulnerabilities-0_known-22c55e?style=flat-square&logo=snyk&logoColor=white" alt="No known production runtime vulnerabilities" />
 
@@ -71,7 +71,7 @@ shouldn't have to.**
 > end, but APIs may change before `1.0`. Use an isolated workspace, keep domain
 > and command allowlists narrow, and review every consequential approval.
 
-### Durable Core Alpha — `0.3.0-alpha.9`
+### Durable Core Alpha — `0.3.0-alpha.10`
 
 | Shipped in this source release | Evidence |
 |---|---|

@@ -573,7 +573,7 @@ wheels = [
 
 [[package]]
 name = "melra"
-version = "0.3.0a9"
+version = "0.3.0a10"
 source = { directory = "../../sdk-py" }
 dependencies = [
     { name = "mcp" },

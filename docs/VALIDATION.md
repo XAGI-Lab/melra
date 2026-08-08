@@ -169,9 +169,9 @@ To exercise a published build the way an end user gets it, install it and point
 the smoke at the installed binary rather than a source build:
 
 ```bash
-npm install --prefix /tmp/melra-check @melra/cli@0.3.0-alpha.9
+npm install --prefix /tmp/melra-check @melra/cli@0.3.0-alpha.10
 MELRA_COMMAND=/tmp/melra-check/node_modules/.bin/melra \
-  MELRA_EXPECTED_VERSION=0.3.0-alpha.9 \
+  MELRA_EXPECTED_VERSION=0.3.0-alpha.10 \
   pnpm registry:smoke
 ```
 
