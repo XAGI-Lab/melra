@@ -246,10 +246,10 @@ but not in the shape the protocol should eventually name.
 | Verification framework | partial | Execution and state levels ship; independent and semantic do not ([P3](#p3--verification-framework)) |
 | Evidence system | ✓ | Redacted receipts and SHA-256 certificates |
 | Effect adapters | partial | Files, terminal, browser, computer; HTTP, database, cloud, SaaS pending ([P4](#p4--credentials-and-api-effects)) |
-| Harness adapters | partial | Ordinary tool names over the same pipeline (`MELRA_HARNESS_TOOLS=1`); reference integrations pending ([P1](#p1--prove-agent-independence)) |
+| Harness adapters | ✓ | Ordinary tool names over the same pipeline (`MELRA_HARNESS_TOOLS=1`), proven against three mismatched clients on one data directory |
 | Sandbox and boundary | ✗ | Developer mode only ([P2](#p2--hard-capability-boundary)) |
 | Workflow engine | ✓ | Nine node types, events, projections, leases |
-| Compatibility suite | ✗ | [P1](#p1--prove-agent-independence) |
+| Compatibility suite | ✓ | `melra conformance`, levels published in [docs/CONFORMANCE.md](docs/CONFORMANCE.md) |
 
 ### P0 — define the category
 
