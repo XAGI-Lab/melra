@@ -8,6 +8,12 @@ All notable changes are documented here. The format follows
 
 ### Added
 
+- **`melra serve --http --open`.** Opens the console once the server is
+  listening, so the URL that carries the token does not have to be copied out of
+  a terminal. It fails silently if the machine has no way to open a link — the
+  URL is already on screen, and a server that refused to start over a missing
+  desktop helper would be worse than one you click into.
+
 - **A client can let itself in, and then its name is on every receipt.**
   `melra serve --http` now speaks OAuth 2.1 — RFC 7591 dynamic registration,
   RFC 8414 and RFC 9728 discovery, authorization code with PKCE S256 — so an

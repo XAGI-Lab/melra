@@ -170,7 +170,16 @@ them as promises was the wrong call:
   boundary on the machine the browser is on — and `MELRA_HTTP_OAUTH=0` turns it
   off, leaving the operator's token as the only way in.
 - [x] Multi-client session isolation.
-- [ ] Optional desktop control surface.
+- [x] Optional desktop control surface — the console, and `melra serve --http
+  --open` to land in it without copying a token out of a terminal. A packaged
+  desktop binary was the shape originally imagined here and it buys almost
+  nothing over that: the console is deliberately read-only, so a desktop app
+  would be a viewer with an installer, a signing pipeline, and a per-platform
+  release matrix behind it. The one thing it could add that a tab cannot is an
+  operating-system notification when something is waiting on a person — which
+  is worth building when approvals are answerable from an operator surface at
+  all, and today they are answerable only where policy can see them, on the MCP
+  and CLI paths.
 
 ## v0.3 — Durable Core Alpha
 

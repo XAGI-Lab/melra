@@ -420,7 +420,7 @@ pnpm melra setup
 <tr><th>Goal</th><th>Command</th></tr>
 <tr><td>Set up policy, client config, and readiness at once</td><td><code>melra setup</code></td></tr>
 <tr><td>Start the stdio server</td><td><code>melra serve</code></td></tr>
-<tr><td>Start the HTTP server and console</td><td><code>melra serve --http</code></td></tr>
+<tr><td>Start the HTTP server and console</td><td><code>melra serve --http --open</code></td></tr>
 <tr><td>Run a read-only system task</td><td><code>melra run --request examples/01-system-info/task.json</code></td></tr>
 <tr><td>Run a verified mutation</td><td><code>melra run --request examples/02-verified-file-write/task.json</code></td></tr>
 <tr><td>Inspect a stored receipt</td><td><code>melra inspect &lt;task-id&gt;</code></td></tr>

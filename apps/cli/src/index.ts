@@ -4,6 +4,7 @@
 
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
+import { spawn } from "node:child_process";
 import { basename, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { DatabaseSync } from "node:sqlite";
@@ -620,6 +621,29 @@ function clientsCommand(args: string[], env: CliEnvironment): number {
   return 0;
 }
 
+/**
+ * Hands the console URL to whatever opens links here.
+ *
+ * The URL carries the token, so this is the difference between copying a secret
+ * out of a terminal and the console simply being open. Failure is silent on
+ * purpose: the URL is already on screen, and a server that refused to start
+ * because a desktop helper is missing would be worse than one you click into.
+ */
+function openInBrowser(url: string): void {
+  const [command, ...prefix] =
+    process.platform === "darwin"
+      ? ["open"]
+      : process.platform === "win32"
+        ? ["cmd", "/c", "start", ""]
+        : ["xdg-open"];
+  const child = spawn(command!, [...prefix, url], {
+    stdio: "ignore",
+    detached: true,
+  });
+  child.on("error", () => {});
+  child.unref();
+}
+
 function help(): void {
   process.stdout.write(`MELRA ${PRODUCT_VERSION}
 
@@ -627,7 +651,7 @@ Usage:
   melra setup [--client <claude|cursor|vscode|codex|generic>]
   melra doctor
   melra init --client <claude|cursor|vscode|codex|generic>
-  melra serve [--http] [--port <port>]
+  melra serve [--http] [--port <port>] [--open]
   melra run --request <task.json>
   melra inspect <task-id>
   melra workflow plan --definition <workflow.json>
@@ -648,6 +672,7 @@ Flags:
                    read-only REST API, a workflow event stream, and the console.
                    Prints a bearer token; every request must carry it.
   --port <port>    HTTP port (default: 7457, or MELRA_HTTP_PORT).
+  --open           Open the console in your browser once it is listening.
 
 Environment:
   MELRA_WORKSPACE  Workspace boundary (default: current directory)
@@ -699,7 +724,7 @@ async function main(): Promise<void> {
       process.exitCode = await setup(args, env);
       return;
     case "serve": {
-      rejectUnknownFlags(args, ["--http", "--port"]);
+      rejectUnknownFlags(args, ["--http", "--port", "--open"]);
       const melra = await runtime(env);
       const http = args.includes("--http");
       const port = argument("--port", args);
@@ -727,6 +752,7 @@ async function main(): Promise<void> {
               : `OAuth is off, so the token above is the only way in.\n`) +
             `Loopback only. Anyone who can read this token can drive this machine.\n`,
         );
+        if (args.includes("--open")) openInBrowser(endpoint.url);
       }
       const close = async () => {
         await server?.close();

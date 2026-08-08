@@ -312,6 +312,7 @@ browser console:
 
 ```bash
 melra serve --http            # or --port 8080, or MELRA_HTTP_PORT=8080
+melra serve --http --open     # and open the console once it is listening
 ```
 
 Startup prints, to stderr, the console URL with the token already in it, the MCP
