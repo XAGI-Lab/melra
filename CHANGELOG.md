@@ -6,6 +6,13 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- A mistyped command now says where the answer is
+  (`unknown command: docter. Run 'melra --help' for the command list.`) instead
+  of naming the mistake and stopping. `melra init`'s usage line also matches its
+  behaviour: `--client` is optional and defaults to `generic`.
+
 ## [0.3.0-alpha.10] - 2026-08-09
 
 ### Added

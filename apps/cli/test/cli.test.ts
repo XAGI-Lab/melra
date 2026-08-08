@@ -327,6 +327,15 @@ describe("melra CLI", () => {
     ).rejects.toMatchObject({
       stderr: expect.not.stringContaining("unknown flag"),
     });
+
+    // A mistyped command is the same mistake one level up, so it gets the same
+    // treatment: name it, and say where the answer is.
+    await expect(
+      execute(process.execPath, [entry, "docter"], options),
+    ).rejects.toMatchObject({
+      code: 1,
+      stderr: expect.stringContaining("unknown command: docter. Run 'melra --help'"),
+    });
   });
 
   it("cannot run unhinged without saying so", async () => {

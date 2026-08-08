@@ -652,7 +652,7 @@ Usage:
   melra setup [--client <claude|cursor|vscode|codex|generic>]
   melra doctor
   melra conformance [--url <mcp-url> --token <token>] [--level <1|2|3>]
-  melra init --client <claude|cursor|vscode|codex|generic>
+  melra init [--client <claude|cursor|vscode|codex|generic>]
   melra serve [--http] [--port <port>] [--open]
   melra run --request <task.json>
   melra inspect <task-id>
@@ -825,7 +825,11 @@ async function main(): Promise<void> {
       help();
       return;
     default:
-      throw new Error(`unknown command: ${basename(command)}`);
+      // No inline command list: the switch above is the only truth about what
+      // exists, and a second copy here would rot the first time one is added.
+      throw new Error(
+        `unknown command: ${basename(command)}. Run 'melra --help' for the command list.`,
+      );
   }
 }
 
