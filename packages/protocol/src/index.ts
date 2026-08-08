@@ -360,6 +360,27 @@ export function principalRef(principal: Principal): string {
   return `${principal.kind}:${principal.id}`;
 }
 
+/**
+ * Records a caller the transport authenticated above whatever the request
+ * declared.
+ *
+ * The authenticated link sits at the outermost end, because anything the
+ * client names — a session, a subagent — is inside it and never above it. A
+ * request that declared nothing is simply that client acting for itself. This
+ * is the one link in a chain that is not a claim; the rest still are, so a
+ * capability grant matching the immediate principal is a narrowing control
+ * rather than an authentication boundary.
+ */
+export function attributeTo(
+  principal: Principal,
+  identity?: Identity,
+): Identity {
+  if (identity === undefined) return { principal, onBehalfOf: [] };
+  const onBehalfOf = [principal, ...identity.onBehalfOf];
+  if (onBehalfOf.length > 7) throw new Error("identity_chain_too_deep");
+  return { principal: identity.principal, onBehalfOf };
+}
+
 /** The delegation chain as one line, outermost first. */
 export function delegationChain(identity: Identity): string {
   return [...identity.onBehalfOf, identity.principal]

@@ -10,9 +10,12 @@ import {
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import type { Principal } from "@melra/protocol";
+import { principalRef } from "@melra/protocol";
 import { capabilitiesPayload, createMcpServer } from "./mcp-server.js";
 import type { MelraRuntime } from "./runtime.js";
 import { consolePage } from "./console-page.js";
+import { clientPrincipal, OAuthProvider } from "./oauth.js";
 
 export const DEFAULT_HTTP_PORT = 7457;
 
@@ -34,6 +37,12 @@ export interface MelraHttpServer {
   token: string;
   host: string;
   port: number;
+  /**
+   * Whether a client can authenticate itself instead of being handed the
+   * token. Off when the server is bound somewhere a browser approval would not
+   * mean anything, or when `MELRA_HTTP_OAUTH=0`.
+   */
+  oauth: boolean;
   close(): Promise<void>;
 }
 
@@ -41,14 +50,25 @@ function json(
   response: ServerResponse,
   status: number,
   body: unknown,
+  headers: Record<string, string> = {},
 ): void {
   const text = JSON.stringify(body, null, 2);
   response.writeHead(status, {
     "content-type": "application/json",
     "cache-control": "no-store",
     "content-length": Buffer.byteLength(text),
+    ...headers,
   });
   response.end(text);
+}
+
+function html(response: ServerResponse, status: number, page: string): void {
+  response.writeHead(status, {
+    "content-type": "text/html; charset=utf-8",
+    "cache-control": "no-store",
+    "content-length": Buffer.byteLength(page),
+  });
+  response.end(page);
 }
 
 /**
@@ -77,6 +97,11 @@ function suppliedToken(
 }
 
 async function readBody(request: IncomingMessage): Promise<unknown> {
+  const text = await readText(request);
+  return text === "" ? undefined : JSON.parse(text);
+}
+
+async function readText(request: IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of request) {
@@ -87,8 +112,22 @@ async function readBody(request: IncomingMessage): Promise<unknown> {
     if (size > 4_000_000) throw new Error("request_body_too_large");
     chunks.push(buffer);
   }
-  if (size === 0) return undefined;
-  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+/** How a session records who opened it; the operator's token has no name. */
+function callerRef(client: Principal | undefined): string {
+  return client === undefined ? "operator" : principalRef(client);
+}
+
+/** Loopback is where "approve this in your browser" means anything. */
+function isLoopback(host: string): boolean {
+  return (
+    host === "127.0.0.1" ||
+    host === "::1" ||
+    host === "localhost" ||
+    host.startsWith("127.")
+  );
 }
 
 export async function serveHttp(
@@ -108,8 +147,22 @@ export async function serveHttp(
     options.token ??
     environment.MELRA_HTTP_TOKEN?.trim() ??
     randomUUID().replaceAll("-", "");
-  const sessions = new Map<string, StreamableHTTPServerTransport>();
+  const sessions = new Map<
+    string,
+    { transport: StreamableHTTPServerTransport; client: string }
+  >();
   const runtime = options.runtime;
+  // A browser approval is only a boundary on the machine the browser is on. A
+  // server deliberately bound to a wider interface keeps the shared token and
+  // nothing else, rather than offering the internet a registration endpoint.
+  const oauthEnabled =
+    isLoopback(host) && environment.MELRA_HTTP_OAUTH?.trim() !== "0";
+  const oauth = oauthEnabled
+    ? new OAuthProvider(runtime.dataDirectory)
+    : undefined;
+  // The bound port is only known after `listen`, and metadata that names the
+  // wrong port sends a client to a door that is not there.
+  let origin = `http://${host}:${port}`;
 
   const server = createServer((request, response) => {
     void handle(request, response).catch((error: unknown) => {
@@ -126,31 +179,134 @@ export async function serveHttp(
     request: IncomingMessage,
     response: ServerResponse,
   ): Promise<void> {
-    const url = new URL(request.url ?? "/", `http://${host}:${port}`);
-    if (!tokenMatches(token, suppliedToken(request, url))) {
-      json(response, 401, {
-        error: "unauthorized",
-        detail:
-          "Send the token printed at startup as `Authorization: Bearer <token>` or `?token=<token>`.",
-      });
+    const url = new URL(request.url ?? "/", origin);
+    if (await handleOAuth(request, response, url)) return;
+    const caller = authenticate(suppliedToken(request, url));
+    if (caller === undefined) {
+      json(
+        response,
+        401,
+        {
+          error: "unauthorized",
+          detail:
+            "Send the token printed at startup as `Authorization: Bearer <token>` or `?token=<token>`.",
+          ...(oauth === undefined
+            ? {}
+            : {
+                oauth: `${origin}/.well-known/oauth-protected-resource`,
+              }),
+        },
+        // What lets an MCP client discover the authorization server instead of
+        // simply reporting that it was refused.
+        oauth === undefined
+          ? {}
+          : {
+              "www-authenticate": `Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource"`,
+            },
+      );
       return;
     }
     if (url.pathname === "/mcp") {
-      await handleMcp(request, response);
+      await handleMcp(
+        request,
+        response,
+        caller === "operator" ? undefined : caller,
+      );
       return;
     }
     await handleApi(request, response, url);
   }
 
+  /**
+   * The operator's own token, or a client that completed the OAuth flow.
+   *
+   * The operator is `"operator"` rather than a principal because the token is
+   * the machine's key, not a name: attributing an effect to it would put a
+   * client name in a receipt that nobody registered.
+   */
+  function authenticate(
+    supplied: string | undefined,
+  ): Principal | "operator" | undefined {
+    if (tokenMatches(token, supplied)) return "operator";
+    if (supplied === undefined || oauth === undefined) return undefined;
+    const client = oauth.clientFor(supplied);
+    return client === undefined ? undefined : clientPrincipal(client);
+  }
+
+  /**
+   * The unauthenticated half of the surface: discovery, registration, consent
+   * and token exchange. Returns whether it took the request.
+   */
+  async function handleOAuth(
+    request: IncomingMessage,
+    response: ServerResponse,
+    url: URL,
+  ): Promise<boolean> {
+    if (oauth === undefined) return false;
+    const path = url.pathname.replace(/\/mcp$/, "");
+    const method = request.method ?? "GET";
+    try {
+      if (path === "/.well-known/oauth-protected-resource") {
+        json(response, 200, oauth.resourceMetadata(origin));
+        return true;
+      }
+      if (
+        path === "/.well-known/oauth-authorization-server" ||
+        path === "/.well-known/openid-configuration"
+      ) {
+        json(response, 200, oauth.metadata(origin));
+        return true;
+      }
+      if (url.pathname === "/oauth/register" && method === "POST") {
+        const body = (await readBody(request)) ?? {};
+        json(response, 201, oauth.register(body as Record<string, unknown>));
+        return true;
+      }
+      if (url.pathname === "/oauth/authorize" && method === "GET") {
+        html(response, 200, oauth.consentPage(url.searchParams));
+        return true;
+      }
+      if (url.pathname === "/oauth/authorize" && method === "POST") {
+        const target = oauth.decide(new URLSearchParams(await readText(request)));
+        response.writeHead(302, { location: target, "cache-control": "no-store" });
+        response.end();
+        return true;
+      }
+      if (url.pathname === "/oauth/token" && method === "POST") {
+        json(response, 200, oauth.token(new URLSearchParams(await readText(request))));
+        return true;
+      }
+    } catch (error) {
+      // OAuth names its own failures, and a client reads that name rather than
+      // the prose: `invalid_grant` is what makes it re-run the flow.
+      const message = error instanceof Error ? error.message : String(error);
+      const [code, ...rest] = message.split(":");
+      json(response, 400, {
+        error: code ?? "invalid_request",
+        ...(rest.length === 0 ? {} : { error_description: rest.join(":") }),
+      });
+      return true;
+    }
+    return false;
+  }
+
   async function handleMcp(
     request: IncomingMessage,
     response: ServerResponse,
+    client?: Principal,
   ): Promise<void> {
     const sessionId = request.headers["mcp-session-id"];
     const existing =
       typeof sessionId === "string" ? sessions.get(sessionId) : undefined;
     if (existing !== undefined) {
-      await existing.handleRequest(request, response);
+      // The session carries the identity it was opened with, so a second
+      // authenticated client cannot pick up someone else's session id and have
+      // its effects recorded under the first client's name.
+      if (existing.client !== callerRef(client)) {
+        json(response, 403, { error: "mcp_session_belongs_to_another_client" });
+        return;
+      }
+      await existing.transport.handleRequest(request, response);
       return;
     }
     if (request.method !== "POST") {
@@ -169,13 +325,13 @@ export async function serveHttp(
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
       onsessioninitialized: (id) => {
-        sessions.set(id, transport);
+        sessions.set(id, { transport, client: callerRef(client) });
       },
       onsessionclosed: (id) => {
         sessions.delete(id);
       },
     });
-    const mcp = createMcpServer(runtime);
+    const mcp = createMcpServer(runtime, client);
     transport.onclose = () => {
       if (transport.sessionId !== undefined) {
         sessions.delete(transport.sessionId);
@@ -321,15 +477,17 @@ export async function serveHttp(
   const address = server.address();
   const boundPort =
     typeof address === "object" && address !== null ? address.port : port;
+  origin = `http://${host}:${boundPort}`;
 
   return {
-    url: `http://${host}:${boundPort}/?token=${token}`,
-    mcpUrl: `http://${host}:${boundPort}/mcp`,
+    url: `${origin}/?token=${token}`,
+    mcpUrl: `${origin}/mcp`,
     token,
     host,
     port: boundPort,
+    oauth: oauthEnabled,
     async close() {
-      for (const session of sessions.values()) await session.close();
+      for (const session of sessions.values()) await session.transport.close();
       sessions.clear();
       await new Promise<void>((resolveClose, rejectClose) => {
         server.close((error) => (error ? rejectClose(error) : resolveClose()));

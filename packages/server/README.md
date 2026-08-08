@@ -34,6 +34,28 @@ returns the task controller, workflow controller, and store. `serveStdio`
 registers the MCP tools and connects the stdio transport — stdout is the
 protocol, so anything you print there corrupts it; use stderr.
 
+## Over loopback HTTP
+
+`serveHttp` opens the same runtime for Streamable HTTP clients, a read-only JSON
+API, an SSE workflow event stream, and the console:
+
+```ts
+import { createMelraRuntime, serveHttp } from "@melra/server";
+
+const runtime = await createMelraRuntime({
+  workspaceRoot: process.cwd(),
+  dataDirectory: `${process.env.HOME}/.melra`,
+});
+const http = await serveHttp({ runtime, port: 7457 });
+console.error(http.mcpUrl, http.token);
+```
+
+Every route wants that token. A client that cannot be handed it can instead
+register itself over OAuth 2.1 and ask a person to approve it in a browser;
+after that its own name — `harness:<name>#<id prefix>` — leads the delegation
+chain on every receipt it produces, rather than the anonymous `agent:local`.
+That flow is offered on loopback only, and `MELRA_HTTP_OAUTH=0` removes it.
+
 ## What the runtime guarantees
 
 Planning never executes. `melra_execute` re-evaluates policy so a stale plan

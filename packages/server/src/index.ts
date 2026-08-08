@@ -4,4 +4,5 @@
 export * from "./mcp-server.js";
 export * from "./harness-tools.js";
 export * from "./http-server.js";
+export * from "./oauth.js";
 export * from "./runtime.js";

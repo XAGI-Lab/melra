@@ -161,8 +161,14 @@ them as promises was the wrong call:
 ### Transport and identity
 
 - [x] Local Streamable HTTP transport.
-- [ ] Local OAuth and client identity. Bearer-token auth ships today; OAuth is
-      the remaining work.
+- [x] Local OAuth and client identity. A client that was never handed the
+  startup token registers itself (RFC 7591), is approved by a person in a
+  browser, and exchanges an authorization code for a bearer token under PKCE
+  S256. What it buys is a name: the approved client is prepended to the
+  delegation chain of every task it dispatches, so a receipt says which client
+  asked rather than `agent:local`. Loopback only — a browser approval is a
+  boundary on the machine the browser is on — and `MELRA_HTTP_OAUTH=0` turns it
+  off, leaving the operator's token as the only way in.
 - [x] Multi-client session isolation.
 - [ ] Optional desktop control surface.
 

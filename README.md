@@ -26,7 +26,7 @@ shouldn't have to.**
 
 <!-- Evidence -->
 <img src="https://img.shields.io/badge/evals-42_scenarios_passing-22c55e?style=flat-square&logo=checkmarx&logoColor=white" alt="42 deterministic evaluation scenarios passing" />
-<img src="https://img.shields.io/badge/tests-287_passing-22c55e?style=flat-square&logo=vitest&logoColor=white" alt="287 JavaScript tests passing" />
+<img src="https://img.shields.io/badge/tests-331_passing-22c55e?style=flat-square&logo=vitest&logoColor=white" alt="331 JavaScript tests passing" />
 <img src="https://img.shields.io/badge/MCP_E2E-13_passing-22c55e?style=flat-square&logo=testcafe&logoColor=white" alt="13 real MCP end-to-end cases passing" />
 <img src="https://img.shields.io/badge/runtime_vulnerabilities-0_known-22c55e?style=flat-square&logo=snyk&logoColor=white" alt="No known production runtime vulnerabilities" />
 
@@ -80,6 +80,7 @@ shouldn't have to.**
 | Eleven MCP tools for tasks and workflows | Container and stdio discovery checks require the exact tool set |
 | Recovery without silent mutation replay | 8/8 deterministic recovery scenarios, zero duplicates, zero false success |
 | Loopback HTTP transport, event stream, and read-only console | Same runtime as stdio, token on every route, `405` on any non-`GET` to the JSON API |
+| A client authenticates itself and is named on every receipt | OAuth 2.1 registration through approval to a token, then the approved client at the head of the delegation chain |
 
 ---
 
@@ -423,6 +424,7 @@ pnpm melra setup
 <tr><td>Run a read-only system task</td><td><code>melra run --request examples/01-system-info/task.json</code></td></tr>
 <tr><td>Run a verified mutation</td><td><code>melra run --request examples/02-verified-file-write/task.json</code></td></tr>
 <tr><td>Inspect a stored receipt</td><td><code>melra inspect &lt;task-id&gt;</code></td></tr>
+<tr><td>See which clients you approved over HTTP</td><td><code>melra clients</code></td></tr>
 <tr><td>Advance a durable workflow</td><td><code>melra workflow advance &lt;workflow-id&gt;</code></td></tr>
 <tr><td>Test a policy file</td><td><code>melra policy test</code></td></tr>
 </table>

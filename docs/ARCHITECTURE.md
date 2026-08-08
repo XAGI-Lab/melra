@@ -110,17 +110,24 @@ declares none is the local principal, `agent:local`. Every receipt records the
 chain as one line (`organization:acme/human:dheeraj/agent:claude-code`), so a
 receipt answers *who authorised this*, not only *what ran*.
 
-MELRA does not authenticate any of it. A link is a claim the layer above makes
-and is worth exactly what that layer's own boundary is worth — which in developer
-mode is nothing. Enforced mode ([P2](../ROADMAP.md#p2--hard-capability-boundary))
-is where a principal becomes a fact rather than a claim.
+MELRA authenticates exactly one link. Over loopback HTTP a client that completed
+the OAuth flow ([installation](INSTALLATION.md#clients-that-let-themselves-in))
+is recorded as `harness:<name>#<id prefix>` at the outermost end of the chain,
+ahead of whatever the request declared — because anything a client names, a
+session or a subagent, is inside it and never above it. Every other link is a
+claim the layer above makes, worth exactly what that layer's own boundary is
+worth, which over stdio is nothing. Enforced mode
+([P2](../ROADMAP.md#p2--hard-capability-boundary)) is where the rest of the
+chain becomes fact rather than claim.
 
 `policy.capabilities` turns that identity into bounded authority. Each grant
 names a capability pattern, the effects allowed under it, a target pattern, the
 holder, and optionally `validUntil` and `policyVersion`. An empty list — the
 default — means no narrowing. A non-empty list is a closed world, checked before
 any allowlist: authority comes first, because the allowlists describe what a
-grant holder may do, not whether they hold one.
+grant holder may do, not whether they hold one. A grant is matched against the
+immediate principal, which is a link the caller declares, so it narrows what a
+cooperating caller can reach rather than standing between it and the effect.
 
 ## Execution boundaries
 

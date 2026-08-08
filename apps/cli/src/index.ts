@@ -13,6 +13,7 @@ import {
   WorkflowDefinitionSchema,
   WorkflowInputSchema,
   PRODUCT_VERSION,
+  principalRef,
   type ApprovalResponse,
   type TaskRequest,
   type WorkflowDefinition,
@@ -22,6 +23,8 @@ import {
 import {
   createMelraRuntime,
   serveHttp,
+  OAuthProvider,
+  clientPrincipal,
   serveStdio,
   unconfinedRoot,
   type MelraRuntime,
@@ -582,6 +585,41 @@ async function policyTest(args: string[], env: CliEnvironment): Promise<void> {
   });
 }
 
+/**
+ * The clients an operator has approved over OAuth, and the way to take that
+ * back. Reads the same file the server writes, so it works while the server is
+ * down — which is when someone most wants to withdraw an approval.
+ */
+function clientsCommand(args: string[], env: CliEnvironment): number {
+  const oauth = new OAuthProvider(env.dataDirectory);
+  const revoke = argument("--revoke", args);
+  if (revoke !== undefined) {
+    const dropped = oauth.revoke(revoke === "all" ? undefined : revoke);
+    process.stdout.write(
+      `Revoked ${dropped} token${dropped === 1 ? "" : "s"}. ` +
+        `The client must be approved again before it can act.\n`,
+    );
+    return 0;
+  }
+  const clients = oauth.clients();
+  if (clients.length === 0) {
+    process.stdout.write("No client has registered against this data directory.\n");
+    return 0;
+  }
+  for (const client of clients) {
+    process.stdout.write(
+      `${client.approvedAt === undefined ? "pending " : "approved"}  ` +
+        `${client.id}  ${client.name}\n` +
+        `          ${principalRef(clientPrincipal(client))}\n`,
+    );
+  }
+  process.stdout.write(
+    `\nRevoke one with 'melra clients --revoke <client-id>', or all of them\n` +
+      `with 'melra clients --revoke all'.\n`,
+  );
+  return 0;
+}
+
 function help(): void {
   process.stdout.write(`MELRA ${PRODUCT_VERSION}
 
@@ -599,6 +637,7 @@ Usage:
   melra workflow cancel <workflow-id>
   melra workflow pause|resume|suspend <workflow-id>
   melra demo durable-core
+  melra clients [--revoke <client-id|all>]
   melra policy test --request <task.json>
   melra version
 
@@ -617,6 +656,7 @@ Environment:
   MELRA_UNHINGED   Set to 1 to disable every guardrail (see --unhinged)
   MELRA_HTTP_PORT  Port for 'serve --http' (default: 7457)
   MELRA_HTTP_TOKEN Fixed bearer token for 'serve --http' (default: random)
+  MELRA_HTTP_OAUTH Set to 0 so only that token gets in; no client can register
   MELRA_BROWSER    Optional Chrome/Chromium/Edge executable
   MELRA_BROWSER_CDP_ENDPOINT       Optional HTTP(S) CDP endpoint
   MELRA_BROWSER_CDP_CONTEXT_INDEX  External context index (-1 is last)
@@ -680,6 +720,11 @@ async function main(): Promise<void> {
             `  Console:  ${endpoint.url}\n` +
             `  MCP:      ${endpoint.mcpUrl}\n` +
             `  Token:    ${endpoint.token}\n` +
+            (endpoint.oauth
+              ? `A client that cannot be given the token can register itself and ask\n` +
+                `you to approve it in a browser; approved clients are named on every\n` +
+                `receipt. Set MELRA_HTTP_OAUTH=0 to allow only the token above.\n`
+              : `OAuth is off, so the token above is the only way in.\n`) +
             `Loopback only. Anyone who can read this token can drive this machine.\n`,
         );
       }
@@ -711,6 +756,10 @@ async function main(): Promise<void> {
         throw new Error("demo supports only 'durable-core'");
       }
       process.exitCode = await durableCoreDemo(env);
+      return;
+    case "clients":
+      rejectUnknownFlags(args, ["--revoke"]);
+      process.exitCode = clientsCommand(args, env);
       return;
     case "policy":
       if (args[0] !== "test") throw new Error("policy supports only 'test'");

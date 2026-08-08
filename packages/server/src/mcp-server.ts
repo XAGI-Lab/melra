@@ -4,6 +4,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
+  attributeTo,
+  IdentitySchema,
+  type Principal,
   MelraCapabilitiesInputSchema,
   MelraExecuteInputSchema,
   MelraPlanInputSchema,
@@ -152,7 +155,61 @@ export function capabilitiesPayload(runtime: MelraRuntime): unknown {
   };
 }
 
-export function createMcpServer(runtime: MelraRuntime): McpServer {
+/**
+ * Stamps a caller the transport authenticated onto one incoming task request.
+ *
+ * A session with no authenticated client is left alone: over stdio the process
+ * boundary is the identity, and inventing one here would put a name in a
+ * receipt that nothing checked.
+ */
+function attributed(
+  input: Record<string, unknown>,
+  client: Principal | undefined,
+): unknown {
+  if (client === undefined) return input;
+  return {
+    ...input,
+    identity: attributeTo(
+      client,
+      input.identity === undefined
+        ? undefined
+        : IdentitySchema.parse(input.identity),
+    ),
+  };
+}
+
+/**
+ * The same stamp, applied to every request inside a workflow definition.
+ *
+ * Walks by shape rather than by node type: a request is the only thing in a
+ * definition carrying both `goal` and `operation`, so a node type added later
+ * is attributed without anyone remembering to come back here — and a workflow
+ * is otherwise a way to dispatch effects that no client's name reaches.
+ */
+function attributeRequests(value: unknown, client: Principal): void {
+  if (Array.isArray(value)) {
+    for (const item of value) attributeRequests(item, client);
+    return;
+  }
+  if (value === null || typeof value !== "object") return;
+  const record = value as Record<string, unknown>;
+  if ("goal" in record && "operation" in record) {
+    record.identity = attributeTo(
+      client,
+      record.identity === undefined
+        ? undefined
+        : IdentitySchema.parse(record.identity),
+    );
+    return;
+  }
+  for (const item of Object.values(record)) attributeRequests(item, client);
+}
+
+export function createMcpServer(
+  runtime: MelraRuntime,
+  /** Who the transport authenticated, if it authenticated anyone. */
+  client?: Principal,
+): McpServer {
   const server = new McpServer({
     name: "melra",
     version: PRODUCT_VERSION,
@@ -191,7 +248,12 @@ export function createMcpServer(runtime: MelraRuntime): McpServer {
         openWorldHint: false,
       },
     },
-    async (input) => toolResult(runtime.controller.plan(TaskRequestSchema.parse(input))),
+    async (input) =>
+      toolResult(
+        runtime.controller.plan(
+          TaskRequestSchema.parse(attributed(input, client)),
+        ),
+      ),
   );
 
   server.registerTool(
@@ -298,11 +360,9 @@ export function createMcpServer(runtime: MelraRuntime): McpServer {
     },
     async (input) => {
       const parsed = WorkflowPlanInputSchema.parse(input);
-      return toolResult(
-        runtime.workflows.plan(
-          WorkflowDefinitionSchema.parse(parsed.definition),
-        ),
-      );
+      const definition = WorkflowDefinitionSchema.parse(parsed.definition);
+      if (client !== undefined) attributeRequests(definition, client);
+      return toolResult(runtime.workflows.plan(definition));
     },
   );
 
@@ -396,7 +456,9 @@ export function createMcpServer(runtime: MelraRuntime): McpServer {
       );
     },
   );
-  if (harnessToolsEnabled(process.env)) registerHarnessTools(server, runtime);
+  if (harnessToolsEnabled(process.env)) {
+    registerHarnessTools(server, runtime, client);
+  }
   return server;
 }
 

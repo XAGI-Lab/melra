@@ -117,6 +117,7 @@ MELRA uses these environment variables:
 | `MELRA_UNHINGED` | Set to `1` to remove every guardrail — see below | unset (all guardrails on) |
 | `MELRA_HTTP_PORT` | Port for `melra serve --http` | `7457` |
 | `MELRA_HTTP_TOKEN` | Bearer token for `melra serve --http` | a fresh random token, printed at startup |
+| `MELRA_HTTP_OAUTH` | Set to `0` so that token is the only way in and no client can register itself | unset (clients may register, on loopback) |
 
 Back up `payload.key` with the SQLite files. Changing or losing it makes
 persisted task and workflow payloads unreadable. Never place it in a client
@@ -321,6 +322,10 @@ MELRA HTTP server listening on http://127.0.0.1:7457
   Console:  http://127.0.0.1:7457/?token=<token>
   MCP:      http://127.0.0.1:7457/mcp
   Token:    <token>
+A client that cannot be given the token can register itself and ask
+you to approve it in a browser; approved clients are named on every
+receipt. Set MELRA_HTTP_OAUTH=0 to allow only the token above.
+Loopback only. Anyone who can read this token can drive this machine.
 ```
 
 Every route needs that token, as `Authorization: Bearer <token>` or `?token=`
@@ -330,10 +335,64 @@ generated each start. **Anyone who can read the token can drive this machine** �
 the server binds loopback only, and putting it behind a proxy on a reachable
 interface hands out that reach.
 
+### Clients that let themselves in
+
+Pasting a token into a client's configuration is fine for one client you
+installed yourself. It stops being fine when several want in, because they all
+end up holding the operator's key and every effect any of them dispatches is
+recorded under the same anonymous `agent:local`.
+
+So the HTTP server also speaks OAuth 2.1, and what a client gets out of it is a
+name. It discovers the flow from the `WWW-Authenticate` header on a `401`,
+registers itself (RFC 7591), sends you to a consent page in your browser, and —
+once you approve — exchanges an authorization code for a bearer token of its
+own, under PKCE S256. Nothing about registration grants anything; approval is
+the whole gate, and it is a person.
+
+After that the client is a principal. It becomes `harness:<name>#<id prefix>` —
+the name it registered under, plus part of the id MELRA minted, so two clients
+calling themselves the same thing stay apart — and that principal is prepended
+to the delegation chain of every task it dispatches, ahead of anything the
+client declares about itself. A receipt then reads:
+
+```
+harness:Claude Code#a91f4c02/subagent:reader
+```
+
+rather than `agent:local`. That is the reason to bother: an effect history that
+says which client asked.
+
+```bash
+melra clients                     # who has registered, and who you approved
+melra clients --revoke <id>       # drop that client's tokens
+melra clients --revoke all        # drop every issued token
+```
+
+Revoking drops tokens, not the registration, so the same client can ask again
+and you get to decide again.
+
+The flow is only offered on loopback — approving something in a browser is a
+boundary on the machine the browser is on, and a server bound to a wider
+interface would otherwise be offering the network a registration endpoint. Set
+`MELRA_HTTP_OAUTH=0` to turn it off entirely and keep the operator's token as
+the only door.
+
+Details worth knowing if you are reviewing this: issued tokens are stored as
+sha256 hashes in a mode-`0600` `oauth.json` under `MELRA_HOME`, an authorization
+code is single-use and stays spent even after a failed redemption, redirect URIs
+must be loopback or a private scheme so a code cannot be delivered off the
+machine, and an MCP session id is bound to the caller that opened it so a leaked
+one cannot be used to act under another client's name.
+
 | Route | Method | What it returns |
 |---|---|---|
 | `/` | `GET` | The console |
 | `/mcp` | `POST`/`GET`/`DELETE` | MCP over Streamable HTTP — all eleven tools |
+| `/.well-known/oauth-protected-resource` | `GET` | RFC 9728 metadata, unauthenticated |
+| `/.well-known/oauth-authorization-server` | `GET` | RFC 8414 metadata, unauthenticated |
+| `/oauth/register` | `POST` | RFC 7591 registration; grants nothing on its own |
+| `/oauth/authorize` | `GET`/`POST` | The consent page, and your decision |
+| `/oauth/token` | `POST` | Authorization code exchange, PKCE S256 |
 | `/api/capabilities` | `GET` | The same payload `melra_capabilities` returns |
 | `/api/tasks?limit=<n>` | `GET` | Recent tasks, newest first |
 | `/api/tasks/:id` | `GET` | One task's status |

@@ -285,6 +285,9 @@ Mutations and destructive operations have one execution attempt.
 - Supported: local stdio, and loopback Streamable HTTP (`melra serve --http`)
   guarded by a bearer token, alongside a read-only JSON API, an SSE workflow
   event stream, and the Community console.
+- Supported over loopback HTTP: OAuth 2.1 client registration, browser approval,
+  and per-client identity — an approved client is named at the head of the
+  delegation chain on every receipt. `MELRA_HTTP_OAUTH=0` turns it off.
 - Packaged: source, portable Node artifact, Python SDK artifact, Docker image.
-- Not supported in `0.3`: transports bound to a non-loopback interface, OAuth,
-  per-client identity, multi-tenant hosting.
+- Not supported in `0.3`: transports bound to a non-loopback interface,
+  multi-tenant hosting.

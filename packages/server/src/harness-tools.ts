@@ -15,8 +15,10 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
+  attributeTo,
   type EvidencePredicate,
   OperationSchema,
+  type Principal,
   TaskRequestSchema,
 } from "@melra/protocol";
 import { z } from "zod";
@@ -250,7 +252,12 @@ function summarize(
   };
 }
 
-export function registerHarnessTools(server: McpServer, runtime: MelraRuntime): void {
+export function registerHarnessTools(
+  server: McpServer,
+  runtime: MelraRuntime,
+  /** Who the transport authenticated, recorded on every task these plan. */
+  client?: Principal,
+): void {
   for (const [name, definition] of Object.entries(HARNESS_TOOLS)) {
     server.registerTool(
       name,
@@ -274,6 +281,9 @@ export function registerHarnessTools(server: McpServer, runtime: MelraRuntime): 
             ...(definition.evidence === undefined
               ? {}
               : { requiredEvidence: definition.evidence(parsed) }),
+            ...(client === undefined
+              ? {}
+              : { identity: attributeTo(client) }),
           }),
         );
         if (task.status === "policy_blocked") {

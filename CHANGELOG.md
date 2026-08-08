@@ -8,6 +8,33 @@ All notable changes are documented here. The format follows
 
 ### Added
 
+- **A client can let itself in, and then its name is on every receipt.**
+  `melra serve --http` now speaks OAuth 2.1 — RFC 7591 dynamic registration,
+  RFC 8414 and RFC 9728 discovery, authorization code with PKCE S256 — so an
+  MCP client that was never handed the startup token can register, ask a person
+  to approve it in a browser, and get a bearer token of its own. A `401` carries
+  `WWW-Authenticate: Bearer resource_metadata="…"`, which is what makes a client
+  find the flow instead of simply reporting that it was refused.
+
+  The point is attribution rather than convenience. An approved client becomes a
+  `harness` principal named for what it registered as plus the first bytes of
+  the id MELRA minted, and that principal is prepended to the delegation chain
+  of every task, workflow node and harness-tool call it dispatches — outermost,
+  because anything the client declares about itself sits inside what the
+  transport established. So a receipt reads
+  `harness:Claude Code#a91f4c02/subagent:reader` instead of `agent:local`, and
+  two clients calling themselves the same thing stay apart. A session id is
+  bound to the caller that opened it, so a leaked one cannot be used to act
+  under another client's name.
+
+  Off unless the server is on loopback, since approving something in a browser
+  is only a boundary on the machine the browser is on, and off entirely with
+  `MELRA_HTTP_OAUTH=0`. Tokens are stored as sha256 hashes in a mode-`0600`
+  `oauth.json`; a code is single-use and stays burned after a failed
+  redemption; redirect URIs must be loopback or a private scheme, so an
+  authorization code cannot be delivered off the machine. `melra clients` lists
+  who has been approved and `melra clients --revoke <id|all>` takes it back.
+
 - **Screen reading as a targeting fallback, with the confidence attached.**
   Where a platform reports no accessibility tree, `computer.inspect` now takes a
   screenshot through the adapter and reads its words with `tesseract`, so
