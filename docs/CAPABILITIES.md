@@ -148,8 +148,7 @@ Actions: `navigate`, `back`, `forward`, `reload`, `inspect`, `wait`, `click`,
   live one. The two cannot be combined, and neither works against a browser
   attached over CDP.
 
-Visual/OCR targeting is not implemented in `0.3`. Captchas are detected and
-reported, never solved.
+Captchas are detected and reported, never solved.
 
 ### Memory
 
@@ -194,8 +193,19 @@ Actions: `capabilities`, `inspect`, `screenshot`, `click`, `move`, `drag`,
   Supplying both `target` and coordinates is rejected.
 - macOS reads the tree through System Events, four levels deep, and needs
   Accessibility permission; Windows reads it through UI Automation. X11 has no
-  equivalent, so the Linux adapter reports `elements: false` and only
-  coordinates work there.
+  equivalent, so the Linux adapter reports `elements: false`.
+- Where no tree came back, `inspect` reads the screen instead: it takes a
+  screenshot through the adapter and runs `tesseract` over it, scaling each word
+  from the captured image onto the display so a Retina capture does not double
+  every coordinate. `capabilities.ocr` says whether the host has `tesseract` at
+  all, and the read only ever runs when the tree was empty — a tree states what
+  a control *is*, a reading only what it looks like.
+- A word read this way carries a `confidence` between 0 and 1; an element the
+  platform reported carries none, so an absent `confidence` means "stated", not
+  "certain". Below `0.3` a word is not reported; below `0.7` it is reported but
+  refused as a target with `computer_target_confidence_too_low`. Only text is
+  found this way, so an unlabelled icon stays unreachable on a desktop with no
+  tree.
 - macOS requires Screen Recording or Accessibility permission. Linux input
   currently requires X11 and `xdotool`. Windows uses Windows PowerShell and
   .NET, which ship with the OS, so it needs no extra install; input goes to
@@ -207,9 +217,8 @@ Actions: `capabilities`, `inspect`, `screenshot`, `click`, `move`, `drag`,
   That cost is per-process, so `timeoutMs` may need raising above its 10s
   default on a slow or loaded machine; `capabilities` reports this too.
 
-OCR/vision fallback, focus verification, multi-display normalization,
-per-monitor DPI compensation, and official task-benchmark evidence remain
-roadmap work. Element targeting is unavailable on Linux/X11.
+Focus verification, multi-display normalization, per-monitor DPI compensation,
+and official task-benchmark evidence remain roadmap work.
 
 ### System
 

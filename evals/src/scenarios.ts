@@ -807,6 +807,55 @@ export const scenarios: EvaluationScenario[] = [
     expectedFinal: "failed",
   },
   {
+    // A desktop with no accessibility tree resolves a target by reading the
+    // screen, and a clear reading is clickable like any other element.
+    id: "computer-read-screen-confident-click-verifies",
+    category: "computer",
+    desktop: "desktop-read-screen",
+    request: {
+      goal: "Click a word read clearly off a desktop with no element tree",
+      operation: {
+        kind: "computer",
+        action: "click",
+        target: { name: "Save" },
+      },
+      constraints: [],
+      forbiddenEffects: [],
+      budget: { maxSteps: 2, maxDurationMs: 5_000, maxRetries: 0 },
+      requiredEvidence: [
+        { type: "result_equals", path: "element.name", value: "Save" },
+      ],
+    },
+    expectedPlan: "awaiting_approval",
+    approve: true,
+    expectedFinal: "verified_success",
+  },
+  {
+    // The word is on screen and `inspect` reports it, but the reading is too
+    // doubtful to act on: clicking the point under it would be a guess at where
+    // a control the platform never named actually is.
+    id: "computer-read-screen-low-confidence-refused",
+    category: "computer",
+    desktop: "desktop-read-screen",
+    request: {
+      goal: "Click a word the screen reading is unsure of",
+      operation: {
+        kind: "computer",
+        action: "click",
+        target: { name: "Send" },
+      },
+      constraints: [],
+      forbiddenEffects: [],
+      budget: { maxSteps: 2, maxDurationMs: 5_000, maxRetries: 0 },
+      requiredEvidence: [
+        { type: "result_equals", path: "success", value: true },
+      ],
+    },
+    expectedPlan: "awaiting_approval",
+    approve: true,
+    expectedFinal: "failed",
+  },
+  {
     id: "pending-task-cancellation",
     category: "policy",
     request: {

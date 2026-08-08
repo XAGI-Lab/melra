@@ -6,6 +6,7 @@ import { ComputerOperationSchema, type ComputerOperation } from "@melra/protocol
 import {
   ComputerRuntime,
   matchElement,
+  parseOcrElements,
   parseSecureInput,
   type ComputerAdapter,
   type ComputerCapabilities,
@@ -33,6 +34,7 @@ class TestAdapter implements ComputerAdapter {
       scroll: true,
       inspect: true,
       elements: true,
+      ocr: false,
       drag: true,
       coordinateSpaces: ["normalized", "pixel"],
       limitations: [],
@@ -225,6 +227,48 @@ describe("matchElement", () => {
     expect(() => matchElement(elements, {})).toThrow(
       "computer_target_requires_role_or_name",
     );
+  });
+
+  it("refuses to click a reading it is not sure of", () => {
+    // Reported by `inspect` — a caller may want to know the word is there — but
+    // not clickable, because the point under a doubtful reading is a guess.
+    const read = [{ ...BUTTON("Delete", 0), role: "text", confidence: 0.42 }];
+    expect(() => matchElement(read, { name: "Delete" })).toThrow(
+      "computer_target_confidence_too_low",
+    );
+    expect(
+      matchElement([{ ...read[0]!, confidence: 0.91 }], { name: "Delete" }).x,
+    ).toBe(0);
+  });
+});
+
+describe("parseOcrElements", () => {
+  // Real `tesseract 5 … tsv` output, trimmed: a page row, the block/para/line
+  // rows above a word, and the words themselves.
+  const tsv = [
+    "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext",
+    "1\t1\t0\t0\t0\t0\t0\t0\t2940\t1912\t-1\t",
+    "4\t1\t1\t1\t1\t0\t42\t15\t167\t31\t-1\t",
+    "5\t1\t1\t1\t1\t1\t100\t40\t80\t20\t96.720352\tSave",
+    "5\t1\t1\t1\t1\t2\t300\t40\t90\t20\t41.5\tCancel",
+    "5\t1\t1\t1\t1\t3\t500\t40\t60\t20\t12.25\tl1lI",
+    "5\t1\t1\t1\t1\t4\t600\t40\t60\t20\t95.0\t   ",
+  ].join("\n");
+
+  it("scales a Retina capture back onto the display it came from", () => {
+    // The image measured 2940 wide, the display is 1470: every box halves, so a
+    // click computed from one lands where the word actually is.
+    expect(parseOcrElements(tsv, 1470)).toEqual([
+      { role: "text", name: "Save", x: 50, y: 20, width: 40, height: 10, confidence: 0.97 },
+      { role: "text", name: "Cancel", x: 150, y: 20, width: 45, height: 10, confidence: 0.42 },
+    ]);
+  });
+
+  it("drops noise and reads nothing at all from a capture with no page row", () => {
+    // `l1lI` is under the reporting floor and the blank token has no name;
+    // without a page row there is no scale, and guessing one would move a click.
+    expect(parseOcrElements(tsv, 1470).map((e) => e.name)).not.toContain("l1lI");
+    expect(parseOcrElements("level\tpage_num\n4\t1", 1470)).toEqual([]);
   });
 });
 

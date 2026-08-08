@@ -92,7 +92,7 @@ them as promises was the wrong call:
 - [x] CLI doctor, init, serve, run, inspect, export, and policy test.
 - [x] TypeScript and Python client SDKs.
 - [x] Docker image and hardened Compose configuration.
-- [x] Forty deterministic safety/execution scenarios plus eight durable
+- [x] Forty-two deterministic safety/execution scenarios plus eight durable
       crash, recovery, and concurrency scenarios.
 - [x] Real MCP stdio, browser, container, and Python interoperability tests.
 - [x] Linux, macOS, and Windows CI definitions.
@@ -117,7 +117,13 @@ them as promises was the wrong call:
   `target: { role, name }` resolves against that list instead of a coordinate.
   X11 exposes no equivalent tree, so the Linux adapter reports
   `elements: false` rather than guessing.
-- [ ] Screenshot and OCR inspection fallback.
+- [x] Screenshot and OCR inspection fallback. Where the platform reports no
+  accessibility tree, `inspect` takes a screenshot through the adapter and reads
+  its words with `tesseract`, scaling each box from the captured image back onto
+  the display so a Retina capture does not double every coordinate. It runs only
+  when the tree came back empty — a tree states what a control *is*, a reading
+  only what it looks like — and `capabilities.ocr` reports whether the host can
+  do it at all.
 - [x] Drag and window-management actions.
 - [x] Active-window, display, focus, and secure-input safety checks. macOS
   refuses `type` and `key` while another process holds secure input, rather than
@@ -137,7 +143,12 @@ them as promises was the wrong call:
 ### Browser and terminal expansion
 
 - [x] Mutation-driven stable-DOM quiet-window with timeout evidence.
-- [ ] Visual targeting fallback with explicit confidence.
+- [x] Visual targeting fallback with explicit confidence. An element read off
+  a screenshot carries a `confidence`; one the platform reported carries none,
+  so absent means "stated" rather than "certain". A reading below `0.3` is not
+  reported, and one below `0.7` is reported by `inspect` but refused as a click
+  target with `computer_target_confidence_too_low` — worth telling a caller
+  about, not worth acting on.
 - [x] Popup and multi-window policy (`policy.popups`).
 - [x] Interactive terminal input (`interactive` + `send`). A real pseudo-TTY is
   still open: stdin is piped, so a program that checks `isatty` and refuses

@@ -8,6 +8,27 @@ All notable changes are documented here. The format follows
 
 ### Added
 
+- **Screen reading as a targeting fallback, with the confidence attached.**
+  Where a platform reports no accessibility tree, `computer.inspect` now takes a
+  screenshot through the adapter and reads its words with `tesseract`, so
+  `target: { name }` resolves on a desktop that could previously only be clicked
+  by coordinate — which on X11 was every desktop. Each box is scaled from the
+  captured image back onto the display, so a Retina capture does not land every
+  click at double the coordinate, and a capture whose size cannot be read
+  produces nothing rather than coordinates at an assumed scale. The read runs
+  only when the tree came back empty: a tree states what a control *is*, a
+  reading only what it looks like. `capabilities.ocr` reports whether the host
+  has `tesseract` at all.
+
+  A word read this way carries a `confidence` between 0 and 1; an element the
+  platform reported carries none, so an absent `confidence` means "stated", not
+  "certain". Below `0.3` a word is not reported at all, and below `0.7` it is
+  reported by `inspect` but refused as a click target with
+  `computer_target_confidence_too_low` — a doubtful reading is worth telling a
+  caller about and not worth acting on, because the point underneath it is a
+  guess at where a control nobody named actually is. Only text is found this
+  way, so an unlabelled icon stays unreachable on a desktop with no tree.
+
 - **Semantic element targeting for computer use.** `computer.inspect` now lists
   the frontmost window's addressable elements — role, name, and pixel geometry,
   capped at 200 — where the platform has an accessibility tree, and `click`,

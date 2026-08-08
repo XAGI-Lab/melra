@@ -1,0 +1,55 @@
+{
+  "schemaVersion": "1.0.0",
+  "id": "desktop-read-screen",
+  "description": "A desktop with no accessibility tree, of the shape the Linux adapter reports: elements false, ocr true. The inspect step already carries the words the runtime would otherwise read off a screenshot, because what these scenarios test is the decision made about a reading — clickable or not — rather than tesseract's own accuracy, which parseOcrElements covers directly. Confidences are the ones a real capture produced for clear and for degraded text.",
+  "capabilities": {
+    "platform": "linux",
+    "adapter": "linux-xdotool",
+    "available": true,
+    "screenshot": true,
+    "pointer": true,
+    "keyboard": true,
+    "scroll": true,
+    "inspect": true,
+    "elements": false,
+    "ocr": true,
+    "drag": true,
+    "coordinateSpaces": ["normalized", "pixel"],
+    "limitations": ["X11 exposes no accessibility tree"]
+  },
+  "steps": {
+    "inspect": {
+      "success": true,
+      "action": "inspect",
+      "displayWidth": 1920,
+      "displayHeight": 1080,
+      "elements": [
+        {
+          "role": "text",
+          "name": "Save",
+          "x": 620,
+          "y": 420,
+          "width": 46,
+          "height": 16,
+          "confidence": 0.96
+        },
+        {
+          "role": "text",
+          "name": "Send",
+          "x": 720,
+          "y": 420,
+          "width": 48,
+          "height": 16,
+          "confidence": 0.41
+        }
+      ]
+    },
+    "click": {
+      "success": true,
+      "action": "click",
+      "coordinateSpace": "pixel",
+      "x": 643,
+      "y": 428
+    }
+  }
+}

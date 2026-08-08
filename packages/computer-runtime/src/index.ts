@@ -23,6 +23,13 @@ export interface ComputerCapabilities {
   inspect: boolean;
   /** `inspect` can list addressable elements, so `target` resolves to a point. */
   elements: boolean;
+  /**
+   * A screenshot can be read for words, so `target` resolves on a desktop with
+   * no accessibility tree. Weaker than `elements` in kind, not only in quality:
+   * a tree states what a control *is*, while a reading only says what it looks
+   * like, which is why every element it produces carries a `confidence`.
+   */
+  ocr: boolean;
   /** `drag` can hold the button down between two points. */
   drag: boolean;
   coordinateSpaces: Array<"normalized" | "pixel">;
@@ -43,6 +50,12 @@ export interface DesktopElement {
   y: number;
   width: number;
   height: number;
+  /**
+   * How sure the reading is, `0`–`1`. Present only on an element read off a
+   * screenshot; an element the platform reported has no confidence because it
+   * is not a reading. Absent therefore means "stated", never "unsure".
+   */
+  confidence?: number;
 }
 
 /**
@@ -68,9 +81,11 @@ export interface DesktopObservation {
   secureInput?: boolean;
   /**
    * Addressable elements of the frontmost window, when the platform exposes an
-   * accessibility tree. Absent — not empty — where it does not, because "this
-   * window has no buttons" and "I cannot see this window's buttons" have to stay
-   * distinguishable to a caller deciding whether to fall back to coordinates.
+   * accessibility tree — or, where it does not, words read off a screenshot,
+   * each carrying a `confidence`. Absent — not empty — when neither was
+   * possible, because "this window has no buttons" and "I cannot see this
+   * window's buttons" have to stay distinguishable to a caller deciding whether
+   * to fall back to coordinates.
    */
   elements?: DesktopElement[];
 }
@@ -136,6 +151,7 @@ function elementsFrom(value: unknown): DesktopElement[] | undefined {
     const role = record["role"];
     const name = record["name"];
     const box = ["x", "y", "width", "height"].map((key) => record[key]);
+    const confidence = record["confidence"];
     if (typeof role !== "string" || role.trim() === "") continue;
     if (!box.every((n) => typeof n === "number" && Number.isFinite(n))) continue;
     const [x, y, width, height] = box as number[];
@@ -143,6 +159,9 @@ function elementsFrom(value: unknown): DesktopElement[] | undefined {
     elements.push({
       role,
       ...(typeof name === "string" && name.trim() !== "" ? { name } : {}),
+      ...(typeof confidence === "number" && Number.isFinite(confidence)
+        ? { confidence: Math.min(1, Math.max(0, confidence)) }
+        : {}),
       x: Math.round(x!),
       y: Math.round(y!),
       width: Math.round(width!),
@@ -153,12 +172,91 @@ function elementsFrom(value: unknown): DesktopElement[] | undefined {
 }
 
 /**
+ * Where each platform's package manager puts `tesseract`. Probed by path rather
+ * than resolved through `PATH`, matching the other tool detection here: a `PATH`
+ * lookup would let a directory earlier in the caller's environment decide which
+ * binary gets to read the screen.
+ */
+const TESSERACT_PATHS = [
+  "/opt/homebrew/bin/tesseract",
+  "/usr/local/bin/tesseract",
+  "/usr/bin/tesseract",
+  "C:\\Program Files\\Tesseract-OCR\\tesseract.exe",
+];
+
+async function tesseract(): Promise<string | undefined> {
+  for (const path of TESSERACT_PATHS) {
+    if (await executable(path)) return path;
+  }
+  return undefined;
+}
+
+/** Below this a word is noise rather than a reading, and is not reported. */
+const MIN_OCR_CONFIDENCE = 0.3;
+
+/** Below this a word is reported by `inspect` but refused as a click target. */
+const MIN_TARGET_CONFIDENCE = 0.7;
+
+/**
+ * Words read off a screenshot, in the display's own pixel space.
+ *
+ * Tesseract's TSV carries one row per token with a `level` column: `1` is the
+ * whole page, `5` is a word. Only words are kept, because a line row spanning
+ * "Save Cancel" has a centre point that lands between two buttons.
+ *
+ * The page row's width is what the image measured, and a Retina capture is
+ * larger than the display it came from by the backing scale factor, so every
+ * box is scaled by the ratio between them. A capture with no readable page row
+ * yields nothing rather than coordinates at an assumed scale.
+ *
+ * Exported for the same reason as `matchElement`: the parsing is the part worth
+ * testing without a screen to point at.
+ */
+export function parseOcrElements(
+  tsv: string,
+  displayWidth: number,
+): DesktopElement[] {
+  const rows = tsv.split("\n").map((line) => line.split("\t"));
+  const imageWidth = Number(rows.find((columns) => columns[0] === "1")?.[8]);
+  if (!Number.isFinite(imageWidth) || imageWidth <= 0) return [];
+  const scale = displayWidth / imageWidth;
+  const elements: DesktopElement[] = [];
+  for (const columns of rows) {
+    if (columns[0] !== "5" || columns.length < 12) continue;
+    // Text is the last column and tesseract does not quote it, so a token
+    // containing a tab would otherwise arrive truncated.
+    const name = columns.slice(11).join("\t").trim();
+    const confidence = Number(columns[10]) / 100;
+    const box = [6, 7, 8, 9].map((index) => Number(columns[index]));
+    if (name === "") continue;
+    if (!Number.isFinite(confidence) || confidence < MIN_OCR_CONFIDENCE) continue;
+    if (!box.every((value) => Number.isFinite(value))) continue;
+    const [x, y, width, height] = box as number[];
+    if (width! <= 0 || height! <= 0) continue;
+    elements.push({
+      role: "text",
+      name,
+      x: Math.round(x! * scale),
+      y: Math.round(y! * scale),
+      width: Math.round(width! * scale),
+      height: Math.round(height! * scale),
+      confidence: Math.min(1, Math.round(confidence * 100) / 100),
+    });
+    if (elements.length >= MAX_ELEMENTS) break;
+  }
+  return elements;
+}
+
+/**
  * Resolves a named target against an observed element list.
  *
  * Ambiguity is an error rather than a first-match, because the failure mode of
  * guessing is clicking the wrong "Delete" and there is no undo for a desktop
  * action. Exact names beat substrings for the same reason: a window with both
- * "Save" and "Save As…" must resolve "Save" to the one the caller wrote.
+ * "Save" and "Save As…" must resolve "Save" to the one the caller wrote. An
+ * element read off a screenshot has to clear `MIN_TARGET_CONFIDENCE` on top of
+ * matching, since a doubtful reading is a doubtful click and the same reasoning
+ * applies — worth reporting from `inspect`, not worth acting on.
  *
  * Exported because the matching rules are the part worth testing directly —
  * everything around them needs a live desktop.
@@ -196,7 +294,16 @@ export function matchElement(
       .join(", ");
     throw new Error(`computer_target_ambiguous: ${listed}`);
   }
-  return matches[0]!;
+  const chosen = matches[0]!;
+  if (
+    chosen.confidence !== undefined &&
+    chosen.confidence < MIN_TARGET_CONFIDENCE
+  ) {
+    throw new Error(
+      `computer_target_confidence_too_low: ${chosen.confidence.toFixed(2)} < ${MIN_TARGET_CONFIDENCE}`,
+    );
+  }
+  return chosen;
 }
 
 /**
@@ -483,6 +590,7 @@ class MacOsAdapter implements ComputerAdapter {
       scroll: osascript,
       inspect: osascript,
       elements: osascript,
+      ocr: (await tesseract()) !== undefined,
       drag: osascript,
       coordinateSpaces: ["normalized", "pixel"],
       limitations: [
@@ -658,6 +766,9 @@ class LinuxXdotoolAdapter implements ComputerAdapter {
       scroll: xdotool !== undefined,
       inspect: xdotool !== undefined,
       elements: false,
+      // X11 has no accessibility tree, so reading the screen is the only way a
+      // named target resolves here at all — not a fallback but the whole path.
+      ocr: screenshot !== undefined && (await tesseract()) !== undefined,
       drag: xdotool !== undefined,
       coordinateSpaces: ["normalized", "pixel"],
       limitations: [
@@ -665,6 +776,7 @@ class LinuxXdotoolAdapter implements ComputerAdapter {
         "Wayland compositors may deny synthetic input",
         "normalized coordinates target the current display size reported by xdotool",
         "inspect cannot report secure input; X11 has no equivalent state",
+        "X11 has no accessibility tree, so a named target is resolved by reading the screen: it needs tesseract installed and finds only text, never an unlabelled icon",
       ],
     };
   }
@@ -1106,6 +1218,7 @@ class WindowsAdapter implements ComputerAdapter {
       scroll: available,
       inspect: available,
       elements: available,
+      ocr: available && (await tesseract()) !== undefined,
       drag: available,
       coordinateSpaces: ["normalized", "pixel"],
       limitations: [
@@ -1298,6 +1411,7 @@ class UnavailableAdapter implements ComputerAdapter {
       scroll: false,
       inspect: false,
       elements: false,
+      ocr: false,
       drag: false,
       coordinateSpaces: ["normalized", "pixel"],
       limitations: ["no supported local computer-use adapter was detected"],
@@ -1404,6 +1518,9 @@ export class ComputerRuntime {
     ) {
       throw new Error(`computer_${requiredCapability}_unavailable`);
     }
+    if (operation.action === "inspect") {
+      return await this.observe(operation, capabilities, signal);
+    }
     const positional = ["click", "move", "drag"].includes(operation.action);
     let resolved: ComputerOperation = operation;
     let element: DesktopElement | undefined;
@@ -1412,8 +1529,13 @@ export class ComputerRuntime {
       if (operation.x !== undefined || operation.y !== undefined) {
         throw new Error("computer_target_conflicts_with_coordinates");
       }
-      if (!capabilities.elements) throw new Error("computer_elements_unavailable");
-      element = matchElement(await this.elements(operation, signal), operation.target);
+      if (!capabilities.elements && !capabilities.ocr) {
+        throw new Error("computer_elements_unavailable");
+      }
+      element = matchElement(
+        await this.elements(operation, capabilities, signal),
+        operation.target,
+      );
       const { target: _named, ...rest } = operation;
       resolved = {
         ...rest,
@@ -1455,17 +1577,69 @@ export class ComputerRuntime {
   /** The frontmost window's elements, or a refusal if the platform saw none. */
   private async elements(
     operation: ComputerOperation,
+    capabilities: ComputerCapabilities,
     signal?: AbortSignal,
   ): Promise<DesktopElement[]> {
-    const observed = await this.adapter.execute(
-      { ...operation, action: "inspect" },
-      this.options.artifactDirectory,
-      signal,
-    );
+    const observed = await this.observe(operation, capabilities, signal);
     const elements = elementsFrom(observed["elements"]);
     if (elements === undefined || elements.length === 0) {
       throw new Error("computer_elements_unavailable");
     }
     return elements;
+  }
+
+  /**
+   * An `inspect` observation, with words read off a screenshot when the platform
+   * reported no element tree.
+   *
+   * The fallback lives here rather than in each adapter so all four inherit it,
+   * and it only runs when the tree came back empty: a tree states what a control
+   * *is*, while a reading only says what it looks like, so the tree wins
+   * wherever there is one. Absence of a display width is a hard stop rather than
+   * an assumed scale — without it there is nothing to map a Retina capture back
+   * onto, and a wrong scale means a click that lands somewhere nobody named.
+   */
+  private async observe(
+    operation: ComputerOperation,
+    capabilities: ComputerCapabilities,
+    signal?: AbortSignal,
+  ): Promise<Record<string, unknown>> {
+    const observed = await this.adapter.execute(
+      { ...operation, action: "inspect" },
+      this.options.artifactDirectory,
+      signal,
+    );
+    const reported = elementsFrom(observed["elements"]);
+    if (reported !== undefined && reported.length > 0) return observed;
+    if (!capabilities.ocr || !capabilities.screenshot) return observed;
+    const displayWidth = observed["displayWidth"];
+    if (typeof displayWidth !== "number") return observed;
+    const read = await this.readScreen(operation, displayWidth, signal);
+    return read.length === 0 ? observed : { ...observed, elements: read };
+  }
+
+  /** Takes a screenshot through the adapter and reads its words. */
+  private async readScreen(
+    operation: ComputerOperation,
+    displayWidth: number,
+    signal?: AbortSignal,
+  ): Promise<DesktopElement[]> {
+    const program = await tesseract();
+    if (program === undefined) return [];
+    const { target: _named, ...rest } = operation;
+    const captured = await this.adapter.execute(
+      { ...rest, action: "screenshot" },
+      this.options.artifactDirectory,
+      signal,
+    );
+    const path = captured["path"];
+    if (typeof path !== "string") return [];
+    const { stdout } = await run(
+      program,
+      [path, "stdout", "tsv"],
+      operation.timeoutMs,
+      signal,
+    );
+    return parseOcrElements(stdout, displayWidth);
   }
 }

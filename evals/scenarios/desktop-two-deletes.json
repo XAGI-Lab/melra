@@ -12,6 +12,7 @@
     "scroll": true,
     "inspect": true,
     "elements": true,
+    "ocr": false,
     "drag": true,
     "coordinateSpaces": ["normalized", "pixel"],
     "limitations": []
