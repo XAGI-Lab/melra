@@ -1,0 +1,42 @@
+{
+  "schemaVersion": "1.0.0",
+  "id": "desktop-save-dialog",
+  "description": "A save dialog with one button of each name, in the shape the macOS adapter reports it. Written by hand against real adapter output rather than captured from a machine, so it carries no window titles, paths, or display sizes belonging to anyone.",
+  "capabilities": {
+    "platform": "darwin",
+    "adapter": "macos-native",
+    "available": true,
+    "screenshot": true,
+    "pointer": true,
+    "keyboard": true,
+    "scroll": true,
+    "inspect": true,
+    "elements": true,
+    "drag": true,
+    "coordinateSpaces": ["normalized", "pixel"],
+    "limitations": []
+  },
+  "steps": {
+    "inspect": {
+      "success": true,
+      "action": "inspect",
+      "application": "TextEdit",
+      "windowTitle": "Untitled",
+      "displayWidth": 1440,
+      "displayHeight": 900,
+      "secureInput": false,
+      "elements": [
+        { "role": "AXTextField", "name": "Save As:", "x": 320, "y": 220, "width": 400, "height": 24 },
+        { "role": "AXButton", "name": "Save", "x": 620, "y": 420, "width": 90, "height": 30 },
+        { "role": "AXButton", "name": "Cancel", "x": 510, "y": 420, "width": 90, "height": 30 }
+      ]
+    },
+    "click": {
+      "success": true,
+      "action": "click",
+      "coordinateSpace": "pixel",
+      "x": 665,
+      "y": 435
+    }
+  }
+}

@@ -1,10 +1,14 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  ReplayComputerAdapter,
+  type ComputerTrace,
+} from "@melra/computer-runtime";
 import { createMelraRuntime } from "@melra/server";
 import { TaskRequestSchema } from "@melra/protocol";
 import { scenarios, type EvaluationScenario } from "./scenarios.js";
@@ -41,10 +45,27 @@ async function runScenario(scenario: EvaluationScenario): Promise<EvaluationResu
     policyPath = join(root, "policy.json");
     await writeFile(policyPath, JSON.stringify(scenario.policy));
   }
+  // A recorded desktop replaces the machine's own, so a scenario can be
+  // approved and executed anywhere instead of stopping at the approval to avoid
+  // taking hold of the mouse on whoever is running the suite.
+  const desktop =
+    scenario.desktop === undefined
+      ? undefined
+      : new ReplayComputerAdapter(
+          JSON.parse(
+            await readFile(
+              fileURLToPath(
+                new URL(`../scenarios/${scenario.desktop}.json`, import.meta.url),
+              ),
+              "utf8",
+            ),
+          ) as ComputerTrace,
+        );
   const runtime = await createMelraRuntime({
     workspaceRoot: root,
     dataDirectory: join(root, ".melra"),
     ...(policyPath === undefined ? {} : { policyPath }),
+    ...(desktop === undefined ? {} : { computerAdapter: desktop }),
   });
   try {
     for (const fixture of scenario.fixtures ?? []) {

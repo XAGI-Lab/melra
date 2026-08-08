@@ -32,6 +32,18 @@ All notable changes are documented here. The format follows
   (`browser_cdp_cannot_replay_har`), and an unreadable archive fails at startup
   as `browser_har_replay_not_readable` instead of presenting itself as a site
   where every request fails.
+- **Replayable computer-use safety evaluations.** `ReplayComputerAdapter` in
+  `@melra/computer-runtime` answers from a recorded desktop — capabilities plus
+  one observation per action — instead of the real one, and
+  `createMelraRuntime({ computerAdapter })` accepts it programmatically. Four new
+  evaluation scenarios use it to run past the approval rather than stopping at
+  it: a named click reaches `verified_success` and its receipt names the element
+  actually hit, the same click with evidence naming a different button is
+  `partial`, and a target matching two buttons or none fails instead of clicking
+  something plausible. Forty scenarios now, and computer-use safety is checkable
+  on a machine with no desktop to disturb. The adapter is not reachable from
+  configuration, only from code: a config file able to swap the real desktop for
+  a recording could report a click nobody made.
 
 ### Changed
 

@@ -15,6 +15,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@melra/computer-runtime": "workspace:*",
     "@melra/protocol": "workspace:*",
     "@melra/receipt-schema": "workspace:*",
     "@melra/server": "workspace:*"

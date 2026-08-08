@@ -92,7 +92,7 @@ them as promises was the wrong call:
 - [x] CLI doctor, init, serve, run, inspect, export, and policy test.
 - [x] TypeScript and Python client SDKs.
 - [x] Docker image and hardened Compose configuration.
-- [x] Thirty-six deterministic safety/execution scenarios plus eight durable
+- [x] Forty deterministic safety/execution scenarios plus eight durable
       crash, recovery, and concurrency scenarios.
 - [x] Real MCP stdio, browser, container, and Python interoperability tests.
 - [x] Linux, macOS, and Windows CI definitions.
@@ -126,7 +126,12 @@ them as promises was the wrong call:
 - [x] Post-action desktop observation and task-specific verification. `inspect`
   returns observed fields a task can be held to with `result_equals`.
 - [x] Windows input adapter.
-- [ ] Replayable computer-use safety evaluations.
+- [x] Replayable computer-use safety evaluations. `ReplayComputerAdapter` runs
+  the whole path — resolve, click, verify, receipt — against a desktop recorded
+  to a file under `evals/scenarios/`, so the claims that a wrong-name target is
+  refused, an ambiguous one is refused, and a successful click with failing
+  evidence is `partial` are checkable on any machine instead of only on one with
+  a mouse to take hold of.
 - [ ] Official OSWorld-MCP subset with released traces and evaluator output.
 
 ### Browser and terminal expansion

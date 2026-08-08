@@ -13,7 +13,10 @@ import {
 import { join, parse, resolve } from "node:path";
 import type { Operation } from "@melra/protocol";
 import { BrowserRuntime } from "@melra/browser-runtime";
-import { ComputerRuntime } from "@melra/computer-runtime";
+import {
+  ComputerRuntime,
+  type ComputerAdapter,
+} from "@melra/computer-runtime";
 import { FileRuntime } from "@melra/file-runtime";
 import { LocalMemory } from "@melra/memory";
 import {
@@ -47,6 +50,13 @@ export interface MelraRuntimeOptions {
   browserCdpContextIndex?: number;
   browserHarPath?: string;
   browserHarReplayPath?: string;
+  /**
+   * Desktop to act on, for callers that need one that behaves the same on
+   * every machine — `ReplayComputerAdapter` over a recorded trace. Deliberately
+   * programmatic only: a config file able to swap the real desktop for a
+   * recording could report a click nobody made.
+   */
+  computerAdapter?: ComputerAdapter;
   /**
    * Directory holding browser cookies and profile state between runs. Opt-in:
    * absent means a fresh throwaway profile, which is why a logged-in site has
@@ -212,6 +222,9 @@ export async function createMelraRuntime(
   const memory = new LocalMemory(store, policy.memoryRetention);
   const computer = new ComputerRuntime({
     artifactDirectory: join(dataDirectory, "artifacts"),
+    ...(options.computerAdapter === undefined
+      ? {}
+      : { adapter: options.computerAdapter }),
   });
   const router = new RuntimeRouter(files, terminal, browser, computer, memory);
   const controller = new TaskController(

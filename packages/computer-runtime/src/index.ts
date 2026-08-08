@@ -1312,6 +1312,52 @@ class UnavailableAdapter implements ComputerAdapter {
   }
 }
 
+/**
+ * A recorded desktop: what the platform reported, frozen to a file.
+ *
+ * Steps are keyed by action rather than ordered, because the runtime issues
+ * calls a caller never wrote — resolving a named `target` inspects first — and a
+ * positional script would drift the moment that happened.
+ */
+export interface ComputerTrace {
+  capabilities: ComputerCapabilities;
+  steps: Record<string, Record<string, unknown>>;
+}
+
+/**
+ * Replays a recorded desktop instead of touching the real one.
+ *
+ * Computer use is the one adapter whose evaluations cannot run honestly in CI:
+ * asserting what a click does means either taking hold of the mouse on the
+ * machine running the suite, or stopping at the approval and never testing what
+ * happens after it. Replaying a recording exercises the whole path — resolution,
+ * execution, verification, receipt — against a desktop that is identical on
+ * every machine.
+ *
+ * An action the recording does not contain is refused rather than defaulted, so
+ * a trace that has drifted from the scenario using it fails loudly.
+ */
+export class ReplayComputerAdapter implements ComputerAdapter {
+  constructor(private readonly trace: ComputerTrace) {}
+
+  async capabilities(): Promise<ComputerCapabilities> {
+    return { ...this.trace.capabilities };
+  }
+
+  async execute(
+    operation: ComputerOperation,
+    _artifactDirectory: string,
+    signal?: AbortSignal,
+  ): Promise<Record<string, unknown>> {
+    if (signal?.aborted === true) throw new Error("task_cancelled");
+    const step = this.trace.steps[operation.action];
+    if (step === undefined) {
+      throw new Error(`computer_trace_missing_step:${operation.action}`);
+    }
+    return { ...step };
+  }
+}
+
 export function createSystemComputerAdapter(): ComputerAdapter {
   if (process.platform === "darwin") return new MacOsAdapter();
   if (process.platform === "linux") return new LinuxXdotoolAdapter();

@@ -55,6 +55,9 @@ importers:
 
   evals:
     dependencies:
+      '@melra/computer-runtime':
+        specifier: workspace:*
+        version: link:../packages/computer-runtime
       '@melra/protocol':
         specifier: workspace:*
         version: link:../packages/protocol

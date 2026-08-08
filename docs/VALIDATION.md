@@ -97,7 +97,7 @@ Host exercised locally: macOS arm64 (Darwin 25.5.0), Node.js 24, Python 3.11.14
 |---|---|
 | `pnpm check` | passed (versions, strict typecheck, tests, Python) |
 | TypeScript/Vitest cases | 287 passed |
-| `pnpm evals` | 36 of 36 scenarios passed, 0 failed |
+| `pnpm evals` | 40 of 40 scenarios passed, 0 failed |
 | `pnpm e2e` | 13 end-to-end cases passed over real stdio |
 | `pnpm pack:check` | passed |
 | `pnpm security:audit` | no known vulnerabilities, Node and Python |
