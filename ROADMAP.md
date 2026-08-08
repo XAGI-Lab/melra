@@ -291,9 +291,19 @@ but not in the shape the protocol should eventually name.
       configure policy, run the agent normally. Opt-in with
       `MELRA_HARNESS_TOOLS=1` so a client that only knows the kernel
       vocabulary sees the same eleven tools it always did.
-- [ ] At least two reference integrations against different harnesses, with the
+- [x] At least two reference integrations against different harnesses, with the
       same policy, durable state, and receipts surviving the swap. This is the
-      claim that distinguishes a kernel from a server; it is not yet proven.
+      claim that distinguishes a kernel from a server.
+      `packages/server/test/agent-independence.test.ts` drives one effect
+      through three deliberately mismatched clients over the same data
+      directory: a child process over stdio speaking ordinary tool names
+      (`write_file`, `approve`), an in-process loopback HTTP server on a
+      *second* runtime object speaking the kernel vocabulary, and the CLI, which
+      speaks no MCP. The same operation asked for two ways derives the same
+      contract; a mutation planned under the first harness is still held after
+      that harness's process is gone, still refuses a wrong phrase, and is
+      finished by the second on the first's terms; the third reads back the same
+      receipt id and `VERIFIED_SUCCESS` certificate.
 - [ ] Compatibility suite a harness can run to demonstrate it does not bypass
       the kernel, and a published conformance level a runtime can claim.
 

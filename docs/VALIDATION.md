@@ -189,6 +189,9 @@ be attached to the immutable release or workflow run.
 - private and metadata network targets are rejected;
 - mutations without required evidence are policy-blocked;
 - wrong or missing approval phrases are rejected;
+- a mutation planned by one harness stays gated after that harness's process is
+  gone, and a second harness on a different transport, vocabulary, and runtime
+  object can only finish it by echoing the original phrase;
 - tampered action digests and approval IDs fail before adapter execution;
 - read retries are bounded and mutations are not retried;
 - independently observed file mutations reconcile after interruption while

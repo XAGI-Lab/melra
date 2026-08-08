@@ -18,6 +18,20 @@ All notable changes are documented here. The format follows
   `pnpm registry:smoke` runs the same check against any installed `melra` via
   `MELRA_COMMAND`.
 
+- **Agent independence is now a test rather than a claim.**
+  `packages/server/test/agent-independence.test.ts` drives one effect through
+  three deliberately mismatched clients sharing one data directory: a child
+  process over stdio speaking the ordinary harness vocabulary (`write_file`,
+  `approve`), a loopback HTTP server on a *second* runtime object speaking the
+  kernel vocabulary (`melra_plan`, `melra_execute`), and the CLI, which speaks
+  no MCP at all. It asserts that the same operation asked for two ways derives
+  the same stored contract, that a mutation planned under the first harness is
+  still held after that harness's process exits, still refuses a wrong approval
+  phrase, and is finished by the second harness on the first's terms — and that
+  the third client reads back the same receipt id and `VERIFIED_SUCCESS`
+  certificate. Policy, durable state, approvals and receipts belong to the
+  kernel, not to whichever client opened the session.
+
 ## [0.3.0-alpha.9] - 2026-08-09
 
 ### Added
