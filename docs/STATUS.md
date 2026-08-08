@@ -50,7 +50,8 @@ Documented in docs/VALIDATION.md "Known alpha limitations":
   OAuth, and carries no per-client identity
 - Browser sessions thrown away per run unless `MELRA_BROWSER_PROFILE` names a
   directory to keep
-- Computer OCR/accessibility targeting roadmap
+- Computer OCR/visual targeting roadmap; element targeting works on macOS and
+  Windows but not on Linux/X11
 - Node SQLite experimental warning (suppressed in the CLI; visible when the
   storage package is embedded as a library)
 - Unhinged mode (`--unhinged` / `MELRA_UNHINGED=1`) is an explicit opt-out of the

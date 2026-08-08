@@ -25,7 +25,7 @@ shouldn't have to.**
 <a href="https://github.com/XAGI-Lab/melra/actions/workflows/container.yml"><img src="https://github.com/XAGI-Lab/melra/actions/workflows/container.yml/badge.svg" alt="Container build status" /></a>
 
 <!-- Evidence -->
-<img src="https://img.shields.io/badge/evals-35_scenarios_passing-22c55e?style=flat-square&logo=checkmarx&logoColor=white" alt="35 deterministic evaluation scenarios passing" />
+<img src="https://img.shields.io/badge/evals-36_scenarios_passing-22c55e?style=flat-square&logo=checkmarx&logoColor=white" alt="36 deterministic evaluation scenarios passing" />
 <img src="https://img.shields.io/badge/tests-287_passing-22c55e?style=flat-square&logo=vitest&logoColor=white" alt="287 JavaScript tests passing" />
 <img src="https://img.shields.io/badge/MCP_E2E-13_passing-22c55e?style=flat-square&logo=testcafe&logoColor=white" alt="13 real MCP end-to-end cases passing" />
 <img src="https://img.shields.io/badge/runtime_vulnerabilities-0_known-22c55e?style=flat-square&logo=snyk&logoColor=white" alt="No known production runtime vulnerabilities" />
@@ -567,7 +567,7 @@ MCP is universally "the best" or that unlike benchmarks are comparable.
 | 🌐 | Slow-render settle | **10/10** vs 0/10 correct | Condition-based waiting observes the final DOM; fixed 300 ms reads too early |
 | 💻 | Terminal | **30/30** verified executions | Shell-free process launch; 48.1 ms p50 on the measured machine |
 | 🖥️ | Computer control plane | **30/30** capability probes | 0.032 ms p50 adapter discovery; this is *not* a desktop task-success score |
-| ✅ | Safety/execution evals | **35/35** passing | Deterministic policy, capability-grant, traversal, terminal, memory, computer, cancellation, and verification scenarios |
+| ✅ | Safety/execution evals | **36/36** passing | Deterministic policy, capability-grant, traversal, terminal, memory, computer, cancellation, and verification scenarios |
 | 🔁 | Durable Core eval | **8/8** valid scenarios | 100% expected recovery, 0 duplicate execution, 0 false success, 100% event consistency |
 
 Read the [research index](docs/research/README.md), the

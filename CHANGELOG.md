@@ -6,6 +6,22 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Semantic element targeting for computer use.** `computer.inspect` now lists
+  the frontmost window's addressable elements — role, name, and pixel geometry,
+  capped at 200 — where the platform has an accessibility tree, and `click`,
+  `move`, and `drag` accept `target: { role, name }` in place of coordinates.
+  macOS reads the tree through System Events four levels deep, Windows through
+  UI Automation; X11 has no equivalent, so the Linux adapter reports the new
+  `capabilities.elements: false` rather than guessing. A target that matches
+  nothing fails `computer_target_not_found`, and one that matches several fails
+  `computer_target_ambiguous` listing the candidates — a desktop action has no
+  undo, so picking the first of two "Delete" buttons is not an option. Exact
+  names beat substrings, the resolved element rides back on the result so
+  `result_equals` can verify what was actually hit, and policy sees
+  `element:role:name` as the target rather than a pixel the caller never wrote.
+
 ## [0.3.0-alpha.8] - 2026-08-08
 
 ### Added

@@ -21,10 +21,28 @@ export interface ComputerCapabilities {
   scroll: boolean;
   /** `inspect` can report the focused window and display geometry. */
   inspect: boolean;
+  /** `inspect` can list addressable elements, so `target` resolves to a point. */
+  elements: boolean;
   /** `drag` can hold the button down between two points. */
   drag: boolean;
   coordinateSpaces: Array<"normalized" | "pixel">;
   limitations: string[];
+}
+
+/**
+ * One addressable thing on the desktop, in pixel space. `role` is the platform's
+ * own word for what it is (`AXButton` on macOS, a UI Automation control type on
+ * Windows) rather than a normalised vocabulary: translating it would mean
+ * guessing at intent, and a caller that can read `inspect` output can match what
+ * it saw there.
+ */
+export interface DesktopElement {
+  role: string;
+  name?: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 /**
@@ -48,7 +66,17 @@ export interface DesktopObservation {
    * is focused, or a lock screen is up. Synthetic keystrokes do not reach it.
    */
   secureInput?: boolean;
+  /**
+   * Addressable elements of the frontmost window, when the platform exposes an
+   * accessibility tree. Absent — not empty — where it does not, because "this
+   * window has no buttons" and "I cannot see this window's buttons" have to stay
+   * distinguishable to a caller deciding whether to fall back to coordinates.
+   */
+  elements?: DesktopElement[];
 }
+
+/** Depth-first cap on what an adapter may report, matched in each helper script. */
+const MAX_ELEMENTS = 200;
 
 /**
  * Reads an adapter helper's JSON into a `DesktopObservation`, keeping only the
@@ -82,12 +110,93 @@ function observationFrom(json: string): DesktopObservation {
   const windowTitle = text("windowTitle");
   const displayWidth = size("displayWidth");
   const displayHeight = size("displayHeight");
+  const elements = elementsFrom(record["elements"]);
   return {
     ...(application === undefined ? {} : { application }),
     ...(windowTitle === undefined ? {} : { windowTitle }),
     ...(displayWidth === undefined ? {} : { displayWidth }),
     ...(displayHeight === undefined ? {} : { displayHeight }),
+    ...(elements === undefined ? {} : { elements }),
   };
+}
+
+/**
+ * An element list is dropped entirely when the key is absent, and entries within
+ * it are dropped individually when a platform could not measure one. A
+ * zero-sized or unnamed control is real; one with no role or no geometry cannot
+ * be clicked, so keeping it would only offer the caller a target that fails at
+ * the point of use.
+ */
+function elementsFrom(value: unknown): DesktopElement[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const elements: DesktopElement[] = [];
+  for (const entry of value.slice(0, MAX_ELEMENTS)) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const record = entry as Record<string, unknown>;
+    const role = record["role"];
+    const name = record["name"];
+    const box = ["x", "y", "width", "height"].map((key) => record[key]);
+    if (typeof role !== "string" || role.trim() === "") continue;
+    if (!box.every((n) => typeof n === "number" && Number.isFinite(n))) continue;
+    const [x, y, width, height] = box as number[];
+    if (width! <= 0 || height! <= 0) continue;
+    elements.push({
+      role,
+      ...(typeof name === "string" && name.trim() !== "" ? { name } : {}),
+      x: Math.round(x!),
+      y: Math.round(y!),
+      width: Math.round(width!),
+      height: Math.round(height!),
+    });
+  }
+  return elements;
+}
+
+/**
+ * Resolves a named target against an observed element list.
+ *
+ * Ambiguity is an error rather than a first-match, because the failure mode of
+ * guessing is clicking the wrong "Delete" and there is no undo for a desktop
+ * action. Exact names beat substrings for the same reason: a window with both
+ * "Save" and "Save As…" must resolve "Save" to the one the caller wrote.
+ *
+ * Exported because the matching rules are the part worth testing directly —
+ * everything around them needs a live desktop.
+ */
+export function matchElement(
+  elements: DesktopElement[],
+  target: { role?: string | undefined; name?: string | undefined },
+): DesktopElement {
+  if (target.role === undefined && target.name === undefined) {
+    throw new Error("computer_target_requires_role_or_name");
+  }
+  const role = target.role?.toLocaleLowerCase();
+  const candidates =
+    role === undefined
+      ? elements
+      : elements.filter((e) => e.role.toLocaleLowerCase() === role);
+  let matches = candidates;
+  if (target.name !== undefined) {
+    const wanted = target.name.toLocaleLowerCase();
+    const exact = candidates.filter(
+      (e) => e.name?.toLocaleLowerCase() === wanted,
+    );
+    matches =
+      exact.length > 0
+        ? exact
+        : candidates.filter((e) =>
+            e.name?.toLocaleLowerCase().includes(wanted) === true,
+          );
+  }
+  if (matches.length === 0) throw new Error("computer_target_not_found");
+  if (matches.length > 1) {
+    const listed = matches
+      .slice(0, 5)
+      .map((e) => `${e.role}:${e.name ?? "?"}`)
+      .join(", ");
+    throw new Error(`computer_target_ambiguous: ${listed}`);
+  }
+  return matches[0]!;
 }
 
 /**
@@ -241,6 +350,17 @@ post($.kCGEventLeftMouseUp, $.CGPointMake(toX, toY));` : ""}
 /** Intermediate motion events synthesised between a drag's press and release. */
 const MACOS_DRAG_STEPS = 10;
 
+/**
+ * Depth the accessibility walk descends before stopping.
+ *
+ * ponytail: fixed depth, not an adaptive budget. Every JXA accessor is an Apple
+ * Event round trip, so a full-tree walk of a document-heavy app costs seconds;
+ * four levels reaches the toolbar and window controls a caller names by hand
+ * without paying for a text view's every glyph run. Raise it here if a real
+ * target turns out to sit deeper.
+ */
+const MACOS_ELEMENT_DEPTH = 4;
+
 const MACOS_INSPECT_SCRIPT = `
 ObjC.import("AppKit");
 const frame = $.NSScreen.mainScreen.frame;
@@ -255,9 +375,52 @@ try {
   const frontmost = Application("System Events")
     .applicationProcesses.whose({ frontmost: true })[0];
   out.application = frontmost.name();
+  const window = frontmost.windows[0];
   try {
-    out.windowTitle = frontmost.windows[0].name();
+    out.windowTitle = window.name();
   } catch (error) {}
+  // Every accessor below is guarded on its own: an element can vanish between
+  // being listed and being measured, and one that does must not cost the whole
+  // list. A partial tree is useful; an exception here is not.
+  const elements = [];
+  const label = (node) => {
+    for (const read of [() => node.title(), () => node.description(), () => node.value()]) {
+      try {
+        const value = read();
+        if (typeof value === "string" && value.trim() !== "") return value;
+      } catch (error) {}
+    }
+    return null;
+  };
+  const visit = (node, depth) => {
+    if (depth > ${MACOS_ELEMENT_DEPTH} || elements.length >= ${MAX_ELEMENTS}) return;
+    let children = [];
+    try {
+      children = node.uiElements();
+    } catch (error) {
+      return;
+    }
+    for (const child of children) {
+      if (elements.length >= ${MAX_ELEMENTS}) return;
+      try {
+        const position = child.position();
+        const size = child.size();
+        const entry = {
+          role: child.role(),
+          x: position[0],
+          y: position[1],
+          width: size[0],
+          height: size[1],
+        };
+        const name = label(child);
+        if (name !== null) entry.name = name;
+        elements.push(entry);
+      } catch (error) {}
+      visit(child, depth + 1);
+    }
+  };
+  visit(window, 0);
+  out.elements = elements;
 } catch (error) {}
 JSON.stringify(out);
 `;
@@ -319,6 +482,7 @@ class MacOsAdapter implements ComputerAdapter {
       keyboard: osascript,
       scroll: osascript,
       inspect: osascript,
+      elements: osascript,
       drag: osascript,
       coordinateSpaces: ["normalized", "pixel"],
       limitations: [
@@ -493,6 +657,7 @@ class LinuxXdotoolAdapter implements ComputerAdapter {
       keyboard: xdotool !== undefined,
       scroll: xdotool !== undefined,
       inspect: xdotool !== undefined,
+      elements: false,
       drag: xdotool !== undefined,
       coordinateSpaces: ["normalized", "pixel"],
       limitations: [
@@ -845,8 +1010,41 @@ if ($window -ne [IntPtr]::Zero) {
   # cannot be opened at all; either way the window is still worth reporting.
   $process = Get-Process -Id $processId -ErrorAction SilentlyContinue
   if ($process -ne $null) { $out.application = $process.ProcessName }
+  # UIAutomationClient ships with the .NET Framework, so listing elements costs
+  # no extra install. The walk is wrapped whole rather than per-element: unlike
+  # the macOS accessibility API, a failure here is the provider refusing the
+  # window outright, not one control going stale, and a half-list would be
+  # indistinguishable from a window that really has three buttons.
+  try {
+    Add-Type -AssemblyName UIAutomationClient
+    Add-Type -AssemblyName UIAutomationTypes
+    $root = [System.Windows.Automation.AutomationElement]::FromHandle($window)
+    $condition = New-Object System.Windows.Automation.PropertyCondition(
+      [System.Windows.Automation.AutomationElement]::IsControlElementProperty, $true)
+    $found = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condition)
+    $elements = @()
+    foreach ($node in $found) {
+      if ($elements.Count -ge ${MAX_ELEMENTS}) { break }
+      $rect = $node.Current.BoundingRectangle
+      if ($rect.Width -le 0 -or $rect.Height -le 0) { continue }
+      $entry = [ordered]@{
+        role = $node.Current.ControlType.ProgrammaticName
+        x = [int]$rect.X
+        y = [int]$rect.Y
+        width = [int]$rect.Width
+        height = [int]$rect.Height
+      }
+      if ($node.Current.Name -ne '') { $entry.name = $node.Current.Name }
+      $elements += $entry
+    }
+    # A single-element array unrolls to a bare object through ConvertTo-Json, so
+    # the shape is forced back to a list before the caller ever sees it.
+    $out.elements = @($elements)
+  } catch {}
 }
-Write-Output ($out | ConvertTo-Json -Compress)
+# The default depth of 2 stops inside the element list and renders each entry as
+# a type name; 4 reaches every leaf the shape actually has.
+Write-Output ($out | ConvertTo-Json -Compress -Depth 4)
 `;
 
 const WINDOWS_SCREENSHOT_SCRIPT = `
@@ -907,6 +1105,7 @@ class WindowsAdapter implements ComputerAdapter {
       keyboard: available,
       scroll: available,
       inspect: available,
+      elements: available,
       drag: available,
       coordinateSpaces: ["normalized", "pixel"],
       limitations: [
@@ -1098,6 +1297,7 @@ class UnavailableAdapter implements ComputerAdapter {
       keyboard: false,
       scroll: false,
       inspect: false,
+      elements: false,
       drag: false,
       coordinateSpaces: ["normalized", "pixel"],
       limitations: ["no supported local computer-use adapter was detected"],
@@ -1158,26 +1358,68 @@ export class ComputerRuntime {
     ) {
       throw new Error(`computer_${requiredCapability}_unavailable`);
     }
-    if (["click", "move", "drag"].includes(operation.action)) {
-      requirePoints(operation);
+    const positional = ["click", "move", "drag"].includes(operation.action);
+    let resolved: ComputerOperation = operation;
+    let element: DesktopElement | undefined;
+    if (operation.target !== undefined) {
+      if (!positional) throw new Error("computer_target_not_positional");
+      if (operation.x !== undefined || operation.y !== undefined) {
+        throw new Error("computer_target_conflicts_with_coordinates");
+      }
+      if (!capabilities.elements) throw new Error("computer_elements_unavailable");
+      element = matchElement(await this.elements(operation, signal), operation.target);
+      const { target: _named, ...rest } = operation;
+      resolved = {
+        ...rest,
+        // The tree measures in pixels, so a normalized request resolves into
+        // pixel space rather than being scaled back into a fraction of a display
+        // the element was never expressed against.
+        coordinateSpace: "pixel",
+        x: element.x + Math.floor(element.width / 2),
+        y: element.y + Math.floor(element.height / 2),
+      };
     }
-    if (operation.coordinateSpace === "normalized") {
+    if (positional) {
+      requirePoints(resolved);
+    }
+    if (resolved.coordinateSpace === "normalized") {
       // Every positional field shares one space, so the bound applies to the
       // drag destination as much as to the press point.
       const outOfRange = [
-        operation.x,
-        operation.y,
-        operation.toX,
-        operation.toY,
+        resolved.x,
+        resolved.y,
+        resolved.toX,
+        resolved.toY,
       ].some((value) => value !== undefined && value > 1);
       if (outOfRange) {
         throw new Error("computer_normalized_coordinates_out_of_range");
       }
     }
-    return await this.adapter.execute(
-      operation,
+    const result = await this.adapter.execute(
+      resolved,
       this.options.artifactDirectory,
       signal,
     );
+    // The resolved element rides back on the result so a caller can verify what
+    // was actually hit with `result_equals` on `element.name`, rather than
+    // trusting that the name it asked for was the name that got clicked.
+    return element === undefined ? result : { ...result, element };
+  }
+
+  /** The frontmost window's elements, or a refusal if the platform saw none. */
+  private async elements(
+    operation: ComputerOperation,
+    signal?: AbortSignal,
+  ): Promise<DesktopElement[]> {
+    const observed = await this.adapter.execute(
+      { ...operation, action: "inspect" },
+      this.options.artifactDirectory,
+      signal,
+    );
+    const elements = elementsFrom(observed["elements"]);
+    if (elements === undefined || elements.length === 0) {
+      throw new Error("computer_elements_unavailable");
+    }
+    return elements;
   }
 }

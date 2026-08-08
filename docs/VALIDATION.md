@@ -97,7 +97,7 @@ Host exercised locally: macOS arm64 (Darwin 25.5.0), Node.js 24, Python 3.11.14
 |---|---|
 | `pnpm check` | passed (versions, strict typecheck, tests, Python) |
 | TypeScript/Vitest cases | 287 passed |
-| `pnpm evals` | 35 of 35 scenarios passed, 0 failed |
+| `pnpm evals` | 36 of 36 scenarios passed, 0 failed |
 | `pnpm e2e` | 13 end-to-end cases passed over real stdio |
 | `pnpm pack:check` | passed |
 | `pnpm security:audit` | no known vulnerabilities, Node and Python |
@@ -285,8 +285,9 @@ findings.
   CDP (`MELRA_BROWSER_CDP`) cannot use it, so that path stays open to DNS
   rebinding.
 - Computer screenshot and input adapters are alpha; OCR/visual targeting,
-  accessibility targeting, focus verification, interactive PTY, semantic
-  embeddings, and extension loading remain roadmap items.
+  focus verification, interactive PTY, semantic embeddings, and extension
+  loading remain roadmap items. Accessibility targeting ships on macOS and
+  Windows; X11 exposes no element tree, so Linux is coordinates only.
 - Node's built-in SQLite API emits an experimental warning on Node 22/24. The
   `melra` executable suppresses that one warning so it does not appear on every
   command or in MCP server logs; embedding `@melra/storage-sqlite` as a library

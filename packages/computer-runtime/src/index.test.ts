@@ -2,16 +2,21 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, expect, it } from "vitest";
-import { ComputerOperationSchema } from "@melra/protocol";
+import { ComputerOperationSchema, type ComputerOperation } from "@melra/protocol";
 import {
   ComputerRuntime,
+  matchElement,
   parseSecureInput,
   type ComputerAdapter,
   type ComputerCapabilities,
+  type DesktopElement,
 } from "./index.js";
 
 class TestAdapter implements ComputerAdapter {
   readonly calls: string[] = [];
+  readonly operations: ComputerOperation[] = [];
+  /** What `inspect` reports back; a live desktop is the only other source. */
+  elements: DesktopElement[] = [];
 
   constructor(
     private readonly overrides: Partial<ComputerCapabilities> = {},
@@ -27,6 +32,7 @@ class TestAdapter implements ComputerAdapter {
       keyboard: true,
       scroll: true,
       inspect: true,
+      elements: true,
       drag: true,
       coordinateSpaces: ["normalized", "pixel"],
       limitations: [],
@@ -34,11 +40,25 @@ class TestAdapter implements ComputerAdapter {
     };
   }
 
-  async execute(operation: { action: string }): Promise<Record<string, unknown>> {
+  async execute(operation: ComputerOperation): Promise<Record<string, unknown>> {
     this.calls.push(operation.action);
-    return { success: true, action: operation.action };
+    this.operations.push(operation);
+    return {
+      success: true,
+      action: operation.action,
+      ...(operation.action === "inspect" ? { elements: this.elements } : {}),
+    };
   }
 }
+
+const BUTTON = (name: string, x: number): DesktopElement => ({
+  role: "AXButton",
+  name,
+  x,
+  y: 40,
+  width: 80,
+  height: 20,
+});
 
 describe("ComputerRuntime", () => {
   it("reports adapter capabilities without a mutation", async () => {
@@ -173,6 +193,89 @@ describe("ComputerRuntime", () => {
       }),
     );
     expect(adapter.calls).toEqual(["inspect", "drag"]);
+  });
+});
+
+describe("matchElement", () => {
+  const elements = [
+    BUTTON("Save", 0),
+    BUTTON("Save As…", 100),
+    { role: "AXTextField", name: "Save", x: 200, y: 40, width: 60, height: 20 },
+  ];
+
+  it("prefers an exact name over the substring it is a prefix of", () => {
+    expect(matchElement(elements, { role: "AXButton", name: "Save" }).x).toBe(0);
+  });
+
+  it("matches a role case-insensitively and a name by substring", () => {
+    expect(matchElement(elements, { role: "axbutton", name: "as…" }).x).toBe(
+      100,
+    );
+  });
+
+  it("refuses rather than guessing between equally good candidates", () => {
+    // Two exact "Save" matches across roles: picking either would be a coin
+    // flip on which control gets clicked.
+    expect(() => matchElement(elements, { name: "Save" })).toThrow(
+      "computer_target_ambiguous",
+    );
+    expect(() => matchElement(elements, { name: "Print" })).toThrow(
+      "computer_target_not_found",
+    );
+    expect(() => matchElement(elements, {})).toThrow(
+      "computer_target_requires_role_or_name",
+    );
+  });
+});
+
+describe("named targets", () => {
+  const click = (
+    target: Record<string, string>,
+    extra: Record<string, unknown> = {},
+  ): ComputerOperation =>
+    ComputerOperationSchema.parse({
+      kind: "computer",
+      action: "click",
+      target,
+      ...extra,
+    });
+
+  it("inspects, then clicks the centre of the resolved element", async () => {
+    const adapter = new TestAdapter();
+    adapter.elements = [BUTTON("Save", 300)];
+    const runtime = new ComputerRuntime({ artifactDirectory: "/tmp", adapter });
+
+    const result = await runtime.execute(click({ name: "Save" }));
+
+    expect(adapter.calls).toEqual(["inspect", "click"]);
+    const acted = adapter.operations[1]!;
+    // 300 + 80/2, 40 + 20/2 — in pixels, because that is what the tree measures.
+    expect([acted.coordinateSpace, acted.x, acted.y]).toEqual(["pixel", 340, 50]);
+    expect(acted.target).toBe(undefined);
+    expect(result.element).toEqual(BUTTON("Save", 300));
+  });
+
+  it("refuses a target the platform or the request cannot support", async () => {
+    const adapter = new TestAdapter();
+    const runtime = new ComputerRuntime({ artifactDirectory: "/tmp", adapter });
+
+    adapter.elements = [BUTTON("Save", 300)];
+    await expect(
+      runtime.execute(click({ name: "Save" }, { x: 10, y: 10 })),
+    ).rejects.toThrow("computer_target_conflicts_with_coordinates");
+
+    adapter.elements = [];
+    await expect(runtime.execute(click({ name: "Save" }))).rejects.toThrow(
+      "computer_elements_unavailable",
+    );
+
+    const blind = new ComputerRuntime({
+      artifactDirectory: "/tmp",
+      adapter: new TestAdapter({ elements: false }),
+    });
+    await expect(blind.execute(click({ name: "Save" }))).rejects.toThrow(
+      "computer_elements_unavailable",
+    );
   });
 });
 

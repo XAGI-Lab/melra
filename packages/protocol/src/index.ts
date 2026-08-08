@@ -205,6 +205,22 @@ export const ComputerOperationSchema = z
       ])
       .optional(),
     deltaY: z.number().int().min(-2_000).max(2_000).optional(),
+    /**
+     * Where to act, named rather than measured. `inspect` reports the elements
+     * the platform can see with the roles and names that address them, and a
+     * caller naming one here has the runtime resolve it to a point instead of
+     * reading pixels off a screenshot. Coordinates still work unchanged;
+     * supplying both is rejected rather than silently resolved one way, because
+     * the two can disagree and the caller is the only one who knows which it
+     * meant.
+     */
+    target: z
+      .object({
+        role: z.string().min(1).max(100).optional(),
+        name: z.string().min(1).max(500).optional(),
+      })
+      .strict()
+      .optional(),
     // Capped at 120s like every other operation kind rather than 30s. A
     // computer action spawns a whole interpreter — `powershell.exe` plus the
     // .NET assemblies it loads, `osascript`, `xdotool` — and the first such

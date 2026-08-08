@@ -88,7 +88,7 @@ them as promises was the wrong call:
 - [x] CLI doctor, init, serve, run, inspect, export, and policy test.
 - [x] TypeScript and Python client SDKs.
 - [x] Docker image and hardened Compose configuration.
-- [x] Thirty deterministic safety/execution scenarios plus eight durable
+- [x] Thirty-six deterministic safety/execution scenarios plus eight durable
       crash, recovery, and concurrency scenarios.
 - [x] Real MCP stdio, browser, container, and Python interoperability tests.
 - [x] Linux, macOS, and Windows CI definitions.
@@ -107,9 +107,12 @@ them as promises was the wrong call:
 - [x] Governed screenshot, pointer, text, named-key, and scroll operations.
 - [x] macOS native adapter with permission-aware capability reporting.
 - [x] Linux/X11 adapter using detected screenshot tools and `xdotool`.
-- [ ] Accessibility-tree inspection and semantic element targeting. `inspect`
-  reports the frontmost application, window title, and display geometry today;
-  addressing an element by name rather than by coordinate is still open.
+- [x] Accessibility-tree inspection and semantic element targeting. `inspect`
+  lists the frontmost window's addressable elements with role, name, and pixel
+  geometry on macOS and Windows, and an operation carrying
+  `target: { role, name }` resolves against that list instead of a coordinate.
+  X11 exposes no equivalent tree, so the Linux adapter reports
+  `elements: false` rather than guessing.
 - [ ] Screenshot and OCR inspection fallback.
 - [x] Drag and window-management actions.
 - [x] Active-window, display, focus, and secure-input safety checks. macOS

@@ -164,8 +164,8 @@ consolidation, and poisoning detection remain roadmap work.
 
 ### Computer
 
-Actions: `capabilities`, `screenshot`, `click`, `move`, `type`, `key`,
-`scroll`.
+Actions: `capabilities`, `inspect`, `screenshot`, `click`, `move`, `drag`,
+`type`, `key`, `scroll`.
 
 - Capability discovery is read-only and reports the detected adapter and
   limitations.
@@ -173,6 +173,20 @@ Actions: `capabilities`, `screenshot`, `click`, `move`, `type`, `key`,
 - Input actions are high-risk mutations requiring evidence and exact scoped
   approval.
 - Coordinates name normalized or pixel space; key input uses a fixed allowlist.
+- `inspect` lists the frontmost window's addressable elements — role, name, and
+  pixel geometry, at most 200 — where the platform exposes an accessibility
+  tree, and `capabilities.elements` says whether it does. `click`, `move`, and
+  `drag` accept `target: { role, name }` instead of coordinates and resolve it
+  against that list, clicking the element's centre. A name that matches nothing
+  fails `computer_target_not_found` and one that matches several fails
+  `computer_target_ambiguous` with the candidates — neither guesses. The
+  resolved element is returned on the result, so `result_equals` on
+  `element.name` verifies what was hit rather than what was asked for.
+  Supplying both `target` and coordinates is rejected.
+- macOS reads the tree through System Events, four levels deep, and needs
+  Accessibility permission; Windows reads it through UI Automation. X11 has no
+  equivalent, so the Linux adapter reports `elements: false` and only
+  coordinates work there.
 - macOS requires Screen Recording or Accessibility permission. Linux input
   currently requires X11 and `xdotool`. Windows uses Windows PowerShell and
   .NET, which ship with the OS, so it needs no extra install; input goes to
@@ -184,9 +198,9 @@ Actions: `capabilities`, `screenshot`, `click`, `move`, `type`, `key`,
   That cost is per-process, so `timeoutMs` may need raising above its 10s
   default on a slow or loaded machine; `capabilities` reports this too.
 
-Accessibility targeting, OCR/vision fallback, focus verification,
-multi-display normalization, per-monitor DPI compensation, and official
-task-benchmark evidence remain roadmap work.
+OCR/vision fallback, focus verification, multi-display normalization,
+per-monitor DPI compensation, and official task-benchmark evidence remain
+roadmap work. Element targeting is unavailable on Linux/X11.
 
 ### System
 

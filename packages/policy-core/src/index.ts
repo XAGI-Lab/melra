@@ -558,9 +558,15 @@ export function classifyOperation(operation: Operation): {
         effect: read ? "read" : "mutate",
         risk: read ? "low" : "high",
         capability: `computer.${operation.action}`,
-        target: positional
-          ? `${operation.coordinateSpace}:${operation.x ?? "?"},${operation.y ?? "?"}`
-          : "active-desktop",
+        // A named target is what the caller asked for, so it is what a
+        // capability pattern gets to match. Reporting the pixel it resolves to
+        // would name a coordinate the caller never wrote, and the resolution
+        // happens after policy anyway.
+        target: operation.target
+          ? `element:${operation.target.role ?? "*"}:${operation.target.name ?? "*"}`
+          : positional
+            ? `${operation.coordinateSpace}:${operation.x ?? "?"},${operation.y ?? "?"}`
+            : "active-desktop",
         traits: [],
       };
     }
