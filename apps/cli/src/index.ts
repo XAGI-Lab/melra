@@ -103,6 +103,9 @@ async function runtime(env: CliEnvironment): Promise<MelraRuntime> {
     ...(env.browserHarPath === undefined
       ? {}
       : { browserHarPath: env.browserHarPath }),
+    ...(env.browserHarReplayPath === undefined
+      ? {}
+      : { browserHarReplayPath: env.browserHarReplayPath }),
     ...(env.browserProfileDir === undefined
       ? {}
       : { browserProfileDir: env.browserProfileDir }),
@@ -618,6 +621,7 @@ Environment:
   MELRA_BROWSER_CDP_ENDPOINT       Optional HTTP(S) CDP endpoint
   MELRA_BROWSER_CDP_CONTEXT_INDEX  External context index (-1 is last)
   MELRA_BROWSER_HAR_PATH           Absolute HAR output path
+  MELRA_BROWSER_HAR_REPLAY         Absolute HAR to replay; nothing hits network
   MELRA_BROWSER_PROFILE            Absolute dir keeping cookies between runs
 `);
 }

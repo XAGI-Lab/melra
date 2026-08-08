@@ -139,8 +139,17 @@ Actions: `navigate`, `back`, `forward`, `reload`, `inspect`, `wait`, `click`,
 - Confines uploaded files to the workspace and downloaded files to the artifact
   directory.
 
-Persistent login profiles, visual/OCR targeting, and deterministic replay are
-not implemented in `0.3`. Captchas are detected and reported, never solved.
+- `MELRA_BROWSER_PROFILE` names a directory to keep, so a site logged into once
+  stays logged in across runs. Unset, every run gets a throwaway profile.
+- `MELRA_BROWSER_HAR_PATH` records the session as an HTTP archive, response
+  bodies included, and `MELRA_BROWSER_HAR_REPLAY` serves a later run entirely
+  from that file. A replayed run opens no sockets, so a request the archive does
+  not contain is aborted rather than fetched — a rerun cannot quietly become a
+  live one. The two cannot be combined, and neither works against a browser
+  attached over CDP.
+
+Visual/OCR targeting is not implemented in `0.3`. Captchas are detected and
+reported, never solved.
 
 ### Memory
 

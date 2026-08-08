@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, realpath, stat } from "node:fs/promises";
+import { constants } from "node:fs";
+import { access, mkdir, readFile, realpath, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type {
   Browser,
@@ -33,6 +34,17 @@ export interface BrowserRuntimeOptions extends NetworkPolicy {
   cdpEndpoint?: string;
   cdpContextIndex?: number;
   recordHarPath?: string;
+  /**
+   * HTTP archive every request is answered from, instead of the network.
+   *
+   * A request the archive does not hold is aborted rather than fetched: a
+   * replay that quietly reaches the live web is not a replay, and the whole
+   * point is that the same task run twice sees the same bytes. Nothing leaves
+   * the machine while this is set, so the destination checks below never come
+   * up — a recording made against an allowed host stays replayable after the
+   * host is removed from the allowlist, because the host is no longer involved.
+   */
+  replayHarPath?: string;
   /**
    * Directory holding cookies, storage, and profile state between runs.
    *
@@ -274,12 +286,34 @@ export class BrowserRuntime {
     if (this.options.recordHarPath !== undefined) {
       await mkdir(dirname(this.options.recordHarPath), { recursive: true });
     }
+    if (this.options.replayHarPath !== undefined) {
+      if (this.options.recordHarPath !== undefined) {
+        // Recording a session that is itself a replay would write the archive
+        // back out as though it had been observed.
+        throw new Error("browser_har_replay_cannot_record");
+      }
+      if (this.options.cdpEndpoint !== undefined) {
+        // The context belongs to whoever started the browser; rerouting its
+        // traffic to a file would change a session MELRA does not own.
+        throw new Error("browser_cdp_cannot_replay_har");
+      }
+      // Playwright treats a missing archive as an empty one and aborts every
+      // request, which looks like a broken site rather than a wrong path.
+      try {
+        await access(this.options.replayHarPath, constants.R_OK);
+      } catch {
+        throw new Error("browser_har_replay_not_readable");
+      }
+    }
     // Unhinged mode asserts nothing about destinations, so pinning one would be
     // theatre. An attached CDP browser is already running and cannot be told to
     // start proxying, so the rebinding window stays open there and the option is
-    // documented as the weaker path rather than silently equivalent.
+    // documented as the weaker path rather than silently equivalent. A replay
+    // opens no sockets at all, so there is nothing to pin.
     const proxy =
-      this.options.unhinged === true || this.options.cdpEndpoint !== undefined
+      this.options.unhinged === true ||
+      this.options.cdpEndpoint !== undefined ||
+      this.options.replayHarPath !== undefined
         ? undefined
         : await startPinningProxy(this.options);
     this.proxy = proxy;
@@ -323,6 +357,16 @@ export class BrowserRuntime {
       }
     };
     await this.context.route("**/*", this.routeHandler);
+    if (this.options.replayHarPath !== undefined) {
+      // Registered after the destination guard so it runs first: a replayed
+      // request is served from the file and never becomes a socket, and
+      // `notFound: "abort"` means a request the archive is missing fails
+      // visibly rather than falling through to the network the guard would
+      // have allowed.
+      await this.context.routeFromHAR(this.options.replayHarPath, {
+        notFound: "abort",
+      });
+    }
     /**
      * Answer dialogs instead of letting Playwright discard them.
      *

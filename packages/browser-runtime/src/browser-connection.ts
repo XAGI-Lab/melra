@@ -108,7 +108,12 @@ export async function connectBrowser(
           recordHar: {
             path: options.recordHarPath,
             mode: "full" as const,
-            content: "omit" as const,
+            // Bodies are embedded rather than omitted because a recording
+            // without them cannot be replayed, which made the recording knob
+            // evidence-only. It costs file size, and it means a HAR now holds
+            // page content alongside the URLs and headers it always held —
+            // treat one as the session itself, not as a log about it.
+            content: "embed" as const,
           },
         }),
   };

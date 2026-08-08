@@ -98,6 +98,107 @@ describe("browser connection evidence", () => {
     ).toBe(true);
   }, 120_000);
 
+  it("replays a recorded HAR after the origin is gone", async () => {
+    const executablePath = await detectBrowserExecutable();
+    if (executablePath === undefined) return;
+    const root = await mkdtemp(join(tmpdir(), "melra-browser-replay-"));
+    roots.push(root);
+    const { server, url } = await fixtureServer();
+    const harPath = join(root, "network.har");
+    const options = {
+      workspaceRoot: root,
+      artifactDirectory: join(root, "artifacts"),
+      executablePath,
+      allowedDomains: ["127.0.0.1"],
+      allowLocalhost: true,
+    };
+    const recorder = new BrowserRuntime({
+      ...options,
+      recordHarPath: harPath,
+    });
+    try {
+      await recorder.execute(
+        BrowserOperationSchema.parse({ kind: "browser", action: "navigate", url }),
+      );
+    } finally {
+      await recorder.close();
+    }
+    // The origin is taken down before replay, so a passing assertion below can
+    // only have been served from the archive.
+    await new Promise<void>((resolvePromise) => {
+      server.close(() => resolvePromise());
+    });
+    const replayer = new BrowserRuntime({ ...options, replayHarPath: harPath });
+    try {
+      const observation = await replayer.execute(
+        BrowserOperationSchema.parse({ kind: "browser", action: "navigate", url }),
+      );
+      expect(observation.text).toContain("verified page");
+      await expect(
+        replayer.execute(
+          BrowserOperationSchema.parse({
+            kind: "browser",
+            action: "navigate",
+            url: `${url}/absent`,
+          }),
+        ),
+      ).rejects.toThrow();
+    } finally {
+      await replayer.close();
+    }
+  }, 180_000);
+
+  it("refuses to record and replay the same session", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-browser-conflict-"));
+    roots.push(root);
+    const runtime = new BrowserRuntime({
+      workspaceRoot: root,
+      artifactDirectory: join(root, "artifacts"),
+      allowedDomains: ["127.0.0.1"],
+      allowLocalhost: true,
+      recordHarPath: join(root, "network.har"),
+      replayHarPath: join(root, "network.har"),
+    });
+    try {
+      await expect(
+        runtime.execute(
+          BrowserOperationSchema.parse({
+            kind: "browser",
+            action: "navigate",
+            url: "http://127.0.0.1:1/",
+          }),
+        ),
+      ).rejects.toThrow("browser_har_replay_cannot_record");
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  it("refuses a replay archive it cannot read", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-browser-missing-"));
+    roots.push(root);
+    const runtime = new BrowserRuntime({
+      workspaceRoot: root,
+      artifactDirectory: join(root, "artifacts"),
+      allowedDomains: ["127.0.0.1"],
+      allowLocalhost: true,
+      replayHarPath: join(root, "absent.har"),
+    });
+    try {
+      await expect(
+        runtime.execute(
+          BrowserOperationSchema.parse({
+            kind: "browser",
+            action: "navigate",
+            url: "http://127.0.0.1:1/",
+          }),
+        ),
+      ).rejects.toThrow("browser_har_replay_not_readable");
+    } finally {
+      await runtime.close();
+    }
+  });
+
   it("attaches to the selected CDP context without closing its owner", async () => {
     const executablePath = await detectBrowserExecutable();
     if (executablePath === undefined) return;

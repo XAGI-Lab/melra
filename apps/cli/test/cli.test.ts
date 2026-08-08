@@ -104,6 +104,15 @@ describe("melra CLI", () => {
       ),
     ).toThrow("browser_cdp_cannot_start_har_recording");
     expect(() =>
+      parseCliEnvironment(
+        {
+          MELRA_BROWSER_HAR_PATH: "/tmp/network.har",
+          MELRA_BROWSER_HAR_REPLAY: "/tmp/network.har",
+        },
+        defaults,
+      ),
+    ).toThrow("browser_har_replay_cannot_record");
+    expect(() =>
       parseCliEnvironment({ MELRA_BROWSER_PROFILE: "profile" }, defaults),
     ).toThrow("browser_profile_must_be_absolute");
     expect(() =>

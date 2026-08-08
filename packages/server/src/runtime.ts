@@ -46,6 +46,7 @@ export interface MelraRuntimeOptions {
   browserCdpEndpoint?: string;
   browserCdpContextIndex?: number;
   browserHarPath?: string;
+  browserHarReplayPath?: string;
   /**
    * Directory holding browser cookies and profile state between runs. Opt-in:
    * absent means a fresh throwaway profile, which is why a logged-in site has
@@ -201,6 +202,9 @@ export async function createMelraRuntime(
     ...(options.browserHarPath === undefined
       ? {}
       : { recordHarPath: options.browserHarPath }),
+    ...(options.browserHarReplayPath === undefined
+      ? {}
+      : { replayHarPath: options.browserHarReplayPath }),
     ...(options.browserProfileDir === undefined
       ? {}
       : { userDataDir: options.browserProfileDir }),

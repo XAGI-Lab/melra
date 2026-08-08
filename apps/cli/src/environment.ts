@@ -14,6 +14,7 @@ export interface CliEnvironment {
   browserCdpEndpoint?: string;
   browserCdpContextIndex?: number;
   browserHarPath?: string;
+  browserHarReplayPath?: string;
   browserProfileDir?: string;
 }
 
@@ -88,6 +89,7 @@ export function parseCliEnvironment(
     source.MELRA_BROWSER_CDP_CONTEXT_INDEX,
   );
   const recordHarPath = harPath(source.MELRA_BROWSER_HAR_PATH);
+  const replayHarPath = harPath(source.MELRA_BROWSER_HAR_REPLAY);
   const profileDir = source.MELRA_BROWSER_PROFILE;
   if (profileDir !== undefined && !isAbsolute(profileDir)) {
     throw new Error("browser_profile_must_be_absolute");
@@ -99,6 +101,14 @@ export function parseCliEnvironment(
   }
   if (endpoint !== undefined && recordHarPath !== undefined) {
     throw new Error("browser_cdp_cannot_start_har_recording");
+  }
+  if (endpoint !== undefined && replayHarPath !== undefined) {
+    // Replay serves requests from the archive, which means never opening the
+    // socket an attached browser is already holding open.
+    throw new Error("browser_cdp_cannot_replay_har");
+  }
+  if (recordHarPath !== undefined && replayHarPath !== undefined) {
+    throw new Error("browser_har_replay_cannot_record");
   }
   if (contextIndex !== undefined && endpoint === undefined) {
     throw new Error("browser_cdp_context_requires_endpoint");
@@ -122,6 +132,9 @@ export function parseCliEnvironment(
       ? {}
       : { browserCdpContextIndex: contextIndex }),
     ...(recordHarPath === undefined ? {} : { browserHarPath: recordHarPath }),
+    ...(replayHarPath === undefined
+      ? {}
+      : { browserHarReplayPath: replayHarPath }),
     ...(profileDir === undefined
       ? {}
       : { browserProfileDir: resolve(profileDir) }),

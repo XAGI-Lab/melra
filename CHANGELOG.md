@@ -21,6 +21,26 @@ All notable changes are documented here. The format follows
   names beat substrings, the resolved element rides back on the result so
   `result_equals` can verify what was actually hit, and policy sees
   `element:role:name` as the target rather than a pixel the caller never wrote.
+- **Deterministic browser replay** through `MELRA_BROWSER_HAR_REPLAY`, an
+  absolute path to an archive recorded earlier by `MELRA_BROWSER_HAR_PATH`. A
+  replayed run serves every request from the file and opens no socket at all: the
+  DNS-pinning proxy is skipped because there is nothing to pin, and a request the
+  archive does not contain is aborted rather than fetched, so a rerun cannot
+  quietly turn into a live one. The replay route is registered after the SSRF
+  guard so it takes precedence over it. Replay refuses to combine with recording
+  (`browser_har_replay_cannot_record`) or with a browser attached over CDP
+  (`browser_cdp_cannot_replay_har`), and an unreadable archive fails at startup
+  as `browser_har_replay_not_readable` instead of presenting itself as a site
+  where every request fails.
+
+### Changed
+
+- **HAR recording now embeds response bodies** rather than omitting them.
+  Omitting them made the recording knob evidence-only — the archive could not
+  replay the session it recorded, which was the one thing a recording is for.
+  The cost is file size and scope: an archive now holds page content alongside
+  the URLs and headers it always held, so treat one as the session itself rather
+  than as a log about it.
 
 ## [0.3.0-alpha.8] - 2026-08-08
 

@@ -48,7 +48,11 @@ memory stay with the model and the harness above.
 - [x] SSRF, cloud-metadata, redirect, and repeated DNS-address checks.
 - [x] Resolver pinning or a browser proxy for complete DNS-rebinding defense.
 - [x] Persistent opt-in browser profiles (`MELRA_BROWSER_PROFILE`).
-- [ ] Deterministic browser recording and replay.
+- [x] Deterministic browser recording and replay. `MELRA_BROWSER_HAR_PATH`
+  records the session with response bodies, and `MELRA_BROWSER_HAR_REPLAY`
+  serves a later run from that archive with no socket opened; a request the
+  archive lacks is aborted rather than fetched, so a replay cannot silently
+  become a live run.
 - [x] Opt-in Chrome DevTools Protocol attachment for shared benchmark sessions.
 
 ### Memory
