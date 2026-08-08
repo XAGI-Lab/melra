@@ -6,6 +6,18 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **The released tarball is now tested on a machine that never built it.** CI
+  building on Linux, macOS and Windows proves the source tree works; an end user
+  installs a package. Every tag now runs an `installed` job on all three that
+  pulls the just-published `@melra/cli` from the registry onto a runner holding
+  nothing but the smoke script, runs `melra doctor`, and drives a real MCP stdio
+  session to a `VERIFIED_SUCCESS` certificate. It asserts the version it reached
+  against the tag, so a cached older build cannot pass for the new one.
+  `pnpm registry:smoke` runs the same check against any installed `melra` via
+  `MELRA_COMMAND`.
+
 ## [0.3.0-alpha.9] - 2026-08-09
 
 ### Added

@@ -126,6 +126,52 @@ jobs:
               --verify-tag --generate-notes ${prerelease}
           fi
 
+  # CI builds this repo from source on every supported platform, which proves the
+  # source tree works and says nothing about the tarball an end user gets. This
+  # job installs the build that was just published, on a machine that never saw
+  # the repo, and drives it over real MCP stdio.
+  installed:
+    needs: artifacts
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Only the smoke script. The thing under test comes from the registry,
+          # so checking out more would let repo state stand in for the artifact.
+          sparse-checkout: scripts/registry-smoke.mjs
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Install the published CLI
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          # The publish above returns before the package is readable everywhere.
+          for attempt in 1 2 3 4 5 6; do
+            npm view "@melra/cli@${version}" version && break
+            echo "not visible yet (attempt ${attempt})"
+            sleep 15
+          done
+          npm install -g "@melra/cli@${version}"
+          # The MCP client for the smoke, unpinned: an end user's client is
+          # whatever is current, so that is what the artifact should answer.
+          npm install --no-save @modelcontextprotocol/sdk
+      - name: melra doctor
+        shell: bash
+        run: melra doctor
+      - name: MCP stdio smoke against the installed CLI
+        shell: bash
+        env:
+          MELRA_EXPECTED_VERSION: ${{ github.ref_name }}
+        run: |
+          MELRA_EXPECTED_VERSION="${MELRA_EXPECTED_VERSION#v}" \
+            node scripts/registry-smoke.mjs
+
   container:
     runs-on: ubuntu-latest
     env:

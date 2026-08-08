@@ -164,6 +164,16 @@ docker run --rm melra:local doctor
 pnpm docker:smoke
 ```
 
+To exercise a published build the way an end user gets it, install it and point
+the smoke at the installed binary rather than a source build:
+
+```bash
+npm install --prefix /tmp/melra-check @melra/cli@0.3.0-alpha.9
+MELRA_COMMAND=/tmp/melra-check/node_modules/.bin/melra \
+  MELRA_EXPECTED_VERSION=0.3.0-alpha.9 \
+  pnpm registry:smoke
+```
+
 Evaluation reports are generated under `evals/results/` and are intentionally
 ignored by Git because timestamps and local paths vary. Release evidence must
 be attached to the immutable release or workflow run.
@@ -262,8 +272,22 @@ exercised in the then-current versions of:
 - VS Code’s MCP support;
 - at least one additional independent MCP inspector or client.
 
-Before `1.0`, a clean released artifact must pass on supported Linux, macOS, and
-Windows machines, and an independent security review must resolve all critical
+The released artifact itself is now covered on all three supported platforms.
+Every tag runs an `installed` job on `ubuntu-latest`, `macos-latest`, and
+`windows-latest` after publishing: each runner checks out nothing but
+`scripts/registry-smoke.mjs`, installs the just-published `@melra/cli` from the
+npm registry, runs `melra doctor`, and drives a real MCP stdio session that
+discovers exactly eleven tools and takes a `{kind:"system",action:"info"}` task
+to `verified_success` with a `VERIFIED_SUCCESS` certificate and a 64-character
+digest. It asserts the reported version against the tag, so a cached older build
+cannot pass for the new one. That is evidence about the tarball an end user
+installs, which is a different claim from CI building the source tree.
+
+The same script run against `@melra/cli@0.3.0-alpha.9` pulled from the registry
+on macOS arm64 (Node.js 24.10.0) reported `version 0.3.0-alpha.9`, 11 tools,
+`verified_success`, and `VERIFIED_SUCCESS`.
+
+Before `1.0`, an independent security review must resolve all critical
 findings.
 
 ## Known alpha limitations

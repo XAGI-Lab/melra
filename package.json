@@ -23,6 +23,7 @@
     "melra": "tsx apps/cli/src/index.ts",
     "e2e": "pnpm --filter @melra/server test:e2e",
     "docker:smoke": "node scripts/docker-smoke.mjs",
+    "registry:smoke": "node scripts/registry-smoke.mjs",
     "benchmark:core": "pnpm build && node scripts/bench-core.mjs",
     "benchmark:locomo": "pnpm --filter @melra/memory build && node scripts/bench-locomo.mjs",
     "benchmark:browser:check": "uv run --project benchmarks/browser-agent --group test ruff check benchmarks/browser-agent && uv run --project benchmarks/browser-agent --group test pytest benchmarks/browser-agent",

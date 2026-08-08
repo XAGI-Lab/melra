@@ -99,7 +99,14 @@ them as promises was the wrong call:
 - [x] CodeQL, dependency review, Dependabot, DCO, and secret protections.
 - [x] Release workflow for checksums, SBOM, and signed provenance.
 - [x] First tagged alpha release with multi-architecture container.
-- [ ] Fresh-machine evidence on every supported platform.
+- [x] Fresh-machine evidence on every supported platform. CI proves the source
+      tree builds on Linux, macOS, and Windows, which is a different claim from
+      the one an end user makes: they install a tarball. Every tag now runs an
+      `installed` job on all three that pulls the just-published `@melra/cli`
+      from the registry onto a runner holding nothing but the smoke script,
+      runs `melra doctor`, and drives eleven tools plus a plan/execute/receipt
+      to a `VERIFIED_SUCCESS` certificate over real MCP stdio — asserting the
+      version it reached, so a stale cached build cannot pass for the new one.
 - [ ] Independent security review.
 
 ## v0.2 — richer local agents
