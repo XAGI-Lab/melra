@@ -3,6 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  allowsRetry,
   delegationChain,
   effectContract,
   LOCAL_IDENTITY,
@@ -137,5 +138,47 @@ describe("effect contract", () => {
     expect(delegationChain(contract.identity)).toBe(
       "organization:acme/human:dheeraj/agent:claude-code",
     );
+  });
+
+  it("publishes how many times the effect may run", () => {
+    // The rule was already true; a caller setting budget.maxRetries on a write
+    // just had no way to learn the number would be ignored.
+    const read = effectContract(
+      record({
+        goal: "Read the changelog",
+        operation: { kind: "file", action: "read", path: "CHANGELOG.md" },
+      }),
+      { capability: "file.read", target: "CHANGELOG.md" },
+    );
+    expect(read.executionGuarantee).toBe("read-only");
+    expect(allowsRetry(read.executionGuarantee)).toBe(true);
+
+    const write = effectContract(
+      record(
+        {
+          goal: "Write the changelog",
+          operation: {
+            kind: "file",
+            action: "write",
+            path: "CHANGELOG.md",
+            content: "x",
+          },
+          requiredEvidence: [{ type: "file_exists", path: "CHANGELOG.md" }],
+        },
+        {
+          policyDecision: {
+            outcome: "confirm",
+            effect: "mutate",
+            risk: "medium",
+            reason: "mutation_requires_approval",
+            policyVersion: "1",
+            traits: [],
+          },
+        },
+      ),
+      { capability: "file.write", target: "CHANGELOG.md" },
+    );
+    expect(write.executionGuarantee).toBe("at-most-once");
+    expect(allowsRetry(write.executionGuarantee)).toBe(false);
   });
 });

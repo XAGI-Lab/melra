@@ -1,7 +1,11 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
-import type { TaskRequestInput, TaskStatus } from "@melra/protocol";
+import type {
+  ExecutionGuarantee,
+  TaskRequestInput,
+  TaskStatus,
+} from "@melra/protocol";
 import type { EvidenceStrength } from "@melra/receipt-schema";
 
 export interface EvaluationScenario {
@@ -36,6 +40,12 @@ export interface EvaluationScenario {
    * cannot state *how* the kernel knows, which is the property these assert.
    */
   expectedEvidenceStrengths?: EvidenceStrength[];
+  /**
+   * The guarantee the plan must publish before the caller approves anything.
+   * Asserted at plan time because that is the point of stating it: a caller
+   * learns a mutation will not be retried while it can still decline.
+   */
+  expectedExecutionGuarantee?: ExecutionGuarantee;
   approve?: boolean;
   cancel?: boolean;
   wrongApproval?: boolean;
@@ -59,6 +69,7 @@ export const scenarios: EvaluationScenario[] = [
     // A read with nothing declared gets the synthetic `operation_completed`
     // item, which is only the adapter's own word that the call returned.
     expectedEvidenceStrengths: ["execution"],
+    expectedExecutionGuarantee: "read-only",
   },
   {
     id: "file-list-root",
@@ -152,6 +163,9 @@ export const scenarios: EvaluationScenario[] = [
     // The mutation declared a predicate the kernel can only answer by going
     // back to the disk, so the receipt outranks the adapter's own report.
     expectedEvidenceStrengths: ["state"],
+    // Published before the approval, so a caller can decline knowing a failure
+    // here will not be retried on its behalf.
+    expectedExecutionGuarantee: "at-most-once",
   },
   {
     id: "file-mkdir-approved",

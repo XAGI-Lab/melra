@@ -79,6 +79,14 @@ async function runScenario(scenario: EvaluationScenario): Promise<EvaluationResu
         `plan_status:${task.status}; expected:${scenario.expectedPlan}`,
       );
     }
+    if (
+      scenario.expectedExecutionGuarantee !== undefined &&
+      task.contract.executionGuarantee !== scenario.expectedExecutionGuarantee
+    ) {
+      throw new Error(
+        `execution_guarantee:${task.contract.executionGuarantee}; expected:${scenario.expectedExecutionGuarantee}`,
+      );
+    }
     let observedFinal: string | undefined;
     let evidenceStrengths: string[] | undefined;
     if (scenario.cancel === true) {

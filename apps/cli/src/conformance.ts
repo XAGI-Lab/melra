@@ -223,7 +223,12 @@ export async function runConformance(
     const capability = field<string>(reply.value, "contract.capability");
     const effect = field<string>(reply.value, "contract.effect");
     must(effect === "read", `a system info read was classified ${effect}`);
-    return `contract ${field<string>(reply.value, "contract.contractVersion")} for ${capability} (${effect})`;
+    const guarantee = field<string>(reply.value, "contract.executionGuarantee");
+    must(
+      guarantee === "read-only",
+      `a read published the guarantee ${guarantee}`,
+    );
+    return `contract ${field<string>(reply.value, "contract.contractVersion")} for ${capability} (${effect}, ${guarantee})`;
   });
 
   await check(2, "mutation-is-held-for-approval", async () => {
@@ -241,6 +246,14 @@ export async function runConformance(
     must(
       field<string>(reply.value, "status") === "awaiting_approval",
       "a gated mutation was not left awaiting approval",
+    );
+    // Published while the caller can still decline: approving a write that
+    // silently would not be retried is a different decision from approving one
+    // that would.
+    const guarantee = field<string>(reply.value, "contract.executionGuarantee");
+    must(
+      guarantee === "at-most-once",
+      `a gated mutation published the guarantee ${guarantee}`,
     );
     approvalId = field<string>(reply.value, "approval.approvalId");
     phrase = field<string>(reply.value, "approval.phrase");

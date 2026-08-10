@@ -529,6 +529,55 @@ export const CapabilityGrantSchema = z
 export type CapabilityGrant = z.infer<typeof CapabilityGrantSchema>;
 
 /**
+ * What MELRA promises about how many times an effect can run.
+ *
+ * Stating it is the point. The rule that mutations are never retried already
+ * governed execution, but it lived inside the controller, so a caller setting
+ * `budget.maxRetries: 3` on a write had no way to learn that the number would
+ * be ignored. Derived from the classified effect, never taken from the caller —
+ * a caller that could declare its own `POST` `provider-idempotent` would have
+ * bought itself a retry it is not entitled to.
+ */
+export type ExecutionGuarantee =
+  /** No state change, so there is nothing to guarantee. Freely retried. */
+  | "read-only"
+  /** Executed zero or one times. Never retried. */
+  | "at-most-once"
+  /** May run more than once; the caller must tolerate a repeat. */
+  | "at-least-once"
+  /** Retry-safe because the provider dedupes on a key MELRA sends. */
+  | "provider-idempotent"
+  /** Outcome may be unknown after a crash; a reconciliation pass decides. */
+  | "reconciliation-required"
+  /** Undone by a declared compensating effect. */
+  | "compensatable";
+
+/**
+ * The four values below `at-most-once` need an adapter that can offer them —
+ * a provider that honours an idempotency key, or a declared inverse effect.
+ * None of the four reference adapters can, so nothing derives them yet and a
+ * caller reading a contract today sees only the two that are real.
+ */
+export function executionGuaranteeFor(effect: Effect): ExecutionGuarantee {
+  return effect === "read" ? "read-only" : "at-most-once";
+}
+
+const RETRIABLE: ReadonlySet<ExecutionGuarantee> = new Set([
+  "read-only",
+  "at-least-once",
+  "provider-idempotent",
+]);
+
+/**
+ * Whether more than one attempt is permitted. The executor asks the guarantee
+ * rather than re-deriving the rule from the effect, so the promise on the
+ * contract and the behaviour in the loop cannot drift apart.
+ */
+export function allowsRetry(guarantee: ExecutionGuarantee): boolean {
+  return RETRIABLE.has(guarantee);
+}
+
+/**
  * One bounded effect, named as a single object.
  *
  * Every field here already governed execution; the contract is what they are
@@ -546,6 +595,8 @@ export interface EffectContract {
   risk: Risk;
   target: string;
   traits: CapabilityTrait[];
+  /** How many times this effect can run. See `ExecutionGuarantee`. */
+  executionGuarantee: ExecutionGuarantee;
   /** Effects this request refuses for itself, honoured even in unhinged mode. */
   forbiddenEffects: Effect[];
   /** What must hold afterwards for the effect to count as a success. */
@@ -890,6 +941,7 @@ export function effectContract(
     risk: task.policyDecision.risk,
     target: classification.target,
     traits: task.policyDecision.traits,
+    executionGuarantee: executionGuaranteeFor(task.policyDecision.effect),
     forbiddenEffects: task.request.forbiddenEffects,
     postconditions: task.request.requiredEvidence,
     budget: task.request.budget,

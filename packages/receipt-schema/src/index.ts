@@ -85,6 +85,14 @@ export interface ActionReceipt {
    */
   principal?: string;
   effect: "read" | "mutate" | "destructive";
+  /**
+   * What was promised about how many times this could run — the same value the
+   * plan showed, so an auditor reads the promise beside the outcome instead of
+   * inferring it from the effect. A string rather than the protocol's union
+   * because this package deliberately has no dependencies; `protocol` owns the
+   * vocabulary and derives every value written here.
+   */
+  executionGuarantee?: string;
   policyDecision: {
     outcome: "allow" | "deny" | "confirm";
     policyVersion: string;

@@ -8,6 +8,15 @@ All notable changes are documented here. The format follows
 
 ### Added
 
+- **The plan now says how many times an effect may run.** Every contract carries
+  an `executionGuarantee` — `read-only` for reads, `at-most-once` for mutations
+  and destructive operations — and every receipt repeats it. The rule was
+  already enforced, but it lived inside the controller, so a caller setting
+  `budget.maxRetries: 3` on a write had no way to learn the number would be
+  ignored. It is derived from the classified effect and never accepted from the
+  caller, and the executor now asks the guarantee instead of re-deriving the
+  rule, so the published promise and the retry loop cannot drift apart.
+
 - **Every evidence item on a certificate now says how it is known.** A new
   `strength` field ranks each item `execution` (the adapter's own report) <
   `state` (the kernel re-read the target) < `independent` < `semantic`, so a
