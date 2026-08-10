@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   canonicalJson,
   createCertificate,
+  evidenceStrength,
   redactStructuredValue,
   sha256,
 } from "./index.js";
@@ -53,5 +54,18 @@ describe("receipt and certificate primitives", () => {
     );
     expect(redacted.value.values[0]).not.toContain("ghp_");
     expect(redacted.redactions.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("ranks re-read state above the adapter's own report", () => {
+    // The distinction the field exists for: a file the kernel went back and
+    // looked at outranks the adapter saying the call returned.
+    expect(evidenceStrength("file_hash")).toBe("state");
+    expect(evidenceStrength("operation_completed")).toBe("execution");
+  });
+
+  it("reads an unknown evidence type as the weakest claim", () => {
+    // A predicate added without a decision in the table, or a type from a
+    // future version, must not inherit a strength it never earned.
+    expect(evidenceStrength("predicate_from_a_later_version")).toBe("execution");
   });
 });

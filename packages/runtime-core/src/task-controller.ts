@@ -27,6 +27,7 @@ import {
 import {
   createCertificate,
   createReceiptId,
+  evidenceStrength,
   redactStructuredValue,
   sha256,
   type ActionReceipt,
@@ -229,6 +230,7 @@ export class TaskController {
         {
           type: "idempotency",
           passed: false,
+          strength: evidenceStrength("idempotency"),
           summary: "duplicate_attempt_prevented",
         },
       ]);
@@ -313,6 +315,7 @@ export class TaskController {
               {
                 type: "operation_completed",
                 passed: actionSucceeded,
+                strength: evidenceStrength("operation_completed"),
                 summary: actionSucceeded
                   ? "read-only operation completed"
                   : "operation reported failure",
@@ -381,6 +384,7 @@ export class TaskController {
         {
           type: "execution_error",
           passed: false,
+          strength: evidenceStrength("execution_error"),
           summary: budgetExhausted ? "task_budget_exhausted" : message,
         },
       ];
