@@ -90,7 +90,7 @@ describe("TerminalRuntime", () => {
     }
     expect(output.stdout).toContain("background-ready");
     expect(output.running).toBe(false);
-    runtime.close();
+    await runtime.close();
   }, 30_000);
 
   it("answers a running job's prompt and refuses one that cannot be answered", async () => {
@@ -152,7 +152,7 @@ describe("TerminalRuntime", () => {
         }),
       ),
     ).rejects.toThrow("terminal_job_not_interactive");
-    runtime.close();
+    await runtime.close();
   }, 30_000);
 
   it("names a missing program instead of surfacing a bare ENOENT", async () => {
@@ -168,7 +168,7 @@ describe("TerminalRuntime", () => {
         }),
       ),
     ).rejects.toThrow("terminal_command_not_found");
-    runtime.close();
+    await runtime.close();
   });
 
   it("does not report a background job that never started", async () => {
@@ -186,6 +186,29 @@ describe("TerminalRuntime", () => {
         }),
       ),
     ).rejects.toThrow("terminal_command_not_found");
-    runtime.close();
+    await runtime.close();
   });
+
+  it("does not resolve close until its children have actually exited", async () => {
+    // A signalled-but-live child holds its cwd open on Windows, so a caller
+    // deleting the workspace right after close raced rmdir and got EBUSY.
+    // Signalling is not exiting; this asserts the difference.
+    const root = await mkdtemp(join(tmpdir(), "melra-terminal-"));
+    roots.push(root);
+    const runtime = await TerminalRuntime.create({ root });
+    const started = await runtime.execute(
+      TerminalOperationSchema.parse({
+        kind: "terminal",
+        action: "start",
+        command: process.execPath,
+        args: ["-e", "setTimeout(() => {}, 30_000)"],
+        timeoutMs: 30_000,
+      }),
+    );
+    const pid = started.pid as number;
+    await runtime.close();
+    // Signal 0 tests for the process rather than signalling it: ESRCH means it
+    // is gone, and no throw means close resolved while it was still running.
+    expect(() => process.kill(pid, 0)).toThrow(/ESRCH/);
+  }, 30_000);
 });

@@ -142,7 +142,7 @@ export class RuntimeRouter implements OperationExecutor {
   }
 
   async close(): Promise<void> {
-    this.terminal.close();
+    await this.terminal.close();
     await this.browser.close();
   }
 }

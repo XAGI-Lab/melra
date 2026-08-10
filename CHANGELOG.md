@@ -6,6 +6,14 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- `TerminalRuntime.close()` now resolves once its supervised children have
+  actually exited rather than once they have been signalled, escalating to
+  SIGKILL after 2s. A still-running child holds its working directory open on
+  Windows, so a caller that removed the workspace immediately after closing
+  raced `rmdir` and could fail with `EBUSY`.
+
 ### Changed
 
 - A mistyped command now says where the answer is

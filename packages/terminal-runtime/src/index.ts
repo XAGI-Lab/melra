@@ -64,6 +64,9 @@ function describeSpawnError(error: unknown, command: string): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
 
+/** How long a signalled child gets to exit on its own before SIGKILL. */
+const CLOSE_GRACE_MS = 2_000;
+
 interface BackgroundJob {
   id: string;
   child: ChildProcess;
@@ -391,11 +394,26 @@ export class TerminalRuntime {
     }
   }
 
-  close(): void {
-    for (const job of this.jobs.values()) {
+  /**
+   * Resolves once every supervised child has actually exited, not once they
+   * have been signalled. A live child holds its cwd open on Windows, so a
+   * caller that deletes the workspace after closing raced `rmdir` against
+   * process teardown and got EBUSY.
+   */
+  async close(): Promise<void> {
+    const exits = [...this.jobs.values()].map(async (job) => {
       clearTimeout(job.timer);
-      if (job.endedAt === undefined) job.child.kill("SIGTERM");
-    }
+      if (job.endedAt !== undefined) return;
+      const exited = new Promise<void>((done) => job.child.once("close", () => done()));
+      job.child.kill("SIGTERM");
+      // A child is free to trap SIGTERM, and shutdown blocking forever on one
+      // that does is worse than the race this replaced.
+      const escalation = setTimeout(() => job.child.kill("SIGKILL"), CLOSE_GRACE_MS);
+      escalation.unref();
+      await exited;
+      clearTimeout(escalation);
+    });
     this.jobs.clear();
+    await Promise.all(exits);
   }
 }
