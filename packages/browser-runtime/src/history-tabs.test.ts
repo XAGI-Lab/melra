@@ -43,8 +43,13 @@ interface Tab {
 async function fixture(): Promise<{ runtime: BrowserRuntime; url: string } | undefined> {
   const executablePath = await detectBrowserExecutable();
   if (executablePath === undefined) return undefined;
+  const pages = ["one", "two", "three"];
   const server = createServer((request, response) => {
-    const name = (request.url ?? "/").slice(1) || "one";
+    // Chosen from a fixed set rather than echoed back. The fixture only ever
+    // needs these three, and reflecting the request path would make the
+    // fixture itself the XSS sink a scanner reasonably flags.
+    const requested = (request.url ?? "/").slice(1);
+    const name = pages.includes(requested) ? requested : "one";
     response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
     response.end(
       `<!doctype html><html><head><title>${name}</title></head><body><h1>${name}</h1></body></html>`,

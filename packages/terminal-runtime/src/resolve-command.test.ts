@@ -132,4 +132,18 @@ describe("quoteForCmd", () => {
       "terminal_windows_argument_not_quotable",
     );
   });
+
+  it("doubles a backslash run only where a quote consumes it", () => {
+    // Mid-string backslashes are literal to CommandLineToArgvW; only the run
+    // that a quote (or the closing quote) eats is doubled.
+    expect(quoteForCmd('a\\\\b"c')).toBe('"a\\\\b\\"c"');
+  });
+
+  it("quotes a pathological backslash run without backtracking", () => {
+    // The previous regex pair was quadratic: 40k backslashes took ~11s, which
+    // an allowlisted `npm install <arg>` could reach from outside.
+    const started = process.hrtime.bigint();
+    expect(quoteForCmd("\\".repeat(40_000) + "x")).toHaveLength(40_003);
+    expect(Number(process.hrtime.bigint() - started) / 1e6).toBeLessThan(500);
+  });
 });

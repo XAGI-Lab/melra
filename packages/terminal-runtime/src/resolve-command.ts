@@ -56,13 +56,32 @@ async function isFile(candidate: string): Promise<boolean> {
  * quoting scheme with a hole in it, an argument containing them is refused —
  * the allowlist would otherwise be bypassable by `npm install "%FOO%"`.
  * Newlines are refused for the same reason: a command line cannot carry one.
+ *
+ * Written as a scan rather than `/(\\*)"/g` + `/(\\*)$/`: both of those
+ * backtrack quadratically, and an argument of 40k backslashes took 11s to quote
+ * before this. An attacker-supplied argument is exactly the input this sees.
  */
 export function quoteForCmd(value: string): string {
   if (/[%!\r\n]/.test(value)) {
     throw new Error("terminal_windows_argument_not_quotable");
   }
-  const escaped = value.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\*)$/, "$1$1");
-  return `"${escaped}"`;
+  let escaped = "";
+  let slashes = 0;
+  for (const character of value) {
+    if (character === "\\") {
+      slashes += 1;
+      continue;
+    }
+    // A backslash run doubles only when a quote consumes it. Anywhere else
+    // `CommandLineToArgvW` reads it literally, so it passes through as written.
+    escaped +=
+      character === '"'
+        ? `${"\\".repeat(slashes * 2)}\\"`
+        : `${"\\".repeat(slashes)}${character}`;
+    slashes = 0;
+  }
+  // The run at the end is followed by the closing quote, so it doubles too.
+  return `"${escaped}${"\\".repeat(slashes * 2)}"`;
 }
 
 function spellings(command: string, pathExt: string): string[] {
