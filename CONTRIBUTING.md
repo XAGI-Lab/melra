@@ -29,11 +29,30 @@ adding it here would make MELRA's guarantees depend on a model's judgement.
 ## Development setup
 
 ```bash
-pnpm install
-pnpm check
+git clone https://github.com/XAGI-Lab/melra.git
+cd melra
+pnpm install --frozen-lockfile
+pnpm build          # required before tests: they import siblings through dist/
+pnpm check          # the full CI gate
 ```
 
 Use Node.js 22 or newer and pnpm 9.5.
+
+**[docs/CONTRIBUTING_GUIDE.md](docs/CONTRIBUTING_GUIDE.md) is the map**: which
+files a given kind of change touches, the non-obvious policy defaults, the house
+style, and the checklist a maintainer will read your pull request against. Read
+it before your first change — it is the difference between a two-file patch and
+a six-file one that actually lands.
+
+## Where to start
+
+- [`good first issue`](https://github.com/XAGI-Lab/melra/labels/good%20first%20issue)
+  — scoped so the description names the files to open.
+- [`help wanted`](https://github.com/XAGI-Lab/melra/labels/help%20wanted)
+  — larger, still well-specified.
+- [Roadmap milestones](https://github.com/XAGI-Lab/melra/milestones) — P2, P3
+  and P4, each with a design issue open *before* the code exists. That is the
+  cheapest moment to disagree with it.
 
 ## Pull requests
 
