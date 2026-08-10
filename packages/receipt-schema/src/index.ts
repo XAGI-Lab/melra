@@ -22,10 +22,53 @@ export type CertificateResult =
   | "POLICY_BLOCKED"
   | "BUDGET_EXHAUSTED";
 
+/**
+ * How the kernel knows an evidence item is true, weakest first.
+ *
+ * A caller reading a receipt has to be able to tell the actor's own word apart
+ * from the world's answer, because that difference is the whole value of
+ * verification. Derived from the item type by `evidenceStrength`, never
+ * declared by the caller — evidence a caller could label `independent` itself
+ * would prove nothing.
+ */
+export type EvidenceStrength =
+  /** The adapter reported it. The actor grading its own homework. */
+  | "execution"
+  /** The kernel re-read the target after the fact. */
+  | "state"
+  /** Confirmed through a different channel than the one that acted. */
+  | "independent"
+  /** A judgement about meaning. Probabilistic; never sole evidence for a destructive effect. */
+  | "semantic";
+
+/**
+ * Only the types that outrank `execution` are listed. An unrecognised type —
+ * an older receipt, a predicate added without a decision here — reads as the
+ * weakest claim rather than silently borrowing a stronger one.
+ */
+const STRONGER_THAN_EXECUTION: Record<string, EvidenceStrength> = {
+  file_exists: "state",
+  file_absent: "state",
+  file_hash: "state",
+  // Not the adapter's word: the kernel read a durable commit that outlives the
+  // process that wrote it.
+  idempotency: "state",
+};
+
+export function evidenceStrength(type: string): EvidenceStrength {
+  return STRONGER_THAN_EXECUTION[type] ?? "execution";
+}
+
 export interface EvidenceItem {
   type: string;
   passed: boolean;
   summary: string;
+  /**
+   * How the item is known. Optional only because receipts written before
+   * strengths existed do not carry one; every item written now does, and
+   * `evidenceStrength(item.type)` recovers it for the ones that do not.
+   */
+  strength?: EvidenceStrength;
   source?: string;
   digest?: string;
 }

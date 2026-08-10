@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { lstat, readFile, realpath, stat } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { EvidencePredicate } from "@melra/protocol";
-import type { EvidenceItem } from "@melra/receipt-schema";
+import { evidenceStrength, type EvidenceItem } from "@melra/receipt-schema";
 
 function inside(root: string, candidate: string): boolean {
   const rel = relative(root, candidate);
@@ -196,7 +196,13 @@ export class Verifier {
     }
     return {
       verified: evidence.every((item) => item.passed),
-      evidence,
+      // Stamped once here rather than at each branch above: strength is a
+      // property of the predicate type, so deriving it in one place keeps a
+      // new branch from quietly shipping without one.
+      evidence: evidence.map((item) => ({
+        ...item,
+        strength: evidenceStrength(item.type),
+      })),
     };
   }
 }

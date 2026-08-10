@@ -58,7 +58,7 @@ that outlives the call.
 
 | Check | What it establishes |
 |---|---|
-| `approved-mutation-verifies` | An approved mutation reaches `verified_success` with passing evidence, not merely "the adapter returned". |
+| `approved-mutation-verifies` | An approved mutation reaches `verified_success` with passing evidence, not merely "the adapter returned" — and every item says how it was established, with at least one the kernel re-read for itself (`strength: "state"`). |
 | `the-effect-really-happened` | The approved bytes are on disk, read back through the kernel. |
 | `the-receipt-outlives-the-call` | The receipt for a finished task is still retrievable after other tasks have run. |
 | `destructive-effects-are-gated-and-verified` | A destructive effect needs its own approval and verifies as absent afterwards. |

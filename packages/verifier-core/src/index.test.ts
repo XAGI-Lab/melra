@@ -66,4 +66,22 @@ describe("Verifier", () => {
       "verification_path_outside_workspace",
     );
   });
+
+  it("stamps each item with how it was established", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-verifier-"));
+    roots.push(root);
+    await writeFile(join(root, "present.txt"), "content");
+    const verifier = await Verifier.create(root);
+    const { evidence } = await verifier.verify(
+      [
+        { type: "file_exists", path: "present.txt" },
+        { type: "result_equals", path: "ok", value: true },
+      ],
+      { ok: true },
+    );
+    // Same receipt, two different claims: one re-read the disk, the other only
+    // re-read what the adapter handed back.
+    expect(evidence[0]?.strength).toBe("state");
+    expect(evidence[1]?.strength).toBe("execution");
+  });
 });

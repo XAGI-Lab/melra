@@ -6,6 +6,18 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Every evidence item on a certificate now says how it is known.** A new
+  `strength` field ranks each item `execution` (the adapter's own report) <
+  `state` (the kernel re-read the target) < `independent` < `semantic`, so a
+  caller reading a receipt can tell the actor's word from the world's answer
+  instead of seeing one undifferentiated boolean. The level is derived from the
+  predicate type by `evidenceStrength()` in `@melra/receipt-schema` and stamped
+  in one place in the verifier — a caller cannot declare it, and an unrecognised
+  predicate type reads as the weakest claim rather than inheriting a stronger
+  one.
+
 ### Fixed
 
 - `TerminalRuntime.close()` now resolves once its supervised children have

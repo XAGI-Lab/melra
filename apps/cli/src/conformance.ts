@@ -336,16 +336,25 @@ export async function runConformance(
       /^[a-f0-9]{64}$/.test(field<string>(reply.value, "certificate.digest")),
       "the certificate carries no SHA-256 digest",
     );
-    const evidence = field<Array<{ type: string; passed: boolean }>>(
-      reply.value,
-      "certificate.evidence",
-    );
+    const evidence = field<
+      Array<{ type: string; passed: boolean; strength?: string }>
+    >(reply.value, "certificate.evidence");
     must(evidence.length > 0, "verified success with no evidence at all");
     must(
       evidence.every((item) => item.passed),
       `verified success over failing evidence: ${JSON.stringify(evidence)}`,
     );
-    return `${status} on ${evidence.length} passing evidence item(s)`;
+    // A mutation verified only by the adapter's own word is a weaker claim than
+    // it looks, so the certificate has to say which kind it carries.
+    must(
+      evidence.every((item) => item.strength !== undefined),
+      "evidence does not say how it was established",
+    );
+    must(
+      evidence.some((item) => item.strength === "state"),
+      "an approved write verified without the kernel re-reading anything",
+    );
+    return `${status} on ${evidence.length} passing evidence item(s), strength ${[...new Set(evidence.map((item) => item.strength))].join("+")}`;
   });
 
   await check(3, "the-effect-really-happened", async () => {

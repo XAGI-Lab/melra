@@ -373,6 +373,16 @@ Execution evidence is the weakest: it says the call returned, not that the world
 changed. Independent verification is much stronger precisely because the channel
 that performed the effect is not the channel that confirms it.
 
+Every evidence item on a certificate carries its level in a `strength` field, so
+a caller reading a receipt can tell the actor's own word from the world's
+answer without knowing the predicate table by heart. The level is **derived from
+the predicate type** by `evidenceStrength()` in `@melra/receipt-schema` and
+stamped once in the verifier — never declared by the caller, because evidence a
+caller could label `independent` itself would prove nothing. An unrecognised
+type — an older receipt, or a predicate added without a decision in that table —
+reads as `execution`, the weakest claim, rather than silently borrowing a
+stronger one.
+
 Semantic verification will be labelled probabilistic wherever it appears, and
 will never be the sole evidence for a destructive effect. A verifier that
 guesses is useful; a verifier that guesses while presenting itself as proof is

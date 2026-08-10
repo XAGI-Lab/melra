@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { TaskRequestInput, TaskStatus } from "@melra/protocol";
+import type { EvidenceStrength } from "@melra/receipt-schema";
 
 export interface EvaluationScenario {
   id: string;
@@ -30,6 +31,11 @@ export interface EvaluationScenario {
   desktop?: string;
   expectedPlan: TaskStatus;
   expectedFinal?: TaskStatus;
+  /**
+   * Evidence strengths the certificate must carry, in order. A status alone
+   * cannot state *how* the kernel knows, which is the property these assert.
+   */
+  expectedEvidenceStrengths?: EvidenceStrength[];
   approve?: boolean;
   cancel?: boolean;
   wrongApproval?: boolean;
@@ -50,6 +56,9 @@ export const scenarios: EvaluationScenario[] = [
     },
     expectedPlan: "planned",
     expectedFinal: "verified_success",
+    // A read with nothing declared gets the synthetic `operation_completed`
+    // item, which is only the adapter's own word that the call returned.
+    expectedEvidenceStrengths: ["execution"],
   },
   {
     id: "file-list-root",
@@ -140,6 +149,9 @@ export const scenarios: EvaluationScenario[] = [
     expectedPlan: "awaiting_approval",
     approve: true,
     expectedFinal: "verified_success",
+    // The mutation declared a predicate the kernel can only answer by going
+    // back to the disk, so the receipt outranks the adapter's own report.
+    expectedEvidenceStrengths: ["state"],
   },
   {
     id: "file-mkdir-approved",

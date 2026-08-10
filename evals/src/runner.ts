@@ -80,6 +80,7 @@ async function runScenario(scenario: EvaluationScenario): Promise<EvaluationResu
       );
     }
     let observedFinal: string | undefined;
+    let evidenceStrengths: string[] | undefined;
     if (scenario.cancel === true) {
       observedFinal = runtime.controller.cancel(task.id).status;
     } else if (scenario.expectedFinal !== undefined) {
@@ -92,6 +93,9 @@ async function runScenario(scenario: EvaluationScenario): Promise<EvaluationResu
           : undefined;
       const execution = await runtime.controller.execute(task.id, approval);
       observedFinal = execution.task.status;
+      evidenceStrengths = execution.certificate?.evidence.map(
+        (item) => item.strength ?? "unstamped",
+      );
     }
     if (
       scenario.expectedFinal !== undefined &&
@@ -100,6 +104,13 @@ async function runScenario(scenario: EvaluationScenario): Promise<EvaluationResu
       throw new Error(
         `final_status:${observedFinal}; expected:${scenario.expectedFinal}`,
       );
+    }
+    if (scenario.expectedEvidenceStrengths !== undefined) {
+      const observed = (evidenceStrengths ?? []).join(",");
+      const expected = scenario.expectedEvidenceStrengths.join(",");
+      if (observed !== expected) {
+        throw new Error(`evidence_strength:${observed}; expected:${expected}`);
+      }
     }
     return {
       id: scenario.id,
