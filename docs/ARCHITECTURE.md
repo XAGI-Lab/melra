@@ -403,6 +403,14 @@ exactly-once everywhere:
 | `reconciliation-required` | Outcome unknown after a crash; must be re-observed | Interrupted mutations without independent file evidence |
 | `compensatable` | Undone by a declared inverse effect | `compensation` workflow nodes |
 
+The plan publishes the value as `contract.executionGuarantee` and the receipt
+repeats it, so a caller learns a write will not be retried *before* it approves
+one, and an auditor reads the promise beside the outcome. It is derived from the
+classified effect and never accepted from the caller — a caller that could
+declare its own `POST` `provider-idempotent` would have bought itself a retry it
+is not entitled to. The executor asks the guarantee rather than re-deriving the
+rule, so the published promise and the retry loop cannot drift apart.
+
 An interrupted mutation becomes `recovery_required` rather than being repeated,
 because the durable record can say what was in flight but not what the provider
 did with it. Recovery asks *what do the durable facts say happened*, never

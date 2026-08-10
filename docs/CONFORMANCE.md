@@ -36,7 +36,7 @@ expressed as one cannot be run.
 | `capabilities-describe-the-surface` | The endpoint describes its own operations, so a caller does not have to guess them. |
 | `unknown-field-rejected` | A request carrying an unrecognised field is refused, not silently accepted with the field dropped. |
 | `incomplete-operation-rejected` | A request missing a required field is refused before anything runs. |
-| `plan-returns-an-effect-contract` | Planning yields a typed contract naming the effect and its classification. |
+| `plan-returns-an-effect-contract` | Planning yields a typed contract naming the effect, its classification, and the execution guarantee it carries. |
 
 ### L2 — governed effects
 
@@ -45,7 +45,7 @@ did not happen.
 
 | Check | What it establishes |
 |---|---|
-| `mutation-is-held-for-approval` | Planning a mutation produces a task-scoped, expiring approval challenge rather than running it. |
+| `mutation-is-held-for-approval` | Planning a mutation produces a task-scoped, expiring approval challenge rather than running it — and publishes `at-most-once`, so the caller knows a failure will not be retried before it approves. |
 | `no-approval-is-refused` | Executing without the approval is refused. |
 | `wrong-phrase-is-refused` | Executing with the wrong phrase is refused; the challenge is not decorative. |
 | `refused-effects-did-not-happen` | After both refusals the file they would have created does not exist. This is the one that matters: a refusal is a fact about the world, not a message. |

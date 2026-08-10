@@ -12,8 +12,10 @@ import type {
   TaskRequest,
 } from "@melra/protocol";
 import {
+  allowsRetry,
   delegationChain,
   effectContract,
+  executionGuaranteeFor,
   LOCAL_IDENTITY,
   TaskRequestSchema,
 } from "@melra/protocol";
@@ -575,6 +577,7 @@ export class TaskController {
       capability,
       principal: delegationChain(request.identity ?? LOCAL_IDENTITY),
       effect,
+      executionGuarantee: executionGuaranteeFor(effect),
       policyDecision: {
         outcome: task.policyDecision.outcome,
         policyVersion: task.policyDecision.policyVersion,
@@ -606,8 +609,11 @@ export class TaskController {
     effect: "read" | "mutate" | "destructive",
     signal: AbortSignal,
   ): Promise<Record<string, unknown>> {
-    const maximumAttempts =
-      effect === "read" ? request.budget.maxRetries + 1 : 1;
+    // Asked of the guarantee rather than re-derived from the effect, so the
+    // promise the plan published is the same rule the loop obeys.
+    const maximumAttempts = allowsRetry(executionGuaranteeFor(effect))
+      ? request.budget.maxRetries + 1
+      : 1;
     let lastError: unknown;
     for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
       if (signal.aborted) throw signal.reason ?? new Error("task_cancelled");
