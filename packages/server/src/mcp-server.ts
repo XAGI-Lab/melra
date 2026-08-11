@@ -115,6 +115,12 @@ export function capabilitiesPayload(runtime: MelraRuntime): unknown {
         policy: {
           version: runtime.policy.version,
           workspaceRoot: runtime.policy.workspaceRoot,
+          // How this kernel is deployed, said out loud on the surface a harness
+          // reads. `developer` is the honest admission that the harness may have
+          // another way to the same disk; `enforced` is the operator's claim that
+          // it does not, and the flag a conformance run reads before deciding
+          // which caveats it still has to print.
+          mode: runtime.policy.mode,
           // An agent that reads capabilities should be able to tell that nothing
           // is going to stop it, and a human reading a transcript should see the
           // same. Reporting the usual read-only posture here while running

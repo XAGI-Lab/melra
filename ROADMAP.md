@@ -247,7 +247,7 @@ but not in the shape the protocol should eventually name.
 | Evidence system | ✓ | Redacted receipts and SHA-256 certificates |
 | Effect adapters | partial | Files, terminal, browser, computer, HTTP; database, cloud, SaaS pending ([P4](#p4--credentials-and-api-effects)) |
 | Harness adapters | ✓ | Ordinary tool names over the same pipeline (`MELRA_HARNESS_TOOLS=1`), proven against three mismatched clients on one data directory |
-| Sandbox and boundary | ✗ | Developer mode only ([P2](#p2--hard-capability-boundary)) |
+| Sandbox and boundary | partial | Enforced mode closes every door MELRA owns; the OS isolation around the harness is the operator's, and there is no socket transport yet ([P2](#p2--hard-capability-boundary)) |
 | Workflow engine | ✓ | Nine node types, events, projections, leases |
 | Compatibility suite | ✓ | `melra conformance`, levels published in [docs/CONFORMANCE.md](docs/CONFORMANCE.md) |
 
@@ -320,7 +320,9 @@ but not in the shape the protocol should eventually name.
       `notProven` list naming what a level does not establish, and the first
       entry is the P2 bypass problem below — this suite can show that an
       endpoint governs the effects it is asked for, and cannot show that the
-      harness has no second way to reach the same disk.
+      harness has no second way to reach the same disk. Against an endpoint
+      reporting enforced mode that entry narrows: the suite verifies the refusals
+      MELRA owns and then names whose word the rest of the claim rests on.
 
 ### P2 — hard capability boundary
 
@@ -329,15 +331,29 @@ a MELRA terminal and an unrestricted native terminal makes MELRA optional, and
 an optional boundary is not a trust boundary. Closing it means removing the
 alternative, not asking the harness not to use it.
 
-- [ ] Two deployment modes: developer mode (today's behaviour) and enforced
+- [x] Two deployment modes: developer mode (today's behaviour) and enforced
       mode, where the harness is sandboxed with no privileged secrets and no
-      raw production shell, talking to MELRA over authenticated IPC.
+      raw production shell, talking to MELRA over authenticated IPC. Shipped as
+      `MELRA_MODE` / `--mode` / `"mode"` in the policy JSON, strictest of the
+      three winning and a typo failing loudly. MELRA cannot verify the operator's
+      claim from inside its own process, so what it does is close every door it
+      owns: `--unsafe-local` refused, no bind outside loopback, no client
+      registering itself, and `mode` stamped on every receipt and published in
+      `melra_capabilities`.
 - [ ] Use operating-system primitives rather than reinventing them: containers,
       separate OS users, filesystem ACLs, namespaces, network isolation,
       sandbox profiles, Unix sockets, service identities, capability tokens.
-- [ ] Rename `--unhinged` to something boring and descriptive
+      Enforced mode deliberately implements none of these itself — the isolation
+      is the operator's, brought as a container or a sandbox profile. What is
+      still missing here is MELRA's side of it: a Unix-socket transport, and
+      hardened deployment recipes that make the sandboxed-harness setup the
+      default rather than a thing to assemble.
+- [x] Rename `--unhinged` to something boring and descriptive
       (`--unsafe-local`), keeping the current flag as a deprecated alias, and
-      refuse it outright in enforced mode.
+      refuse it outright in enforced mode. The old flag still works and prints a
+      deprecation line; the two together exit with
+      `enforced_mode_refuses_unsafe_local` before any guardrail warning, because
+      a process that refuses to start has none to warn about.
 
 ### P3 — verification framework
 

@@ -154,13 +154,13 @@ Planning never executes an adapter. Task execution re-evaluates policy and
 revalidates an approval against the current action digest immediately before
 the effect.
 
-Unhinged mode removes the `Policy` diamond and the runtimes' confinement, leaving
+Unsafe-local mode removes the `Policy` diamond and the runtimes' confinement, leaving
 the rest of the chain intact: tasks are still planned, executed, verified against
 whatever evidence the caller declared, and receipted. It is implemented by
 short-circuiting `evaluatePolicy` to `allow` and by rooting the file runtime,
 terminal runtime, and verifier at the filesystem root instead of the workspace —
 not by adding bypass branches to the confinement code, which keeps exactly one
-behaviour. See [unhinged mode](INSTALLATION.md#unhinged-mode).
+behaviour. See [unsafe-local mode](INSTALLATION.md#unsafe-local-mode).
 
 ## Durable storage
 
@@ -418,6 +418,13 @@ buy a retry — the effect still runs at most once — it says how an outcome ME
 could not observe should be settled. That is a different promise from
 `at-most-once`, which says the effect ran zero or one times without saying
 which, so the plan states it separately.
+
+Beside it, every receipt carries `mode` — `developer` or `enforced`. It says
+nothing about the request; it records how the kernel that ran the effect was
+deployed, which is the difference between "governed by the only door" and
+"governed by one of several". That is not recoverable after the fact, so it is
+written at the same time as the outcome rather than left for an auditor to infer.
+See [deployment modes](INSTALLATION.md#deployment-modes).
 
 ## Outcomes MELRA cannot observe
 

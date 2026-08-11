@@ -152,11 +152,24 @@ export async function serveHttp(
     { transport: StreamableHTTPServerTransport; client: string }
   >();
   const runtime = options.runtime;
+  const enforced = runtime.policy.mode === "enforced";
+  // A sandbox talks to its kernel over IPC. A listener on a routable interface
+  // is not that, whatever the token guarding it, so enforced mode refuses to
+  // start rather than start something it would have to describe as a second door.
+  if (enforced && !isLoopback(host)) {
+    throw new Error("enforced_mode_refuses_public_bind");
+  }
   // A browser approval is only a boundary on the machine the browser is on. A
   // server deliberately bound to a wider interface keeps the shared token and
   // nothing else, rather than offering the internet a registration endpoint.
+  //
+  // Enforced mode drops it on loopback too: self-registration is a stranger
+  // asking a human to let it in, and the whole claim of enforced mode is that
+  // only identities the operator issued can reach the kernel at all.
   const oauthEnabled =
-    isLoopback(host) && environment.MELRA_HTTP_OAUTH?.trim() !== "0";
+    !enforced &&
+    isLoopback(host) &&
+    environment.MELRA_HTTP_OAUTH?.trim() !== "0";
   const oauth = oauthEnabled
     ? new OAuthProvider(runtime.dataDirectory)
     : undefined;

@@ -5,8 +5,10 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, parse, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { TaskRequestSchema, type TaskRequest } from "@melra/protocol";
+import { deploymentMode, TaskRequestSchema, type TaskRequest } from "@melra/protocol";
+import { serveHttp } from "./http-server.js";
 import {
+  assertEnforceable,
   createMelraRuntime,
   unconfinedRoot,
   unhingedFromEnvironment,
@@ -138,5 +140,128 @@ describe("unhinged runtime", () => {
       environment: { MELRA_UNHINGED: "1" },
     });
     expect(runtime.policy.unhinged).toBe(true);
+  });
+});
+
+describe("deploymentMode", () => {
+  it("reads only the two exact words", () => {
+    expect(deploymentMode(undefined)).toBe("developer");
+    expect(deploymentMode("")).toBe("developer");
+    expect(deploymentMode(" ENFORCED ")).toBe("enforced");
+    // A typo must not read as the permissive mode. Someone who meant to lock a
+    // machine down and misspelled it should hear about it, not be handed
+    // developer mode with a config file that claims otherwise.
+    for (const value of ["enfroced", "strict", "1", "on"]) {
+      expect(() => deploymentMode(value)).toThrow(/deployment_mode_unknown/);
+    }
+  });
+});
+
+describe("enforced mode", () => {
+  let base: string;
+  let workspace: string;
+  let data: string;
+  let runtime: MelraRuntime | undefined;
+
+  beforeEach(async () => {
+    base = await mkdtemp(join(tmpdir(), "melra-enforced-"));
+    workspace = join(base, "workspace");
+    data = join(base, "data");
+    await mkdir(workspace, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await runtime?.close();
+    runtime = undefined;
+    await rm(base, { recursive: true, force: true });
+  });
+
+  it("refuses to start with the local bypass, from either channel", async () => {
+    expect(() => assertEnforceable("enforced", true)).toThrow(
+      /enforced_mode_refuses_unsafe_local/,
+    );
+    expect(() => assertEnforceable("developer", true)).not.toThrow();
+    await expect(
+      createMelraRuntime({
+        workspaceRoot: workspace,
+        dataDirectory: data,
+        environment: { MELRA_UNHINGED: "1", MELRA_MODE: "enforced" },
+      }),
+    ).rejects.toThrow(/enforced_mode_refuses_unsafe_local/);
+  });
+
+  it("takes the stricter of flag, environment, and policy file", async () => {
+    const policyPath = join(base, "policy.json");
+    await writeFile(policyPath, JSON.stringify({ mode: "enforced" }), "utf8");
+    // Nothing on the command line or in the environment asks for it, so only the
+    // file does — and a file that pinned the mode must not be loosened by an
+    // unset variable.
+    runtime = await createMelraRuntime({
+      workspaceRoot: workspace,
+      dataDirectory: data,
+      environment: {},
+      policyPath,
+    });
+    expect(runtime.policy.mode).toBe("enforced");
+  });
+
+  it("rejects a policy file whose mode is a typo", async () => {
+    const policyPath = join(base, "policy.json");
+    await writeFile(policyPath, JSON.stringify({ mode: "enfroced" }), "utf8");
+    await expect(
+      createMelraRuntime({
+        workspaceRoot: workspace,
+        dataDirectory: data,
+        environment: {},
+        policyPath,
+      }),
+    ).rejects.toThrow(/deployment_mode_unknown/);
+  });
+
+  it("names the mode on the receipt of every effect", async () => {
+    runtime = await createMelraRuntime({
+      workspaceRoot: workspace,
+      dataDirectory: data,
+      environment: { MELRA_MODE: "enforced" },
+    });
+    const task = runtime.controller.plan(
+      request({ operation: { kind: "system", action: "info" } }),
+    );
+    const { receipt } = await runtime.controller.execute(task.id);
+    // An auditor holding a receipt should not have to ask which deployment
+    // produced it — that is the difference between "the only door" and "one of
+    // several", and it is not recoverable after the fact.
+    expect(receipt?.mode).toBe("enforced");
+  });
+
+  it("refuses a bind that is not loopback, and admits no self-registering client", async () => {
+    runtime = await createMelraRuntime({
+      workspaceRoot: workspace,
+      dataDirectory: data,
+      environment: { MELRA_MODE: "enforced" },
+    });
+    await expect(
+      serveHttp({
+        runtime,
+        host: "0.0.0.0",
+        port: 0,
+        environment: {},
+      }),
+    ).rejects.toThrow(/enforced_mode_refuses_public_bind/);
+
+    // Loopback is allowed, but OAuth registration is not: enforced mode admits
+    // identities the operator issued and nothing that asks to be let in.
+    const endpoint = await serveHttp({
+      runtime,
+      port: 0,
+      environment: {},
+    });
+    try {
+      expect(endpoint.oauth).toBe(false);
+      const refused = await fetch(`${endpoint.mcpUrl}`, { method: "POST" });
+      expect(refused.status).toBe(401);
+    } finally {
+      await endpoint.close();
+    }
   });
 });

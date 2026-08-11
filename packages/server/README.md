@@ -70,13 +70,24 @@ browser runtime independently rejects non-`http(s)` protocols, URL credentials,
 private and link-local ranges, and cloud metadata, resolving DNS first so a
 public name cannot be rebound. Secrets are redacted before anything is persisted.
 
-## Unhinged mode
+## Unsafe-local mode
 
 `unhinged: true` (or `MELRA_UNHINGED=1`) removes all of the above except the
 budgets and the redaction: no policy, no approvals, no evidence requirement, no
 workspace confinement, no destination checks. The runtime reports the mode in
 `melra_capabilities` so a connected agent can see there is nothing stopping it.
-See [unhinged mode](https://github.com/XAGI-Lab/melra/blob/main/docs/INSTALLATION.md#unhinged-mode).
+See [unsafe-local mode](https://github.com/XAGI-Lab/melra/blob/main/docs/INSTALLATION.md#unsafe-local-mode).
+
+## Deployment modes
+
+`MELRA_MODE` (or `mode` on `createMelraRuntime`) is `developer` by default —
+MELRA governs the effects it is asked for, and the harness may have another path
+to the same systems. `enforced` is the operator asserting it does not. The
+runtime cannot verify that, so it closes the doors it owns: `assertEnforceable`
+refuses to build a runtime that is both enforced and unhinged, `serveHttp`
+refuses a bind outside loopback and serves no client-registration endpoint, and
+`mode` is stamped on every receipt and published in `melra_capabilities`. See
+[deployment modes](https://github.com/XAGI-Lab/melra/blob/main/docs/INSTALLATION.md#deployment-modes).
 
 Requires Node.js 22 or newer. Full documentation:
 [github.com/XAGI-Lab/melra](https://github.com/XAGI-Lab/melra)

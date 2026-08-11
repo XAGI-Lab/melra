@@ -225,7 +225,7 @@ listed under known limitations below.
 - memory reads and deletion remain scope-aware;
 - computer input is classified high-risk and requires scoped approval.
 
-Every item above describes the default posture. Unhinged mode
+Every item above describes the default posture. Unsafe-local mode
 (`--unhinged` / `MELRA_UNHINGED=1`) removes rows 1–5 and 7–9 by design; what is
 covered *about* that mode is separate:
 
@@ -363,6 +363,6 @@ findings.
   command or in MCP server logs; embedding `@melra/storage-sqlite` as a library
   still surfaces it, because silencing a host's warnings is not a library's call.
 - Alpha database downgrades and migrations are not guaranteed.
-- Unhinged mode is an explicit opt-out of the safety model, not a limitation of
+- Unsafe-local mode is an explicit opt-out of the safety model, not a limitation of
   it. On Windows it lifts confinement to the root of the drive MELRA runs from;
   reaching a second drive still needs a second server there.

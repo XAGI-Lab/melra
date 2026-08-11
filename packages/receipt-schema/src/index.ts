@@ -109,6 +109,13 @@ export interface ActionReceipt {
    * vocabulary and derives every value written here.
    */
   executionGuarantee?: string;
+  /**
+   * How the kernel that ran this effect was deployed — `developer` or
+   * `enforced`. An auditor reading a receipt should not have to ask whether the
+   * boundary that governed it was the only door or one of several. A string for
+   * the same reason as `executionGuarantee`: `protocol` owns the vocabulary.
+   */
+  mode?: string;
   policyDecision: {
     outcome: "allow" | "deny" | "confirm";
     policyVersion: string;

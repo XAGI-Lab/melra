@@ -82,6 +82,12 @@ rules it was not written for.
 caller's own `forbiddenEffects` and `constraints` are honoured, because those are
 the caller bounding its own task rather than a guardrail MELRA imposes.
 
+`mode` is `developer` or `enforced` and is not about a request at all: it records
+how this kernel is deployed, and therefore what it refuses about its own setup
+rather than about a caller. `deploymentMode` parses it from the flag, the
+environment, and the policy file through one function, so a typo fails loudly
+instead of leaving a machine permissive with a config that claims otherwise.
+
 Requires Node.js 22 or newer. Full documentation:
 [github.com/XAGI-Lab/melra](https://github.com/XAGI-Lab/melra)
 

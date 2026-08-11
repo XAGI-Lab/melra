@@ -55,8 +55,23 @@ const KERNEL_TOOLS = [
   "melra_workflow_control",
 ] as const;
 
+/**
+ * The bypass caveat, in the only two honest versions of it.
+ *
+ * In developer mode nothing observable from the client side distinguishes a
+ * harness that goes through MELRA from one that also holds a native shell, so
+ * the caveat stands as written. An endpoint reporting enforced mode has had that
+ * alternative removed by its operator — a claim about deployment, which this
+ * suite cannot check either. What it *can* check is that the endpoint closed
+ * every door of its own, so the caveat narrows to naming whose word it is.
+ */
+function bypassCaveat(mode: string): string {
+  return mode === "enforced"
+    ? "That the operator's enforced-mode claim is true. The endpoint reports enforced mode and this suite verified the refusals MELRA owns, but whether the harness above it is really sandboxed is a fact about the deployment, not about this endpoint."
+    : "That the harness has no second, ungoverned path to the same systems. A harness holding both a MELRA terminal and a native one makes the kernel optional, and an optional boundary is not a trust boundary. Nothing observable from this side distinguishes the two.";
+}
+
 const NOT_PROVEN = [
-  "That the harness has no second, ungoverned path to the same systems. A harness holding both a MELRA terminal and a native one makes the kernel optional, and an optional boundary is not a trust boundary. Nothing observable from this side distinguishes the two.",
   "That the endpoint's own policy is well chosen. The suite checks that policy is consulted and obeyed, not that it says the right thing.",
   "Anything about effects this suite does not exercise. It probes one file effect end to end; browser, terminal, computer, and memory adapters are out of scope.",
 ];
@@ -174,6 +189,9 @@ export async function runConformance(
     content: marker,
   };
   let probeWritten = false;
+  // Read from `melra_capabilities` below. Absent on an endpoint older than
+  // deployment modes, which is developer mode by definition.
+  let mode = "developer";
   let approvalId: string | undefined;
   let phrase: string | undefined;
   let writeTaskId: string | undefined;
@@ -193,7 +211,18 @@ export async function runConformance(
     for (const action of ["read", "write", "delete"]) {
       must(file.includes(action), `operations.file omits ${action}`);
     }
-    return `version ${version}, ${file.length} file actions declared`;
+    const policy = field<Record<string, unknown>>(reply.value, "policy");
+    if (policy.mode === "enforced" || policy.mode === "developer") {
+      mode = policy.mode;
+    }
+    // Enforced mode's whole promise is that the boundary cannot be bypassed, so
+    // an endpoint claiming it while running with no guardrails is claiming the
+    // one thing it has disproved. Refuse the claim rather than repeat it.
+    must(
+      !(mode === "enforced" && policy.unhinged === true),
+      "the endpoint reports enforced mode and unhinged guardrails at once",
+    );
+    return `version ${version}, ${file.length} file actions declared, ${mode} mode`;
   });
 
   await check(1, "unknown-field-rejected", async () => {
@@ -476,7 +505,9 @@ export async function runConformance(
       passed: checks.filter((entry) => entry.passed).length,
       of: checks.length,
       checks,
-      notProven: NOT_PROVEN,
+      // What an operator has to read before quoting the level above.
+      mode,
+      notProven: [bypassCaveat(mode), ...NOT_PROVEN],
       // Only ever set when a level-3 check failed between writing the probe and
       // deleting it. Saying where it is beats silently leaving it.
       ...(probeWritten ? { uncleanedProbeFile: probe } : {}),
