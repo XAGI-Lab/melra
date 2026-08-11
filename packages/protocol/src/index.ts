@@ -232,6 +232,47 @@ export const ComputerOperationSchema = z
   })
   .strict();
 
+export const HttpOperationSchema = z
+  .object({
+    kind: z.literal("http"),
+    action: z.literal("request"),
+    method: z
+      .enum(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"])
+      .default("GET"),
+    url: z.string().url().max(4_096),
+    headers: z.record(z.string().min(1).max(256), z.string().max(8_192)).optional(),
+    /**
+     * The request payload, sent verbatim.
+     *
+     * Named `content` rather than `body` because that is the key
+     * `redactStructuredValue` already strips — an API call is the most likely
+     * place for a bearer token or a password to be written down, and the
+     * persisted copy must not hold one. `body` is taken: a `bounded_loop`
+     * workflow node uses it for its step list, which must survive redaction to
+     * stay parseable.
+     */
+    content: boundedText.optional(),
+    /**
+     * Sent as `Idempotency-Key` so a provider that supports it can collapse a
+     * duplicate submission of its own accord.
+     *
+     * ponytail: caller-supplied, not derived from the task — the adapter is
+     * handed an operation, not a task id. It does not upgrade the execution
+     * guarantee either: MELRA cannot check that the far end honours the header,
+     * and a mutation still runs at most once from here.
+     */
+    idempotencyKey: z.string().min(1).max(256).optional(),
+    /** Bounds one response the way `maxFileBytes` bounds one read. */
+    maxResponseBytes: z
+      .number()
+      .int()
+      .min(1_000)
+      .max(10 * 1024 * 1024)
+      .default(1024 * 1024),
+    timeoutMs: z.number().int().min(100).max(120_000).default(30_000),
+  })
+  .strict();
+
 export const SystemOperationSchema = z
   .object({
     kind: z.literal("system"),
@@ -245,6 +286,7 @@ export const OperationSchema = z.discriminatedUnion("kind", [
   BrowserOperationSchema,
   MemoryOperationSchema,
   ComputerOperationSchema,
+  HttpOperationSchema,
   SystemOperationSchema,
 ]);
 
@@ -254,6 +296,7 @@ export type BrowserTarget = z.infer<typeof BrowserTargetSchema>;
 export type BrowserOperation = z.infer<typeof BrowserOperationSchema>;
 export type MemoryOperation = z.infer<typeof MemoryOperationSchema>;
 export type ComputerOperation = z.infer<typeof ComputerOperationSchema>;
+export type HttpOperation = z.infer<typeof HttpOperationSchema>;
 export type SystemOperation = z.infer<typeof SystemOperationSchema>;
 export type Operation = z.infer<typeof OperationSchema>;
 

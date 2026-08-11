@@ -18,6 +18,7 @@ import {
   type ComputerAdapter,
 } from "@melra/computer-runtime";
 import { FileRuntime } from "@melra/file-runtime";
+import { HttpRuntime } from "@melra/http-runtime";
 import { LocalMemory } from "@melra/memory";
 import {
   createDefaultPolicy,
@@ -98,6 +99,7 @@ export class RuntimeRouter implements OperationExecutor {
     private readonly browser: BrowserRuntime,
     private readonly computer: ComputerRuntime,
     private readonly memory: LocalMemory,
+    private readonly http: HttpRuntime,
   ) {}
 
   async execute(
@@ -116,6 +118,8 @@ export class RuntimeRouter implements OperationExecutor {
         return this.memory.execute(operation);
       case "computer":
         return await this.computer.execute(operation, signal);
+      case "http":
+        return await this.http.execute(operation, signal);
       case "system":
         return {
           platform: platform(),
@@ -137,6 +141,7 @@ export class RuntimeRouter implements OperationExecutor {
       "browser",
       "memory",
       "computer",
+      "http",
       "system",
     ]);
   }
@@ -226,7 +231,19 @@ export async function createMelraRuntime(
       ? {}
       : { adapter: options.computerAdapter }),
   });
-  const router = new RuntimeRouter(files, terminal, browser, computer, memory);
+  const http = new HttpRuntime({
+    allowedDomains: policy.allowedDomains,
+    allowLocalhost: policy.allowLocalhost,
+    unhinged,
+  });
+  const router = new RuntimeRouter(
+    files,
+    terminal,
+    browser,
+    computer,
+    memory,
+    http,
+  );
   const controller = new TaskController(
     store,
     policy,

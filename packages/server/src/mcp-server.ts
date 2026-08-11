@@ -98,6 +98,7 @@ export function capabilitiesPayload(runtime: MelraRuntime): unknown {
             "key",
             "scroll",
           ],
+          http: ["request"],
           system: ["info"],
         },
         workflowNodes: [

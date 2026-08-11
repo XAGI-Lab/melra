@@ -122,25 +122,25 @@ export async function assertSafeDestination(
   // is a bug either way — but asserts nothing about where it points.
   if (policy.unhinged) return { url, address: url.hostname };
   if (!["http:", "https:"].includes(url.protocol)) {
-    throw new Error("browser_protocol_not_allowed");
+    throw new Error("destination_protocol_not_allowed");
   }
   if (url.username !== "" || url.password !== "") {
-    throw new Error("browser_url_credentials_not_allowed");
+    throw new Error("destination_credentials_not_allowed");
   }
   const host = url.hostname.toLowerCase();
   const localName = host === "localhost" || host.endsWith(".localhost");
   if (localName && !policy.allowLocalhost) {
-    throw new Error("browser_private_destination_blocked");
+    throw new Error("destination_private_blocked");
   }
   if (!domainAllowed(host, policy.allowedDomains)) {
-    throw new Error("browser_domain_not_allowed");
+    throw new Error("destination_domain_not_allowed");
   }
   if (isIP(host)) {
     if (
       isPrivateAddress(host) &&
       !(policy.allowLocalhost && isLoopbackAddress(host))
     ) {
-      throw new Error("browser_private_destination_blocked");
+      throw new Error("destination_private_blocked");
     }
     return { url, address: host };
   }
@@ -153,7 +153,7 @@ export async function assertSafeDestination(
         !(policy.allowLocalhost && isLoopbackAddress(item.address)),
     )
   ) {
-    throw new Error("browser_private_destination_blocked");
+    throw new Error("destination_private_blocked");
   }
   // Every answer passed, so any of them is safe to pin; the first is the one the
   // resolver preferred.

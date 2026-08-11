@@ -18,11 +18,11 @@ describe("browser network policy", () => {
   it("blocks credentials and localhost by default", async () => {
     const policy = { allowedDomains: ["*"], allowLocalhost: false };
     await expect(assertSafeUrl("http://127.0.0.1", policy)).rejects.toThrow(
-      "browser_private_destination_blocked",
+      "destination_private_blocked",
     );
     await expect(
       assertSafeUrl("https://user:pass@example.com", policy),
-    ).rejects.toThrow("browser_url_credentials_not_allowed");
+    ).rejects.toThrow("destination_credentials_not_allowed");
   });
 
   it("asserts nothing about the destination when unhinged", async () => {

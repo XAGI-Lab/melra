@@ -349,6 +349,7 @@ implementations that must pass through those services to reach anything.
 | `@melra/terminal-runtime` | Shell-free process and background-job control |
 | `@melra/browser-runtime` | Isolated Playwright browser execution |
 | `@melra/computer-runtime` | Typed local computer-use adapters |
+| `@melra/http-runtime` | One bounded HTTP request, pinned to a checked address |
 
 `@melra/sdk` is a client of the kernel rather than a part of it.
 

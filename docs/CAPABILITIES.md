@@ -220,6 +220,33 @@ Actions: `capabilities`, `inspect`, `screenshot`, `click`, `move`, `drag`,
 Focus verification, multi-display normalization, per-monitor DPI compensation,
 and official task-benchmark evidence remain roadmap work.
 
+### HTTP
+
+Action: `request`. Fields: `method`, `url`, `headers`, `content`,
+`idempotencyKey`, `maxResponseBytes`, `timeoutMs`.
+
+- `GET` and `HEAD` classify as reads. Every other method is a mutation: it needs
+  declared evidence and an exact scoped approval, and it runs at most once —
+  `budget.maxRetries` does not apply to it.
+- The destination goes through the same checks and the same `allowedDomains`
+  allowlist a browser navigation does, and the socket then connects to the
+  address that was checked rather than resolving the name a second time.
+- Redirects are not followed. A `Location` header points somewhere the
+  destination check never saw, so the status and headers come back and the
+  caller can plan a second governed request.
+- `success` on the result is true only for a 2xx. It is the far end's own word,
+  which is why a mutation must still declare what would count: a completed call
+  whose evidence does not hold is `partial`.
+- `idempotencyKey` is sent as `Idempotency-Key` for providers that honour it.
+  MELRA cannot check that they do, so it does not change the guarantee.
+- Response bodies are capped by `maxResponseBytes` (1 MiB by default); a body
+  past the cap stops being read and the result reports `truncated: true`.
+- The request payload travels as `content`, which redaction strips before
+  anything is persisted. Raw bytes reach the live caller only.
+
+Request signing, retries with backoff, and streaming responses are not
+implemented.
+
 ### System
 
 Action: `info`. Returns local runtime capability information without mutation.

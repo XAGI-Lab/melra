@@ -30,11 +30,21 @@ never reaches a runtime.
 - Terminal commands must be allowlisted by basename. Shell interpreters and
   `sudo`/`su` are denied unconditionally. `git` counts as a read only for a small
   read-only subcommand set; `npm`, `npx`, and `pnpm` are high-risk mutations.
-- Browser destinations default to `allowedDomains: ["*"]` with localhost allowed,
-  because the allowlist is a narrowing control, not the safety boundary — the
-  browser runtime independently blocks private and metadata destinations.
+- Browser and HTTP destinations default to `allowedDomains: ["*"]` with localhost
+  allowed, because the allowlist is a narrowing control, not the safety boundary
+  — `assertSafeDestination`, exported from this package, is what blocks private
+  and metadata destinations, and it holds even with `allowedDomains: ["*"]`.
 - `classifyOperation` is the single place effect and risk are decided. An action
   that is not classified there is mis-classified, not unclassified.
+
+## The destination boundary
+
+`assertSafeDestination` lives here rather than in a runtime so every adapter that
+opens a socket shares one implementation. It rejects non-`http(s)` protocols and
+URL credentials, resolves DNS first and checks **every** answer, and blocks
+private, loopback, link-local, and cloud-metadata ranges in IPv4, IPv6, and
+IPv4-mapped IPv6 form. It returns the address it checked so the caller can pin
+the socket to it instead of letting the name resolve a second time.
 
 ## Capability grants
 
