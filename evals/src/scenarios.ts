@@ -16,6 +16,7 @@ export interface EvaluationScenario {
     | "terminal"
     | "browser"
     | "computer"
+    | "http"
     | "memory"
     | "policy"
     | "verification";
@@ -999,5 +1000,100 @@ export const scenarios: EvaluationScenario[] = [
     expectedPlan: "awaiting_approval",
     cancel: true,
     expectedFinal: "cancelled",
+  },
+  {
+    // Nothing here opens a socket: every HTTP scenario stops at the plan, which
+    // is where the properties worth asserting live. The adapter's own suite
+    // covers the wire against a loopback fixture.
+    //
+    // A GET is a read, so it needs no approval — and forbidding `read` is what
+    // proves that. If the method were mis-classified this would plan.
+    id: "http-get-is-read-not-mutation",
+    category: "http",
+    request: {
+      goal: "Fetch an order from the API",
+      operation: {
+        kind: "http",
+        action: "request",
+        url: "https://api.example.com/orders/1",
+      },
+      constraints: [],
+      forbiddenEffects: ["read"],
+      budget: { maxSteps: 2, maxDurationMs: 10_000, maxRetries: 0 },
+      requiredEvidence: [],
+    },
+    expectedPlan: "policy_blocked",
+  },
+  {
+    // The guarantee is published before the caller approves anything, because
+    // that is the point of publishing it: a POST whose outcome MELRA cannot see
+    // runs once and is never retried, and the caller learns that while it can
+    // still decline.
+    id: "http-post-requires-approval-and-runs-at-most-once",
+    category: "http",
+    request: {
+      goal: "Submit an order to the API",
+      operation: {
+        kind: "http",
+        action: "request",
+        method: "POST",
+        url: "https://api.example.com/orders",
+        content: '{"item":"widget"}',
+      },
+      constraints: [],
+      forbiddenEffects: [],
+      budget: { maxSteps: 2, maxDurationMs: 10_000, maxRetries: 3 },
+      requiredEvidence: [{ type: "result_equals", path: "status", value: 201 }],
+    },
+    expectedPlan: "awaiting_approval",
+    expectedExecutionGuarantee: "at-most-once",
+    cancel: true,
+    expectedFinal: "cancelled",
+  },
+  {
+    // A mutation with no declared evidence is never simply allowed. HTTP now
+    // has a derived post-condition like every other kind, so the caller is held
+    // to the response's own success flag instead of being denied and left to
+    // guess a predicate — and the call still stops at an approval. Without the
+    // `case "http"` in `defaultEvidenceFor` this would deny instead.
+    id: "http-mutation-without-evidence-gets-a-derived-postcondition",
+    category: "http",
+    request: {
+      goal: "Submit an order without saying what would count",
+      operation: {
+        kind: "http",
+        action: "request",
+        method: "POST",
+        url: "https://api.example.com/orders",
+      },
+      constraints: [],
+      forbiddenEffects: [],
+      budget: { maxSteps: 2, maxDurationMs: 10_000, maxRetries: 0 },
+      requiredEvidence: [],
+    },
+    expectedPlan: "awaiting_approval",
+    cancel: true,
+    expectedFinal: "cancelled",
+  },
+  {
+    // One allowlist covers every kind that names a destination. A policy that
+    // stopped the browser and let the HTTP adapter through would only be
+    // describing which package made the call.
+    id: "http-destination-outside-allowlist-denied",
+    category: "http",
+    policy: { allowedDomains: ["api.example.com"] },
+    request: {
+      goal: "Call an API the policy does not list",
+      operation: {
+        kind: "http",
+        action: "request",
+        url: "https://attacker.test/orders",
+      },
+      constraints: [],
+      forbiddenEffects: [],
+      budget: { maxSteps: 2, maxDurationMs: 10_000, maxRetries: 0 },
+      requiredEvidence: [],
+    },
+    expectedPlan: "policy_blocked",
   },
 ];

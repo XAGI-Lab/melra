@@ -8,6 +8,24 @@ All notable changes are documented here. The format follows
 
 ### Added
 
+- **HTTP and API calls are now a governed effect.** A new `http` operation kind
+  (`packages/http-runtime`) puts one bounded request through the same pipeline
+  every other effect goes through: `GET`/`HEAD` classify as reads, every other
+  method is a mutation that needs declared evidence and a typed approval, and
+  the response status is what verification is checked against. A 2xx is the far
+  end's own word, so a completed call whose declared evidence does not hold is
+  `partial`, never success.
+
+  The destination guard moved from `@melra/browser-runtime` to
+  `@melra/policy-core` so an API call and a page load share one implementation
+  rather than one package holding the boundary and the other reimplementing it.
+  Its four refusal reasons are renamed `browser_* -> destination_*`, and
+  `browser_domain_not_allowed` in policy decisions is now
+  `destination_domain_not_allowed`; the old symbols are still re-exported from
+  `@melra/browser-runtime`. Redirects are deliberately not followed — a
+  `Location` header points somewhere the destination check never saw — and the
+  socket connects to the address that was checked, not to the name.
+
 - **The plan now says how many times an effect may run.** Every contract carries
   an `executionGuarantee` — `read-only` for reads, `at-most-once` for mutations
   and destructive operations — and every receipt repeats it. The rule was

@@ -17,7 +17,7 @@
 
 import { createServer, request as httpRequest, type Server } from "node:http";
 import { connect, type Socket } from "node:net";
-import { assertSafeDestination, type NetworkPolicy } from "./network-policy.js";
+import { assertSafeDestination, type NetworkPolicy } from "@melra/policy-core";
 
 export interface PinningProxy {
   /** `http://127.0.0.1:<port>`, ready for Playwright's `proxy.server`. */

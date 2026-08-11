@@ -9,7 +9,8 @@ npm install @melra/browser-runtime
 ```
 
 ```ts
-import { BrowserRuntime, assertSafeUrl } from "@melra/browser-runtime";
+import { BrowserRuntime } from "@melra/browser-runtime";
+import { assertSafeUrl } from "@melra/policy-core";
 ```
 
 Nineteen actions: navigate, back, forward, reload, inspect, wait, click, type,

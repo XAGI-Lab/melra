@@ -20,7 +20,7 @@ Host exercised locally: macOS arm64, Node.js 24.10.0, Python 3.11.14
 | TypeScript build and strict typecheck | passed across 15 packages/apps |
 | JavaScript/Vitest cases | 331 passed |
 | Python lint and SDK tests | ruff passed; 2 tests passed |
-| Safety/execution evaluation | 42 of 42 passed |
+| Safety/execution evaluation | 46 of 46 passed |
 | Durable Core evaluation | 8 valid, 0 invalid |
 | Durable recovery rate | `1.0` |
 | Duplicate-execution rate | `0.0` |
@@ -97,7 +97,7 @@ Host exercised locally: macOS arm64 (Darwin 25.5.0), Node.js 24, Python 3.11.14
 |---|---|
 | `pnpm check` | passed (versions, strict typecheck, tests, Python) |
 | TypeScript/Vitest cases | 331 passed |
-| `pnpm evals` | 42 of 42 scenarios passed, 0 failed |
+| `pnpm evals` | 46 of 46 scenarios passed, 0 failed |
 | `pnpm e2e` | 13 end-to-end cases passed over real stdio |
 | `pnpm pack:check` | passed |
 | `pnpm security:audit` | no known vulnerabilities, Node and Python |

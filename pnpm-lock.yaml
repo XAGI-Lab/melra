@@ -73,6 +73,9 @@ importers:
 
   packages/browser-runtime:
     dependencies:
+      '@melra/policy-core':
+        specifier: workspace:*
+        version: link:../policy-core
       '@melra/protocol':
         specifier: workspace:*
         version: link:../protocol
@@ -88,6 +91,15 @@ importers:
 
   packages/file-runtime:
     dependencies:
+      '@melra/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+
+  packages/http-runtime:
+    dependencies:
+      '@melra/policy-core':
+        specifier: workspace:*
+        version: link:../policy-core
       '@melra/protocol':
         specifier: workspace:*
         version: link:../protocol
@@ -153,6 +165,9 @@ importers:
       '@melra/file-runtime':
         specifier: workspace:*
         version: link:../file-runtime
+      '@melra/http-runtime':
+        specifier: workspace:*
+        version: link:../http-runtime
       '@melra/memory':
         specifier: workspace:*
         version: link:../memory

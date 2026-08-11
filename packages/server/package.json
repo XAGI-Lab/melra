@@ -29,6 +29,7 @@
     "@melra/browser-runtime": "workspace:*",
     "@melra/computer-runtime": "workspace:*",
     "@melra/file-runtime": "workspace:*",
+    "@melra/http-runtime": "workspace:*",
     "@melra/memory": "workspace:*",
     "@melra/policy-core": "workspace:*",
     "@melra/protocol": "workspace:*",

@@ -131,15 +131,15 @@ const ALWAYS_DENIED_COMMANDS = new Set([
  * Defaults tuned so a fresh install is usable without editing `policy.json`.
  *
  * `allowedDomains: ["*"]` is not the SSRF boundary and never was. `assertSafeUrl`
- * in `@melra/browser-runtime` independently rejects non-http(s) protocols, URL
+ * in `./network-policy.js` independently rejects non-http(s) protocols, URL
  * credentials, private ranges, and cloud metadata (169.254/16), and it resolves
  * DNS before allowing a navigation so a public name cannot be rebound to a
  * private address. The domain list is a *narrowing* control on top of that guard,
  * for operators who want to restrict which public sites are reachable — it is not
- * what stops a browser from reaching the loopback interface.
+ * what stops a browser or an HTTP call from reaching the loopback interface.
  *
  * Defaulting it to `[]` made every single navigation fail with
- * `browser_domain_not_allowed` out of the box, which is why browser use was
+ * `destination_domain_not_allowed` out of the box, which is why browser use was
  * reported as unusable. Operators who want an allowlist set one explicitly.
  */
 /**
@@ -570,6 +570,23 @@ export function classifyOperation(operation: Operation): {
         traits: [],
       };
     }
+    case "http": {
+      // The method is the classification. A GET that a server treats as a write
+      // is that server misusing HTTP, and MELRA cannot see it — which is why a
+      // read still gets no approval but also no retry-into-a-duplicate: the
+      // guarantee comes from the effect, and the effect comes from here.
+      const read = operation.method === "GET" || operation.method === "HEAD";
+      const target = new URL(operation.url);
+      target.search = "";
+      target.hash = "";
+      return {
+        effect: read ? "read" : "mutate",
+        risk: read ? "low" : "medium",
+        capability: `http.${operation.method.toLowerCase()}`,
+        target: target.toString(),
+        traits: ["network"],
+      };
+    }
     case "system":
       return {
         effect: "read",
@@ -633,8 +650,11 @@ export function defaultEvidenceFor(
           : [];
     case "browser":
     case "computer":
+    case "http":
       // These adapters report an explicit `success` flag; hold the task to it
-      // rather than letting a silent no-op pass as a completed action.
+      // rather than letting a silent no-op pass as a completed action. For HTTP
+      // that flag is the response status, which is the far end's own word — the
+      // independent re-read that would be stronger is a caller's to declare.
       return [{ type: "result_equals", path: "success", value: true }];
     case "terminal":
       // `run`/`start` say nothing about what the command should leave behind,
@@ -670,8 +690,15 @@ function isCommandAllowed(operation: Operation, policy: LocalPolicy): boolean {
 }
 
 function domainAllowed(operation: Operation, policy: LocalPolicy): boolean {
-  if (operation.kind !== "browser" || operation.url === undefined) return true;
-  const url = new URL(operation.url);
+  // Every kind that names a destination is checked by the same allowlist. The
+  // browser and the HTTP adapter reach the same hosts; a policy that let one
+  // through and not the other would only describe which package made the call.
+  const raw =
+    operation.kind === "browser" || operation.kind === "http"
+      ? operation.url
+      : undefined;
+  if (raw === undefined) return true;
+  const url = new URL(raw);
   if (!["http:", "https:"].includes(url.protocol)) return false;
   const host = url.hostname.toLowerCase();
   if (host === "localhost" || host.endsWith(".localhost")) return policy.allowLocalhost;
@@ -802,7 +829,7 @@ export function evaluatePolicy(
 
   if (!domainAllowed(request.operation, policy)) {
     return {
-      decision: decide("deny", "browser_domain_not_allowed", "high"),
+      decision: decide("deny", "destination_domain_not_allowed", "high"),
     };
   }
 
@@ -867,3 +894,5 @@ export function validateApproval(
   }
   return { ok: true };
 }
+
+export * from "./network-policy.js";

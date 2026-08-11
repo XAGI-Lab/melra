@@ -357,9 +357,12 @@ alternative, not asking the harness not to use it.
       outside the delegated capability even when the credential could perform
       them. That is the difference between possessing credentials and
       possessing authority.
-- [ ] HTTP/API effect adapter. A large share of serious autonomous work happens
+- [x] HTTP/API effect adapter. A large share of serious autonomous work happens
       through APIs rather than mouse clicks, and an API effect needs the same
-      nine guarantees as a file write.
+      nine guarantees as a file write. Shipped as the `http` operation kind:
+      reads for `GET`/`HEAD`, an approval-gated at-most-once mutation for every
+      other method, checked against the same destination boundary the browser
+      uses and pinned to the address that was checked.
 - [ ] Declared per-effect execution guarantees — `at-most-once`,
       `at-least-once`, `provider-idempotent`, `reconciliation-required`,
       `compensatable`, `read-only` — stated rather than assumed.

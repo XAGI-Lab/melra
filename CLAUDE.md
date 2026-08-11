@@ -29,7 +29,8 @@ belongs to the agent above and does not go in this repo.
 MCP over stdio is one of several interfaces onto the same runtime (MCP stdio,
 MCP over loopback HTTP, CLI, TypeScript SDK, Python SDK, read-only JSON API);
 none of them is a shortcut past a stage of the pipeline. Eleven MCP tools sit in
-front of four reference effect adapters (files, terminal, browser, computer) plus
+front of five reference effect adapters (files, terminal, browser, computer, http)
+plus
 operational memory as a kernel service: six task tools (`melra_capabilities`,
 `melra_plan`, `melra_execute`, `melra_task_status`, `melra_task_cancel`,
 `melra_receipt`) and five durable-workflow tools (`melra_workflow_plan`,
@@ -44,7 +45,7 @@ strict tsc), plus two Python projects managed by `uv` (`sdk-py`,
 pnpm install --frozen-lockfile
 pnpm build                  # tsc -p per package; required before tests (see below)
 pnpm check                  # versions:check + typecheck + test + python:check — the CI gate
-pnpm evals                  # 42 deterministic policy/execution scenarios → evals/results/latest.json
+pnpm evals                  # 46 deterministic policy/execution scenarios → evals/results/latest.json
 pnpm e2e                    # packages/server/test/e2e.test.ts against a live stdio server
 pnpm pack:check              # npm pack --dry-run for the published CLI
 pnpm readme:check           # typecheck every ```ts block in every package README

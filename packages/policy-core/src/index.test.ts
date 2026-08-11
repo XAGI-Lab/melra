@@ -660,3 +660,105 @@ describe("capability grants", () => {
     ).toBe("unhinged_mode_no_guardrails");
   });
 });
+
+describe("http destinations", () => {
+  const request = (fields: Record<string, unknown>) =>
+    TaskRequestSchema.parse({
+      goal: "Call an API",
+      operation: { kind: "http", action: "request", ...fields },
+      requiredEvidence: [{ type: "result_equals", path: "success", value: true }],
+    });
+  const taskId = "b4b6f2a1-6f2e-4d5a-9c3e-8a1d0f7c2b34";
+
+  it("classifies by method, not by kind", () => {
+    expect(
+      classifyOperation({
+        kind: "http",
+        action: "request",
+        method: "GET",
+        url: "https://api.example.com/v1/orders?page=2",
+        maxResponseBytes: 1_000,
+        timeoutMs: 1_000,
+      }),
+    ).toMatchObject({
+      effect: "read",
+      capability: "http.get",
+      // The query is dropped so a capability pattern matches the resource, not
+      // whatever token happened to be stapled to the URL.
+      target: "https://api.example.com/v1/orders",
+      traits: ["network"],
+    });
+    expect(
+      classifyOperation({
+        kind: "http",
+        action: "request",
+        method: "POST",
+        url: "https://api.example.com/v1/orders",
+        maxResponseBytes: 1_000,
+        timeoutMs: 1_000,
+      }),
+    ).toMatchObject({ effect: "mutate", capability: "http.post" });
+  });
+
+  it("holds an HTTP mutation to the same evidence rule as any other", () => {
+    const missing = TaskRequestSchema.parse({
+      goal: "Create an order",
+      operation: {
+        kind: "http",
+        action: "request",
+        method: "POST",
+        url: "https://api.example.com/v1/orders",
+      },
+    });
+    expect(
+      evaluatePolicy(taskId, missing, createDefaultPolicy(root)).decision.reason,
+    ).toBe("mutation_requires_evidence");
+    expect(
+      evaluatePolicy(
+        taskId,
+        request({ method: "POST", url: "https://api.example.com/v1/orders" }),
+        createDefaultPolicy(root),
+      ).decision.outcome,
+    ).toBe("confirm");
+  });
+
+  it("applies the domain allowlist to HTTP, not only to the browser", () => {
+    const policy = {
+      ...createDefaultPolicy(root),
+      allowedDomains: ["api.example.com"],
+    };
+    expect(
+      evaluatePolicy(
+        taskId,
+        request({ url: "https://api.example.com/v1/orders" }),
+        policy,
+      ).decision.outcome,
+    ).toBe("allow");
+    expect(
+      evaluatePolicy(taskId, request({ url: "https://attacker.test/" }), policy)
+        .decision.reason,
+    ).toBe("destination_domain_not_allowed");
+  });
+
+  it("refuses an HTTP call when the network trait is denied", () => {
+    expect(
+      evaluatePolicy(taskId, request({ url: "https://api.example.com/" }), {
+        ...createDefaultPolicy(root),
+        deniedTraits: ["network"],
+      }).decision.reason,
+    ).toBe("trait_denied:network");
+  });
+
+  it("derives the response-status post-condition for a mutation", () => {
+    expect(
+      defaultEvidenceFor({
+        kind: "http",
+        action: "request",
+        method: "POST",
+        url: "https://api.example.com/v1/orders",
+        maxResponseBytes: 1_000,
+        timeoutMs: 1_000,
+      }),
+    ).toEqual([{ type: "result_equals", path: "success", value: true }]);
+  });
+});

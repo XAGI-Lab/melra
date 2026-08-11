@@ -21,7 +21,7 @@ import {
 import {
   assertSafeUrl,
   type NetworkPolicy,
-} from "./network-policy.js";
+} from "@melra/policy-core";
 import { startPinningProxy, type PinningProxy } from "./pinning-proxy.js";
 import { buildSelector } from "./selector.js";
 import { waitForStableDom } from "./stable-dom.js";
@@ -1072,7 +1072,16 @@ export class BrowserRuntime {
   }
 }
 
-export * from "./network-policy.js";
+// The destination guard moved to `@melra/policy-core` so the HTTP adapter can
+// reach it without pulling in Playwright. Re-exported here because it was part
+// of this package's published surface.
+export {
+  assertSafeDestination,
+  assertSafeUrl,
+  isPrivateAddress,
+  type NetworkPolicy,
+  type SafeDestination,
+} from "@melra/policy-core";
 export * from "./pinning-proxy.js";
 export * from "./selector.js";
 export * from "./stable-dom.js";
