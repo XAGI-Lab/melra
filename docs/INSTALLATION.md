@@ -115,6 +115,7 @@ MELRA uses these environment variables:
 | `MELRA_BROWSER` | Chrome, Chromium, or Edge executable | auto-detected |
 | `MELRA_PAYLOAD_KEY` | Optional canonical base64url 256-bit payload key | private `<MELRA_HOME>/payload.key` |
 | `MELRA_UNHINGED` | Set to `1` to remove every guardrail — see below | unset (all guardrails on) |
+| `MELRA_MODE` | `developer` or `enforced` — see [deployment modes](#deployment-modes) | `developer` |
 | `MELRA_HTTP_PORT` | Port for `melra serve --http` | `7457` |
 | `MELRA_HTTP_TOKEN` | Bearer token for `melra serve --http` | a fresh random token, printed at startup |
 | `MELRA_HTTP_OAUTH` | Set to `0` so that token is the only way in and no client can register itself | unset (clients may register, on loopback) |
@@ -154,7 +155,7 @@ A window the page opens by itself is governed by policy, not by the caller:
 provoked it, as `popups: [{ "url": "...", "blocked": true }]` in the result.
 `"allow"` keeps it as an addressable tab. Either way the caller is told — the
 setting governs whether the window survives, not whether it is reported, and
-`assertSafeUrl` still decides where it may load from. Unhinged mode allows
+`assertSafeUrl` still decides where it may load from. Unsafe-local mode allows
 popups, because closing one is MELRA's judgement about what the caller should be
 looking at.
 
@@ -334,7 +335,7 @@ not the plan, not the result, not the receipt, not the database. `melra_capabili
 publishes the names so a caller knows not to go looking for a key it will never
 be given.
 
-Host and capability scoping stay on in `--unhinged` mode. That flag lifts the
+Host and capability scoping stay on in `--unsafe-local` mode. That flag lifts the
 guardrails MELRA imposes on the caller; a credential's scope is the operator
 bounding their own secret, which is a different thing.
 
@@ -362,7 +363,7 @@ immediately with `circuit_open:<target>` instead of running, until
 trial: one success clears the count, another failure re-opens at once. Other
 targets are unaffected, a `partial` counts as reaching the target, and a
 cancellation counts neither way. `threshold: 0` switches it off, which is also
-what unhinged mode does.
+what unsafe-local mode does.
 
 ```json
 { "circuitBreaker": { "threshold": 3, "cooldownMs": 60000 } }
@@ -499,15 +500,67 @@ can start work policy has not seen. Each SSE frame carries the event's
 without gaps.
 
 The console is one self-contained page with no build step and no external
-requests: the posture you are running under (including a red banner in unhinged
+requests: the posture you are running under (including a red banner in unsafe-local
 mode), every workflow run, each node's status, and a live event tail.
 
-## Unhinged mode
+## Deployment modes
 
-`melra serve --unhinged` (or `MELRA_UNHINGED=1`) runs MELRA with no guardrails at
+MELRA governs the effects it is asked for. It cannot see whether the harness
+above it also holds a native terminal — and a harness holding both makes MELRA
+optional, which is not a trust boundary. `MELRA_MODE` is where you say which of
+those two situations you are in.
+
+| Mode | What it means |
+|---|---|
+| `developer` (default) | MELRA governs what it is asked for. The harness may have another path to the same systems, and you accept that. This is the reason MELRA can be tried in thirty seconds. |
+| `enforced` | You are asserting the alternative has been removed: the harness is sandboxed, holds no privileged secrets, and reaches these systems only through here. |
+
+MELRA cannot verify that assertion from inside its own process — the isolation
+is the operating system's job, and enforced mode deliberately does not reinvent
+it. Bring a container, a separate OS user, a sandbox profile, or filesystem
+ACLs. What MELRA does is stop being one of the ways the claim could be false, by
+closing every door it owns:
+
+- **`--unsafe-local` is refused outright.** A mode whose point is that the
+  boundary cannot be bypassed cannot also ship a bypass flag. Either flag or
+  variable, the process exits with `enforced_mode_refuses_unsafe_local` before
+  anything runs.
+- **No bind outside loopback.** `serve --http --host 0.0.0.0` fails with
+  `enforced_mode_refuses_public_bind`. A sandbox talks to its kernel over IPC; a
+  listener on a routable interface is a machine-control API on a network.
+- **No client registers itself.** The OAuth registration endpoints are not
+  served at all, on loopback or anywhere else. Enforced mode admits service
+  identities the operator issued, and nothing that asks to be let in — so the
+  bearer token is the only way in.
+- **Every receipt says `enforced`.** `ActionReceipt.mode` records it, and
+  `melra_capabilities` publishes `policy.mode`, so an auditor never has to infer
+  whether an effect was governed by the only door or by one of several.
+
+Deliberately not refused: running as root. Enforced mode exists for containers,
+and a container process is usually root inside it.
+
+Set it whichever way suits the deployment — `MELRA_MODE=enforced`, `--mode
+enforced`, or `"mode": "enforced"` in the policy JSON. The strictest of the three
+wins, so a policy file that pinned it is not loosened by an unset variable, and a
+typo (`MELRA_MODE=enfroced`) fails loudly rather than leaving a machine in
+developer mode with a config that claims otherwise.
+
+A `melra conformance` run against an enforced endpoint keeps the same level — the
+mode does not earn checks — but its first `notProven` entry narrows from "nothing
+observable rules out a second path" to naming whose word the remaining claim
+rests on. See [CONFORMANCE.md](CONFORMANCE.md).
+
+## Unsafe-local mode
+
+`melra serve --unsafe-local` (or `MELRA_UNHINGED=1`) runs MELRA with no
+guardrails at
 all. Use it when you want the agent to have exactly the reach your own shell has
 and you accept the consequences. It applies to every command in the process, not
 just `serve`.
+
+The flag was originally called `--unhinged`, which still works and prints a
+deprecation line: it named a mood rather than what it does, which is opt out of
+the entire safety model.
 
 What is off, precisely:
 

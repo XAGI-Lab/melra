@@ -25,13 +25,26 @@ The MCP client and task content are potentially hostile. The host operating
 system and the configured local policy are trusted. MELRA is not a security
 boundary against a fully compromised host.
 
-**Unhinged mode is outside this threat model.** `--unhinged` /
+**Unsafe-local mode is outside this threat model.** `--unsafe-local` /
 `MELRA_UNHINGED=1` removes the policy, approval, confinement, and
 network-destination boundaries listed above, which means the "potentially
 hostile MCP client" assumption no longer holds: a hostile client in that mode
 has the full authority of the OS user. Nothing in this document applies to a
-process running unhinged. See
-[unhinged mode](INSTALLATION.md#unhinged-mode).
+process running unsafe-local. See
+[unsafe-local mode](INSTALLATION.md#unsafe-local-mode).
+
+**The bypass assumption, and how enforced mode changes it.** Everything below
+assumes the harness reaches these systems *through* MELRA. In developer mode that
+is an assumption, not a control: a harness holding a native terminal as well
+makes the kernel optional. `MELRA_MODE=enforced` is the operator asserting the
+alternative has been removed, and MELRA cannot verify that from inside its own
+process — the isolation is the host's, brought as a container, a separate OS
+user, or a sandbox profile. What enforced mode contributes is closing every door
+MELRA itself owns: it refuses to start with `--unsafe-local`, refuses any bind
+outside loopback, serves no client-registration endpoint, and stamps `mode` on
+every receipt so an auditor need not infer which deployment produced an effect.
+The residual risk is the assertion itself. See
+[deployment modes](INSTALLATION.md#deployment-modes).
 
 ## Threats and controls
 
@@ -47,7 +60,7 @@ process running unhinged. See
 | Shell injection | direct process spawn; shell and privilege commands denied | an allowed executable can interpret dangerous arguments |
 | Process escape | cwd confinement, environment allowlist, time/output bounds | processes are not OS-sandboxed outside the container profile |
 | SSRF and metadata access | URL validation, DNS resolution, per-request interception | malicious public endpoints remain reachable when domains allow them |
-| DNS rebinding | the checked answer is pinned: requests go through a loopback proxy that connects to the address validation accepted | an attached CDP browser and unhinged mode resolve names themselves, so the window stays open there |
+| DNS rebinding | the checked answer is pinned: requests go through a loopback proxy that connects to the address validation accepted | an attached CDP browser and unsafe-local mode resolve names themselves, so the window stays open there |
 | Malicious downloads/uploads | path confinement and artifact hashes | file content is not malware-scanned |
 | Unintended computer input | typed actions, named-key allowlist, high-risk approval | focus can change between approval and action |
 | Desktop observation leakage | local-only screenshot artifact with explicit invocation | screenshots may contain sensitive on-screen data |

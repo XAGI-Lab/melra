@@ -10,6 +10,7 @@ import type {
   CapabilityGrant,
   CapabilityTrait,
   CredentialDefinition,
+  DeploymentMode,
   Effect,
   EvidencePredicate,
   HttpOperation,
@@ -22,6 +23,7 @@ import type {
 import {
   CapabilityGrantSchema,
   CredentialsSchema,
+  deploymentMode,
   LOCAL_IDENTITY,
   principalRef,
 } from "@melra/protocol";
@@ -110,6 +112,22 @@ export interface LocalPolicy {
    * derives it from another setting.
    */
   unhinged: boolean;
+  /**
+   * How this kernel is deployed, and therefore what it refuses about its own
+   * setup rather than about a caller's request.
+   *
+   * `developer` is the default and changes nothing: MELRA governs the effects it
+   * is asked for, and the operator accepts that the harness may have another way
+   * to the same disk. `enforced` is the operator asserting there is no other way
+   * — the harness is sandboxed, holds no privileged secrets, and reaches systems
+   * only through here. MELRA cannot verify that assertion, so what it does
+   * instead is remove every door it owns that would contradict it: no
+   * `--unsafe-local`, no bind outside loopback, no client registering itself.
+   *
+   * Named on every receipt, because "was this effect governed by the only door
+   * or by one of several" is not something an auditor should have to infer.
+   */
+  mode: DeploymentMode;
 }
 
 export interface PolicyEvaluation {
@@ -422,6 +440,7 @@ export function createDefaultPolicy(workspaceRoot: string): LocalPolicy {
     credentials: {},
     circuitBreaker: { threshold: 3, cooldownMs: 60_000 },
     unhinged: false,
+    mode: "developer",
   };
 }
 
@@ -457,6 +476,10 @@ export async function loadPolicy(
       parsed.credentials === undefined
         ? defaults.credentials
         : CredentialsSchema.parse(parsed.credentials),
+    // Through the same parser the environment variable and the flag go through,
+    // so `"mode": "enfroced"` in a policy file fails loudly instead of leaving a
+    // machine in developer mode with a file that claims otherwise.
+    mode: deploymentMode(parsed.mode),
   };
 }
 

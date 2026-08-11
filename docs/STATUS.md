@@ -56,7 +56,7 @@ Documented in docs/VALIDATION.md "Known alpha limitations":
   Windows but not on Linux/X11
 - Node SQLite experimental warning (suppressed in the CLI; visible when the
   storage package is embedded as a library)
-- Unhinged mode (`--unhinged` / `MELRA_UNHINGED=1`) is an explicit opt-out of the
+- Unsafe-local mode (`--unsafe-local` / `MELRA_UNHINGED=1`) is an explicit opt-out of the
   entire safety model, not a scope limit. Nothing in this document's safety
   claims applies to a process running in it.
 

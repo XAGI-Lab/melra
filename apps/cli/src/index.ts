@@ -14,6 +14,7 @@ import {
   WorkflowDefinitionSchema,
   WorkflowInputSchema,
   PRODUCT_VERSION,
+  deploymentMode,
   principalRef,
   type ApprovalResponse,
   type TaskRequest,
@@ -22,6 +23,7 @@ import {
   type WorkflowRun,
 } from "@melra/protocol";
 import {
+  assertEnforceable,
   createMelraRuntime,
   serveHttp,
   OAuthProvider,
@@ -59,7 +61,7 @@ async function existingPolicyPath(env: CliEnvironment): Promise<string | undefin
 }
 
 /**
- * The banner unhinged mode prints before it does anything.
+ * The banner unsafe-local mode prints before it does anything.
  *
  * It goes to stderr, which is where it has to go: in `serve` the stdout stream
  * is the MCP transport and any prose written there corrupts the protocol. stderr
@@ -68,11 +70,11 @@ async function existingPolicyPath(env: CliEnvironment): Promise<string | undefin
  * developer who exported the variable in one shell and forgot deserves the
  * reminder on every invocation rather than only at startup.
  */
-function unhingedBanner(root: string): string {
+function unsafeLocalBanner(root: string): string {
   return [
     "",
     "  ############################################################",
-    "  #  MELRA IS RUNNING UNHINGED. NO GUARDRAILS ARE APPLIED.   #",
+    "  #  MELRA IS RUNNING UNSAFE-LOCAL. NO GUARDRAILS APPLY.     #",
     "  ############################################################",
     "",
     "  Disabled for every task this process runs:",
@@ -86,7 +88,7 @@ function unhingedBanner(root: string): string {
     "  OS user can. Receipts are still written, so you will be able to read what",
     "  happened — after it has happened.",
     "",
-    "  Turn it off by unsetting MELRA_UNHINGED and dropping --unhinged.",
+    "  Turn it off by unsetting MELRA_UNHINGED and dropping --unsafe-local.",
     "",
   ].join("\n");
 }
@@ -97,6 +99,7 @@ async function runtime(env: CliEnvironment): Promise<MelraRuntime> {
     workspaceRoot: env.workspaceRoot,
     dataDirectory: env.dataDirectory,
     unhinged: env.unhinged,
+    mode: env.mode,
     ...(policyPath === undefined ? {} : { policyPath }),
     ...(env.browserExecutablePath === undefined
       ? {}
@@ -134,7 +137,14 @@ function argument(name: string, args: string[]): string | undefined {
  * a terminal prints nothing and in a pipeline that never closes hangs forever.
  */
 function rejectUnknownFlags(args: string[], known: readonly string[]): void {
-  const allowed = new Set([...known, "--unhinged"]);
+  // Process-wide rather than per-command: these three describe the process, not
+  // what a command does, so every command accepts them.
+  const allowed = new Set([
+    ...known,
+    "--unsafe-local",
+    "--unhinged",
+    "--mode",
+  ]);
   // A flag's own value can look like a flag (`--input node=--x`), so skip the
   // slot after any known flag that takes one.
   const valued = new Set(known.filter((flag) => flag !== "--http"));
@@ -383,10 +393,20 @@ async function doctor(env: CliEnvironment): Promise<{
           name: "guardrails",
           status: "warn",
           detail:
-            "UNHINGED: no policy, approval, evidence, confinement, or destination check is applied",
+            "UNSAFE-LOCAL: no policy, approval, evidence, confinement, or destination check is applied",
         }
       : { name: "guardrails", status: "pass", detail: "enforced" },
   );
+  // Not a `fail` either way. Developer mode is a legitimate choice and the
+  // default; what is not legitimate is a machine that cannot say which one it is.
+  checks.push({
+    name: "mode",
+    status: "pass",
+    detail:
+      env.mode === "enforced"
+        ? "enforced: no unsafe-local, loopback only, no client self-registration"
+        : "developer: MELRA governs what it is asked for; the harness may have another path",
+  });
   try {
     await access(env.workspaceRoot, constants.R_OK | constants.W_OK);
     checks.push({
@@ -468,6 +488,7 @@ async function doctor(env: CliEnvironment): Promise<{
       // Alongside the `guardrails` check so a script does not have to read a
       // detail string to find out whether this machine has any.
       unhinged: env.unhinged,
+      mode: env.mode,
       checks,
     },
     failed,
@@ -577,6 +598,7 @@ async function policyTest(args: string[], env: CliEnvironment): Promise<void> {
   const policy = {
     ...(await loadPolicy(await existingPolicyPath(env), env.workspaceRoot)),
     unhinged: env.unhinged,
+    mode: env.mode,
   };
   const taskId = "00000000-0000-4000-8000-000000000000";
   // Metered grants are counted from the same database the server draws them
@@ -678,8 +700,14 @@ Usage:
   melra version
 
 Flags:
-  --unhinged       Run with no policy and no guardrails. Everything the OS user
+  --unsafe-local   Run with no policy and no guardrails. Everything the OS user
                    can do, any caller can now do. Same as MELRA_UNHINGED=1.
+                   Refused outright when --mode enforced. Was --unhinged, which
+                   still works and warns.
+  --mode <m>       developer (default) or enforced. Enforced is you asserting
+                   the harness has no other path to these systems: MELRA then
+                   refuses --unsafe-local, refuses any bind off loopback, and
+                   admits no self-registering client. Stamped on every receipt.
   --http           Serve MCP over loopback HTTP instead of stdio, alongside a
                    read-only REST API, a workflow event stream, and the console.
                    Prints a bearer token; every request must carry it.
@@ -693,7 +721,8 @@ Environment:
   MELRA_WORKSPACE  Workspace boundary (default: current directory)
   MELRA_HOME       Local database and artifact directory
   MELRA_POLICY     Optional local policy JSON
-  MELRA_UNHINGED   Set to 1 to disable every guardrail (see --unhinged)
+  MELRA_UNHINGED   Set to 1 to disable every guardrail (see --unsafe-local)
+  MELRA_MODE       developer (default) or enforced (see --mode)
   MELRA_HTTP_PORT  Port for 'serve --http' (default: 7457)
   MELRA_HTTP_TOKEN Fixed bearer token for 'serve --http' (default: random)
   MELRA_HTTP_OAUTH Set to 0 so only that token gets in; no client can register
@@ -709,17 +738,34 @@ Environment:
 async function main(): Promise<void> {
   const [command = "help", ...args] = process.argv.slice(2);
   const parsed = parseCliEnvironment(process.env);
-  // `--unhinged` is an alias for the variable, not a second setting: one field
-  // carries the answer so no code path can consult the weaker of the two.
-  const env: CliEnvironment = args.includes("--unhinged")
-    ? { ...parsed, unhinged: true }
-    : parsed;
+  // `--unsafe-local` is an alias for the variable, not a second setting: one
+  // field carries the answer so no code path can consult the weaker of the two.
+  // `--unhinged` was the original name and still works — it undersold what it
+  // does, being a mood rather than a description, so it says so and moves on.
+  const deprecated = args.includes("--unhinged");
+  if (deprecated) {
+    process.stderr.write(
+      "melra: --unhinged is deprecated; use --unsafe-local. It is not a mood, " +
+        "it is an opt-out of the entire safety model.\n",
+    );
+  }
+  const modeFlag = argument("--mode", args);
+  const env: CliEnvironment = {
+    ...parsed,
+    unhinged:
+      parsed.unhinged || deprecated || args.includes("--unsafe-local"),
+    ...(modeFlag === undefined ? {} : { mode: deploymentMode(modeFlag) }),
+  };
+  // Before the banner: a process that refuses to start has no guardrails to warn
+  // about, and printing the unsafe-local warning first would read as if it had
+  // taken effect.
+  assertEnforceable(env.mode, env.unhinged);
   // Before the command runs, and for every command including `help` — the mode
   // is a property of the process, so there is no invocation where staying quiet
   // about it is right.
   if (env.unhinged) {
     process.stderr.write(
-      `${unhingedBanner(unconfinedRoot(env.workspaceRoot))}\n`,
+      `${unsafeLocalBanner(unconfinedRoot(env.workspaceRoot))}\n`,
     );
   }
   switch (command) {
@@ -782,6 +828,10 @@ async function main(): Promise<void> {
                 `you to approve it in a browser; approved clients are named on every\n` +
                 `receipt. Set MELRA_HTTP_OAUTH=0 to allow only the token above.\n`
               : `OAuth is off, so the token above is the only way in.\n`) +
+            (env.mode === "enforced"
+              ? `Enforced mode: loopback only, no client can register itself, and\n` +
+                `--unsafe-local is refused. Every receipt says 'enforced'.\n`
+              : "") +
             `Loopback only. Anyone who can read this token can drive this machine.\n`,
         );
         if (args.includes("--open")) openInBrowser(endpoint.url);

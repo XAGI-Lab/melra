@@ -626,12 +626,33 @@ pairs *and* its sanitized artifact passes the publication gate.
 See the [threat model](docs/THREAT_MODEL.md) and
 [security policy](SECURITY.md) for residual risks.
 
-Every row above can be turned off at once with `melra serve --unhinged` (or
+Every row above can be turned off at once with `melra serve --unsafe-local` (or
 `MELRA_UNHINGED=1`): no policy, no approvals, no evidence requirement, no
 workspace confinement, no destination checks. The agent gets exactly the reach
 your OS user has. The mode announces itself on stderr, in `melra doctor`, and in
 `melra_capabilities`, and receipts still record what ran. See
-[unhinged mode](docs/INSTALLATION.md#unhinged-mode) for what stays on and why.
+[unsafe-local mode](docs/INSTALLATION.md#unsafe-local-mode) for what stays on and why.
+
+### Two deployment modes
+
+The honest gap in a default install is that MELRA governs the effects it is
+*asked for*. A harness holding both a MELRA terminal and a native one makes the
+kernel optional, and an optional boundary is not a trust boundary. `MELRA_MODE`
+is where you say which situation you are in:
+
+| Mode | Meaning |
+|---|---|
+| `developer` (default) | MELRA governs what it is asked for; the harness may have another path, and you accept that. This is why MELRA can be tried in thirty seconds. |
+| `enforced` | You assert the alternative is gone — the harness is sandboxed, holds no privileged secrets, and reaches these systems only through here. |
+
+MELRA cannot verify that assertion from inside its own process, and it does not
+pretend to: the isolation is the operating system's job, so bring a container or
+a sandbox profile. What enforced mode does is stop being one of the ways the
+claim could be false — `--unsafe-local` refused outright, no bind outside
+loopback, no client registering itself, and `mode` stamped on every receipt. A
+conformance run against it keeps the same level and narrows its caveat to naming
+whose word the rest rests on. See
+[deployment modes](docs/INSTALLATION.md#deployment-modes).
 
 ---
 

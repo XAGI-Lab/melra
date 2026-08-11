@@ -806,6 +806,7 @@ export class TaskController {
         effect,
         request.reconciliation.length > 0,
       ),
+      mode: this.policy.mode,
       policyDecision: {
         outcome: task.policyDecision.outcome,
         policyVersion: task.policyDecision.policyVersion,

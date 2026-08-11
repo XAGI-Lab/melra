@@ -59,6 +59,7 @@ describe("melra CLI", () => {
       browserCdpEndpoint: "http://127.0.0.1:9222/",
       browserCdpContextIndex: -1,
       unhinged: false,
+      mode: "developer",
     });
     expect(
       parseCliEnvironment(
@@ -187,17 +188,38 @@ describe("melra CLI", () => {
     });
     const report = JSON.parse(result.stdout) as {
       level: number;
+      mode: string;
+      notProven: string[];
       checks: Array<{ name: string; passed: boolean; detail: string }>;
       uncleanedProbeFile?: string;
     };
     expect(report.checks.filter((check) => !check.passed)).toEqual([]);
     expect(report.level).toBe(3);
+    expect(report.mode).toBe("developer");
+    // The caveat an operator has to read before quoting the level: in developer
+    // mode nothing observable from this side rules out a second path.
+    expect(report.notProven[0]).toContain("no second, ungoverned path");
     // The suite writes a real file through the kernel, so it owes the workspace
     // the same file back. A leftover probe is a bug in the suite, not a detail.
     expect(report.uncleanedProbeFile).toBeUndefined();
     expect(
       (await readdir(root)).filter((name) => name.startsWith("melra-conformance-")),
     ).toEqual([]);
+
+    // Enforced mode does not earn a level the endpoint has not earned; what it
+    // changes is whose word the remaining caveat rests on.
+    const strict = await execute(process.execPath, [entry, "conformance"], {
+      cwd: root,
+      env: { ...env, MELRA_MODE: "enforced" },
+    });
+    const strictReport = JSON.parse(strict.stdout) as {
+      level: number;
+      mode: string;
+      notProven: string[];
+    };
+    expect(strictReport.level).toBe(3);
+    expect(strictReport.mode).toBe("enforced");
+    expect(strictReport.notProven[0]).toContain("enforced-mode claim");
 
     // Unhinged is supposed to cost the governed levels and keep the typed one.
     // If it ever reached L2 the flag would not be doing what it says.
@@ -338,7 +360,7 @@ describe("melra CLI", () => {
     });
   });
 
-  it("cannot run unhinged without saying so", async () => {
+  it("cannot run unsafe-local without saying so", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-cli-"));
     roots.push(root);
     const env = {
@@ -353,17 +375,64 @@ describe("melra CLI", () => {
       cwd: root,
       env,
     });
-    expect(doctor.stderr).toContain("NO GUARDRAILS ARE APPLIED");
+    expect(doctor.stderr).toContain("NO GUARDRAILS");
     expect(JSON.parse(doctor.stdout).unhinged).toBe(true);
 
     // And the flag alone is enough — no environment variable needed.
     const flagged = await execute(
       process.execPath,
+      [entry, "doctor", "--unsafe-local"],
+      { cwd: root, env: { ...env, MELRA_UNHINGED: "0" } },
+    );
+    expect(flagged.stderr).toContain("NO GUARDRAILS");
+    expect(JSON.parse(flagged.stdout).unhinged).toBe(true);
+
+    // The old name still works, because a flag people have in scripts that
+    // silently stops disabling guardrails is worse than a deprecated one.
+    const deprecated = await execute(
+      process.execPath,
       [entry, "doctor", "--unhinged"],
       { cwd: root, env: { ...env, MELRA_UNHINGED: "0" } },
     );
-    expect(flagged.stderr).toContain("NO GUARDRAILS ARE APPLIED");
-    expect(JSON.parse(flagged.stdout).unhinged).toBe(true);
+    expect(deprecated.stderr).toContain("--unhinged is deprecated");
+    expect(JSON.parse(deprecated.stdout).unhinged).toBe(true);
+  });
+
+  it("refuses to start in enforced mode with the local bypass", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-cli-"));
+    roots.push(root);
+    const env = {
+      ...process.env,
+      MELRA_HOME: join(root, ".melra"),
+      MELRA_WORKSPACE: root,
+    };
+    const enforced = await execute(process.execPath, [entry, "doctor"], {
+      cwd: root,
+      env: { ...env, MELRA_MODE: "enforced" },
+    });
+    expect(
+      JSON.parse(enforced.stdout).checks.find(
+        (check: { name: string }) => check.name === "mode",
+      ).detail,
+    ).toContain("enforced");
+
+    // The two together are a contradiction, so the process declines to be the
+    // thing that resolves it — before printing a banner that would read as if
+    // unsafe-local had taken effect.
+    await expect(
+      execute(
+        process.execPath,
+        [entry, "doctor", "--mode", "enforced", "--unsafe-local"],
+        { cwd: root, env },
+      ),
+    ).rejects.toThrow(/enforced_mode_refuses_unsafe_local/);
+    // A typo in the mode is not silently the permissive one.
+    await expect(
+      execute(process.execPath, [entry, "doctor"], {
+        cwd: root,
+        env: { ...env, MELRA_MODE: "enfroced" },
+      }),
+    ).rejects.toThrow(/deployment_mode_unknown/);
   });
 
   it("initializes a safe local policy and client configuration", async () => {

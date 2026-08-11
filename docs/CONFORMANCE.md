@@ -73,6 +73,15 @@ result.
   optional, and an optional boundary is not a trust boundary. Nothing
   observable from this side distinguishes the two. If you are certifying your
   own harness, this is the part only you can answer.
+
+  This is the one entry that changes with the endpoint. `melra_capabilities`
+  publishes `policy.mode`, and the report echoes it. Against an endpoint
+  reporting `enforced`, the caveat narrows to *"that the operator's
+  enforced-mode claim is true"* — the suite checked the refusals MELRA owns
+  (no `--unsafe-local`, loopback only, no self-registering client, and it fails
+  the endpoint outright if it claims enforced mode while running with no
+  guardrails), and what is left is a fact about the deployment rather than about
+  the endpoint. The level itself does not change: a mode earns no checks.
 - **That the endpoint's own policy is well chosen.** The suite checks that
   policy is consulted and obeyed, not that it says the right thing. An endpoint
   that allows everything and an endpoint with a careful allowlist both reach
@@ -81,7 +90,7 @@ result.
   effect end to end. Browser, terminal, computer, and memory adapters are out
   of scope.
 
-`--unhinged` removes the guardrails by design, so an unhinged endpoint reaches
+`--unsafe-local` removes the guardrails by design, so an unsafe-local endpoint reaches
 L1 and stops there. That is the correct result, not a bug.
 
 ## The probe effect

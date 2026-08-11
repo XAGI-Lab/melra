@@ -91,7 +91,7 @@ are non-obvious and deliberate:
 Then decide the `unhinged` question explicitly, because there is no default that
 is right for every rule: if your rule is **MELRA's judgement** about what a
 caller should be allowed to do, it goes *above* the early return and is lifted
-by unhinged mode. If it protects the host from a crash (like `maxFileBytes`), it
+by unsafe-local mode. If it protects the host from a crash (like `maxFileBytes`), it
 stays unconditional. Never scatter a `policy.unhinged` check inside the code that
 owns a boundary — move the boundary instead, the way `createMelraRuntime` roots
 the runtimes at `unconfinedRoot()`.

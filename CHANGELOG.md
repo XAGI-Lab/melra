@@ -8,6 +8,29 @@ All notable changes are documented here. The format follows
 
 ### Added
 
+- **Two deployment modes, and enforced mode closes every door MELRA owns.** The
+  honest gap in a default install was never a bug in the pipeline: MELRA governs
+  the effects it is *asked for*, and a harness holding a native terminal as well
+  makes the kernel optional. `MELRA_MODE` / `--mode` / `"mode"` in the policy
+  JSON now says which situation you are in — `developer` (the default, and the
+  reason MELRA can be tried in thirty seconds) or `enforced`, the operator
+  asserting the alternative has been removed. MELRA cannot verify that from
+  inside its own process, so it does the part it can: `--unsafe-local` is refused
+  outright (`enforced_mode_refuses_unsafe_local`), a bind outside loopback is
+  refused (`enforced_mode_refuses_public_bind`), the OAuth client-registration
+  endpoints are not served at all so the operator's token is the only way in, and
+  `mode` is stamped on every `ActionReceipt` and published as `policy.mode` in
+  `melra_capabilities`. The strictest of flag, environment, and policy file wins,
+  and a typo (`MELRA_MODE=enfroced`) fails loudly rather than leaving a machine
+  permissive with a config claiming otherwise. Deliberately not refused: running
+  as root — enforced mode exists for containers, which are usually root inside.
+- **A conformance run says whose word the bypass caveat rests on.** The first
+  `notProven` entry was fixed prose about a second ungoverned path. It now reads
+  the endpoint's own `policy.mode`: against an enforced endpoint it narrows to
+  *"that the operator's enforced-mode claim is true"*, and the run fails outright
+  if an endpoint reports enforced mode while running with no guardrails. The
+  level is unchanged either way — a mode earns no checks.
+
 - **A mutation whose reply never arrived no longer claims it failed.** `failed`
   reads as *the effect did not happen*, and after a request that went out and
   was never answered, that is a claim nobody holds. The HTTP adapter now tells
@@ -42,6 +65,12 @@ All notable changes are documented here. The format follows
   `advance` refuses to start new work on top of a half-undone saga.
 
 ### Fixed
+
+- `TerminalRuntime.close()` now resolves once its supervised children have
+  actually exited rather than once they have been signalled, escalating to
+  SIGKILL after 2s. A still-running child holds its working directory open on
+  Windows, so a caller that removed the workspace immediately after closing
+  raced `rmdir` and could fail with `EBUSY`.
 
 - A failed compensation is no longer reported as a clean workflow failure:
   `deriveStatus` excluded compensation nodes entirely, so a forward effect whose
@@ -140,15 +169,13 @@ All notable changes are documented here. The format follows
   predicate type reads as the weakest claim rather than inheriting a stronger
   one.
 
-### Fixed
-
-- `TerminalRuntime.close()` now resolves once its supervised children have
-  actually exited rather than once they have been signalled, escalating to
-  SIGKILL after 2s. A still-running child holds its working directory open on
-  Windows, so a caller that removed the workspace immediately after closing
-  raced `rmdir` and could fail with `EBUSY`.
-
 ### Changed
+
+- **`--unhinged` is now `--unsafe-local`.** The old name described a mood; the
+  flag is an opt-out of the entire safety model. `--unhinged` still works and
+  prints a deprecation line, because a flag people have in scripts that silently
+  stops disabling guardrails is worse than a deprecated one. `MELRA_UNHINGED` is
+  unchanged.
 
 - A mistyped command now says where the answer is
   (`unknown command: docter. Run 'melra --help' for the command list.`) instead
@@ -562,7 +589,7 @@ All notable changes are documented here. The format follows
   stay in force. The mode cannot run invisibly — it prints a stderr banner, shows
   in `melra doctor`, and reports `unhinged: true` with
   `defaultPosture: "unhinged"` in `melra_capabilities`. See
-  [unhinged mode](docs/INSTALLATION.md#unhinged-mode).
+  [unhinged mode](docs/INSTALLATION.md#unsafe-local-mode).
 - Workflows can wait on a person. A `human_input` node blocks the run in the new
   `awaiting_input` status until an answer arrives through
   `melra_workflow_advance`'s `inputs` argument (`melra workflow advance --input

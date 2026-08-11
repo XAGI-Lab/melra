@@ -3,12 +3,15 @@
 
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
+import type { DeploymentMode } from "@melra/protocol";
+import { deploymentMode } from "@melra/protocol";
 import { unhingedFromEnvironment } from "@melra/server";
 
 export interface CliEnvironment {
   workspaceRoot: string;
   dataDirectory: string;
   unhinged: boolean;
+  mode: DeploymentMode;
   policyPath?: string;
   browserExecutablePath?: string;
   browserCdpEndpoint?: string;
@@ -121,6 +124,7 @@ export function parseCliEnvironment(
       source.MELRA_HOME ?? join(defaults.home, ".melra"),
     ),
     unhinged: unhingedFromEnvironment(source),
+    mode: deploymentMode(source.MELRA_MODE),
     ...(source.MELRA_POLICY === undefined
       ? {}
       : { policyPath: resolve(source.MELRA_POLICY) }),

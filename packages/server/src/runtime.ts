@@ -11,8 +11,8 @@ import {
   totalmem,
 } from "node:os";
 import { join, parse, resolve } from "node:path";
-import type { Operation } from "@melra/protocol";
-import { HttpOperationSchema } from "@melra/protocol";
+import type { DeploymentMode, Operation } from "@melra/protocol";
+import { deploymentMode, HttpOperationSchema } from "@melra/protocol";
 import { BrowserRuntime } from "@melra/browser-runtime";
 import {
   ComputerRuntime,
@@ -47,6 +47,11 @@ export interface MelraRuntimeOptions {
    * value comes from `MELRA_UNHINGED` in `environment`.
    */
   unhinged?: boolean;
+  /**
+   * Deployment mode. When omitted, the value comes from `MELRA_MODE` in
+   * `environment`, then from the policy file.
+   */
+  mode?: DeploymentMode;
   browserExecutablePath?: string;
   browserHeadless?: boolean;
   browserCdpEndpoint?: string;
@@ -79,6 +84,37 @@ export function unhingedFromEnvironment(
 ): boolean {
   const raw = environment.MELRA_UNHINGED?.trim().toLowerCase();
   return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+}
+
+/**
+ * What enforced mode refuses about its own setup, in one place.
+ *
+ * MELRA cannot see whether the harness above it also holds a native terminal —
+ * that is the operator's claim, and enforced mode is them making it. What MELRA
+ * can do is stop being one of the ways the claim could be false. Each refusal
+ * here is a door this process owns:
+ *
+ * - `--unsafe-local` turns off every guardrail. A mode whose whole point is that
+ *   the boundary cannot be bypassed cannot also ship a bypass flag.
+ * - A bind outside loopback is not IPC between a sandbox and its kernel; it is a
+ *   machine-control API on a network, which is a second door by definition.
+ *   Checked in `serveHttp`, which is the only place that knows the host.
+ * - A client registering itself over OAuth is a stranger asking a human to let it
+ *   in. Enforced mode admits service identities the operator issued, and nothing
+ *   else. Also `serveHttp`.
+ *
+ * Deliberately not checked: whether this process runs as root. Enforced mode's
+ * whole point is containers, and a container process is usually root inside it —
+ * refusing that would refuse the deployment the mode exists for.
+ */
+export function assertEnforceable(mode: DeploymentMode, unhinged: boolean): void {
+  if (mode === "enforced" && unhinged) {
+    throw new Error(
+      "enforced_mode_refuses_unsafe_local: enforced mode exists so the " +
+        "boundary cannot be bypassed. Drop --unsafe-local and MELRA_UNHINGED, " +
+        "or run in developer mode.",
+    );
+  }
 }
 
 /**
@@ -181,7 +217,15 @@ export async function createMelraRuntime(
   const unhinged =
     (options.unhinged ?? unhingedFromEnvironment(environment)) ||
     loaded.unhinged;
-  const policy: LocalPolicy = { ...loaded, unhinged };
+  // Same shape, opposite direction: the strictest of the three wins, so a policy
+  // file that pinned enforced mode is not loosened by an unset variable.
+  const mode: DeploymentMode =
+    (options.mode ?? deploymentMode(environment.MELRA_MODE)) === "enforced" ||
+    loaded.mode === "enforced"
+      ? "enforced"
+      : "developer";
+  assertEnforceable(mode, unhinged);
+  const policy: LocalPolicy = { ...loaded, unhinged, mode };
   // Confinement is lifted by moving the root, not by branching inside the
   // runtimes. `maxFileBytes` stays as configured: it bounds how much one read
   // pulls into memory, and an unbounded read is a way to crash the host, not a

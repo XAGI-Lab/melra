@@ -730,6 +730,31 @@ export type ExecutionGuarantee =
   | "compensatable";
 
 /**
+ * How the kernel is deployed. Not a property of a request — a property of the
+ * process, recorded on every effect that process runs.
+ *
+ * `developer` is the default and the reason MELRA can be tried in thirty
+ * seconds: it governs the effects it is asked for, and says plainly that a
+ * harness holding a native terminal as well makes it optional. `enforced` is the
+ * operator asserting the alternative has been removed. MELRA cannot check that
+ * assertion from inside the process, so it does the part it can: it closes every
+ * door of its own that would contradict the claim.
+ */
+export type DeploymentMode = "developer" | "enforced";
+
+/**
+ * Only the exact word counts. A stray `MELRA_MODE=Enforced` left in a shell
+ * profile is a typo, and quietly reading it as developer mode would hand back
+ * the bypasses the operator thought they had turned off.
+ */
+export function deploymentMode(value: string | undefined): DeploymentMode {
+  const raw = value?.trim().toLowerCase();
+  if (raw === undefined || raw === "" || raw === "developer") return "developer";
+  if (raw === "enforced") return "enforced";
+  throw new Error("deployment_mode_unknown");
+}
+
+/**
  * `at-least-once`, `provider-idempotent` and `compensatable` still need an
  * adapter that can offer them, so nothing derives those three yet.
  * `reconciliation-required` is real: a caller that declared `reconciliation`
