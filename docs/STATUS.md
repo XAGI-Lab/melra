@@ -2,11 +2,11 @@
 
 Last updated: 2026-08-09
 
-Version: `0.3.0-alpha.10`
+Version: `0.3.0-alpha.11`
 
 ## Engineering Complete
 
-- ✅ **All 338 tests passing** (336 Vitest, 2 Python pytest)
+- ✅ **All 414 tests passing** (412 Vitest, 2 Python pytest)
 - ✅ **Versions consistent** across the root manifest, every `apps/*` and `packages/*` manifest, the protocol constant, sdk-py, and both uv locks (`pnpm versions:check`)
 - ✅ **Gate green**: `pnpm check`, `pnpm e2e`, `pnpm security:audit` all pass
 - ✅ **Conformance L3 verified effects**: `melra conformance` reports 14/14 checks against this build's own stdio server, and L1 under `MELRA_UNHINGED=1` — both asserted in CI. Levels and their limits: [CONFORMANCE.md](CONFORMANCE.md)
@@ -40,7 +40,7 @@ leaving it for a tag push to discover.
 **From VALIDATION.md:**
 > Before `1.0`, a clean released artifact must pass on supported Linux, macOS, and Windows machines, and an independent security review must resolve all critical findings.
 
-**Current state:** Threat model reviewed for 0.3.0-alpha.10, no independent audit yet.
+**Current state:** Threat model reviewed for 0.3.0-alpha.11, no independent audit yet.
 
 **Action:** Engage external security reviewer when approaching beta/1.0.
 

@@ -6,6 +6,8 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0-alpha.11] - 2026-08-11
+
 ### Added
 
 - **Two deployment modes, and enforced mode closes every door MELRA owns.** The
@@ -1109,7 +1111,8 @@ All notable changes are documented here. The format follows
 - Cross-scope memory overwrite and deletion protection.
 - Patched transitive HTTP adapter enforced through a package override.
 
-[Unreleased]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.10...HEAD
+[Unreleased]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.11...HEAD
+[0.3.0-alpha.11]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.10...v0.3.0-alpha.11
 [0.3.0-alpha.10]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.9...v0.3.0-alpha.10
 [0.3.0-alpha.9]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.8...v0.3.0-alpha.9
 [0.3.0-alpha.8]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.7...v0.3.0-alpha.8

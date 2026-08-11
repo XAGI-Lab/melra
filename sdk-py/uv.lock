@@ -341,7 +341,7 @@ wheels = [
 
 [[package]]
 name = "melra"
-version = "0.3.0a10"
+version = "0.3.0a11"
 source = { editable = "." }
 dependencies = [
     { name = "mcp" },
