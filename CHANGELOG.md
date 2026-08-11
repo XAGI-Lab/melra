@@ -6,6 +6,14 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- `melra doctor` no longer uses the word "enforced" for two different things. The
+  `guardrails` check reported `enforced` — meaning they are applied — two lines
+  above the new `mode` check reporting `developer`, and an operator reading both
+  can conclude a developer-mode machine is locked down. Guardrails now read
+  `all applied`, and `enforced` belongs to the deployment mode alone.
+
 ## [0.3.0-alpha.11] - 2026-08-11
 
 ### Added
