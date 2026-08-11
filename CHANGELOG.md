@@ -8,6 +8,28 @@ All notable changes are documented here. The format follows
 
 ### Added
 
+- **A capability grant can now have a size, not just an expiry.** `validUntil`
+  bounds a window; `maxOperations` bounds how many times a grant may ever be
+  spent inside it, and a `provider: { name, account, amountMax, dailyMax }` block
+  bounds money — one call and a rolling 24 hours. The count is durable and is
+  drawn down at exactly one point: where a verified task commits its idempotency
+  key. An operation that was refused, failed verification, was cancelled, or
+  collapsed into a duplicate costs the caller nothing, and a restart does not
+  refill the budget. Money bounds need the caller to declare an operation's
+  `spend`, because MELRA cannot read an amount out of an arbitrary provider's
+  payload — and the direction of that check is what makes taking its word safe:
+  a money-bounded grant covers declared spends only, so understating is a lie the
+  grant does not cover and declaring nothing means no grant matches
+  (`capability_spend_not_declared`). Provider names compare exactly, so a grant
+  for `stripe-test` never quietly covers `stripe`. Several grants are several
+  authorities: one that is spent out does not refuse work another still covers. A
+  metered grant evaluated where nothing can count it is refused
+  (`capability_usage_unmeterable`) rather than treated as full, on the same
+  reasoning as an unavailable verification probe. `melra_capabilities` publishes
+  how many issued grants are metered, and `melra policy test` now reads the same
+  durable counts the server draws down, so a dry run cannot report a budget as
+  full when it is spent.
+
 - **An effect can now be confirmed by a channel that did not perform it.** The
   new `http_resource_matches` evidence predicate executes through one request
   and verifies through another: `POST /refunds` does the work, `GET

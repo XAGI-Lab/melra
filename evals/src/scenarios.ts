@@ -452,6 +452,75 @@ export const scenarios: EvaluationScenario[] = [
     expectedFinal: "verified_success",
   },
   {
+    // A grant is an authority with a size. This one may move money for one
+    // provider up to $50 a call, and the call declares $90 — refused at policy,
+    // before a socket is opened, like every other deny.
+    id: "capability-spend-over-per-operation-ceiling",
+    category: "policy",
+    policy: {
+      capabilities: [
+        {
+          id: "refunds",
+          capability: "http.post",
+          effects: ["mutate"],
+          target: "*",
+          principal: "*",
+          provider: { name: "acme-pay", amountMax: 5_000 },
+        },
+      ],
+    },
+    request: {
+      goal: "Refund more than the grant covers",
+      operation: {
+        kind: "http",
+        action: "request",
+        method: "POST",
+        url: "https://api.example.com/refunds",
+        content: '{"charge":"ch_1"}',
+        spend: { provider: "acme-pay", amount: 9_000, currency: "USD" },
+      },
+      constraints: [],
+      forbiddenEffects: [],
+      budget: { maxSteps: 2, maxDurationMs: 10_000, maxRetries: 0 },
+      requiredEvidence: [{ type: "result_equals", path: "status", value: 201 }],
+    },
+    expectedPlan: "policy_blocked",
+  },
+  {
+    // The same grant, and a call that declares nothing at all. MELRA cannot read
+    // an amount out of an arbitrary provider's payload, so a money-bounded grant
+    // covers declared spends only: an undeclared one is ungranted, not free.
+    id: "capability-provider-grant-needs-a-declared-spend",
+    category: "policy",
+    policy: {
+      capabilities: [
+        {
+          id: "refunds",
+          capability: "http.post",
+          effects: ["mutate"],
+          target: "*",
+          principal: "*",
+          provider: { name: "acme-pay", amountMax: 5_000 },
+        },
+      ],
+    },
+    request: {
+      goal: "Refund without saying what it moves",
+      operation: {
+        kind: "http",
+        action: "request",
+        method: "POST",
+        url: "https://api.example.com/refunds",
+        content: '{"charge":"ch_1"}',
+      },
+      constraints: [],
+      forbiddenEffects: [],
+      budget: { maxSteps: 2, maxDurationMs: 10_000, maxRetries: 0 },
+      requiredEvidence: [{ type: "result_equals", path: "status", value: 201 }],
+    },
+    expectedPlan: "policy_blocked",
+  },
+  {
     id: "terminal-command-not-allowlisted",
     category: "policy",
     request: {

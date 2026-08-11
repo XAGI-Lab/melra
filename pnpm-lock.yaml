@@ -46,6 +46,9 @@ importers:
       '@melra/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
+      '@melra/runtime-core':
+        specifier: workspace:*
+        version: link:../../packages/runtime-core
       '@melra/server':
         specifier: workspace:*
         version: link:../../packages/server

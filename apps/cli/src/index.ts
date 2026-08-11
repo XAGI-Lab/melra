@@ -32,6 +32,8 @@ import {
 } from "@melra/server";
 import { detectBrowserExecutable } from "@melra/browser-runtime";
 import { createSystemComputerAdapter } from "@melra/computer-runtime";
+import { capabilityUsageReader } from "@melra/runtime-core";
+import { SqliteStore } from "@melra/storage-sqlite";
 import {
   classifyOperation,
   createDefaultPolicy,
@@ -577,14 +579,22 @@ async function policyTest(args: string[], env: CliEnvironment): Promise<void> {
     unhinged: env.unhinged,
   };
   const taskId = "00000000-0000-4000-8000-000000000000";
-  // The decision carries effect, risk, and traits; the classification adds the
-  // capability and target it was made against, so a surprising verdict can be
-  // traced to what MELRA thought the request was touching.
-  const { capability, target } = classifyOperation(request.operation);
-  output({
-    ...evaluatePolicy(taskId, request, policy),
-    classified: { capability, target },
-  });
+  // Metered grants are counted from the same database the server draws them
+  // down in, so a preview cannot report a budget as full when it is spent — and
+  // policy refuses a metered grant outright when nothing can count it.
+  const store = new SqliteStore(join(env.dataDirectory, "melra.sqlite"));
+  try {
+    // The decision carries effect, risk, and traits; the classification adds the
+    // capability and target it was made against, so a surprising verdict can be
+    // traced to what MELRA thought the request was touching.
+    const { capability, target } = classifyOperation(request.operation);
+    output({
+      ...evaluatePolicy(taskId, request, policy, capabilityUsageReader(store)),
+      classified: { capability, target },
+    });
+  } finally {
+    store.close();
+  }
 }
 
 /**

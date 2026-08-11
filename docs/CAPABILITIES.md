@@ -223,7 +223,7 @@ and official task-benchmark evidence remain roadmap work.
 ### HTTP
 
 Action: `request`. Fields: `method`, `url`, `headers`, `content`,
-`idempotencyKey`, `maxResponseBytes`, `timeoutMs`.
+`idempotencyKey`, `spend`, `maxResponseBytes`, `timeoutMs`.
 
 - `GET` and `HEAD` classify as reads. Every other method is a mutation: it needs
   declared evidence and an exact scoped approval, and it runs at most once —
@@ -248,6 +248,10 @@ Action: `request`. Fields: `method`, `url`, `headers`, `content`,
   [INSTALLATION.md](INSTALLATION.md#credentials). The result reports which ones
   by name under `credentials`, never their values, and a caller-supplied header
   cannot shadow one.
+- `spend` declares what the call moves — `{ provider, account?, amount, currency }`,
+  the amount in minor units. It is optional and means nothing until a grant with
+  a `provider` block exists; from then on that grant covers declared spends only.
+  See [Identity and capability grants](#identity-and-capability-grants).
 
 Request signing, retries with backoff, and streaming responses are not
 implemented.
@@ -308,6 +312,32 @@ and `policyVersion`. The list is empty by default and changes nothing when it is
 A non-empty list is a closed world: an effect with no matching grant is denied
 `capability_not_granted` before any allowlist is consulted. See
 docs/INSTALLATION.md for the file format.
+
+`validUntil` bounds a window; two optional fields bound what happens inside it.
+
+- `maxOperations` is how many times the grant may ever be spent. The count is
+  durable, so a restart does not refill it.
+- `provider: { name, account?, amountMax?, dailyMax? }` bounds money. `amountMax`
+  caps one call, `dailyMax` the declared amounts committed in the last 24 hours.
+
+A grant is drawn down at one point only: where a verified task commits its
+idempotency key. An operation that was refused, failed verification, was
+cancelled, or collapsed into a duplicate costs nothing.
+
+Money bounds need the caller to say what the call moves, because MELRA cannot
+read an amount out of an arbitrary provider's payload. That direction is what
+makes taking its word safe: a grant carrying a `provider` block covers *only*
+operations that declare a matching `spend`, so understating is a lie the grant
+does not cover and omitting it means no grant matches at all
+(`capability_spend_not_declared`). `name` and `account` compare exactly, not as
+patterns — `stripe` and `stripe-test` are different providers.
+
+A grant list is a set of authorities rather than one budget: a grant that is
+spent out does not refuse work another still covers. A metered grant evaluated
+where nothing can count it is refused (`capability_usage_unmeterable`) — a bound
+nobody can evaluate must not become the loosest one. `melra_capabilities`
+publishes how many issued grants are metered, so a caller planning a batch knows
+some of its authority is finite.
 
 `melra_plan` returns the effect contract beside the task record — identity,
 capability, operation, effect, risk, target, traits, postconditions, budget,
