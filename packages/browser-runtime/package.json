@@ -29,6 +29,6 @@
   "dependencies": {
     "@melra/policy-core": "workspace:*",
     "@melra/protocol": "workspace:*",
-    "playwright-core": "1.62.0"
+    "playwright-core": "1.62.1"
   }
 }
