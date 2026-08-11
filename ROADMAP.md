@@ -239,13 +239,13 @@ but not in the shape the protocol should eventually name.
 | Capability engine | ✓ | Issued grants in `policy.capabilities`, checked before allowlists |
 | Policy engine | ✓ | `@melra/policy-core`, re-evaluated at execution |
 | Authorization | ✓ | Exact, expiring, task-scoped approval phrases |
-| Credential broker | ✗ | Adapters use the ambient environment ([P4](#p4--credentials-and-api-effects)) |
+| Credential broker | ✓ | `policy.credentials`, scoped by host and by capability; adapters never see the value |
 | Durable effect runtime | ✓ | `@melra/runtime-core` over SQLite |
 | Idempotency | ✓ | `idempotency_commits`, unique per committed attempt |
 | Recovery engine | ✓ | Conservative rules plus explicit `recovery_required` |
 | Verification framework | partial | Execution and state levels ship; independent and semantic do not ([P3](#p3--verification-framework)) |
 | Evidence system | ✓ | Redacted receipts and SHA-256 certificates |
-| Effect adapters | partial | Files, terminal, browser, computer; HTTP, database, cloud, SaaS pending ([P4](#p4--credentials-and-api-effects)) |
+| Effect adapters | partial | Files, terminal, browser, computer, HTTP; database, cloud, SaaS pending ([P4](#p4--credentials-and-api-effects)) |
 | Harness adapters | ✓ | Ordinary tool names over the same pipeline (`MELRA_HARNESS_TOOLS=1`), proven against three mismatched clients on one data directory |
 | Sandbox and boundary | ✗ | Developer mode only ([P2](#p2--hard-capability-boundary)) |
 | Workflow engine | ✓ | Nine node types, events, projections, leases |
@@ -352,20 +352,26 @@ alternative, not asking the harness not to use it.
 
 ### P4 — credentials and API effects
 
-- [ ] Credential broker: agents receive capabilities, not credentials. The
+- [x] Credential broker: agents receive capabilities, not credentials. The
       kernel holds the secret and performs the effect, and refuses operations
       outside the delegated capability even when the credential could perform
       them. That is the difference between possessing credentials and
-      possessing authority.
+      possessing authority. Shipped as `policy.credentials`: a definition names
+      where the secret lives, which header carries it, which hosts it may travel
+      to, and which `<capability>:<target>` it may act under. A destination the
+      `hosts` list does not cover is called *unauthenticated*; an operation the
+      `capability` does not cover is *refused before the secret is read*.
 - [x] HTTP/API effect adapter. A large share of serious autonomous work happens
       through APIs rather than mouse clicks, and an API effect needs the same
       nine guarantees as a file write. Shipped as the `http` operation kind:
       reads for `GET`/`HEAD`, an approval-gated at-most-once mutation for every
       other method, checked against the same destination boundary the browser
       uses and pinned to the address that was checked.
-- [ ] Declared per-effect execution guarantees — `at-most-once`,
+- [x] Declared per-effect execution guarantees — `at-most-once`,
       `at-least-once`, `provider-idempotent`, `reconciliation-required`,
-      `compensatable`, `read-only` — stated rather than assumed.
+      `compensatable`, `read-only` — stated rather than assumed. Published on
+      the plan and recorded on the receipt, and the single thing the retry loop
+      consults.
 - [ ] Reconciliation for effects whose provider cannot promise exactly-once.
 - [ ] Compensation as a first-class saga across providers, not only within one
       workflow.

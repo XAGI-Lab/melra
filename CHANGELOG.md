@@ -8,6 +8,19 @@ All notable changes are documented here. The format follows
 
 ### Added
 
+- **Agents receive capabilities, not credentials.** A new `policy.credentials`
+  map lets an operator hand the kernel a secret the agent never sees: the
+  definition names where the secret lives (`env` or a mode-`0600` `file`), which
+  header carries it, which hosts it may travel to, and which
+  `<capability>:<target>` it may act under. The two scopes deliberately behave
+  differently on a miss — a destination the `hosts` list does not cover is sent
+  **unauthenticated**, so a caller-chosen URL cannot walk a bearer token to
+  another origin, while an operation the `capability` does not cover is
+  **refused before the secret is read**, so a rejected call never brings
+  plaintext into the process. The result and the receipt record which credential
+  authorised the effect by name; the value reaches the socket and nothing else.
+  `melra_capabilities` publishes the configured names.
+
 - **HTTP and API calls are now a governed effect.** A new `http` operation kind
   (`packages/http-runtime`) puts one bounded request through the same pipeline
   every other effect goes through: `GET`/`HEAD` classify as reads, every other

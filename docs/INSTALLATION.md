@@ -249,6 +249,52 @@ than containment. What they buy today is that a receipt records who asked and on
 whose behalf, and that one agent's authority can be narrower than the policy
 as a whole.
 
+### Credentials
+
+`capabilities` narrow what a caller may do with its own hands. `credentials`
+give the kernel a hand the caller does not have: the secret lives here, the
+agent never receives it, and the effect still goes out.
+
+```json
+{
+  "credentials": {
+    "billing": {
+      "source": { "env": "STRIPE_API_KEY" },
+      "inject": { "header": "Authorization", "scheme": "Bearer" },
+      "hosts": ["api.stripe.com"],
+      "capability": "http.post:https://api.stripe.com/v1/refunds*"
+    }
+  }
+}
+```
+
+`source` is either `{ "env": "NAME" }` or `{ "file": "/path" }`. A file must be
+a regular file, not a symlink, and mode `0600` or tighter — a secret any other
+user can read is one the agent could have read for itself.
+
+The two lists are scoped differently on purpose, and the difference is the
+whole feature:
+
+- **`hosts`** — where the secret may travel. A request to a host outside the
+  list is sent **unauthenticated**, not refused. A credential that follows
+  whatever URL the caller chose is scoped to nothing.
+- **`capability`** — what may be done while holding it, matched against
+  `<capability>:<target>` as MELRA classified the operation
+  (`http.post:https://api.stripe.com/v1/refunds/re_1`). An operation inside
+  `hosts` that the capability does not cover is **refused before the secret is
+  read**, so a rejected call never brings plaintext into the process.
+
+Nothing else changes: the call is still classified, still policy-checked, still
+approval-gated, still verified. The caller's receipt records which credential
+authorised the effect by name; the value reaches the socket and nowhere else —
+not the plan, not the result, not the receipt, not the database. `melra_capabilities`
+publishes the names so a caller knows not to go looking for a key it will never
+be given.
+
+Host and capability scoping stay on in `--unhinged` mode. That flag lifts the
+guardrails MELRA imposes on the caller; a credential's scope is the operator
+bounding their own secret, which is a different thing.
+
 Memories are reclaimed on the next `melra_execute` that writes to the same
 scope. `memoryRetention.maxAgeDays` (default `30`) is how long an expired or
 superseded record is kept after it stops being readable — no search or list can

@@ -22,6 +22,7 @@ import { HttpRuntime } from "@melra/http-runtime";
 import { LocalMemory } from "@melra/memory";
 import {
   createDefaultPolicy,
+  CredentialBroker,
   loadPolicy,
   type LocalPolicy,
 } from "@melra/policy-core";
@@ -235,6 +236,11 @@ export async function createMelraRuntime(
     allowedDomains: policy.allowedDomains,
     allowLocalhost: policy.allowLocalhost,
     unhinged,
+    // Host and capability scoping stay on under `unhinged`. That flag lifts the
+    // guardrails MELRA imposes on the caller; a credential's scope is the
+    // operator bounding their own secret, and nothing in this process asked for
+    // that to be widened.
+    credentials: new CredentialBroker(policy.credentials),
   });
   const router = new RuntimeRouter(
     files,

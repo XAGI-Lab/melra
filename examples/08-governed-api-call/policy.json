@@ -1,0 +1,12 @@
+{
+  "version": "example-api",
+  "allowedDomains": ["api.github.com"],
+  "credentials": {
+    "github": {
+      "source": { "env": "GITHUB_TOKEN" },
+      "inject": { "header": "Authorization", "scheme": "Bearer" },
+      "hosts": ["api.github.com"],
+      "capability": "http.get:https://api.github.com/*"
+    }
+  }
+}
