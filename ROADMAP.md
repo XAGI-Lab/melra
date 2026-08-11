@@ -274,11 +274,14 @@ but not in the shape the protocol should eventually name.
       target patterns, allowed effects, holder, `validUntil`, and
       `policyVersion`. Empty means no narrowing; non-empty is a closed world
       checked before any allowlist.
-- [ ] Usage-bounded and provider-shaped grants — `max_operations`, and
-      (provider, effect, account, `amount_max`, `daily_max`) for effects that
-      spend or commit something. Deferred to
-      [P4](#p4--credentials-and-api-effects): metering a grant needs something
-      to meter, and that arrives with the credential broker and API effects.
+- [x] Usage-bounded and provider-shaped grants — `maxOperations`, and
+      `provider: { name, account, amountMax, dailyMax }` for effects that spend
+      or commit something. Drawn down where a verified task commits its
+      idempotency key, so a refusal, a failed verification, or a duplicate costs
+      nothing and a restart does not refill the count. Delivered in
+      [P4](#p4--credentials-and-api-effects), as planned: metering a grant needs
+      something to meter, and that arrived with the credential broker and API
+      effects.
 
 ### P1 — prove agent independence
 
@@ -378,6 +381,15 @@ alternative, not asking the harness not to use it.
       `compensatable`, `read-only` — stated rather than assumed. Published on
       the plan and recorded on the receipt, and the single thing the retry loop
       consults.
+- [x] Usage-bounded and provider-shaped grants, the [P0](#p0--define-the-category)
+      capability model finished now that there is something to meter. A grant
+      carries `maxOperations` and an optional `provider` block bounding one
+      call (`amountMax`) and a rolling day (`dailyMax`). Money bounds need the
+      caller to declare an operation's `spend`, since MELRA cannot read an
+      amount out of an arbitrary provider's payload — and the direction of that
+      check is what makes taking its word safe: a money-bounded grant covers
+      declared spends only, so understating is a lie the grant does not cover.
+      A metered grant nothing can count is refused, not waved through.
 - [ ] Reconciliation for effects whose provider cannot promise exactly-once.
 - [ ] Compensation as a first-class saga across providers, not only within one
       workflow.

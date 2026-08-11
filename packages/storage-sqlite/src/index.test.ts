@@ -67,11 +67,16 @@ describe("SqliteStore", () => {
 
     store = new SqliteStore(databasePath);
 
-    expect(
+    const applied = (
       store.database
         .prepare("SELECT version FROM schema_migrations ORDER BY version")
-        .all(),
-    ).toEqual([{ version: 1 }, { version: 2 }]);
+        .all() as Array<{ version: number }>
+    ).map((row) => row.version);
+    // Recorded once each, in order, with no gaps — the property this test is
+    // about. A literal list would only restate which migrations exist today and
+    // would fail on every unrelated one added afterwards.
+    expect(applied.length).toBeGreaterThanOrEqual(2);
+    expect(applied).toEqual(applied.map((_, index) => index + 1));
   });
 
   it("grants a workflow lease to one owner and expires it", () => {

@@ -141,6 +141,15 @@ export function capabilitiesPayload(runtime: MelraRuntime): unknown {
             runtime.policy.capabilities.length === 0
               ? "ungranted"
               : "granted-only",
+          // A grant can run out mid-session, so a caller planning a batch needs
+          // to know some of its authority is finite before it starts. Counts
+          // only — which grant, for whom, and how much is the operator's.
+          meteredGrants: runtime.policy.capabilities.filter(
+            (grant) =>
+              grant.maxOperations !== undefined ||
+              grant.provider?.amountMax !== undefined ||
+              grant.provider?.dailyMax !== undefined,
+          ).length,
           // Worth knowing before a caller plans a retry loop: after this many
           // consecutive failures against one target, the next task touching it
           // is refused outright rather than run.

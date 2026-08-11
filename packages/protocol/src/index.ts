@@ -262,6 +262,26 @@ export const HttpOperationSchema = z
      * and a mutation still runs at most once from here.
      */
     idempotencyKey: z.string().min(1).max(256).optional(),
+    /**
+     * What this call is about to cost, declared by the caller.
+     *
+     * MELRA cannot read an amount out of an arbitrary provider's payload, so a
+     * money bound needs the caller to state one. The declaration is checked
+     * against `CapabilityGrant.provider`, and the direction of the check is
+     * what makes it safe to take a caller's word: a grant with money bounds
+     * covers only operations that declare a spend, so understating is a lie the
+     * grant does not cover and omitting it means no grant matches at all.
+     */
+    spend: z
+      .object({
+        provider: z.string().min(1).max(100),
+        account: z.string().min(1).max(200).optional(),
+        /** Minor units — 5000 is $50.00, never 5000 dollars. */
+        amount: z.number().int().min(0).max(1_000_000_000_000),
+        currency: z.string().regex(/^[A-Z]{3}$/),
+      })
+      .strict()
+      .optional(),
     /** Bounds one response the way `maxFileBytes` bounds one read. */
     maxResponseBytes: z
       .number()
@@ -600,6 +620,35 @@ export const CapabilityGrantSchema = z
      * reinterpreted under different rules.
      */
     policyVersion: z.string().max(64).optional(),
+    /**
+     * How many times this grant may be spent, ever.
+     *
+     * `validUntil` bounds a window; this bounds what happens inside it. The
+     * count is durable and increments on commit, so a restart does not refill
+     * it and an operation that was refused, failed verification, or was
+     * cancelled does not draw it down.
+     */
+    maxOperations: z.number().int().min(1).max(1_000_000).optional(),
+    /**
+     * Money bounds, for grants over effects that move some.
+     *
+     * A grant carrying this block covers *only* operations that declare a
+     * matching `spend` (see `HttpOperationSchema`), so an undeclared spend is
+     * an ungranted one rather than a free one. `name` and `account` are
+     * compared exactly, not as patterns: `stripe` and `stripe-test` are
+     * different providers and a grant meaning one must not cover the other.
+     */
+    provider: z
+      .object({
+        name: z.string().min(1).max(100),
+        account: z.string().min(1).max(200).optional(),
+        /** Ceiling on one operation's declared amount, in minor units. */
+        amountMax: z.number().int().min(0).max(1_000_000_000_000).optional(),
+        /** Ceiling on declared amounts committed in the last 24 hours. */
+        dailyMax: z.number().int().min(0).max(1_000_000_000_000).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 

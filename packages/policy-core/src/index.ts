@@ -12,6 +12,7 @@ import type {
   CredentialDefinition,
   Effect,
   EvidencePredicate,
+  HttpOperation,
   Identity,
   Operation,
   PolicyDecision,
@@ -114,6 +115,12 @@ export interface LocalPolicy {
 export interface PolicyEvaluation {
   decision: PolicyDecision;
   challenge?: ApprovalChallenge;
+  /**
+   * The grant that authorised this, when `policy.capabilities` is non-empty.
+   * What the commit meters against — absent means no grants are configured and
+   * there is nothing to draw down.
+   */
+  grantId?: string;
 }
 
 const READ_ONLY_GIT_ACTIONS = new Set([
@@ -459,6 +466,8 @@ export function classifyOperation(operation: Operation): {
   capability: string;
   target: string;
   traits: CapabilityTrait[];
+  /** What the caller declared this operation moves, when it declared one. */
+  spend?: DeclaredSpend;
 } {
   switch (operation.kind) {
     case "file": {
@@ -610,6 +619,7 @@ export function classifyOperation(operation: Operation): {
         capability: `http.${operation.method.toLowerCase()}`,
         target: target.toString(),
         traits: ["network"],
+        ...(operation.spend === undefined ? {} : { spend: operation.spend }),
       };
     }
     case "system":
@@ -749,26 +759,141 @@ function patternMatches(pattern: string, value: string): boolean {
 }
 
 /**
- * Why the issued capabilities do not cover this effect, or `undefined` if they
- * do. An empty grant list is not a closed world — it means the operator has not
+ * What a grant has already drawn down, read from wherever commits are counted.
+ *
+ * A lookup rather than a number because policy is evaluated more than once per
+ * task and a grant may be metered by any of several bounds; the caller that
+ * owns the durable count decides how to answer.
+ */
+/**
+ * What an operation declared it moves. Taken from the schema that defines it
+ * rather than restated, so a field added there cannot go unnoticed here.
+ */
+export type DeclaredSpend = NonNullable<HttpOperation["spend"]>;
+
+export type CapabilityUsageReader = (grantId: string) => {
+  /** Operations committed against this grant, ever. */
+  operations: number;
+  /** Declared amounts committed against it in the last 24 hours. */
+  amountToday: number;
+};
+
+/** What the issued grants say about one effect. */
+export interface CapabilityCheck {
+  /** Why they do not cover it, or `undefined` if they do. */
+  refusal?: string;
+  /** The grant it will be metered against, when a grant was needed at all. */
+  grantId?: string;
+}
+
+type ClassifiedForGrant = {
+  effect: Effect;
+  capability: string;
+  target: string;
+  spend?: DeclaredSpend;
+};
+
+/**
+ * Whether a provider-shaped grant covers what this operation declared.
+ *
+ * Exact comparison, not patterns: `stripe` and `stripe-test` are different
+ * providers, and a grant meaning one must not quietly cover the other. A grant
+ * with money bounds and an operation that declared nothing do not match — an
+ * undeclared spend is an ungranted one, not a free one.
+ */
+function providerCovers(
+  grant: CapabilityGrant,
+  spend: ClassifiedForGrant["spend"],
+): boolean {
+  if (grant.provider === undefined) return true;
+  if (spend === undefined) return false;
+  return (
+    grant.provider.name === spend.provider &&
+    (grant.provider.account === undefined ||
+      grant.provider.account === spend.account)
+  );
+}
+
+/** Milliseconds in the rolling window `provider.dailyMax` is measured over. */
+export const CAPABILITY_DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Why a matching, unexpired grant still cannot pay for this effect.
+ *
+ * Fails closed when a metered grant is evaluated without a way to read its
+ * count: a budget nobody can count is not a budget, and treating an
+ * uncountable one as full would make the metered grant the loosest kind there
+ * is.
+ */
+function meteringRefusal(
+  grant: CapabilityGrant,
+  spend: ClassifiedForGrant["spend"],
+  usage: CapabilityUsageReader | undefined,
+): string | undefined {
+  const { amountMax, dailyMax } = grant.provider ?? {};
+  if (
+    grant.maxOperations === undefined &&
+    amountMax === undefined &&
+    dailyMax === undefined
+  ) {
+    return undefined;
+  }
+  if (usage === undefined) return `capability_usage_unmeterable:${grant.id}`;
+  const amount = spend?.amount ?? 0;
+  if (amountMax !== undefined && amount > amountMax) {
+    return `capability_amount_exceeded:${grant.id}`;
+  }
+  const drawn = usage(grant.id);
+  if (
+    grant.maxOperations !== undefined &&
+    drawn.operations >= grant.maxOperations
+  ) {
+    return `capability_usage_exhausted:${grant.id}`;
+  }
+  if (dailyMax !== undefined && drawn.amountToday + amount > dailyMax) {
+    return `capability_daily_limit_exceeded:${grant.id}`;
+  }
+  return undefined;
+}
+
+/**
+ * Which issued grant covers this effect, or why none does.
+ *
+ * An empty grant list is not a closed world — it means the operator has not
  * issued grants at all, and the rest of policy decides on its own.
  */
-export function capabilityRefusal(
-  classified: { effect: Effect; capability: string; target: string },
+export function capabilityCheck(
+  classified: ClassifiedForGrant,
   identity: Identity,
   policy: LocalPolicy,
-): string | undefined {
-  if (policy.capabilities.length === 0) return undefined;
+  usage?: CapabilityUsageReader,
+): CapabilityCheck {
+  if (policy.capabilities.length === 0) return {};
   const holder = principalRef(identity.principal);
-  const matching = policy.capabilities.filter(
+  const candidates = policy.capabilities.filter(
     (grant) =>
       patternMatches(grant.capability, classified.capability) &&
       grant.effects.includes(classified.effect) &&
       patternMatches(grant.target, classified.target) &&
       patternMatches(grant.principal, holder),
   );
+  const matching = candidates.filter((grant) =>
+    providerCovers(grant, classified.spend),
+  );
   if (matching.length === 0) {
-    return `capability_not_granted:${classified.capability}`;
+    // A grant did cover the effect and was turned away on the money block
+    // alone. Saying `not_granted` there would send the caller looking for a
+    // grant it already holds, so name the two fixes apart: declare a spend, or
+    // declare the right one.
+    if (candidates.some((grant) => grant.provider !== undefined)) {
+      return {
+        refusal:
+          classified.spend === undefined
+            ? `capability_spend_not_declared:${classified.capability}`
+            : `capability_provider_mismatch:${classified.spend.provider}`,
+      };
+    }
+    return { refusal: `capability_not_granted:${classified.capability}` };
   }
   const usable = matching.filter(
     (grant) =>
@@ -777,19 +902,49 @@ export function capabilityRefusal(
       (grant.policyVersion === undefined ||
         grant.policyVersion === policy.version),
   );
-  if (usable.length > 0) return undefined;
-  // Every candidate matched the effect and was refused for a reason the holder
-  // can act on, so name it rather than reporting a missing grant.
-  const stale = matching.find((grant) => grant.policyVersion !== policy.version);
-  return stale?.policyVersion !== undefined
-    ? `capability_policy_version_mismatch:${stale.id}`
-    : `capability_expired:${matching[0]?.id ?? classified.capability}`;
+  if (usable.length === 0) {
+    // Every candidate matched the effect and was refused for a reason the
+    // holder can act on, so name it rather than reporting a missing grant.
+    const stale = matching.find(
+      (grant) => grant.policyVersion !== policy.version,
+    );
+    return {
+      refusal:
+        stale?.policyVersion !== undefined
+          ? `capability_policy_version_mismatch:${stale.id}`
+          : `capability_expired:${matching[0]?.id ?? classified.capability}`,
+    };
+  }
+  // A grant list is a set of authorities, not a single budget: one that is
+  // spent out does not refuse work another still covers. Only when every
+  // usable grant is exhausted does the first one's reason become the answer.
+  let exhausted: string | undefined;
+  for (const grant of usable) {
+    const refusal = meteringRefusal(grant, classified.spend, usage);
+    if (refusal === undefined) return { grantId: grant.id };
+    exhausted ??= refusal;
+  }
+  return exhausted === undefined ? {} : { refusal: exhausted };
+}
+
+/**
+ * Why the issued capabilities do not cover this effect, or `undefined` if they
+ * do. `capabilityCheck` also reports which grant covered it.
+ */
+export function capabilityRefusal(
+  classified: ClassifiedForGrant,
+  identity: Identity,
+  policy: LocalPolicy,
+  usage?: CapabilityUsageReader,
+): string | undefined {
+  return capabilityCheck(classified, identity, policy, usage).refusal;
 }
 
 export function evaluatePolicy(
   taskId: string,
   request: TaskRequest,
   policy: LocalPolicy,
+  usage?: CapabilityUsageReader,
 ): PolicyEvaluation {
   const classified = classifyOperation(request.operation);
   // Every decision reports the same classification it was made from, including
@@ -831,18 +986,24 @@ export function evaluatePolicy(
   // Authority before rules: a caller that was never granted this effect is
   // refused without consulting the allowlists, which describe what the grant
   // holder may do, not whether they hold one.
-  const ungranted = capabilityRefusal(
+  const granted = capabilityCheck(
     classified,
     request.identity ?? LOCAL_IDENTITY,
     policy,
+    usage,
   );
-  if (ungranted !== undefined) {
-    return { decision: decide("deny", ungranted, "critical") };
+  if (granted.refusal !== undefined) {
+    return { decision: decide("deny", granted.refusal, "critical") };
   }
+  // Carried on every non-deny outcome so the commit knows what to meter. A deny
+  // never reaches an adapter, so it never draws anything down.
+  const metered =
+    granted.grantId === undefined ? {} : { grantId: granted.grantId };
 
   const deniedTrait = classified.traits.find((trait) =>
     policy.deniedTraits.includes(trait),
-  );  if (deniedTrait !== undefined) {
+  );
+  if (deniedTrait !== undefined) {
     return { decision: decide("deny", `trait_denied:${deniedTrait}`) };
   }
 
@@ -863,7 +1024,7 @@ export function evaluatePolicy(
   }
 
   if (classified.effect === "read") {
-    return { decision: decide("allow", "read_only_operation") };
+    return { decision: decide("allow", "read_only_operation"), ...metered };
   }
 
   if (policy.mutations === "deny") {
@@ -875,6 +1036,7 @@ export function evaluatePolicy(
   const phrase = `APPROVE ${digest.slice(0, 12)}`;
   return {
     decision: decide("confirm", "explicit_approval_required"),
+    ...metered,
     challenge: {
       approvalId,
       taskId,

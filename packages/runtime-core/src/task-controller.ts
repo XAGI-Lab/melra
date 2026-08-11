@@ -20,9 +20,11 @@ import {
   TaskRequestSchema,
 } from "@melra/protocol";
 import {
+  CAPABILITY_DAY_MS,
   classifyOperation,
   defaultEvidenceFor,
   evaluatePolicy,
+  type CapabilityUsageReader,
   type LocalPolicy,
   validateApproval,
 } from "@melra/policy-core";
@@ -102,6 +104,21 @@ function withDefaultEvidence(request: TaskRequest): TaskRequest {
   return { ...request, requiredEvidence: derived };
 }
 
+/**
+ * A grant's durable draw-down, the way policy wants to read it.
+ *
+ * Exported because `melra policy test` previews the same decision from outside
+ * this class, and a preview that counted differently from the server it is
+ * previewing would be worse than none.
+ */
+export function capabilityUsageReader(store: SqliteStore): CapabilityUsageReader {
+  return (grantId) => {
+    const since = new Date(Date.now() - CAPABILITY_DAY_MS).toISOString();
+    const drawn = store.capabilityUsage(grantId, since);
+    return { operations: drawn.operations, amountToday: drawn.amountInWindow };
+  };
+}
+
 export class TaskController {
   private readonly active = new Map<string, AbortController>();
 
@@ -125,6 +142,17 @@ export class TaskController {
       );
   }
 
+  /**
+   * The durable draw-down on each grant, as policy sees it.
+   *
+   * Handed to every `evaluatePolicy` call in this class so a metered grant is
+   * counted the same at plan time, at the re-check before execution, and in a
+   * preflight — a bound that only one of the three enforced would be a bound
+   * with a way around it.
+   */
+  private readonly capabilityUsage: CapabilityUsageReader = (grantId) =>
+    capabilityUsageReader(this.store)(grantId);
+
   plan(
     request: TaskRequest,
     options: TaskPlanOptions = {},
@@ -144,7 +172,12 @@ export class TaskController {
     }
     this.preflight(parsedRequest);
     const id = randomUUID();
-    const policy = evaluatePolicy(id, parsedRequest, this.policy);
+    const policy = evaluatePolicy(
+      id,
+      parsedRequest,
+      this.policy,
+      this.capabilityUsage,
+    );
     const timestamp = now();
     const sanitizedRequest = redactStructuredValue(parsedRequest)
       .value as TaskRequest;
@@ -200,6 +233,7 @@ export class TaskController {
       "00000000-0000-4000-8000-000000000000",
       parsed,
       this.policy,
+      this.capabilityUsage,
     ).decision;
   }
 
@@ -239,7 +273,12 @@ export class TaskController {
     }
     const request = this.loadRequest(taskId);
 
-    const rechecked = evaluatePolicy(task.id, request, this.policy);
+    const rechecked = evaluatePolicy(
+      task.id,
+      request,
+      this.policy,
+      this.capabilityUsage,
+    );
     if (rechecked.decision.outcome === "deny") {
       task.status = "policy_blocked";
       task.policyDecision = rechecked.decision;
@@ -339,6 +378,22 @@ export class TaskController {
       ) {
         task.status = "cancelled";
         task.error = "duplicate_attempt_prevented";
+      }
+      // Metered here and nowhere else: the same point idempotency commits, so a
+      // grant is drawn down by work that actually happened and was verified.
+      // A refusal, a failed verification, a duplicate collapsed just above —
+      // none of them reach this line, and none of them cost the caller a draw.
+      if (
+        verified &&
+        task.status !== "cancelled" &&
+        rechecked.grantId !== undefined
+      ) {
+        this.store.recordCapabilityUse(
+          rechecked.grantId,
+          task.id,
+          classified.spend?.amount ?? 0,
+          now(),
+        );
       }
       const receipt = this.createReceipt(
         task,

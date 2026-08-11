@@ -268,6 +268,25 @@ export class SqliteStore {
       );
     `,
     );
+    // Migration 3 meters capability grants. A ledger row per commit rather than
+    // a counter column, because a rolling daily total needs to know when each
+    // draw happened, and a counter that only goes up cannot answer that. The
+    // composite key is what makes a replayed or recovered commit idempotent:
+    // the same task cannot spend the same grant twice.
+    this.applyMigration(
+      3,
+      `
+      CREATE TABLE IF NOT EXISTS capability_usage (
+        grant_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        amount INTEGER NOT NULL DEFAULT 0,
+        committed_at TEXT NOT NULL,
+        PRIMARY KEY(grant_id, task_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_capability_usage_window
+        ON capability_usage(grant_id, committed_at);
+    `,
+    );
   }
 
   private applyMigration(version: number, statements: string): void {
@@ -785,6 +804,55 @@ export class SqliteStore {
         WHERE idempotency_key = ?
       `)
       .get(key) as IdempotencyCommitRow | undefined;
+  }
+
+  /**
+   * Draws one operation, and whatever it declared it moved, against a grant.
+   *
+   * Silent on a repeat: the key is `(grant, task)`, so recovery replaying a
+   * committed task or a receipt being rebuilt cannot spend the grant a second
+   * time. Called at the same point as `commitIdempotency` — after verification,
+   * never at plan time — so a refused, failed, or cancelled operation leaves
+   * the budget where it found it.
+   */
+  recordCapabilityUse(
+    grantId: string,
+    taskId: string,
+    amount: number,
+    at: string,
+  ): void {
+    this.database
+      .prepare(`
+        INSERT OR IGNORE INTO capability_usage(
+          grant_id, task_id, amount, committed_at
+        )
+        VALUES (?, ?, ?, ?)
+      `)
+      .run(grantId, taskId, amount, at);
+  }
+
+  /**
+   * What a grant has spent: every operation ever, and the declared amounts
+   * committed at or after `since`.
+   */
+  capabilityUsage(
+    grantId: string,
+    since: string,
+  ): { operations: number; amountInWindow: number } {
+    const row = this.database
+      .prepare(`
+        SELECT
+          COUNT(*) AS operations,
+          COALESCE(
+            SUM(CASE WHEN committed_at >= ? THEN amount ELSE 0 END), 0
+          ) AS amountInWindow
+        FROM capability_usage
+        WHERE grant_id = ?
+      `)
+      .get(since, grantId) as
+      | { operations: number; amountInWindow: number }
+      | undefined;
+    return row ?? { operations: 0, amountInWindow: 0 };
   }
 
   private assertWorkflowEvents(

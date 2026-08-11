@@ -762,3 +762,137 @@ describe("http destinations", () => {
     ).toEqual([{ type: "result_equals", path: "success", value: true }]);
   });
 });
+
+describe("metered capability grants", () => {
+  const taskId = "9f1d5b3a-4c2e-4a71-9d80-2b6f0c4e18aa";
+  const spend = (amount: number) =>
+    TaskRequestSchema.parse({
+      goal: "Refund a charge",
+      operation: {
+        kind: "http",
+        action: "request",
+        method: "POST",
+        url: "https://api.acme-pay.test/v1/refunds",
+        spend: { provider: "acme-pay", amount, currency: "USD" },
+      },
+      requiredEvidence: [{ type: "result_equals", path: "success", value: true }],
+    });
+  const policyWith = (
+    grant: Record<string, unknown>,
+  ): Parameters<typeof evaluatePolicy>[2] => ({
+    ...createDefaultPolicy(root),
+    capabilities: [
+      {
+        id: "refunds",
+        capability: "http.post",
+        effects: ["mutate"],
+        target: "*",
+        principal: "*",
+        ...grant,
+      },
+    ] as never,
+  });
+  /** A grant that has already drawn down this much. */
+  const drawn = (operations: number, amountToday: number) => () => ({
+    operations,
+    amountToday,
+  });
+
+  it("carries the grant it authorised against, so the commit knows what to meter", () => {
+    expect(
+      evaluatePolicy(
+        taskId,
+        spend(1_000),
+        policyWith({ maxOperations: 5, provider: { name: "acme-pay" } }),
+        drawn(0, 0),
+      ).grantId,
+    ).toBe("refunds");
+  });
+
+  it("names the missing declaration rather than a missing grant", () => {
+    // The grant covers `http.post` for this principal and is turned away on the
+    // money block alone. `capability_not_granted` would send the caller looking
+    // for a grant it already holds; these two say which fix applies.
+    const undeclared = TaskRequestSchema.parse({
+      goal: "Refund without saying what it moves",
+      operation: {
+        kind: "http",
+        action: "request",
+        method: "POST",
+        url: "https://api.acme-pay.test/v1/refunds",
+      },
+      requiredEvidence: [{ type: "result_equals", path: "success", value: true }],
+    });
+    const policy = policyWith({ provider: { name: "acme-pay" } });
+    expect(evaluatePolicy(taskId, undeclared, policy).decision.reason).toBe(
+      "capability_spend_not_declared:http.post",
+    );
+    expect(
+      evaluatePolicy(taskId, spend(100), policyWith({ provider: { name: "other-pay" } }))
+        .decision.reason,
+    ).toBe("capability_provider_mismatch:acme-pay");
+  });
+
+  it("refuses when the rolling daily total would go over", () => {    // Under the per-operation ceiling and inside the operation count. What is
+    // exhausted is the day, which no other bound can see.
+    expect(
+      evaluatePolicy(
+        taskId,
+        spend(3_000),
+        policyWith({
+          provider: { name: "acme-pay", amountMax: 5_000, dailyMax: 8_000 },
+        }),
+        drawn(2, 6_000),
+      ).decision.reason,
+    ).toBe("capability_daily_limit_exceeded:refunds");
+  });
+
+  it("refuses a metered grant when nothing can count it", () => {
+    // No reader. A budget nobody can count is not a budget, and treating an
+    // uncountable one as full would make the metered grant the loosest kind.
+    expect(
+      evaluatePolicy(taskId, spend(1_000), policyWith({ maxOperations: 1 }))
+        .decision.reason,
+    ).toBe("capability_usage_unmeterable:refunds");
+  });
+
+  it("spends an exhausted grant's sibling rather than refusing", () => {
+    // Two grants, one spent out. A grant list is a set of authorities, not a
+    // single budget.
+    const policy = {
+      ...createDefaultPolicy(root),
+      capabilities: [
+        {
+          id: "small",
+          capability: "http.post",
+          effects: ["mutate"],
+          target: "*",
+          principal: "*",
+          maxOperations: 1,
+        },
+        {
+          id: "large",
+          capability: "http.post",
+          effects: ["mutate"],
+          target: "*",
+          principal: "*",
+          maxOperations: 100,
+        },
+      ] as never,
+    };
+    const evaluation = evaluatePolicy(taskId, spend(1_000), policy, (id) => ({
+      operations: id === "small" ? 1 : 0,
+      amountToday: 0,
+    }));
+    expect(evaluation.decision.outcome).toBe("confirm");
+    expect(evaluation.grantId).toBe("large");
+  });
+
+  it("leaves an unmetered grant alone", () => {
+    // No `maxOperations`, no `provider` — nothing to count, so nothing needs a
+    // reader and the grant behaves exactly as it did before metering existed.
+    expect(
+      evaluatePolicy(taskId, spend(1_000), policyWith({})).decision.outcome,
+    ).toBe("confirm");
+  });
+});

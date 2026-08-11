@@ -242,6 +242,49 @@ in the request's `identity`, written `kind:id`; a request that declares no
 identity is the local principal, `agent:local`. Add `policyVersion` to a grant
 to have it refused rather than reinterpreted after the policy changes under it.
 
+A grant may also carry a size. `validUntil` bounds a window; `maxOperations`
+bounds how many times the grant may ever be spent inside it, and a `provider`
+block bounds money:
+
+```json
+{
+  "capabilities": [
+    {
+      "id": "refunds",
+      "capability": "http.post",
+      "effects": ["mutate"],
+      "target": "https://api.acme-pay.com/*",
+      "principal": "agent:support",
+      "maxOperations": 20,
+      "provider": { "name": "acme-pay", "amountMax": 5000, "dailyMax": 25000 }
+    }
+  ]
+}
+```
+
+Amounts are minor units — `5000` is $50.00. `amountMax` caps a single call and
+`dailyMax` the declared amounts committed in the last 24 hours. The counts are
+durable and are drawn down at one point only: where a verified task commits. An
+operation that was refused, failed verification, was cancelled, or collapsed
+into a duplicate costs nothing, and a restart does not refill the budget.
+
+A `provider` block makes the grant cover *only* operations that declare a
+matching `spend` (see [CAPABILITIES.md](CAPABILITIES.md#http)):
+
+```json
+{ "kind": "http", "action": "request", "method": "POST",
+  "url": "https://api.acme-pay.com/v1/refunds",
+  "spend": { "provider": "acme-pay", "amount": 2500, "currency": "USD" } }
+```
+
+MELRA cannot read an amount out of an arbitrary provider's payload, so a money
+bound needs the caller to state one — and that direction is what makes taking
+its word safe. Understating is a lie the grant does not cover, and declaring
+nothing means no grant matches at all (`capability_spend_not_declared`).
+`name` and `account` compare exactly: `stripe` and `stripe-test` are different
+providers. Several grants are several authorities, so one that is spent out does
+not refuse work another still covers.
+
 Identity is a claim the layer above makes, not something MELRA authenticates.
 Grants are worth what the boundary around your harness is worth, which is why
 [the threat model](THREAT_MODEL.md) treats developer mode as convenience rather
