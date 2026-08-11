@@ -29,11 +29,74 @@ function wildcardMatches(value: string, pattern: string): boolean {
   return new RegExp(`^${escaped}$`, "u").test(value);
 }
 
-export class Verifier {
-  private constructor(readonly root: string) {}
+/**
+ * A read the verifier can make through a channel it does not own.
+ *
+ * Injected rather than imported so this package keeps no adapter dependency:
+ * whoever supplies the probe decides what a read costs and what it is allowed
+ * to reach, and the verifier only decides whether the answer matches.
+ */
+export type EvidenceProbe = (request: {
+  url: string;
+  method: "GET" | "HEAD";
+  timeoutMs: number;
+}) => Promise<Record<string, unknown>>;
 
-  static async create(root: string): Promise<Verifier> {
-    return new Verifier(await realpath(root));
+/**
+ * A result with its JSON body parsed alongside the transport fields, so
+ * `json.id` reads the payload and `status` reads the response. A body that is
+ * not JSON simply has no `json`, and a path into it goes unresolved rather
+ * than throwing here.
+ */
+function withParsedBody(
+  result: Record<string, unknown>,
+): Record<string, unknown> {
+  if (typeof result.content !== "string") return result;
+  try {
+    return { ...result, json: JSON.parse(result.content) };
+  } catch {
+    return result;
+  }
+}
+
+const TOKEN = /\{\{([A-Za-z0-9_.]{1,64})\}\}/gu;
+
+/**
+ * Splices values from the recorded result into a verification URL.
+ *
+ * The id of the thing to re-read is only known after the effect ran, so the
+ * URL has to be completed from the result. Tokens are bounded to a dotted path
+ * and each value is percent-encoded, so a response field carrying `../` or a
+ * `?` cannot rewrite the path the operator wrote. An unresolved token fails the
+ * predicate rather than producing a URL with a hole in it.
+ */
+function interpolate(template: string, result: Record<string, unknown>): string {
+  const source = withParsedBody(result);
+  return template.replace(TOKEN, (_match, path: string) => {
+    const value = readResultPath(source, path);
+    if (value === undefined || value === null || typeof value === "object") {
+      throw new Error(`verification_token_unresolved:${path}`);
+    }
+    return encodeURIComponent(String(value));
+  });
+}
+
+export interface VerifierOptions {
+  /** Absent means `http_resource_matches` fails rather than passes. */
+  probe?: EvidenceProbe;
+}
+
+export class Verifier {
+  private constructor(
+    readonly root: string,
+    private readonly probe: EvidenceProbe | undefined,
+  ) {}
+
+  static async create(
+    root: string,
+    options: VerifierOptions = {},
+  ): Promise<Verifier> {
+    return new Verifier(await realpath(root), options.probe);
   }
 
   private async filePath(input: string): Promise<string> {
@@ -182,6 +245,31 @@ export class Verifier {
               summary: `file hash ${passed ? "matched" : "did not match"}`,
               source: relative(this.root, path),
               digest,
+            });
+            break;
+          }
+          case "http_resource_matches": {
+            if (this.probe === undefined) {
+              // Fails, never passes. A predicate the runtime cannot evaluate is
+              // an unanswered question, and treating it as satisfied would make
+              // the strongest evidence type the easiest one to claim.
+              throw new Error("verification_probe_unavailable");
+            }
+            const url = interpolate(predicate.url, result);
+            const observed = withParsedBody(
+              await this.probe({
+                url,
+                method: predicate.method,
+                timeoutMs: predicate.timeoutMs,
+              }),
+            );
+            const value = readResultPath(observed, predicate.path);
+            const passed = Object.is(value, predicate.value);
+            evidence.push({
+              type: predicate.type,
+              passed,
+              summary: `independent read of ${predicate.path} ${passed ? "matched" : "did not match"} expected value`,
+              source: url,
             });
             break;
           }

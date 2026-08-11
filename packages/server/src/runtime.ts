@@ -12,6 +12,7 @@ import {
 } from "node:os";
 import { join, parse, resolve } from "node:path";
 import type { Operation } from "@melra/protocol";
+import { HttpOperationSchema } from "@melra/protocol";
 import { BrowserRuntime } from "@melra/browser-runtime";
 import {
   ComputerRuntime,
@@ -254,7 +255,23 @@ export async function createMelraRuntime(
     store,
     policy,
     router,
-    await Verifier.create(runtimeRoot),
+    await Verifier.create(runtimeRoot, {
+      // The same adapter the effects go through, so a verification request is
+      // checked against the destination boundary, the allowlist, and the
+      // credential scope like any other call. A read that could reach where an
+      // effect may not would be a way to make the verifier fetch things for
+      // you.
+      probe: async (request) =>
+        await http.execute(
+          HttpOperationSchema.parse({
+            kind: "http",
+            action: "request",
+            method: request.method,
+            url: request.url,
+            timeoutMs: request.timeoutMs,
+          }),
+        ),
+    }),
     cipher,
   );
   const workflows = new WorkflowController(store, controller, cipher);

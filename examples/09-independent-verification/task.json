@@ -1,0 +1,19 @@
+{
+  "goal": "Create a record and confirm it exists by asking the provider, not the response",
+  "operation": {
+    "kind": "http",
+    "action": "request",
+    "method": "POST",
+    "url": "https://httpbin.org/post",
+    "content": "{\"id\":\"anything\"}",
+    "timeoutMs": 15000
+  },
+  "requiredEvidence": [
+    {
+      "type": "http_resource_matches",
+      "url": "https://httpbin.org/anything/{{json.json.id}}",
+      "path": "json.url",
+      "value": "https://httpbin.org/anything/anything"
+    }
+  ]
+}

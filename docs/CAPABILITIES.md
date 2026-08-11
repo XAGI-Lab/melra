@@ -268,9 +268,21 @@ Action: `info`. Returns local runtime capability information without mutation.
 | `exit_code` | terminal process exit code |
 | `url_matches` | anchored URL glob (`*` wildcard) |
 | `page_contains` | inspected page text |
+| `http_resource_matches` | a second `GET`/`HEAD` against the provider's own state |
 
 URL globs are anchored and schema-bounded. A completed action with unmet
 required evidence returns `partial`, never `verified_success`.
+
+`http_resource_matches` is the only predicate whose answer does not come from
+the channel that acted. `POST /refunds` returning `201` is the client that made
+the call reporting on itself; `GET /refunds/rf_1` is the provider. Because the
+id is only known afterwards, the URL is completed from the recorded result —
+`{{json.id}}` reads the parsed response body, `{{status}}` the status — and each
+spliced value is percent-encoded, so a response field cannot rewrite the path.
+The verification request is an effect like any other: same adapter, same
+destination boundary, same allowlist, same credential scope. `GET` and `HEAD`
+only, and a runtime with no HTTP channel fails the predicate rather than passing
+it. It is the only predicate carrying `strength: "independent"`.
 
 `melra_execute` returns raw operation output directly to the connected client.
 Durable task state and receipts keep only centrally redacted input and output;
