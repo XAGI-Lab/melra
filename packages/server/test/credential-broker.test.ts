@@ -20,13 +20,14 @@ import { createMelraRuntime } from "../src/index.js";
 import type { MelraRuntime } from "../src/runtime.js";
 
 const SECRET = "sk_live_kernel_held_never_agent_held";
+const OTHER_SECRET = "sk_live_for_a_host_this_test_never_calls";
 
 let fixture: Server;
 let port: number;
 let runtime: MelraRuntime;
 let root: string;
 /** What the far end actually received, per request, in order. */
-const seen: { url: string; authorization: string | undefined }[] = [];
+const seen: { url: string; headers: Record<string, string | undefined> }[] = [];
 
 beforeAll(async () => {
   fixture = createServer((req, res) => {
@@ -34,7 +35,7 @@ beforeAll(async () => {
     req.on("end", () => {
       seen.push({
         url: req.url ?? "",
-        authorization: req.headers.authorization,
+        headers: req.headers as Record<string, string | undefined>,
       });
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ ok: true }));
@@ -50,10 +51,7 @@ beforeAll(async () => {
       version: "credential-broker",
       workspaceRoot: root,
       allowedCommands: [],
-      // `localhost` and `127.0.0.1` are the same machine and a different name,
-      // which is exactly the shape needed to prove host scoping: one is the
-      // credential's host, the other is not.
-      allowedDomains: ["127.0.0.1", "localhost"],
+      allowedDomains: ["127.0.0.1"],
       allowLocalhost: true,
       mutations: "confirm",
       approvalTtlMs: 300_000,
@@ -65,10 +63,19 @@ beforeAll(async () => {
           hosts: ["127.0.0.1"],
           capability: "http.post:http://127.0.0.1:*/charges*",
         },
+        // Scoped to a host this test never reaches, and deliberately delegated
+        // `*` so nothing but the host list can be what holds it back.
+        partner: {
+          source: { env: "MELRA_TEST_PARTNER_KEY" },
+          inject: { header: "X-Partner-Key" },
+          hosts: ["api.partner.example"],
+          capability: "*",
+        },
       },
     }),
   );
   process.env.MELRA_TEST_BILLING_KEY = SECRET;
+  process.env.MELRA_TEST_PARTNER_KEY = OTHER_SECRET;
   runtime = await createMelraRuntime({
     workspaceRoot: root,
     dataDirectory: join(root, ".data"),
@@ -78,6 +85,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   delete process.env.MELRA_TEST_BILLING_KEY;
+  delete process.env.MELRA_TEST_PARTNER_KEY;
   await runtime.close();
   await new Promise<void>((resolve) => fixture.close(() => resolve()));
   await rm(root, { recursive: true, force: true });
@@ -109,7 +117,7 @@ describe("a credential the agent never holds", () => {
   it("reaches the far end and nothing else", async () => {
     const { planned, task, output, receipt } = await run(charge("127.0.0.1"));
     expect(task.status).toBe("verified_success");
-    expect(seen.at(-1)?.authorization).toBe(`Bearer ${SECRET}`);
+    expect(seen.at(-1)?.headers.authorization).toBe(`Bearer ${SECRET}`);
     // The caller learns which credential authorised the call, which is what a
     // receipt is for, and learns nothing it could replay.
     expect(output?.credentials).toEqual(["billing"]);
@@ -126,12 +134,16 @@ describe("a credential the agent never holds", () => {
     expect(bytes.includes(Buffer.from(SECRET))).toBe(false);
   });
 
-  it("lets a request to another host go out unauthenticated", async () => {
-    const { task } = await run(charge("localhost"));
+  it("leaves a credential scoped to another host behind", async () => {
+    const { task } = await run(charge("127.0.0.1"));
     expect(task.status).toBe("verified_success");
-    // Not refused — sent without the header. A secret that follows whatever URL
-    // the caller picked is scoped to nothing at all.
-    expect(seen.at(-1)?.authorization).toBeUndefined();
+    // `partner` is delegated `*` — every capability there is — and still does
+    // not ride along, because this is not its host. The request is not refused
+    // for want of it either: a secret that follows whatever URL the caller
+    // picked is scoped to nothing at all, so a host it does not cover is a
+    // request that goes out without it.
+    expect(seen.at(-1)?.headers["x-partner-key"]).toBeUndefined();
+    expect(JSON.stringify(seen.at(-1))).not.toContain(OTHER_SECRET);
   });
 
   it("refuses an operation outside the delegation before anything is sent", async () => {
