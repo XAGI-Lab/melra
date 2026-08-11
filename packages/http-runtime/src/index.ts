@@ -5,6 +5,7 @@ import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import type { IncomingMessage } from "node:http";
 import type { HttpOperation } from "@melra/protocol";
+import { outcomeUnknown } from "@melra/protocol";
 import {
   assertSafeDestination,
   classifyOperation,
@@ -133,6 +134,13 @@ export class HttpRuntime {
               // receipt should record; its value is the one thing that must not
               // leave this function.
               credentials: brokered?.used ?? [],
+              // Echoed back so a reconciliation predicate can be written
+              // against the one fact that was true *before* the call. After a
+              // request that went unanswered there is no response to read, so
+              // this is the only handle on what the provider was asked to do.
+              ...(operation.idempotencyKey === undefined
+                ? {}
+                : { idempotencyKey: operation.idempotencyKey }),
             });
           };
           response.on("end", finish);
@@ -140,12 +148,20 @@ export class HttpRuntime {
           response.on("error", reject);
         },
       );
+      // Whether the request made it out. A socket error before this is a
+      // request that never happened; after it, the far end may have done the
+      // work and lost the reply, and only `outcomeUnknown` says so honestly.
+      // `bytesWritten` is not the signal — it counts headers buffered on a
+      // socket that never connected, so ECONNREFUSED reports a nonzero count.
+      const failed = (error: Error): void => {
+        reject(call.writableFinished ? outcomeUnknown(error.message) : error);
+      };
       // A timeout fires the event but does not end the request; without this an
       // unresponsive host holds the socket for the life of the process.
       call.on("timeout", () => {
         call.destroy(new Error("http_timeout"));
       });
-      call.on("error", reject);
+      call.on("error", failed);
       signal?.addEventListener(
         "abort",
         () => call.destroy(new Error("task_cancelled")),

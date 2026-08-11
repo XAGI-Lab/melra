@@ -8,6 +8,52 @@ All notable changes are documented here. The format follows
 
 ### Added
 
+- **A mutation whose reply never arrived no longer claims it failed.** `failed`
+  reads as *the effect did not happen*, and after a request that went out and
+  was never answered, that is a claim nobody holds. The HTTP adapter now tells
+  the two cases apart by whether the request reached the wire: a DNS failure or
+  a refused connection really did not happen and still fails, while a request
+  written to the socket and left unanswered is marked
+  `effect_outcome_unknown:` and parks the task `recovery_required`, with
+  `inconclusive: true` on the evidence item and `RECOVERY_REQUIRED` on the
+  certificate. Reads are exempt — a read that may or may not have run changed
+  nothing either way.
+- **`reconciliation` predicates settle an outcome MELRA could not observe.** A
+  new array on the task request, read against the facts that were true *before*
+  the call — task id, URL, method, and the `idempotencyKey` MELRA sent — because
+  a lost reply leaves no response to interpolate from. Calling `melra_execute`
+  on a parked task reconciles instead of re-running, so a caller retrying the
+  obvious way gets the safe thing: the provider confirming the effect resolves
+  it `verified_success` (receipted as `recovered`), the provider denying it
+  makes it `failed`, and a provider that cannot be reached leaves it parked
+  rather than guessing. `recoverInterrupted` uses the same path after a crash.
+  Declaring reconciliation publishes `reconciliation-required` on the plan
+  instead of `at-most-once`, so a caller sees the stronger promise before it
+  approves — it buys no retry; the effect still runs at most once.
+- **Sagas unwind across providers, in order, and say so when they cannot.**
+  Compensations now run one at a time, newest effect first, each verified before
+  the next starts — cancel the shipment, then refund the charge that paid for
+  it. A `Promise.all` was computing that reverse order and then discarding it by
+  starting every compensation at once. Each compensation is an ordinary governed
+  task, so undoing effects at two different hosts is the same code path as two
+  at one host. An unwind that cannot finish stops rather than undoing further,
+  the run becomes `recovery_required` with
+  `workflow_compensation_incomplete:<node>` naming the missing inverse, and
+  `advance` refuses to start new work on top of a half-undone saga.
+
+### Fixed
+
+- A failed compensation is no longer reported as a clean workflow failure:
+  `deriveStatus` excluded compensation nodes entirely, so a forward effect whose
+  declared inverse did not run left the world in a state no node described and
+  the run still read `failed`.
+- A compensation that failed no longer triggers a second unwind of the
+  remaining steps, which would undo further work while its own inverse was
+  still outstanding.
+- Recovering a verified interrupted task now draws down its capability grant.
+  It committed the idempotency key but skipped the metering, so work recovered
+  after a crash was free.
+
 - **A capability grant can now have a size, not just an expiry.** `validUntil`
   bounds a window; `maxOperations` bounds how many times a grant may ever be
   spent inside it, and a `provider: { name, account, amountMax, dailyMax }` block

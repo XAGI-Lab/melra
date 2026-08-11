@@ -157,6 +157,7 @@ function systemRequest(goal: string): TaskRequest {
     constraints: [],
     forbiddenEffects: [],
     requiredEvidence: [],
+    reconciliation: [],
     budget: {
       maxDurationMs: 120_000,
       maxRetries: 2,
@@ -184,6 +185,7 @@ function fileWorkflow(name: string, path: string): WorkflowDefinition {
         constraints: [],
         forbiddenEffects: [],
         requiredEvidence: [{ type: "file_exists", path }],
+        reconciliation: [],
         budget: {
           maxDurationMs: 120_000,
           maxRetries: 2,

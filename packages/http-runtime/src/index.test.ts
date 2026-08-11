@@ -31,6 +31,9 @@ beforeAll(async () => {
         res.writeHead(200).end("x".repeat(50_000));
         return;
       }
+      // Accepts the request and never answers, which is the case MELRA must not
+      // report as "the effect did not happen".
+      if (req.url === "/silent") return;
       res.writeHead(201, { "content-type": "application/json" });
       res.end(JSON.stringify({ created: true }));
     });
@@ -120,5 +123,38 @@ describe("http runtime", () => {
     );
     controller.abort();
     await expect(pending).rejects.toThrow("task_cancelled");
+  });
+
+  it("marks the outcome unknown when a sent request goes unanswered", async () => {
+    // The far end has the request and may already have acted on it. Claiming
+    // failure here would be the kernel asserting something it cannot know.
+    await expect(
+      runtime().execute(
+        operation({
+          method: "POST",
+          url: `${origin}/silent`,
+          content: "charge",
+          timeoutMs: 300,
+        }),
+      ),
+    ).rejects.toThrow("effect_outcome_unknown:http_timeout");
+  });
+
+  it("reports a plain failure when the request never left the machine", async () => {
+    const closed = createServer();
+    await new Promise<void>((resolve) =>
+      closed.listen(0, "127.0.0.1", resolve),
+    );
+    const port = (closed.address() as AddressInfo).port;
+    await new Promise<void>((resolve) => closed.close(() => resolve()));
+
+    const attempt = runtime().execute(
+      operation({ method: "POST", url: `http://127.0.0.1:${port}/charges` }),
+    );
+
+    // Nothing reached a server, so this one really did not happen — and must
+    // not be parked for reconciliation.
+    await expect(attempt).rejects.toThrow(/ECONNREFUSED/);
+    await expect(attempt).rejects.not.toThrow(/effect_outcome_unknown/);
   });
 });

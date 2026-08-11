@@ -7,11 +7,12 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   TaskRequestSchema,
+  outcomeUnknown,
   type Operation,
 } from "@melra/protocol";
 import { createDefaultPolicy } from "@melra/policy-core";
 import { SqliteStore } from "@melra/storage-sqlite";
-import { Verifier } from "@melra/verifier-core";
+import { Verifier, type EvidenceProbe } from "@melra/verifier-core";
 import { CircuitBreaker } from "./circuit-breaker.js";
 import { PayloadCipher } from "./payload-cipher.js";
 import { TaskController } from "./task-controller.js";
@@ -36,6 +37,7 @@ async function setup(
       return { success: true, stored: true, value: "verified" };
     },
   },
+  probe?: EvidenceProbe,
 ) {
   const root = await mkdtemp(join(tmpdir(), "melra-controller-"));
   roots.push(root);
@@ -46,6 +48,7 @@ async function setup(
     root,
     Buffer.alloc(32, 7),
     executor,
+    probe,
   );
   return { controller, store };
 }
@@ -61,12 +64,13 @@ async function createController(
       signal?: AbortSignal,
     ): Promise<Record<string, unknown>>;
   },
+  probe?: EvidenceProbe,
 ): Promise<TaskController> {
   return new TaskController(
     store,
     createDefaultPolicy(root),
     executor,
-    await Verifier.create(root),
+    await Verifier.create(root, probe === undefined ? {} : { probe }),
     new PayloadCipher(key),
   );
 }
@@ -631,5 +635,214 @@ describe("effect contract and principal", () => {
     );
     const execution = await controller.execute(task.id);
     expect(execution.receipt?.principal).toBe("agent:local");
+  });
+
+  describe("reconciliation", () => {
+    /**
+     * A charge whose request reached the wire and was never answered, plus the
+     * probe that can settle it. The reconciliation URL is written against the
+     * idempotency key rather than a response field on purpose: there is no
+     * response to read on this path.
+     */
+    async function unansweredCharge(probe?: EvidenceProbe) {
+      const execute = vi.fn(async () => {
+        throw outcomeUnknown("socket hang up");
+      });
+      const { controller, store } = await setup({ execute }, probe);
+      const task = controller.plan(
+        TaskRequestSchema.parse({
+          goal: "Charge the customer",
+          operation: {
+            kind: "http",
+            action: "request",
+            method: "POST",
+            url: "http://localhost:9/charges",
+            idempotencyKey: "charge-1",
+          },
+          requiredEvidence: [
+            { type: "result_equals", path: "success", value: true },
+          ],
+          reconciliation: [
+            {
+              type: "http_resource_matches",
+              url: "http://localhost:9/charges/{{idempotencyKey}}",
+              method: "GET",
+              path: "json.status",
+              value: "applied",
+            },
+          ],
+        }),
+      );
+      const parked = await controller.execute(task.id, {
+        approvalId: task.approval!.approvalId,
+        phrase: task.approval!.phrase,
+      });
+      return { controller, store, task, parked, execute };
+    }
+
+    it("parks an unanswered mutation instead of claiming it failed", async () => {
+      const { parked, controller } = await unansweredCharge();
+      expect(parked.task.status).toBe("recovery_required");
+      expect(parked.certificate?.result).toBe("RECOVERY_REQUIRED");
+      // The receipt must not read as proof the charge did not happen.
+      expect(parked.receipt?.evidence[0]).toMatchObject({
+        type: "execution_error",
+        passed: false,
+        inconclusive: true,
+      });
+      expect(parked.receipt?.executionGuarantee).toBe("reconciliation-required");
+      expect(controller.status(parked.task.id).status).toBe("recovery_required");
+    });
+
+    it("resolves a parked mutation the provider says did happen", async () => {
+      const probe = vi.fn(async () => ({
+        status: 200,
+        content: JSON.stringify({ status: "applied" }),
+      }));
+      const { parked, controller, execute } = await unansweredCharge(probe);
+      expect(parked.task.status).toBe("recovery_required");
+
+      // Retrying the obvious way must not re-run the adapter: it may already
+      // have charged the customer once.
+      const settled = await controller.execute(parked.task.id);
+
+      expect(settled.task.status).toBe("verified_success");
+      expect(settled.certificate?.result).toBe("VERIFIED_SUCCESS");
+      expect(probe).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: "http://localhost:9/charges/charge-1",
+        }),
+      );
+      expect(execute).toHaveBeenCalledTimes(1);
+    });
+
+    it("marks a parked mutation failed only once the provider denies it", async () => {
+      const probe = vi.fn(async () => ({
+        status: 404,
+        content: JSON.stringify({ status: "none" }),
+      }));
+      const { parked, controller } = await unansweredCharge(probe);
+
+      const settled = await controller.execute(parked.task.id);
+
+      expect(settled.task).toMatchObject({
+        status: "failed",
+        error: "reconciliation_confirms_effect_not_applied",
+      });
+      expect(settled.certificate?.result).toBe("FAILED");
+    });
+
+    it("keeps a parked mutation parked when the provider cannot be reached", async () => {
+      const probe = vi.fn(async () => {
+        throw new Error("ECONNREFUSED");
+      });
+      const { parked, controller } = await unansweredCharge(probe);
+
+      const settled = await controller.execute(parked.task.id);
+
+      // An unreachable provider did not say no. Anything but `recovery_required`
+      // here is the kernel inventing an outcome.
+      expect(settled.task).toMatchObject({
+        status: "recovery_required",
+        error: "reconciliation_inconclusive",
+      });
+      expect(settled.receipt).toBeUndefined();
+      expect(probe).toHaveBeenCalledTimes(1);
+    });
+
+    it("parks an unanswered mutation that declared no way to settle it", async () => {
+      const execute = vi.fn(async () => {
+        throw outcomeUnknown("socket hang up");
+      });
+      const { controller } = await setup({ execute });
+      const task = controller.plan(
+        TaskRequestSchema.parse({
+          goal: "Charge the customer",
+          operation: {
+            kind: "http",
+            action: "request",
+            method: "POST",
+            url: "http://localhost:9/charges",
+          },
+          requiredEvidence: [
+            { type: "result_equals", path: "success", value: true },
+          ],
+        }),
+      );
+      const parked = await controller.execute(task.id, {
+        approvalId: task.approval!.approvalId,
+        phrase: task.approval!.phrase,
+      });
+      expect(parked.task.status).toBe("recovery_required");
+      expect(parked.receipt?.executionGuarantee).toBe("at-most-once");
+
+      const settled = await controller.execute(task.id);
+
+      expect(settled.task.error).toBe("reconciliation_not_declared");
+      expect(execute).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves an unanswered read failed, since nothing changed either way", async () => {
+      const execute = vi.fn(async () => {
+        throw outcomeUnknown("socket hang up");
+      });
+      const { controller } = await setup({ execute });
+      const task = controller.plan(
+        TaskRequestSchema.parse({
+          goal: "Read the charge",
+          operation: {
+            kind: "http",
+            action: "request",
+            method: "GET",
+            url: "http://localhost:9/charges/charge-1",
+          },
+        }),
+      );
+      expect((await controller.execute(task.id)).task.status).toBe("failed");
+    });
+
+    it("settles an interrupted mutation on recovery when it can", async () => {
+      const probe = vi.fn(async () => ({
+        status: 200,
+        content: JSON.stringify({ status: "applied" }),
+      }));
+      const execute = vi.fn(async () => ({ success: true }));
+      const { controller, store } = await setup({ execute }, probe);
+      const task = controller.plan(
+        TaskRequestSchema.parse({
+          goal: "Charge the customer",
+          operation: {
+            kind: "http",
+            action: "request",
+            method: "POST",
+            url: "http://localhost:9/charges",
+            idempotencyKey: "charge-2",
+          },
+          requiredEvidence: [
+            { type: "result_equals", path: "success", value: true },
+          ],
+          reconciliation: [
+            {
+              type: "http_resource_matches",
+              url: "http://localhost:9/charges/{{idempotencyKey}}",
+              method: "GET",
+              path: "json.status",
+              value: "applied",
+            },
+          ],
+        }),
+      );
+      const interrupted = store.getTask(task.id)!;
+      interrupted.status = "running";
+      store.saveTask(interrupted);
+
+      const [recovered] = await controller.recoverInterrupted();
+
+      expect(recovered).toMatchObject({
+        id: task.id,
+        status: "verified_success",
+      });
+      expect(execute).not.toHaveBeenCalled();
+    });
   });
 });

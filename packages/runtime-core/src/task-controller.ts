@@ -16,6 +16,7 @@ import {
   delegationChain,
   effectContract,
   executionGuaranteeFor,
+  isOutcomeUnknown,
   LOCAL_IDENTITY,
   TaskRequestSchema,
 } from "@melra/protocol";
@@ -68,6 +69,31 @@ function now(): string {
   return new Date().toISOString();
 }
 
+/**
+ * What was true before the call went out.
+ *
+ * A request that was never answered left no response, so the only handle on
+ * what the provider was asked to do is the key MELRA itself sent. Shaped like
+ * an adapter result so one predicate type reads the same on both paths.
+ */
+function reconciliationFacts(
+  task: TaskRecord,
+  operation: Operation,
+): Record<string, unknown> {
+  return {
+    taskId: task.id,
+    ...(operation.kind === "http"
+      ? {
+          url: operation.url,
+          method: operation.method,
+          ...(operation.idempotencyKey === undefined
+            ? {}
+            : { idempotencyKey: operation.idempotencyKey }),
+        }
+      : {}),
+  };
+}
+
 function certificateResult(task: TaskRecord): CertificateResult {
   switch (task.status) {
     case "verified_success":
@@ -84,6 +110,10 @@ function certificateResult(task: TaskRecord): CertificateResult {
       return "POLICY_BLOCKED";
     case "budget_exhausted":
       return "BUDGET_EXHAUSTED";
+    // Without this case a parked task certified as FAILED — exactly the claim
+    // the status exists to stop MELRA from making.
+    case "recovery_required":
+      return "RECOVERY_REQUIRED";
     default:
       return "FAILED";
   }
@@ -250,6 +280,12 @@ export class TaskController {
     const task = this.status(taskId);
     if (task.status === "policy_blocked") {
       return { task };
+    }
+    // Re-running the adapter is the one thing that must not happen to a parked
+    // task: it may already have run. `reconcile` asks the provider instead, so
+    // a caller retrying the obvious way gets the safe thing.
+    if (task.status === "recovery_required") {
+      return await this.reconcile(taskId);
     }
     if (!["planned", "awaiting_approval"].includes(task.status)) {
       throw new Error(`task_not_executable:${task.status}`);
@@ -430,19 +466,37 @@ export class TaskController {
       if (!shortCircuited && (!aborted || budgetExhausted)) {
         this.breaker.recordFailure(classified.target);
       }
-      task.status = aborted
-        ? budgetExhausted
-          ? "budget_exhausted"
-          : "cancelled"
-        : "failed";
-      task.error = budgetExhausted ? "task_budget_exhausted" : message;
+      // Checked on the raw message and ahead of every other outcome, because it
+      // is the strongest thing known: the adapter says the effect may already
+      // have happened. `failed`, `cancelled` and `budget_exhausted` all assert
+      // more than that. Reads are exempt — a read that may or may not have run
+      // changed nothing either way, so there is nothing to reconcile.
+      const unknownOutcome =
+        classified.effect !== "read" && isOutcomeUnknown(rawMessage);
+      task.status = unknownOutcome
+        ? "recovery_required"
+        : aborted
+          ? budgetExhausted
+            ? "budget_exhausted"
+            : "cancelled"
+          : "failed";
+      task.error = unknownOutcome
+        ? message
+        : budgetExhausted
+          ? "task_budget_exhausted"
+          : message;
       task.updatedAt = now();
       const evidence: EvidenceItem[] = [
         {
           type: "execution_error",
           passed: false,
+          // The adapter could not say, so neither can the receipt. Without this
+          // the item reads as proof the effect did not happen.
+          ...(unknownOutcome ? { inconclusive: true } : {}),
           strength: evidenceStrength("execution_error"),
-          summary: budgetExhausted ? "task_budget_exhausted" : message,
+          summary: budgetExhausted && !unknownOutcome
+            ? "task_budget_exhausted"
+            : message,
         },
       ];
       const receipt = this.createReceipt(
@@ -456,7 +510,7 @@ export class TaskController {
         {},
         evidence,
         approval,
-        budgetExhausted ? "task_budget_exhausted" : message,
+        task.error,
       );
       this.store.saveReceipt(receipt);
       task.receiptIds.push(receipt.receiptId);
@@ -508,6 +562,147 @@ export class TaskController {
     return await this.verifier.verify(predicates, {});
   }
 
+  /**
+   * Ask the provider whether an effect MELRA could not observe actually
+   * happened.
+   *
+   * Reachable only from `recovery_required`, the one status that says "unknown"
+   * rather than a result. The predicates are read against the facts that were
+   * true *before* the call — the idempotency key that went out, the destination
+   * — because a request that was never answered left no response to
+   * interpolate a verification URL from.
+   *
+   * Three answers, and the third is the point: it happened, it did not, or the
+   * provider could not be reached and the task stays exactly where it was.
+   */
+  async reconcile(taskId: string): Promise<ExecutionResult> {
+    const task = this.status(taskId);
+    if (task.status !== "recovery_required") {
+      throw new Error(`task_not_reconcilable:${task.status}`);
+    }
+    const request = this.loadRequest(taskId);
+    const classified = classifyOperation(request.operation);
+    const park = (reason: string): ExecutionResult => {
+      task.error = reason;
+      task.updatedAt = now();
+      this.store.saveTask(task);
+      return { task };
+    };
+    if (request.reconciliation.length === 0) {
+      return park("reconciliation_not_declared");
+    }
+    const verification = await this.verifier.verify(
+      request.reconciliation,
+      reconciliationFacts(task, request.operation),
+    );
+    // An unreachable provider did not say no. Resolving on this would be the
+    // same lie as the `failed` this whole path exists to avoid.
+    if (verification.evidence.some((item) => item.inconclusive === true)) {
+      return park("reconciliation_inconclusive");
+    }
+    if (verification.verified) {
+      return this.resolveAsVerified(
+        task,
+        request,
+        classified,
+        verification.evidence,
+        { reconciliation: "provider_state_confirms_effect" },
+      );
+    }
+    // The provider answered, and the answer is that it never happened. Only now
+    // is `failed` a claim MELRA is entitled to make.
+    task.status = "failed";
+    task.error = "reconciliation_confirms_effect_not_applied";
+    task.updatedAt = now();
+    this.store.saveTask(task);
+    const receipt = this.createReceipt(
+      task,
+      request,
+      classified.capability,
+      classified.target,
+      classified.effect,
+      task.updatedAt,
+      false,
+      { reconciliation: "provider_state_denies_effect" },
+      verification.evidence,
+      undefined,
+      task.error,
+    );
+    this.store.saveReceipt(receipt);
+    task.receiptIds.push(receipt.receiptId);
+    const certificate = this.createAndSaveCertificate(
+      task,
+      verification.evidence,
+    );
+    return { task, receipt, certificate };
+  }
+
+  /**
+   * Settle a task as done on evidence gathered after the fact.
+   *
+   * Shared by restart recovery and reconciliation because the two differ only
+   * in where the evidence came from. Everything an ordinary success does has to
+   * happen here too — the idempotency commit *and* the capability draw-down —
+   * or an effect settled this way would be free to run again and free to spend.
+   */
+  private resolveAsVerified(
+    task: TaskRecord,
+    request: TaskRequest,
+    classified: ReturnType<typeof classifyOperation>,
+    evidence: EvidenceItem[],
+    observed: Record<string, unknown>,
+  ): ExecutionResult {
+    if (
+      task.idempotencyKey !== undefined &&
+      this.store.getIdempotencyCommit(task.idempotencyKey) === undefined
+    ) {
+      this.store.commitIdempotency(
+        task.idempotencyKey,
+        task.id,
+        task.attempt ?? 1,
+        now(),
+      );
+    }
+    // Read for the grant id only. The work is already done, so this is
+    // accounting rather than permission — a grant that has since run out still
+    // pays for what it authorised.
+    const { grantId } = evaluatePolicy(
+      task.id,
+      request,
+      this.policy,
+      this.capabilityUsage,
+    );
+    if (grantId !== undefined) {
+      this.store.recordCapabilityUse(
+        grantId,
+        task.id,
+        classified.spend?.amount ?? 0,
+        now(),
+      );
+    }
+    const receipt = this.createReceipt(
+      task,
+      request,
+      classified.capability,
+      classified.target,
+      classified.effect,
+      task.updatedAt,
+      true,
+      observed,
+      evidence,
+      task.approval === undefined
+        ? undefined
+        : { approvalId: task.approval.approvalId, phrase: "recovered" },
+    );
+    this.store.saveReceipt(receipt);
+    task.receiptIds.push(receipt.receiptId);
+    task.status = "verified_success";
+    delete task.error;
+    task.updatedAt = now();
+    const certificate = this.createAndSaveCertificate(task, evidence);
+    return { task, receipt, certificate };
+  }
+
   async recoverInterrupted(): Promise<TaskRecord[]> {
     const recovered: TaskRecord[] = [];
     for (const task of this.store.listInterruptedTasks()) {
@@ -528,41 +723,9 @@ export class TaskController {
           {},
         );
         if (verification.verified) {
-          if (
-            task.idempotencyKey !== undefined &&
-            this.store.getIdempotencyCommit(task.idempotencyKey) ===
-              undefined
-          ) {
-            this.store.commitIdempotency(
-              task.idempotencyKey,
-              task.id,
-              task.attempt ?? 1,
-              now(),
-            );
-          }
-          const receipt = this.createReceipt(
-            task,
-            request,
-            classified.capability,
-            classified.target,
-            classified.effect,
-            task.updatedAt,
-            true,
-            { recovery: "independent_reobservation" },
-            verification.evidence,
-            task.approval === undefined
-              ? undefined
-              : {
-                  approvalId: task.approval.approvalId,
-                  phrase: "recovered",
-                },
-          );
-          this.store.saveReceipt(receipt);
-          task.receiptIds.push(receipt.receiptId);
-          task.status = "verified_success";
-          delete task.error;
-          task.updatedAt = now();
-          this.createAndSaveCertificate(task, verification.evidence);
+          this.resolveAsVerified(task, request, classified, verification.evidence, {
+            recovery: "independent_reobservation",
+          });
           recovered.push(task);
           continue;
         }
@@ -575,6 +738,13 @@ export class TaskController {
           : "interrupted_mutation_requires_reconciliation";
       task.updatedAt = now();
       this.store.saveTask(task);
+      // A crash mid-flight is the same unknown a dropped reply is, so a task
+      // that declared how to settle one gets asked here rather than waiting for
+      // someone to notice it. Still parked if the provider cannot answer.
+      if (task.status === "recovery_required" && request.reconciliation.length > 0) {
+        recovered.push((await this.reconcile(task.id)).task);
+        continue;
+      }
       recovered.push(task);
     }
     return recovered;
@@ -632,7 +802,10 @@ export class TaskController {
       capability,
       principal: delegationChain(request.identity ?? LOCAL_IDENTITY),
       effect,
-      executionGuarantee: executionGuaranteeFor(effect),
+      executionGuarantee: executionGuaranteeFor(
+        effect,
+        request.reconciliation.length > 0,
+      ),
       policyDecision: {
         outcome: task.policyDecision.outcome,
         policyVersion: task.policyDecision.policyVersion,
@@ -666,7 +839,9 @@ export class TaskController {
   ): Promise<Record<string, unknown>> {
     // Asked of the guarantee rather than re-derived from the effect, so the
     // promise the plan published is the same rule the loop obeys.
-    const maximumAttempts = allowsRetry(executionGuaranteeFor(effect))
+    const maximumAttempts = allowsRetry(
+      executionGuaranteeFor(effect, request.reconciliation.length > 0),
+    )
       ? request.budget.maxRetries + 1
       : 1;
     let lastError: unknown;

@@ -1120,6 +1120,42 @@ export const scenarios: EvaluationScenario[] = [
     expectedFinal: "cancelled",
   },
   {
+    // Same POST, one field different. Declaring how to settle an unobserved
+    // outcome changes what MELRA promises: not "ran zero or one times, and you
+    // will never know which", but "if the reply is lost, the provider's own
+    // state decides". The caller reads that before approving, so it can tell
+    // the two postures apart while it can still decline.
+    id: "http-post-with-reconciliation-publishes-a-stronger-guarantee",
+    category: "http",
+    request: {
+      goal: "Charge a customer with a way to settle a lost reply",
+      operation: {
+        kind: "http",
+        action: "request",
+        method: "POST",
+        url: "https://api.example.com/charges",
+        idempotencyKey: "charge-eval-1",
+        content: '{"amount":100}',
+      },
+      constraints: [],
+      forbiddenEffects: [],
+      budget: { maxSteps: 2, maxDurationMs: 10_000, maxRetries: 0 },
+      requiredEvidence: [{ type: "result_equals", path: "status", value: 201 }],
+      reconciliation: [
+        {
+          type: "http_resource_matches",
+          url: "https://api.example.com/charges/{{idempotencyKey}}",
+          path: "json.status",
+          value: "applied",
+        },
+      ],
+    },
+    expectedPlan: "awaiting_approval",
+    expectedExecutionGuarantee: "reconciliation-required",
+    cancel: true,
+    expectedFinal: "cancelled",
+  },
+  {
     // A mutation with no declared evidence is never simply allowed. HTTP now
     // has a derived post-condition like every other kind, so the caller is held
     // to the response's own success flag instead of being denied and left to
