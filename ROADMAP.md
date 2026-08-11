@@ -243,7 +243,7 @@ but not in the shape the protocol should eventually name.
 | Durable effect runtime | ✓ | `@melra/runtime-core` over SQLite |
 | Idempotency | ✓ | `idempotency_commits`, unique per committed attempt |
 | Recovery engine | ✓ | Conservative rules plus explicit `recovery_required` |
-| Verification framework | partial | Execution and state levels ship; independent and semantic do not ([P3](#p3--verification-framework)) |
+| Verification framework | partial | Execution, state, and independent levels ship; semantic does not ([P3](#p3--verification-framework)) |
 | Evidence system | ✓ | Redacted receipts and SHA-256 certificates |
 | Effect adapters | partial | Files, terminal, browser, computer, HTTP; database, cloud, SaaS pending ([P4](#p4--credentials-and-api-effects)) |
 | Harness adapters | ✓ | Ordinary tool names over the same pipeline (`MELRA_HARNESS_TOOLS=1`), proven against three mismatched clients on one data directory |
@@ -338,13 +338,19 @@ alternative, not asking the harness not to use it.
 
 ### P3 — verification framework
 
-- [ ] Verification strength surfaced by name on every evidence item —
+- [x] Verification strength surfaced by name on every evidence item —
       **execution**, **state**, **independent**, **semantic** — so a caller can
-      tell a re-read of the target from the adapter's own word.
-- [ ] Independent-channel verification: confirm an effect through a different
+      tell a re-read of the target from the adapter's own word. Stamped in one
+      place from the predicate type, so a new predicate cannot ship without one.
+- [x] Independent-channel verification: confirm an effect through a different
       channel than the one that performed it (execute via `POST /refund`,
       verify via `GET /refund/:id`), rather than through the page or process
-      that did the work.
+      that did the work. Shipped as the `http_resource_matches` predicate: the
+      URL is completed from the recorded result (`{{json.id}}`, percent-encoded)
+      because the id exists only after the effect ran, the read goes out through
+      the same adapter and destination boundary as any other call, `GET`/`HEAD`
+      only, and a runtime with no HTTP channel fails the predicate rather than
+      passing it. It carries `strength: "independent"`; nothing else does.
 - [ ] Pluggable verifiers — file, process, HTTP, database, browser, cloud,
       SaaS, webhook — behind one predicate interface.
 - [ ] Semantic verification, labelled probabilistic everywhere it appears, and

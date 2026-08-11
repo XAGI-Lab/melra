@@ -53,6 +53,10 @@ const STRONGER_THAN_EXECUTION: Record<string, EvidenceStrength> = {
   // Not the adapter's word: the kernel read a durable commit that outlives the
   // process that wrote it.
   idempotency: "state",
+  // The only item here the acting channel did not produce: a separate request
+  // whose answer comes from the provider's state rather than from the call that
+  // changed it.
+  http_resource_matches: "independent",
 };
 
 export function evidenceStrength(type: string): EvidenceStrength {

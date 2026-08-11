@@ -1113,6 +1113,37 @@ export const scenarios: EvaluationScenario[] = [
     expectedFinal: "failed",
   },
   {
+    id: "http-independent-verification-cannot-outreach-the-effect",
+    category: "http",
+    // Nothing opens a socket: the destination is off the allowlist, so this is
+    // refused at plan time. Declaring the strongest evidence type buys no
+    // leniency anywhere earlier in the pipeline — a task that promises an
+    // independent re-read is still a task, and policy still runs first.
+    policy: { allowedDomains: ["127.0.0.1"], allowLocalhost: true },
+    request: {
+      goal: "Refund a charge and confirm it against the provider",
+      operation: {
+        kind: "http",
+        action: "request",
+        method: "POST",
+        url: "http://records.invalid/refunds",
+        content: '{"charge":"ch_1"}',
+      },
+      constraints: [],
+      forbiddenEffects: [],
+      budget: { maxSteps: 2, maxDurationMs: 5_000, maxRetries: 1 },
+      requiredEvidence: [
+        {
+          type: "http_resource_matches",
+          url: "http://records.invalid/refunds/{{json.id}}",
+          path: "json.state",
+          value: "succeeded",
+        },
+      ],
+    },
+    expectedPlan: "policy_blocked",
+  },
+  {
     // One allowlist covers every kind that names a destination. A policy that
     // stopped the browser and let the HTTP adapter through would only be
     // describing which package made the call.

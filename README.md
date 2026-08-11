@@ -25,7 +25,7 @@ shouldn't have to.**
 <a href="https://github.com/XAGI-Lab/melra/actions/workflows/container.yml"><img src="https://github.com/XAGI-Lab/melra/actions/workflows/container.yml/badge.svg" alt="Container build status" /></a>
 
 <!-- Evidence -->
-<img src="https://img.shields.io/badge/evals-47_scenarios_passing-22c55e?style=flat-square&logo=checkmarx&logoColor=white" alt="47 deterministic evaluation scenarios passing" />
+<img src="https://img.shields.io/badge/evals-48_scenarios_passing-22c55e?style=flat-square&logo=checkmarx&logoColor=white" alt="48 deterministic evaluation scenarios passing" />
 <img src="https://img.shields.io/badge/tests-336_passing-22c55e?style=flat-square&logo=vitest&logoColor=white" alt="336 JavaScript tests passing" />
 <img src="https://img.shields.io/badge/MCP_E2E-13_passing-22c55e?style=flat-square&logo=testcafe&logoColor=white" alt="13 real MCP end-to-end cases passing" />
 <img src="https://img.shields.io/badge/runtime_vulnerabilities-0_known-22c55e?style=flat-square&logo=snyk&logoColor=white" alt="No known production runtime vulnerabilities" />
@@ -551,8 +551,12 @@ execution — so a stale plan can never ride a since-tightened policy.
 > in AES-256-GCM envelopes. Interrupted reads may retry; interrupted mutations
 > are never silently repeated and require independent filesystem
 > reconciliation or enter `recovery_required`. Evidence predicates remain
-> caller-authored: filesystem predicates independently re-read state, while
-> result, terminal, URL, and page predicates evaluate adapter observations.
+> caller-authored, and what a predicate is worth depends on where its answer
+> came from: `http_resource_matches` asks a channel that did not perform the
+> effect, filesystem predicates re-read state, and result, terminal, URL, and
+> page predicates evaluate adapter observations. Every evidence item carries
+> that level in `strength`, derived from the predicate type rather than
+> declared by the caller.
 
 ---
 
@@ -570,7 +574,7 @@ MCP is universally "the best" or that unlike benchmarks are comparable.
 | 🌐 | Slow-render settle | **10/10** vs 0/10 correct | Condition-based waiting observes the final DOM; fixed 300 ms reads too early |
 | 💻 | Terminal | **30/30** verified executions | Shell-free process launch; 48.1 ms p50 on the measured machine |
 | 🖥️ | Computer control plane | **30/30** capability probes | 0.032 ms p50 adapter discovery; this is *not* a desktop task-success score |
-| ✅ | Safety/execution evals | **47/47** passing | Deterministic policy, capability-grant, credential-scope, traversal, terminal, memory, computer, HTTP, cancellation, and verification scenarios, six of them against a recorded desktop |
+| ✅ | Safety/execution evals | **48/48** passing | Deterministic policy, capability-grant, credential-scope, traversal, terminal, memory, computer, HTTP, cancellation, and verification scenarios, six of them against a recorded desktop |
 | 🔁 | Durable Core eval | **8/8** valid scenarios | 100% expected recovery, 0 duplicate execution, 0 false success, 100% event consistency |
 
 Read the [research index](docs/research/README.md), the
@@ -765,6 +769,19 @@ examples/                   runnable task examples
 
 Code, adapters, benchmark harnesses, verifier predicates, documentation, and
 threat analysis are all welcome.
+
+**Looking for something to pick up?**
+
+| Start here | What it is |
+|---|---|
+| [good first issue](https://github.com/XAGI-Lab/melra/labels/good%20first%20issue) | Scoped, with the files to touch named in the issue |
+| [help wanted](https://github.com/XAGI-Lab/melra/labels/help%20wanted) | Larger, still well-defined |
+| [Milestones](https://github.com/XAGI-Lab/melra/milestones) | The roadmap phases, as trackable work |
+| [docs/CONTRIBUTING_GUIDE.md](docs/CONTRIBUTING_GUIDE.md) | How the pipeline fits together and which files one change touches |
+
+Adding an operation or an evidence predicate touches a fixed, short list of
+places — the guide names them in order, so a first pull request does not have to
+be discovered by grep.
 
 1. Read [CONTRIBUTING.md](CONTRIBUTING.md) and the
    [Code of Conduct](CODE_OF_CONDUCT.md).

@@ -367,7 +367,7 @@ rather than flattening it into a boolean:
 |:--:|---|---|---|:--:|
 | 0 | **Execution** | The adapter's own report | exit code `0`, HTTP 200, no exception | ✓ |
 | 1 | **State** | MELRA re-reads the target itself | `file_exists`, `file_hash` re-reading the workspace | ✓ |
-| 2 | **Independent** | A different channel to the same fact | execute via `POST /refund`, verify via `GET /refund/:id` | roadmap |
+| 2 | **Independent** | A different channel to the same fact | `http_resource_matches`: execute via `POST /refund`, verify via `GET /refund/:id` | ✓ |
 | 3 | **Semantic** | A judgement about meaning | "the summary is accurate" | roadmap, and **probabilistic** |
 
 Execution evidence is the weakest: it says the call returned, not that the world

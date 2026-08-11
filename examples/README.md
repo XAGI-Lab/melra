@@ -34,6 +34,24 @@ reads it at send time and puts it on the wire; the result names `github` under
 `credentials` and carries no value anywhere. A request to any other host is sent
 without it. See [docs/INSTALLATION.md](../docs/INSTALLATION.md#credentials).
 
+## Verified by something other than the call itself
+
+`POST` returning `201` is the client that made the call reporting on itself. The
+ninth example declares evidence that asks the provider instead — a second `GET`,
+through the same adapter and the same allowlist:
+
+```bash
+MELRA_POLICY=examples/09-independent-verification/policy.json \
+  pnpm melra run --request examples/09-independent-verification/task.json
+```
+
+The id exists only after the effect ran, so the verification URL is completed
+from the recorded result: `{{json.json.id}}` reads the parsed response body, and
+the value is percent-encoded before it is spliced in. If the provider accepts the
+call and the record never appears, the task is `partial` — the one outcome an
+adapter's own report cannot produce. The evidence item carries
+`strength: "independent"`; nothing else does.
+
 | Example | Capability | Expected result |
 |---|---|---|
 | `01-system-info` | system | runtime information |
@@ -44,3 +62,4 @@ without it. See [docs/INSTALLATION.md](../docs/INSTALLATION.md#credentials).
 | `06-computer-capabilities` | computer | detected adapter and limitations are reported |
 | `07-project-decision-memory` | memory | a project procedure is stored with provenance |
 | `08-governed-api-call` | http | a 200 from an allowlisted API, verified against the status |
+| `09-independent-verification` | http | a `POST` confirmed by a separate `GET`, not by its own response |

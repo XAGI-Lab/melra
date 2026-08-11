@@ -1,0 +1,7 @@
+{
+  "version": "example-independent-verification",
+  "allowedDomains": ["httpbin.org"],
+  "allowLocalhost": false,
+  "mutations": "confirm",
+  "allowedCommands": []
+}

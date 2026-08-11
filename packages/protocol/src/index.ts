@@ -352,6 +352,40 @@ export const EvidencePredicateSchema = z.discriminatedUnion("type", [
       text: z.string().min(1).max(10_000),
     })
     .strict(),
+  /**
+   * Confirm the effect through a channel that did not perform it.
+   *
+   * Re-reading a file after writing it is honest because the filesystem is the
+   * authority. An API response is not: the client that got `200 OK` is the same
+   * client being asked whether the thing happened. This predicate asks the
+   * provider's own state instead — `POST /refunds` executes, `GET /refunds/:id`
+   * decides — which is why it is the only predicate that carries
+   * `strength: "independent"`.
+   *
+   * The request is an effect and gets no shortcut: it goes out through the same
+   * adapter, the same destination boundary, and the same allowlist as any other
+   * HTTP call. `GET` and `HEAD` only — a verification that changes something is
+   * not a verification.
+   */
+  z
+    .object({
+      type: z.literal("http_resource_matches"),
+      /**
+       * May contain `{{token}}` placeholders, which is why this is not
+       * `z.string().url()` — it becomes a URL only after interpolation.
+       * A token names a dotted path in the *recorded result* of the operation
+       * being verified (`{{json.id}}` reads the parsed response body,
+       * `{{status}}` the status), never caller-supplied text, and its value is
+       * percent-encoded before it is spliced in.
+       */
+      url: z.string().min(1).max(4_096),
+      method: z.enum(["GET", "HEAD"]).default("GET"),
+      /** Dotted path into the probe's result; `json.` reads the parsed body. */
+      path: z.string().min(1).max(512),
+      value: z.union([z.string(), z.number(), z.boolean(), z.null()]),
+      timeoutMs: z.number().int().min(100).max(60_000).default(15_000),
+    })
+    .strict(),
 ]);
 
 export type EvidencePredicate = z.infer<typeof EvidencePredicateSchema>;

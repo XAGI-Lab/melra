@@ -8,6 +8,20 @@ All notable changes are documented here. The format follows
 
 ### Added
 
+- **An effect can now be confirmed by a channel that did not perform it.** The
+  new `http_resource_matches` evidence predicate executes through one request
+  and verifies through another: `POST /refunds` does the work, `GET
+  /refunds/rf_1` decides whether it counts. A `201` is the client that made the
+  call reporting on itself, so a provider that accepted the request without
+  doing the work now lands `partial` instead of `verified_success`. The id is
+  only known after the effect ran, so the verification URL is completed from the
+  recorded result — `{{json.id}}` reads the parsed body, `{{status}}` the status
+  — with each spliced value percent-encoded so a response field cannot rewrite
+  the path. The read is an effect like any other: same adapter, same destination
+  boundary, same allowlist, same credential scope, `GET` and `HEAD` only. A
+  runtime with no HTTP channel fails the predicate rather than passing it. It is
+  the only predicate carrying `strength: "independent"`.
+
 - **Agents receive capabilities, not credentials.** A new `policy.credentials`
   map lets an operator hand the kernel a secret the agent never sees: the
   definition names where the secret lives (`env` or a mode-`0600` `file`), which
