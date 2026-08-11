@@ -395,7 +395,10 @@ async function doctor(env: CliEnvironment): Promise<{
           detail:
             "UNSAFE-LOCAL: no policy, approval, evidence, confinement, or destination check is applied",
         }
-      : { name: "guardrails", status: "pass", detail: "enforced" },
+      // Not "enforced": the next check uses that word for the deployment mode,
+      // and one JSON blob saying `guardrails: enforced` beside `mode: developer`
+      // reads as a contradiction that is not there.
+      : { name: "guardrails", status: "pass", detail: "all applied" },
   );
   // Not a `fail` either way. Developer mode is a legitimate choice and the
   // default; what is not legitimate is a machine that cannot say which one it is.

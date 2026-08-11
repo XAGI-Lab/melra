@@ -415,6 +415,14 @@ describe("melra CLI", () => {
         (check: { name: string }) => check.name === "mode",
       ).detail,
     ).toContain("enforced");
+    // "enforced" belongs to the mode and to nothing else in this report. Two
+    // checks a line apart using it for different things is how an operator ends
+    // up believing a developer-mode machine is locked down.
+    expect(
+      JSON.parse(enforced.stdout).checks.find(
+        (check: { name: string }) => check.name === "guardrails",
+      ).detail,
+    ).not.toContain("enforced");
 
     // The two together are a contradiction, so the process declines to be the
     // thing that resolves it — before printing a banner that would read as if

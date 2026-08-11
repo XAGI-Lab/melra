@@ -81,6 +81,11 @@ shouldn't have to.**
 | Recovery without silent mutation replay | 8/8 deterministic recovery scenarios, zero duplicates, zero false success |
 | Loopback HTTP transport, event stream, and read-only console | Same runtime as stdio, token on every route, `405` on any non-`GET` to the JSON API |
 | A client authenticates itself and is named on every receipt | OAuth 2.1 registration through approval to a token, then the approved client at the head of the delegation chain |
+| Two deployment modes, so a kernel can say whether it is the only door | `--unsafe-local` and a non-loopback bind are both refused under `MELRA_MODE=enforced`, no client can self-register, and `mode` is stamped on every receipt |
+| HTTP and API calls as a first-class effect | Same nine stages as a file write; a mutation whose reply never arrived is reported `unknown` rather than `failed` |
+| Agents receive capabilities, not credentials | The kernel holds the secret and scopes it by host and capability; grants carry a size as well as an expiry and are drawn down durably |
+| Evidence says how it is known | `execution` / `state` / `independent` / `semantic`, derived in one place from the predicate type, so a caller can tell a re-read of the target from the adapter's own word |
+| An effect can be confirmed by a channel that did not perform it | `http_resource_matches` executes through `POST` and verifies through a separate `GET`, so an accepted-but-not-done request lands `partial` |
 
 ---
 
