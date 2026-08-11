@@ -14,6 +14,12 @@ All notable changes are documented here. The format follows
   can conclude a developer-mode machine is locked down. Guardrails now read
   `all applied`, and `enforced` belongs to the deployment mode alone.
 
+- The README no longer says the HTTP adapter is unshipped. It has been a real
+  adapter since this release; the adapter table now lists it, and the capability
+  comparison marks the hard capability boundary *partly shipped* — enforced mode
+  ships, the OS isolation and socket transport around it do not — rather than
+  *target*, which read as nothing having landed.
+
 ## [0.3.0-alpha.11] - 2026-08-11
 
 ### Added

@@ -206,12 +206,16 @@ Next to the two layers it is most often mistaken for:
 | Evidence receipts | uncommon | possible | **core** |
 | Works across agents | ✗ | ✓ | ✓ |
 | Credential isolation | varies | varies | **core** |
-| Hard capability boundary | varies | usually ✗ | *target* |
+| Hard capability boundary | varies | usually ✗ | *partly shipped* |
 
 Plenty of MCP servers *can* do these things — this is not a claim that none of
 them do. The difference is that in MELRA they are the execution contract rather
-than a per-tool option. Items marked *target* are designed and on the
-[roadmap](ROADMAP.md); they are **not shipped today**.
+than a per-tool option. The boundary is *partly shipped*: `MELRA_MODE=enforced`
+closes every door MELRA owns, but the OS isolation that stops a harness reaching
+the filesystem *around* the kernel is the operator's to build, and there is no
+Unix-socket transport yet ([#52](https://github.com/XAGI-Lab/melra/issues/52)).
+A kernel cannot verify it is the only door; enforced mode is the operator
+asserting that, and MELRA holding up its end.
 
 ---
 
@@ -246,8 +250,8 @@ together; the effect lifecycle is below both of them.
                                    ▼
             ┌────────────────────────────────────────────┐
    adapters │  EFFECT ADAPTERS                           │
-            │  files · terminal · browser · computer     │
-            │  HTTP · database · cloud · SaaS            │
+            │  files · terminal · browser · computer ·   │
+            │  HTTP — planned: database · cloud · SaaS   │
             └────────────────────────────────────────────┘
                                    ▼
              Linux · macOS · Windows · APIs · cloud
@@ -288,11 +292,12 @@ and certificate pipeline — an adapter that skipped it would not be an adapter.
 | 💻 | **Terminal** | Shell-free foreground and supervised background processes with allowlists, traits, timeouts, interactive input, cancellation, and redaction |
 | 🌐 | **Browser** | Isolated Playwright sessions, semantic DOM targets, bounded artifacts, network policy, popup policy, opt-in profiles, and condition-based post-action settling |
 | 🖥️ | **Computer** | Capability discovery plus governed screenshot, pointer, keyboard, and scroll adapters on macOS and supported Linux/X11 setups |
+| 📡 | **HTTP** | `GET`/`HEAD` as reads and every other method as an approval-gated at-most-once mutation, pinned to the address the destination check resolved, with credentials injected by the kernel rather than handed to the caller |
 
-The diagram above also shows HTTP, database, cloud, and SaaS adapters. Those are
-designed and on the [roadmap](ROADMAP.md) — **not shipped today**. A serious
-amount of autonomous work happens through APIs rather than mouse clicks, and an
-API effect needs the same nine guarantees as a file write.
+The diagram above also shows database, cloud, and SaaS adapters. Those are
+designed and on the [roadmap](ROADMAP.md) — **not shipped today**. HTTP is,
+because a serious amount of autonomous work happens through APIs rather than
+mouse clicks, and an API effect needs the same nine guarantees as a file write.
 
 **Operational memory** is a kernel service rather than an adapter: what MELRA
 knows about its own effects — which operation changed what, which attempt was
