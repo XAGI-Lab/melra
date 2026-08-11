@@ -169,9 +169,9 @@ To exercise a published build the way an end user gets it, install it and point
 the smoke at the installed binary rather than a source build:
 
 ```bash
-npm install --prefix /tmp/melra-check @melra/cli@0.3.0-alpha.10
+npm install --prefix /tmp/melra-check @melra/cli@0.3.0-alpha.11
 MELRA_COMMAND=/tmp/melra-check/node_modules/.bin/melra \
-  MELRA_EXPECTED_VERSION=0.3.0-alpha.10 \
+  MELRA_EXPECTED_VERSION=0.3.0-alpha.11 \
   pnpm registry:smoke
 ```
 
@@ -319,11 +319,11 @@ digest. It asserts the reported version against the tag, so a cached older build
 cannot pass for the new one. That is evidence about the tarball an end user
 installs, which is a different claim from CI building the source tree.
 
-On `v0.3.0-alpha.10` that job passed on all three runners against the package as
-published: `version 0.3.0-alpha.10`, 11 tools, `verified_success`,
+On `v0.3.0-alpha.11` that job passed on all three runners against the package as
+published: `version 0.3.0-alpha.11`, 11 tools, `verified_success`,
 `VERIFIED_SUCCESS`, digest
-`83e1103f1de5029ac34c2e9a5c785546d1e35d225ecfff1a6f07971586643c6b`
-(macos-latest; run 31278184093).
+`ac74291990e0c38caaf654668ea831378e9c872b00d909b6d8b2c6442cd78c9f`
+(macos-latest; run 31494782032).
 
 Before `1.0`, an independent security review must resolve all critical
 findings.

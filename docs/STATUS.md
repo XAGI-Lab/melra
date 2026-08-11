@@ -12,7 +12,7 @@ Version: `0.3.0-alpha.11`
 - ✅ **Conformance L3 verified effects**: `melra conformance` reports 14/14 checks against this build's own stdio server, and L1 under `MELRA_UNHINGED=1` — both asserted in CI. Levels and their limits: [CONFORMANCE.md](CONFORMANCE.md)
 - ✅ **Install paths documented**: npm, container, release tarball, source
 - ✅ **Registry install verified end to end**: the `installed` job on ubuntu, macOS and Windows installs the just-published `@melra/cli` from npm, passes `melra doctor`, and drives a real stdio session to `verified_success`; `npx -y @melra/cli@alpha conformance` in an empty directory earns level 3 (14/14)
-- ✅ **Release artifacts published**: GitHub release v0.3.0-alpha.10 with 6 assets, container at `ghcr.io/xagi-lab/melra:alpha` and `:v0.3.0-alpha.10` (linux/amd64 + linux/arm64), all 14 npm packages on the `alpha` and `latest` dist-tags with provenance attestation
+- ✅ **Release artifacts published**: GitHub release v0.3.0-alpha.11 with 6 assets, container at `ghcr.io/xagi-lab/melra:alpha` and `:v0.3.0-alpha.11` (linux/amd64 + linux/arm64), all 15 npm packages on the `alpha` and `latest` dist-tags with provenance attestation
 
 `0.3.0-alpha.7` is the one gap in that history: its container image built, but
 the `artifacts` job failed on a stale `uv.lock` before reaching the registry, so
@@ -33,7 +33,7 @@ leaving it for a tag push to discover.
 
 **Current state:** Automated compatibility claim is official MCP SDK over stdio (TypeScript + Python). Named graphical clients remain release-gated until manually exercised.
 
-**Action:** Install `npx @melra/cli@alpha` or download the `v0.3.0-alpha.10` release artifact, configure each client per docs/INSTALLATION.md, verify discovery/plan/execute/receipt cycle.
+**Action:** Install `npx @melra/cli@alpha` or download the `v0.3.0-alpha.11` release artifact, configure each client per docs/INSTALLATION.md, verify discovery/plan/execute/receipt cycle.
 
 ### Independent Security Review
 
