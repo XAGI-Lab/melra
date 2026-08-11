@@ -243,6 +243,11 @@ Action: `request`. Fields: `method`, `url`, `headers`, `content`,
   past the cap stops being read and the result reports `truncated: true`.
 - The request payload travels as `content`, which redaction strips before
   anything is persisted. Raw bytes reach the live caller only.
+- Credentials the operator configured under `policy.credentials` are injected at
+  send time when both the destination and the operation are covered — see
+  [INSTALLATION.md](INSTALLATION.md#credentials). The result reports which ones
+  by name under `credentials`, never their values, and a caller-supplied header
+  cannot shadow one.
 
 Request signing, retries with backoff, and streaming responses are not
 implemented.

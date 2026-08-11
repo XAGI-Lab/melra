@@ -1,0 +1,17 @@
+{
+  "goal": "Read the public API status without holding a key",
+  "operation": {
+    "kind": "http",
+    "action": "request",
+    "method": "GET",
+    "url": "https://api.github.com/zen",
+    "timeoutMs": 15000
+  },
+  "requiredEvidence": [
+    {
+      "type": "result_equals",
+      "path": "status",
+      "value": 200
+    }
+  ]
+}

@@ -572,6 +572,50 @@ export const CapabilityGrantSchema = z
 export type CapabilityGrant = z.infer<typeof CapabilityGrantSchema>;
 
 /**
+ * One secret the kernel holds so the agent does not have to.
+ *
+ * The whole point is the asymmetry between the two lists. `hosts` says where
+ * the secret may travel; `capability` says what may be done while holding it.
+ * A request to a host outside `hosts` is sent *without* the credential, because
+ * a secret that follows the caller wherever it points is not scoped to
+ * anything. A request to a host inside `hosts` that the capability does not
+ * cover is *refused* — that is the caller reaching past the authority it was
+ * delegated, and it is the difference between possessing a credential and
+ * possessing authority.
+ */
+export const CredentialDefinitionSchema = z
+  .object({
+    source: z.union([
+      z.object({ env: z.string().min(1).max(256) }).strict(),
+      z.object({ file: z.string().min(1).max(4096) }).strict(),
+    ]),
+    inject: z
+      .object({
+        header: z.string().min(1).max(256),
+        /** Prefix written before the secret, e.g. `Bearer`. */
+        scheme: z.string().max(64).optional(),
+      })
+      .strict(),
+    /** Hosts the secret may be sent to. `*` matches any run of characters. */
+    hosts: z.array(z.string().min(1).max(256)).min(1).max(64),
+    /**
+     * Matched against `<capability>:<target>` as `classifyOperation` reports
+     * them — `http.post:https://api.stripe.com/v1/refunds/re_1` against
+     * `http.post:https://api.stripe.com/v1/refunds/*`.
+     */
+    capability: z.string().min(1).max(512),
+  })
+  .strict();
+
+export type CredentialDefinition = z.infer<typeof CredentialDefinitionSchema>;
+
+export const CredentialsSchema = z
+  .record(z.string().min(1).max(128), CredentialDefinitionSchema)
+  .refine((value) => Object.keys(value).length <= 64, {
+    message: "too_many_credentials",
+  });
+
+/**
  * What MELRA promises about how many times an effect can run.
  *
  * Stating it is the point. The rule that mutations are never retried already

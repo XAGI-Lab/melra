@@ -5,9 +5,20 @@ import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import type { IncomingMessage } from "node:http";
 import type { HttpOperation } from "@melra/protocol";
-import { assertSafeDestination, type NetworkPolicy } from "@melra/policy-core";
+import {
+  assertSafeDestination,
+  classifyOperation,
+  type CredentialBroker,
+  type NetworkPolicy,
+} from "@melra/policy-core";
 
-export interface HttpRuntimeOptions extends NetworkPolicy {}
+export interface HttpRuntimeOptions extends NetworkPolicy {
+  /**
+   * Supplies the secrets this adapter is allowed to send. Omitted means every
+   * request goes out with exactly the headers the caller wrote.
+   */
+  credentials?: CredentialBroker;
+}
 
 /**
  * One governed HTTP call.
@@ -35,8 +46,30 @@ export class HttpRuntime {
     if (signal?.aborted === true) throw new Error("task_cancelled");
     const secure = url.protocol === "https:";
     const send = secure ? httpsRequest : httpRequest;
+    // Brokered against the destination that was *checked*, not the one the
+    // caller wrote: pinning already collapsed the name to an address, and a
+    // credential scoped by host has to be scoped by the same host the socket
+    // will actually talk to.
+    const { capability, target } = classifyOperation(operation);
+    const brokered = await this.options.credentials?.headersFor({
+      host: url.hostname,
+      capability,
+      target,
+    });
+
     const headers: Record<string, string> = {
-      ...(operation.headers ?? {}),
+      // Lowercased before the merge, or `Authorization: guess` from the caller
+      // and `authorization: <secret>` from the broker are two distinct keys and
+      // both go on the wire — which server wins is then the server's choice.
+      ...Object.fromEntries(
+        Object.entries(operation.headers ?? {}).map(([name, value]) => [
+          name.toLowerCase(),
+          value,
+        ]),
+      ),
+      // Last, so a caller cannot name the same header and have its own value
+      // ride out under a credential's name.
+      ...brokered?.headers,
       // `Host` carries the name so a name-based virtual host still resolves at
       // the far end even though the socket was opened to a literal address.
       host: url.host,
@@ -96,6 +129,10 @@ export class HttpRuntime {
               truncated,
               url: url.toString(),
               method: operation.method,
+              // Names only. Which credential authorised the call is something a
+              // receipt should record; its value is the one thing that must not
+              // leave this function.
+              credentials: brokered?.used ?? [],
             });
           };
           response.on("end", finish);

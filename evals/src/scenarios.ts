@@ -1076,6 +1076,43 @@ export const scenarios: EvaluationScenario[] = [
     expectedFinal: "cancelled",
   },
   {
+    id: "http-credential-outside-delegation-refused-before-read",
+    category: "http",
+    // Nothing opens a socket: `127.0.0.1` needs no resolver, and the broker
+    // refuses while the request is still a set of headers being assembled.
+    policy: {
+      allowedDomains: ["127.0.0.1"],
+      allowLocalhost: true,
+      credentials: {
+        billing: {
+          // Deliberately a name nothing exports. Reading it would fail with
+          // `credential_source_missing`, so a `failed` here is only reachable
+          // through the refusal that lands before the source is touched.
+          source: { env: "MELRA_EVAL_NO_SUCH_KEY" },
+          inject: { header: "Authorization", scheme: "Bearer" },
+          hosts: ["127.0.0.1"],
+          capability: "http.post:http://127.0.0.1:*/charges",
+        },
+      },
+    },
+    request: {
+      goal: "Refund a charge the delegation does not cover",
+      operation: {
+        kind: "http",
+        action: "request",
+        method: "DELETE",
+        url: "http://127.0.0.1:9/charges/ch_1",
+      },
+      constraints: [],
+      forbiddenEffects: [],
+      budget: { maxSteps: 2, maxDurationMs: 5_000, maxRetries: 1 },
+      requiredEvidence: [{ type: "result_equals", path: "success", value: true }],
+    },
+    expectedPlan: "awaiting_approval",
+    approve: true,
+    expectedFinal: "failed",
+  },
+  {
     // One allowlist covers every kind that names a destination. A policy that
     // stopped the browser and let the HTTP adapter through would only be
     // describing which package made the call.

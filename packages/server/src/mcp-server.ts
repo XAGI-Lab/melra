@@ -147,6 +147,10 @@ export function capabilitiesPayload(runtime: MelraRuntime): unknown {
           circuitBreaker: runtime.policy.circuitBreaker,
           allowedDomains: runtime.policy.allowedDomains,
           allowLocalhost: runtime.policy.allowLocalhost,
+          // Names only, and worth publishing: a caller that knows the kernel
+          // holds a credential for an API stops trying to source one itself,
+          // which is the whole point of it not having one.
+          credentials: Object.keys(runtime.policy.credentials),
           // A blocked popup is reported on the action that provoked it, so a
           // caller knows in advance whether a window it did not open will still
           // be there to address.

@@ -9,6 +9,7 @@ import type {
   ApprovalResponse,
   CapabilityGrant,
   CapabilityTrait,
+  CredentialDefinition,
   Effect,
   EvidencePredicate,
   Identity,
@@ -19,6 +20,7 @@ import type {
 } from "@melra/protocol";
 import {
   CapabilityGrantSchema,
+  CredentialsSchema,
   LOCAL_IDENTITY,
   principalRef,
 } from "@melra/protocol";
@@ -74,6 +76,16 @@ export interface LocalPolicy {
    * holding authority over one directory rather than over the whole workspace.
    */
   capabilities: CapabilityGrant[];
+  /**
+   * Secrets the kernel injects on the caller's behalf, keyed by a name the
+   * caller may see in a receipt. Empty by default.
+   *
+   * The agent never holds one. It names an operation; if a definition's `hosts`
+   * cover the destination *and* its `capability` covers the operation, the
+   * kernel reads the secret at send time and puts it on the wire. See
+   * `CredentialBroker` for why those two lists behave differently on a miss.
+   */
+  credentials: Record<string, CredentialDefinition>;
   /**
    * Stops a task from re-running an operation whose target keeps failing.
    *
@@ -179,6 +191,11 @@ export function normalizeCommandName(command: string): string {
  *   network at all, not "no network except the browser".
  */
 export type { CapabilityTrait } from "@melra/protocol";
+
+export {
+  CredentialBroker,
+  type BrokeredHeaders,
+} from "./credentials.js";
 
 /**
  * Subcommands that install, per package manager, and the ones that only read.
@@ -395,6 +412,7 @@ export function createDefaultPolicy(workspaceRoot: string): LocalPolicy {
     memoryRetention: { maxAgeDays: 30, maxPerScope: 0 },
     deniedTraits: [],
     capabilities: [],
+    credentials: {},
     circuitBreaker: { threshold: 3, cooldownMs: 60_000 },
     unhinged: false,
   };
@@ -425,6 +443,13 @@ export async function loadPolicy(
       parsed.capabilities === undefined
         ? defaults.capabilities
         : CapabilityGrantSchema.array().max(200).parse(parsed.capabilities),
+    // Same reasoning as `capabilities`: a malformed credential definition must
+    // not land as an object whose `hosts` happen to match nothing — an operator
+    // would read that as "scoped" when it is "silently absent".
+    credentials:
+      parsed.credentials === undefined
+        ? defaults.credentials
+        : CredentialsSchema.parse(parsed.credentials),
   };
 }
 
