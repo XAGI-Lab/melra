@@ -348,6 +348,7 @@ alternative, not asking the harness not to use it.
       still missing here is MELRA's side of it: a Unix-socket transport, and
       hardened deployment recipes that make the sandboxed-harness setup the
       default rather than a thing to assemble.
+      ([#52](https://github.com/XAGI-Lab/melra/issues/52))
 - [x] Rename `--unhinged` to something boring and descriptive
       (`--unsafe-local`), keeping the current flag as a deprecated alias, and
       refuse it outright in enforced mode. The old flag still works and prints a
@@ -372,8 +373,10 @@ alternative, not asking the harness not to use it.
       passing it. It carries `strength: "independent"`; nothing else does.
 - [ ] Pluggable verifiers — file, process, HTTP, database, browser, cloud,
       SaaS, webhook — behind one predicate interface.
+      ([#53](https://github.com/XAGI-Lab/melra/issues/53))
 - [ ] Semantic verification, labelled probabilistic everywhere it appears, and
       never the sole evidence for a destructive effect.
+      ([#54](https://github.com/XAGI-Lab/melra/issues/54))
 
 ### P4 — credentials and API effects
 
