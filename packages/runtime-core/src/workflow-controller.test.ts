@@ -67,6 +67,7 @@ function request(goal: string): TaskRequest {
     constraints: [],
     forbiddenEffects: [],
     requiredEvidence: [],
+    reconciliation: [],
     budget: {
       maxDurationMs: 120_000,
       maxRetries: 2,
@@ -665,6 +666,144 @@ describe("WorkflowController execution", () => {
     expect(compensated.run.status).toBe("failed");
     expect(compensated.run.nodes["undo-first"]?.status).toBe("compensated");
     expect(memoryCalls).toBe(1);
+  });
+
+  const PAYMENTS = "https://payments.example.test";
+  const LOGISTICS = "https://logistics.example.test";
+
+  function call(goal: string, url: string): TaskRequest {
+    return TaskRequestSchema.parse({
+      goal,
+      operation: { kind: "http", action: "request", method: "POST", url },
+    });
+  }
+
+  /**
+   * Advance until nothing changes, approving whatever the run stops on.
+   *
+   * Every step here is a mutation, so each one parks for approval — which is
+   * the point being preserved: an unwind that needed five approvals still ran
+   * in one order, and the helper never volunteers an approval for a node the
+   * run did not stop on.
+   */
+  async function settle(controller: WorkflowController, id: string) {
+    let result = await controller.advance(id);
+    for (let round = 0; round < 12; round += 1) {
+      const approvals = Object.values(result.run.nodes).flatMap((state) =>
+        state.status === "awaiting_approval" && state.approval !== undefined
+          ? [
+              {
+                approvalId: state.approval.approvalId,
+                phrase: state.approval.phrase,
+              },
+            ]
+          : [],
+      );
+      const next = await controller.advance(id, approvals);
+      if (next.events.length === 0) return next;
+      result = next;
+    }
+    throw new Error("workflow_did_not_settle");
+  }
+
+  /** `host/path`, so an assertion reads as "which provider, which endpoint". */
+  function saga(
+    failing: string,
+  ): { calls: string[]; execute: (operation: Operation) => Promise<Record<string, unknown>> } {
+    const calls: string[] = [];
+    return {
+      calls,
+      async execute(operation) {
+        if (operation.kind !== "http") throw new Error("unexpected_operation");
+        const url = new URL(operation.url);
+        const seen = `${url.host}${url.pathname}`;
+        calls.push(seen);
+        return { success: seen !== failing };
+      },
+    };
+  }
+
+  function sagaDefinition(): WorkflowDefinition {
+    return WorkflowDefinitionSchema.parse({
+      schemaVersion: "1.0.0",
+      id: definitionId,
+      version: 1,
+      name: "Charge, ship, notify",
+      nodes: [
+        {
+          id: "charge",
+          type: "operation",
+          request: call("Charge", `${PAYMENTS}/charges`),
+        },
+        {
+          id: "ship",
+          type: "operation",
+          dependsOn: ["charge"],
+          request: call("Ship", `${LOGISTICS}/shipments`),
+        },
+        {
+          id: "notify",
+          type: "operation",
+          dependsOn: ["ship"],
+          request: call("Notify", `${PAYMENTS}/notify`),
+        },
+        // Declared in forward order; the unwind reverses them.
+        {
+          id: "undo-charge",
+          type: "compensation",
+          forNodeId: "charge",
+          request: call("Refund", `${PAYMENTS}/refunds`),
+        },
+        {
+          id: "undo-ship",
+          type: "compensation",
+          forNodeId: "ship",
+          request: call("Cancel shipment", `${LOGISTICS}/cancellations`),
+        },
+      ],
+    });
+  }
+
+  it("unwinds two providers newest-effect-first when a later step fails", async () => {
+    const { calls, execute } = saga("payments.example.test/notify");
+    const { controller } = await setup(execute);
+    const planned = controller.plan(sagaDefinition());
+
+    const result = await settle(controller, planned.id);
+
+    // The shipment is cancelled before the charge that paid for it is refunded,
+    // and the two land at different hosts through the same governed path.
+    expect(calls).toEqual([
+      "payments.example.test/charges",
+      "logistics.example.test/shipments",
+      "payments.example.test/notify",
+      "logistics.example.test/cancellations",
+      "payments.example.test/refunds",
+    ]);
+    expect(result.run.nodes["undo-ship"]?.status).toBe("compensated");
+    expect(result.run.nodes["undo-charge"]?.status).toBe("compensated");
+    expect(result.run.status).toBe("failed");
+  });
+
+  it("halts and flags the saga when a compensation cannot complete", async () => {
+    const { calls, execute } = saga("logistics.example.test/cancellations");
+    const { controller } = await setup(async (operation) => {
+      const result = await execute(operation);
+      if (operation.kind === "http" && operation.url.endsWith("/notify")) {
+        return { success: false };
+      }
+      return result;
+    });
+    const planned = controller.plan(sagaDefinition());
+
+    const result = await settle(controller, planned.id);
+
+    // Refunding the charge while the shipment is still outstanding would give
+    // away the goods. Stop, and say which inverse is missing.
+    expect(calls).not.toContain("payments.example.test/refunds");
+    expect(result.run.status).toBe("recovery_required");
+    expect(result.run.error).toBe("workflow_compensation_incomplete:undo-ship");
+    expect(result.run.nodes["undo-charge"]?.status).toBe("pending");
   });
 });
 

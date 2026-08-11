@@ -24,6 +24,7 @@ function operation(id: string, dependsOn: string[] = []): OperationNode {
       constraints: [],
       forbiddenEffects: [],
       requiredEvidence: [],
+      reconciliation: [],
       budget: {
         maxDurationMs: 120_000,
         maxRetries: 2,

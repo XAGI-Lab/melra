@@ -102,4 +102,30 @@ describe("verification through a channel that did not act", () => {
   it("only reads — the schema has no verb that could change anything", () => {
     expect(() => predicate({ method: "DELETE" })).toThrow();
   });
+
+  it("separates a provider that answered no from one that did not answer", async () => {
+    const verifier = await Verifier.create(root, {
+      probe: async () => {
+        throw new Error("ECONNREFUSED");
+      },
+    });
+    const { verified, evidence } = await verifier.verify([predicate()], created);
+    // Unproven is not proven, so the task still does not verify — but "no such
+    // refund" and "could not ask" are different facts, and only the first is
+    // grounds to call the effect failed.
+    expect(verified).toBe(false);
+    expect(evidence[0]).toMatchObject({
+      passed: false,
+      inconclusive: true,
+      source: "https://api.example.com/refunds/rf_123",
+    });
+  });
+
+  it("does not call a value mismatch inconclusive", async () => {
+    const verifier = await Verifier.create(root, {
+      probe: probeReturning({ state: "pending" }),
+    });
+    const { evidence } = await verifier.verify([predicate()], created);
+    expect(evidence[0]?.inconclusive).toBeUndefined();
+  });
 });

@@ -20,7 +20,9 @@ export type CertificateResult =
   | "WAITING_APPROVAL"
   | "WAITING_USER"
   | "POLICY_BLOCKED"
-  | "BUDGET_EXHAUSTED";
+  | "BUDGET_EXHAUSTED"
+  /** The effect may or may not have happened. Neither claim is available yet. */
+  | "RECOVERY_REQUIRED";
 
 /**
  * How the kernel knows an evidence item is true, weakest first.
@@ -73,6 +75,16 @@ export interface EvidenceItem {
    * `evidenceStrength(item.type)` recovers it for the ones that do not.
    */
   strength?: EvidenceStrength;
+  /**
+   * The question could not be asked — an unreachable provider, a probe the
+   * runtime does not have — as opposed to being asked and answered no.
+   *
+   * `passed` stays false either way, because unproven is not proven. The flag
+   * exists so a caller can tell the two apart: a provider that answered "no
+   * such refund" is evidence the effect did not happen, and a provider that
+   * did not answer is evidence of nothing at all.
+   */
+  inconclusive?: boolean;
   source?: string;
   digest?: string;
 }

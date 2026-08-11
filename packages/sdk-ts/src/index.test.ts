@@ -177,6 +177,7 @@ describe("TypeScript workflow SDK", () => {
                 constraints: [],
                 forbiddenEffects: [],
                 requiredEvidence: [],
+                reconciliation: [],
                 budget: { maxSteps: 10, maxDurationMs: 120_000, maxRetries: 2 },
               },
             },

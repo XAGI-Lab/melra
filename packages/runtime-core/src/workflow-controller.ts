@@ -29,7 +29,11 @@ import {
   applyWorkflowEvent,
   rebuildWorkflow,
 } from "./workflow-events.js";
-import { readyNodeIds, validateWorkflow } from "./workflow-graph.js";
+import {
+  readyNodeIds,
+  validateWorkflow,
+  type WorkflowGraph,
+} from "./workflow-graph.js";
 
 type EmitEvent = (
   type: string,
@@ -227,6 +231,21 @@ export class WorkflowController {
     if (current.status === "failed" && rollback.length === 0) {
       return { run: current, tasks: [], events: [] };
     }
+    // An unwind that stopped half-done is not a base to build more effects on:
+    // a forward effect happened, its declared inverse did not, and no node
+    // describes that. Refused here rather than left to `readyNodeIds`, which
+    // would happily start an independent branch on top of it.
+    if (
+      definition.nodes.some(
+        (node) =>
+          node.type === "compensation" &&
+          ["failed", "recovery_required"].includes(
+            current.nodes[node.id]?.status ?? "",
+          ),
+      )
+    ) {
+      return { run: current, tasks: [], events: [] };
+    }
     // A node parked for a human — approval phrase or supplied input — is no
     // longer `pending`, so `readyNodeIds` will not return it. Re-offer it here
     // or the workflow would stall forever with the answer in hand.
@@ -250,23 +269,43 @@ export class WorkflowController {
       return { run: current, tasks: [], events: [] };
     }
 
-    const results = await Promise.all(
-      nodeIds.map(async (nodeId) => {
-        const node = graph.nodes.get(nodeId)!;
-        return {
-          nodeId,
-          result: await this.advanceNode(
-            node,
-            definition,
-            current.nodes[nodeId]!,
-            current,
-            approvals,
-            inputs,
-          ),
-        };
-      }),
-    );
-    if (results.some(({ result }) => result.state.status === "failed")) {
+    const results: Array<{ nodeId: string; result: NodeAdvance }> = await (rollback.length >
+    0
+      ? // Compensations undo each other's preconditions, so the order they run
+        // in *is* the semantics: cancel the shipment before refunding the
+        // charge that paid for it. `Promise.all` computed a reverse list and
+        // then threw the order away by starting them all at once. Sequential,
+        // and stopping at the first one that does not reach `compensated` —
+        // continuing past a failed unwind would strand the saga in a state no
+        // node describes.
+        this.unwind(rollback, graph, definition, current, approvals, inputs)
+      : Promise.all(
+          nodeIds.map(async (nodeId) => {
+            const node = graph.nodes.get(nodeId)!;
+            return {
+              nodeId,
+              result: await this.advanceNode(
+                node,
+                definition,
+                current.nodes[nodeId]!,
+                current,
+                approvals,
+                inputs,
+              ),
+            };
+          }),
+        ));
+    // A *compensation* that failed must not open a second unwind. The saga is
+    // already stranded, and undoing the next step while this inverse is still
+    // outstanding is precisely what the halt exists to prevent — so only a
+    // forward node failing starts compensating.
+    if (
+      results.some(
+        ({ nodeId, result }) =>
+          result.state.status === "failed" &&
+          graph.nodes.get(nodeId)?.type !== "compensation",
+      )
+    ) {
       for (const node of [...definition.nodes].reverse()) {
         if (
           node.type !== "compensation" ||
@@ -309,6 +348,9 @@ export class WorkflowController {
                 : compensation.state,
           },
         });
+        // Same rule as a resumed unwind: stop rather than undo step 1 while
+        // step 3's inverse is still outstanding.
+        if (compensation.state.status !== "verified_complete") break;
       }
     }
     let run = this.transition(current, (draft, emit) => {
@@ -340,7 +382,27 @@ export class WorkflowController {
       if (status !== draft.status) {
         const from = draft.status;
         draft.status = status;
-        emit("workflow.status_changed", { from, to: status });
+        // Name the step, or "recovery_required" tells an operator that
+        // something needs hands without saying which effect is half-undone.
+        const stalled = definition.nodes.find(
+          (node) =>
+            node.type === "compensation" &&
+            ["failed", "recovery_required"].includes(
+              draft.nodes[node.id]?.status ?? "",
+            ),
+        );
+        if (status === "recovery_required" && stalled !== undefined) {
+          draft.error = `workflow_compensation_incomplete:${stalled.id}`;
+        } else {
+          // The reducer clears `error` on every status change, so the draft has
+          // to as well or replay no longer reproduces the projection.
+          delete draft.error;
+        }
+        emit("workflow.status_changed", {
+          from,
+          to: status,
+          ...(draft.error === undefined ? {} : { error: draft.error }),
+        });
       }
     });
     if (results.some(({ result }) => result.checkpoint === true)) {
@@ -591,6 +653,41 @@ export class WorkflowController {
         throw new Error("workflow_event_history_invalid");
       }
     }
+  }
+
+  /**
+   * Run declared compensations one at a time, newest effect first, stopping at
+   * the first that does not land `compensated`.
+   *
+   * `nodeIds` is already in unwind order. Nothing here is special-cased for the
+   * provider a compensation talks to: each one is an ordinary request through
+   * `runTask`, so undoing a charge at one host and a shipment at another is the
+   * same code path as undoing two at the same host — policy, approval, and the
+   * compensation's own declared evidence all still apply, and a delegate saying
+   * "reversed" without evidence still does not count.
+   */
+  private async unwind(
+    nodeIds: string[],
+    graph: WorkflowGraph,
+    definition: WorkflowDefinition,
+    run: WorkflowRun,
+    approvals: ApprovalResponse[],
+    inputs: WorkflowInput[],
+  ): Promise<Array<{ nodeId: string; result: NodeAdvance }>> {
+    const results: Array<{ nodeId: string; result: NodeAdvance }> = [];
+    for (const nodeId of nodeIds) {
+      const result = await this.advanceNode(
+        graph.nodes.get(nodeId)!,
+        definition,
+        run.nodes[nodeId]!,
+        run,
+        approvals,
+        inputs,
+      );
+      results.push({ nodeId, result });
+      if (result.state.status !== "compensated") break;
+    }
+    return results;
   }
 
   private async advanceNode(
@@ -947,6 +1044,22 @@ export class WorkflowController {
     const required = definition.nodes.filter(
       (node) => node.type !== "compensation",
     );
+    // Compensation nodes are excluded from every check below, because a
+    // skipped one is the normal case on a clean run. A *failed* one is not:
+    // the forward effect happened and its declared inverse did not, which
+    // leaves the world in a state no single node describes. Checked first, so
+    // an incomplete unwind is never reported as a clean failure.
+    if (
+      definition.nodes.some(
+        (node) =>
+          node.type === "compensation" &&
+          ["failed", "recovery_required"].includes(
+            run.nodes[node.id]?.status ?? "",
+          ),
+      )
+    ) {
+      return "recovery_required";
+    }
     if (required.some((node) => run.nodes[node.id]?.status === "failed")) {
       return "failed";
     }

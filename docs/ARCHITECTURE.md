@@ -401,7 +401,7 @@ exactly-once everywhere:
 | `at-most-once` | Executed zero or one times; never retried | Every mutation and destructive operation |
 | `at-least-once` | May execute more than once; the effect must tolerate it | Not used |
 | `provider-idempotent` | Exactly-once because the provider accepts an idempotency key | Roadmap, with the HTTP adapter |
-| `reconciliation-required` | Outcome unknown after a crash; must be re-observed | Interrupted mutations without independent file evidence |
+| `reconciliation-required` | Outcome may be unknown; settled by re-reading the provider rather than re-running | A request that declared `reconciliation` predicates, and interrupted mutations without independent file evidence |
 | `compensatable` | Undone by a declared inverse effect | `compensation` workflow nodes |
 
 The plan publishes the value as `contract.executionGuarantee` and the receipt
@@ -411,6 +411,61 @@ classified effect and never accepted from the caller — a caller that could
 declare its own `POST` `provider-idempotent` would have bought itself a retry it
 is not entitled to. The executor asks the guarantee rather than re-deriving the
 rule, so the published promise and the retry loop cannot drift apart.
+
+`reconciliation-required` is the one value a caller influences, and only by
+giving MELRA more to work with: declaring `reconciliation` predicates does not
+buy a retry — the effect still runs at most once — it says how an outcome MELRA
+could not observe should be settled. That is a different promise from
+`at-most-once`, which says the effect ran zero or one times without saying
+which, so the plan states it separately.
+
+## Outcomes MELRA cannot observe
+
+A mutation whose reply never arrives is the case where a kernel is most tempted
+to lie. `failed` reads as *the effect did not happen*, and after a request that
+went out and was never answered, that is a claim nobody holds.
+
+The discriminator is whether the request reached the wire. A DNS failure or a
+refused connection means the bytes never left, so `failed` is true. A request
+written to the socket and left unanswered means the far end may have done the
+work and lost the reply, so the adapter marks the error
+`effect_outcome_unknown:` and the task parks as `recovery_required` — the
+receipt's evidence carries `inconclusive: true`, and the certificate says
+`RECOVERY_REQUIRED` rather than `FAILED`. Reads are exempt: a read that may or
+may not have run changed nothing either way.
+
+Settling a parked task is what `reconciliation` predicates are for. They are
+read against the facts that were true *before* the call — the task id, the URL,
+the method, the `idempotencyKey` MELRA sent — because a lost reply left no
+response to interpolate from. Calling `melra_execute` on a parked task
+reconciles instead of re-running, so a caller retrying the obvious way gets the
+safe thing:
+
+| Provider says | Task becomes |
+|---|---|
+| the effect is applied | `verified_success`, receipted as `recovered` |
+| no such effect | `failed`, `reconciliation_confirms_effect_not_applied` |
+| nothing — unreachable | stays `recovery_required`, `reconciliation_inconclusive` |
+| *(none declared)* | stays `recovery_required`, `reconciliation_not_declared` |
+
+An unreachable provider did not say no, so nothing is concluded from silence.
+The same path runs on restart: `recoverInterrupted` reconciles a crashed
+mutation that declared how to settle one, and parks the rest.
+
+## Sagas across providers
+
+A compensation node is an ordinary governed task whose request may name any
+host, so undoing a charge at one provider and a shipment at another needs no
+special code — policy, approval, and the compensation's own declared evidence
+all still apply.
+
+What does need care is order. Compensations undo each other's preconditions:
+cancel the shipment before refunding the charge that paid for it. They run one
+at a time, newest effect first, and the unwind stops at the first that does not
+reach `compensated` — refunding while the goods are still in transit is worse
+than stopping. A stalled unwind makes the run `recovery_required` with
+`workflow_compensation_incomplete:<node>` naming the missing inverse, and
+`advance` refuses to start new work on top of it.
 
 An interrupted mutation becomes `recovery_required` rather than being repeated,
 because the durable record can say what was in flight but not what the provider

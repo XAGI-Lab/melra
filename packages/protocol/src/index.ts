@@ -529,6 +529,13 @@ export const TaskRequestSchema = z
       .describe(
         "Predicates that must hold after execution for the task to be verified_success. Required for any non-read operation: a mutation with none is denied with mutation_requires_evidence. An adapter that succeeded while a predicate failed is partial, never success.",
       ),
+    reconciliation: z
+      .array(EvidencePredicateSchema)
+      .max(5)
+      .default([])
+      .describe(
+        "How to settle this effect if MELRA never learns whether it happened — a request that went out and was never answered, or a crash mid-flight. Read against the facts that were true before the call (idempotencyKey, url, method), never against a response, because there is none. Declaring these makes the executionGuarantee reconciliation-required instead of at-most-once.",
+      ),
     identity: IdentitySchema.optional().describe(
       "Who is asking, and on whose behalf. Recorded on the task and every receipt, and matched against policy.capabilities when the operator has issued grants. Omitted means the implicit local principal.",
     ),
@@ -723,13 +730,45 @@ export type ExecutionGuarantee =
   | "compensatable";
 
 /**
- * The four values below `at-most-once` need an adapter that can offer them —
- * a provider that honours an idempotency key, or a declared inverse effect.
- * None of the four reference adapters can, so nothing derives them yet and a
- * caller reading a contract today sees only the two that are real.
+ * `at-least-once`, `provider-idempotent` and `compensatable` still need an
+ * adapter that can offer them, so nothing derives those three yet.
+ * `reconciliation-required` is real: a caller that declared `reconciliation`
+ * predicates has given MELRA a way to settle an outcome it could not observe,
+ * and that is a different promise from `at-most-once`, which says the effect
+ * ran zero or one times but not which.
  */
-export function executionGuaranteeFor(effect: Effect): ExecutionGuarantee {
-  return effect === "read" ? "read-only" : "at-most-once";
+export function executionGuaranteeFor(
+  effect: Effect,
+  /** Whether the request declared a way to settle an unknown outcome. */
+  reconcilable = false,
+): ExecutionGuarantee {
+  if (effect === "read") return "read-only";
+  return reconcilable ? "reconciliation-required" : "at-most-once";
+}
+
+/**
+ * Prefix on an adapter error that does *not* claim the effect failed to happen.
+ *
+ * The distinction is the whole of it. A request that never left the machine —
+ * DNS failure, connection refused — definitely did nothing, and `failed` is the
+ * truth. A request that was written to the socket and went unanswered is a
+ * different fact: the far end may have done the work and lost the reply.
+ * Reporting the second as `failed` is the one lie a kernel that owns effects
+ * cannot afford to tell, so an adapter that can tell the two apart marks it and
+ * the executor parks the task for reconciliation instead of asserting either
+ * outcome.
+ */
+export const OUTCOME_UNKNOWN_PREFIX = "effect_outcome_unknown:";
+
+/** Wraps a reason as an error whose outcome MELRA cannot determine. */
+export function outcomeUnknown(reason: string): Error {
+  return new Error(
+    isOutcomeUnknown(reason) ? reason : `${OUTCOME_UNKNOWN_PREFIX}${reason}`,
+  );
+}
+
+export function isOutcomeUnknown(message: string): boolean {
+  return message.startsWith(OUTCOME_UNKNOWN_PREFIX);
 }
 
 const RETRIABLE: ReadonlySet<ExecutionGuarantee> = new Set([
@@ -1111,7 +1150,12 @@ export function effectContract(
     risk: task.policyDecision.risk,
     target: classification.target,
     traits: task.policyDecision.traits,
-    executionGuarantee: executionGuaranteeFor(task.policyDecision.effect),
+    executionGuarantee: executionGuaranteeFor(
+      task.policyDecision.effect,
+      // `?? []` because a task record is durable JSON that outlives the code
+      // that wrote it, and one persisted before this field existed has none.
+      (task.request.reconciliation ?? []).length > 0,
+    ),
     forbiddenEffects: task.request.forbiddenEffects,
     postconditions: task.request.requiredEvidence,
     budget: task.request.budget,

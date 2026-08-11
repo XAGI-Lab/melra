@@ -390,9 +390,23 @@ alternative, not asking the harness not to use it.
       check is what makes taking its word safe: a money-bounded grant covers
       declared spends only, so understating is a lie the grant does not cover.
       A metered grant nothing can count is refused, not waved through.
-- [ ] Reconciliation for effects whose provider cannot promise exactly-once.
-- [ ] Compensation as a first-class saga across providers, not only within one
-      workflow.
+- [x] Reconciliation for effects whose provider cannot promise exactly-once. A
+      request that never left the machine definitely did not happen; one that
+      was written to the socket and never answered may have. The adapter tells
+      the two apart, and only the second parks the task `recovery_required`
+      rather than claiming it failed. A declared `reconciliation` predicate then
+      settles it from the provider's own state — read against the facts that
+      were true *before* the call, because a lost reply left no response to
+      read. A provider that cannot answer leaves the task parked; nothing
+      guesses. Declaring one publishes `reconciliation-required` on the plan, so
+      a caller sees the stronger promise before it approves.
+- [x] Compensation as a first-class saga across providers, not only within one
+      workflow. Compensations run one at a time, newest effect first, each
+      verified before the next starts, and every one is an ordinary governed
+      task — so undoing a charge at one host and a shipment at another is the
+      same code path as two at the same host. An unwind that cannot finish stops
+      instead of undoing further, and the run reports
+      `workflow_compensation_incomplete:<node>` rather than a clean failure.
 
 ### P5 — beyond one machine
 

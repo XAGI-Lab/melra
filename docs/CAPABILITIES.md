@@ -45,14 +45,16 @@ Node types: `operation`, `approval`, `condition`, `parallel`, `bounded_loop`,
 - Exact definitions and task payloads survive restart in encrypted envelopes.
 - Each advance executes one deterministic ready wave.
 - Workflow events and the current projection commit atomically.
-- Interrupted reads may retry. Mutations reconcile only from independent file
-  evidence or enter `recovery_required`.
+- Interrupted reads may retry. Mutations are never silently repeated: they
+  reconcile from independent evidence — a file re-read, or a declared
+  `reconciliation` predicate asking the provider — or enter `recovery_required`.
+- Compensations unwind newest effect first, one at a time, across as many
+  providers as the saga touched. An unwind that cannot finish stops and reports
+  `workflow_compensation_incomplete:<node>`.
 - Definitions allow at most 500 nodes, 100 dependencies per node, 20 parallel
   branches, and 100 loop iterations.
-- Competing advances for the same workflow are serialized inside one process.
-
-Human-input, delegation, pause/resume commands, and cross-process leases are
-not implemented.
+- Competing advances for the same workflow are serialized inside one process,
+  and across processes by an expiring SQLite lease.
 
 ## Operations
 
@@ -287,6 +289,15 @@ The verification request is an effect like any other: same adapter, same
 destination boundary, same allowlist, same credential scope. `GET` and `HEAD`
 only, and a runtime with no HTTP channel fails the predicate rather than passing
 it. It is the only predicate carrying `strength: "independent"`.
+
+A task request carries a second predicate list, `reconciliation`, drawn from the
+same schema but asked only when a mutation's outcome is unknown — the request
+reached the wire and no reply came back. Nothing runs again: the predicates ask
+the provider what its state is, `{{idempotencyKey}}` splices the request's own
+key into the URL, and the answer settles the task as `verified_success` or
+`failed`. A provider that cannot be reached leaves the task `recovery_required`
+rather than guessing either way, and a request that declared no reconciliation
+predicates stays parked for a human.
 
 `melra_execute` returns raw operation output directly to the connected client.
 Durable task state and receipts keep only centrally redacted input and output;

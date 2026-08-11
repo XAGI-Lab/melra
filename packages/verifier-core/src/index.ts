@@ -256,13 +256,32 @@ export class Verifier {
               throw new Error("verification_probe_unavailable");
             }
             const url = interpolate(predicate.url, result);
-            const observed = withParsedBody(
-              await this.probe({
-                url,
-                method: predicate.method,
-                timeoutMs: predicate.timeoutMs,
-              }),
-            );
+            // Caught here rather than by the outer handler so a transport
+            // failure is not filed as the provider saying no. Both are
+            // `passed: false`; only this one is `inconclusive`, and that is
+            // what lets an unreachable provider leave a mutation
+            // `recovery_required` instead of `failed`. The interpolate above
+            // stays outside: an unresolved token is a caller error, and the
+            // provider is not implicated in it.
+            let observed: Record<string, unknown>;
+            try {
+              observed = withParsedBody(
+                await this.probe({
+                  url,
+                  method: predicate.method,
+                  timeoutMs: predicate.timeoutMs,
+                }),
+              );
+            } catch (error) {
+              evidence.push({
+                type: predicate.type,
+                passed: false,
+                inconclusive: true,
+                summary: `independent read unavailable: ${error instanceof Error ? error.message : String(error)}`,
+                source: url,
+              });
+              break;
+            }
             const value = readResultPath(observed, predicate.path);
             const passed = Object.is(value, predicate.value);
             evidence.push({
