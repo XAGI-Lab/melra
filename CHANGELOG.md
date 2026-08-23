@@ -193,6 +193,10 @@ All notable changes are documented here. The format follows
   stops disabling guardrails is worse than a deprecated one. `MELRA_UNHINGED` is
   unchanged.
 
+- `melra_capabilities` now derives its operation map from the protocol schemas,
+  removing the hand-maintained discovery surface that could silently drift from
+  the operations clients validate.
+
 - A mistyped command now says where the answer is
   (`unknown command: docter. Run 'melra --help' for the command list.`) instead
   of naming the mistake and stopping. `melra init`'s usage line also matches its

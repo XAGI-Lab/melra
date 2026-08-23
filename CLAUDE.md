@@ -147,8 +147,7 @@ Adding or changing an operation action touches a fixed set of places, in this or
 2. `packages/policy-core` `classifyOperation` — effect, risk, capability string, target.
 3. The owning runtime package (`file-runtime`, `terminal-runtime`, `browser-runtime`, `computer-runtime`, `memory`).
 4. `RuntimeRouter` in `packages/server/src/runtime.ts` if a new `kind` is introduced.
-5. The `operations` map in `melra_capabilities` (`packages/server/src/mcp-server.ts`) — it is a hand-maintained list, not derived from the schemas.
-6. A scenario in `evals/src/scenarios.ts` asserting both `expectedPlan` and `expectedFinal`.
+5. A scenario in `evals/src/scenarios.ts` asserting both `expectedPlan` and `expectedFinal`.
 
 New evidence predicate types need `EvidencePredicateSchema` plus a branch in
 `packages/verifier-core`. The verifier resolves every path through `realpath` and rejects
