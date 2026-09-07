@@ -13,6 +13,7 @@ import {
   MelraReceiptInputSchema,
   MelraTaskCancelInputSchema,
   MelraTaskStatusInputSchema,
+  OperationSchema,
   PRODUCT_VERSION,
   PROTOCOL_VERSION,
   TaskRequestSchema,
@@ -62,45 +63,14 @@ export function capabilitiesPayload(runtime: MelraRuntime): unknown {
         tools: harnessTools
           ? [...TOOL_NAMES, ...Object.keys(HARNESS_TOOLS), "approve"]
           : TOOL_NAMES,
-        operations: {
-          file: ["list", "read", "stat", "hash", "write", "move", "delete", "mkdir"],
-          terminal: ["run", "start", "status", "output", "send", "stop"],
-          browser: [
-            "navigate",
-            "back",
-            "forward",
-            "reload",
-            "inspect",
-            "wait",
-            "click",
-            "type",
-            "fill_form",
-            "select",
-            "press",
-            "scroll",
-            "screenshot",
-            "upload",
-            "download",
-            "tabs",
-            "tab_new",
-            "tab_switch",
-            "close",
-          ],
-          memory: ["put", "search", "list", "delete", "clear"],
-          computer: [
-            "capabilities",
-            "inspect",
-            "screenshot",
-            "click",
-            "move",
-            "drag",
-            "type",
-            "key",
-            "scroll",
-          ],
-          http: ["request"],
-          system: ["info"],
-        },
+        operations: Object.fromEntries(
+          OperationSchema.options.map((schema) => [
+            schema.shape.kind.value,
+            "options" in schema.shape.action
+              ? [...schema.shape.action.options]
+              : [schema.shape.action.value],
+          ]),
+        ),
         workflowNodes: [
           "operation",
           "approval",
