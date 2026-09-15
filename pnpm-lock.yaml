@@ -15,7 +15,7 @@ importers:
     devDependencies:
       '@modelcontextprotocol/sdk':
         specifier: 1.30.0
-        version: 1.30.0(zod@4.4.3)
+        version: 1.30.0(zod@4.6.2)
       '@types/node':
         specifier: 22.20.1
         version: 22.20.1
@@ -57,7 +57,7 @@ importers:
         version: link:../../packages/storage-sqlite
       '@modelcontextprotocol/sdk':
         specifier: 1.30.0
-        version: 1.30.0(zod@4.4.3)
+        version: 1.30.0(zod@4.6.2)
 
   evals:
     dependencies:
@@ -125,8 +125,8 @@ importers:
   packages/protocol:
     dependencies:
       zod:
-        specifier: 4.4.3
-        version: 4.4.3
+        specifier: 4.6.2
+        version: 4.6.2
 
   packages/receipt-schema: {}
 
@@ -155,7 +155,7 @@ importers:
         version: link:../protocol
       '@modelcontextprotocol/sdk':
         specifier: 1.30.0
-        version: 1.30.0(zod@4.4.3)
+        version: 1.30.0(zod@4.6.2)
 
   packages/server:
     dependencies:
@@ -197,10 +197,10 @@ importers:
         version: link:../verifier-core
       '@modelcontextprotocol/sdk':
         specifier: 1.30.0
-        version: 1.30.0(zod@4.4.3)
+        version: 1.30.0(zod@4.6.2)
       zod:
-        specifier: 4.4.3
-        version: 4.4.3
+        specifier: 4.6.2
+        version: 4.6.2
 
   packages/storage-sqlite:
     dependencies:
@@ -1146,8 +1146,8 @@ packages:
     peerDependencies:
       zod: ^3.25.28 || ^4
 
-  zod@4.4.3:
-    resolution: {integrity: sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==}
+  zod@4.6.2:
+    resolution: {integrity: sha512-lh5RCAGFa1Cm2hjtNwLQhSs/AsqdWnTQaBER9fEwN/88pSh7KOtJavtBx/0VlkN/uFd61SwYmljLMDAsHlvzBQ==}
 
 snapshots:
 
@@ -1235,7 +1235,7 @@ snapshots:
 
   '@jridgewell/sourcemap-codec@1.5.5': {}
 
-  '@modelcontextprotocol/sdk@1.30.0(zod@4.4.3)':
+  '@modelcontextprotocol/sdk@1.30.0(zod@4.6.2)':
     dependencies:
       '@hono/node-server': 2.0.12(hono@4.13.0)
       ajv: 8.20.0
@@ -1252,8 +1252,8 @@ snapshots:
       json-schema-typed: 8.0.2
       pkce-challenge: 5.0.1
       raw-body: 3.0.2
-      zod: 4.4.3
-      zod-to-json-schema: 3.25.2(zod@4.4.3)
+      zod: 4.6.2
+      zod-to-json-schema: 3.25.2(zod@4.6.2)
     transitivePeerDependencies:
       - supports-color
 
@@ -1990,8 +1990,8 @@ snapshots:
 
   wrappy@1.0.2: {}
 
-  zod-to-json-schema@3.25.2(zod@4.4.3):
+  zod-to-json-schema@3.25.2(zod@4.6.2):
     dependencies:
-      zod: 4.4.3
+      zod: 4.6.2
 
-  zod@4.4.3: {}
+  zod@4.6.2: {}
