@@ -43,7 +43,7 @@
     "readme:check": "pnpm build && node scripts/check-readme-examples.mjs"
   },
   "devDependencies": {
-    "@modelcontextprotocol/sdk": "1.30.0",
+    "@modelcontextprotocol/sdk": "1.30.1",
     "@types/node": "22.20.1",
     "playwright-core": "1.62.0",
     "tsx": "4.23.5",

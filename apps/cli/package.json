@@ -41,6 +41,6 @@
     "@melra/runtime-core": "workspace:*",
     "@melra/server": "workspace:*",
     "@melra/storage-sqlite": "workspace:*",
-    "@modelcontextprotocol/sdk": "1.30.0"
+    "@modelcontextprotocol/sdk": "1.30.1"
   }
 }
