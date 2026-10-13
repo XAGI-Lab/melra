@@ -70,9 +70,13 @@ function proseLines(text) {
  * HTML tags and backticks go first.
  */
 function slug(heading) {
-  return heading
-    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/<[^>]+>/g, "")
+  let text = heading.replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1");
+  // Until stable: one pass leaves a tag behind in input like `<<a>b>`.
+  for (let previous; previous !== text; ) {
+    previous = text;
+    text = text.replace(/<[^>]+>/g, "");
+  }
+  return text
     .toLowerCase()
     .replace(/[^\p{L}\p{M}\p{N}\p{Pc} -]/gu, "")
     .replace(/ /g, "-");
