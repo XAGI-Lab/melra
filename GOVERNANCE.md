@@ -14,7 +14,7 @@ Maintainers review changes, triage issues, cut releases, and protect the
 versioned contract. The initial maintainers are:
 
 - `@dheeraj-codingdesk`
-- `@Gautam-R-Patil`
+- `@bhavana-sanal`
 
 Maintainers may add maintainers after sustained, trusted contribution.
 
