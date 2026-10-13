@@ -32,3 +32,10 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 2
+    ignore:
+      # The image's Node line moves deliberately (#78), not to whatever is
+      # newest: an odd or not-yet-LTS major is outside the CI matrix. Digest
+      # and patch updates within the line still come through.
+      - dependency-name: node
+        update-types:
+          - "version-update:semver-major"

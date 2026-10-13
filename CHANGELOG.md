@@ -6,29 +6,16 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
-### Security
-
-- Cleared every advisory `pnpm audit --prod` and `pip-audit` reported, which had
-  turned the scheduled Dependency Audit red on `main` and on every open pull
-  request. `@modelcontextprotocol/sdk` moves to 1.32.1 (its OAuth client could
-  send credentials to the wrong authorization server), and overrides pin the
-  patched transitive versions of `hono` 4.13.13, `@hono/node-server` 2.1.5,
-  `fast-uri` 3.1.8 (SSRF and host confusion), `ip-address` 10.7.4, `qs` 6.16.0,
-  and `proxy-addr` 2.0.8 (IP spoofing through IPv4-mapped IPv6). `pyjwt` moves
-  to 2.15.1 in the Python SDK and the browser benchmark.
-
-- The release workflow no longer hands every job the publishing token. It
-  granted `contents`, `packages`, and `id-token: write` workflow-wide while
-  running actions by mutable tag (`anchore/sbom-action@v0` among them), and the
-  `installed` job — which deliberately installs an unpinned MCP SDK — held the
-  same token. Permissions are now read-only by default and granted per job,
-  every action is pinned to a full commit SHA, no checkout persists its
-  credentials, and the publishing job restores no cache another workflow could
-  have written. A new Workflow Lint job runs `zizmor` so none of that drifts
-  back; it went from 39 high-severity findings to none. The container base
-  image is pinned by digest and Dependabot now tracks it.
-
 ### Added
+
+- `pnpm docs:check` now also checks `CHANGELOG.md`: Keep a Changelog section
+  names only, one of each per release, no empty sections or leftover conflict
+  markers, canonical order under `[Unreleased]`, releases dated newest first,
+  a link reference for every release, and a section for the current
+  `package.json` version so a bump cannot ship without notes. It found and
+  merged a duplicate `Added` and `Fixed` in `0.3.0-alpha.6`. `CHANGELOG.md`
+  now merges with `merge=union` locally, so parallel branches stop conflicting
+  on it.
 
 - `melra setup --client <name>` now emits each client's own configuration
   format and names the file it belongs in, instead of one `mcpServers` blob for
@@ -91,6 +78,28 @@ All notable changes are documented here. The format follows
   and then reset — and a reset after the write is, correctly, an unknown outcome.
   Every governed call now opens its own connection, so a reset after the write
   means the far end really may have acted.
+
+### Security
+
+- Cleared every advisory `pnpm audit --prod` and `pip-audit` reported, which had
+  turned the scheduled Dependency Audit red on `main` and on every open pull
+  request. `@modelcontextprotocol/sdk` moves to 1.32.1 (its OAuth client could
+  send credentials to the wrong authorization server), and overrides pin the
+  patched transitive versions of `hono` 4.13.13, `@hono/node-server` 2.1.5,
+  `fast-uri` 3.1.8 (SSRF and host confusion), `ip-address` 10.7.4, `qs` 6.16.0,
+  and `proxy-addr` 2.0.8 (IP spoofing through IPv4-mapped IPv6). `pyjwt` moves
+  to 2.15.1 in the Python SDK and the browser benchmark.
+
+- The release workflow no longer hands every job the publishing token. It
+  granted `contents`, `packages`, and `id-token: write` workflow-wide while
+  running actions by mutable tag (`anchore/sbom-action@v0` among them), and the
+  `installed` job — which deliberately installs an unpinned MCP SDK — held the
+  same token. Permissions are now read-only by default and granted per job,
+  every action is pinned to a full commit SHA, no checkout persists its
+  credentials, and the publishing job restores no cache another workflow could
+  have written. A new Workflow Lint job runs `zizmor` so none of that drifts
+  back; it went from 39 high-severity findings to none. The container base
+  image is pinned by digest and Dependabot now tracks it.
 
 ## [0.3.0-alpha.11] - 2026-08-11
 
@@ -523,49 +532,6 @@ All notable changes are documented here. The format follows
   secure input is held, because synthetic keystrokes are dropped by the window
   server and would otherwise report success while typing into nothing.
 
-### Changed
-
-- MELRA is now described as an agent-independent **autonomy kernel** rather than
-  an MCP server. The behaviour is unchanged; the framing is not. The kernel owns
-  effects — typing, classification, authorisation, approval, durable record,
-  idempotency, bounded execution, verification, and receipts — and never owns
-  reasoning, so it ships no model client, planner, prompt library, or semantic
-  memory about the user. Files, terminal, browser, and computer use are now
-  described as *reference effect adapters* rather than capability layers, memory
-  as *operational memory* about MELRA's own effects, and MCP as one of several
-  interfaces (MCP stdio, MCP over loopback HTTP, CLI, TypeScript SDK, Python
-  SDK) onto the same runtime rather than the definition of the product. README,
-  ROADMAP, `docs/ARCHITECTURE.md`, `CLAUDE.md`, and the package `description`
-  fields were rewritten accordingly; `docs/ARCHITECTURE.md` now also states the
-  responsibility boundary, the canonical effect lifecycle, and verification
-  strength with today's predicates mapped onto it.
-- The responsibility boundary is now stated as **three** layers rather than two:
-  the LLM reasons, the harness manages the loop, MELRA owns the effect
-  lifecycle. MELRA begins where the tool call leaves the model loop, and never
-  receives a goal — "fix the production server" is reasoning, and what reaches
-  the kernel is a bounded operation. README and `docs/ARCHITECTURE.md` carry the
-  ownership table for the three layers; `CONTRIBUTING.md` and `CLAUDE.md` carry
-  the scope test that follows from it (*would this feature still make sense if
-  the effect request came from ordinary deterministic software rather than an
-  LLM?*).
-- Verification strengths are now named rather than numbered — **execution**,
-  **state**, **independent**, **semantic** — and `docs/ARCHITECTURE.md` adds the
-  per-effect execution-guarantee taxonomy (`read-only`, `at-most-once`,
-  `at-least-once`, `provider-idempotent`, `reconciliation-required`,
-  `compensatable`) with what each covers today, plus the developer-mode versus
-  enforced-mode deployment split and the bypass problem developer mode does not
-  solve.
-
-### Fixed
-
-- `docs/ARCHITECTURE.md` no longer claims human-input and delegation nodes are
-  unimplemented or that no command enters `paused`/`suspended`; all four ship.
-  The workflow node table, status diagram, and event-type list now match the
-  code, including `workflow.paused`, `workflow.suspended`, and
-  `workflow.resumed`.
-
-### Added
-
 - Persistent opt-in browser profiles. Set `MELRA_BROWSER_PROFILE` to an absolute
   directory and cookies, storage, and profile state survive between runs, so a
   site logged into once stays logged in instead of being logged into again on
@@ -628,7 +594,46 @@ All notable changes are documented here. The format follows
   per scope, oldest first — that one deletes data you can still read, so it
   defaults to `0`, meaning no ceiling.
 
+### Changed
+
+- MELRA is now described as an agent-independent **autonomy kernel** rather than
+  an MCP server. The behaviour is unchanged; the framing is not. The kernel owns
+  effects — typing, classification, authorisation, approval, durable record,
+  idempotency, bounded execution, verification, and receipts — and never owns
+  reasoning, so it ships no model client, planner, prompt library, or semantic
+  memory about the user. Files, terminal, browser, and computer use are now
+  described as *reference effect adapters* rather than capability layers, memory
+  as *operational memory* about MELRA's own effects, and MCP as one of several
+  interfaces (MCP stdio, MCP over loopback HTTP, CLI, TypeScript SDK, Python
+  SDK) onto the same runtime rather than the definition of the product. README,
+  ROADMAP, `docs/ARCHITECTURE.md`, `CLAUDE.md`, and the package `description`
+  fields were rewritten accordingly; `docs/ARCHITECTURE.md` now also states the
+  responsibility boundary, the canonical effect lifecycle, and verification
+  strength with today's predicates mapped onto it.
+- The responsibility boundary is now stated as **three** layers rather than two:
+  the LLM reasons, the harness manages the loop, MELRA owns the effect
+  lifecycle. MELRA begins where the tool call leaves the model loop, and never
+  receives a goal — "fix the production server" is reasoning, and what reaches
+  the kernel is a bounded operation. README and `docs/ARCHITECTURE.md` carry the
+  ownership table for the three layers; `CONTRIBUTING.md` and `CLAUDE.md` carry
+  the scope test that follows from it (*would this feature still make sense if
+  the effect request came from ordinary deterministic software rather than an
+  LLM?*).
+- Verification strengths are now named rather than numbered — **execution**,
+  **state**, **independent**, **semantic** — and `docs/ARCHITECTURE.md` adds the
+  per-effect execution-guarantee taxonomy (`read-only`, `at-most-once`,
+  `at-least-once`, `provider-idempotent`, `reconciliation-required`,
+  `compensatable`) with what each covers today, plus the developer-mode versus
+  enforced-mode deployment split and the bypass problem developer mode does not
+  solve.
+
 ### Fixed
+
+- `docs/ARCHITECTURE.md` no longer claims human-input and delegation nodes are
+  unimplemented or that no command enters `paused`/`suspended`; all four ship.
+  The workflow node table, status diagram, and event-type list now match the
+  code, including `workflow.paused`, `workflow.suspended`, and
+  `workflow.resumed`.
 
 - `melra policy test` previewed the wrong policy. It built its decision from the
   shipped defaults and ignored `MELRA_POLICY` and `~/.melra/policy.json`, which
@@ -647,7 +652,6 @@ All notable changes are documented here. The format follows
   unconditionally created its own root, and unhinged mode roots it at the drive
   root, which Windows answers with `EPERM` instead of the no-op POSIX gives for
   a directory that already exists. It now only creates a root that is missing.
-
 
 ## [0.3.0-alpha.5] - 2026-08-08
 
