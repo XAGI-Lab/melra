@@ -94,9 +94,9 @@ shouldn't have to.**
 | | | |
 |---|---|---|
 | [Why MELRA](#why-melra) | [Where it sits](#where-it-sits-) | [Quickstart](#quickstart-) |
-| [Reference effect adapters](#reference-effect-adapters-) | [Where to use it](#where-you-can-use-melra-) | [MCP tool surface](#a-deliberately-small-mcp-surface-) |
-| [How execution works](#how-execution-works-) | [Safe defaults](#safe-defaults-) | [Evidence](#evidence-not-leaderboard-theatre-) |
-| [Reproduce the scores](#reproduce-the-scores-) | [SDKs](#sdks-and-implementation-languages-) | [Repository map](#repository-map-) |
+| [Reference effect adapters](#reference-effect-adapters-) | [Where to use it](#where-you-can-use-melra-%EF%B8%8F) | [MCP tool surface](#a-deliberately-small-mcp-surface-) |
+| [How execution works](#how-execution-works-%EF%B8%8F) | [Safe defaults](#safe-defaults-) | [Evidence](#evidence-not-leaderboard-theatre-) |
+| [Reproduce the scores](#reproduce-the-scores-) | [SDKs](#sdks-and-implementation-languages-) | [Repository map](#repository-map-%EF%B8%8F) |
 | [Documentation](#documentation-) | [Contributing](#contributing-) | [Roadmap](ROADMAP.md) |
 
 ---

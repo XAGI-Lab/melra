@@ -43,7 +43,35 @@ All notable changes are documented here. The format follows
   MELRA's own entry, so it doubles as the way to repoint a client after an
   upgrade.
 
+- **`pnpm docs:check` fails when a doc link stops resolving.** Renaming a
+  heading silently broke every link to its anchor; one was found by hand during
+  the unsafe-local rename, which is not a plan. `scripts/check-links.mjs` walks
+  every `*.md` in the repo and checks that each relative link target exists and
+  each `#anchor` — local or `other.md#anchor` — matches a heading under GitHub's
+  slug rules, duplicate-heading suffixes and explicit `<a id>` anchors included.
+  Code blocks and inline code are ignored, and external links are out of scope,
+  since a check that fails when someone else's site is down is one people learn
+  to ignore. Every failure is reported as `file:line`, and `pnpm check` runs it.
+
+- **`pnpm docs:check` also fails when a `MELRA_*` variable is undocumented.**
+  The environment table in `docs/INSTALLATION.md` was kept by hand and drifted.
+  `scripts/check-env-docs.mjs` collects every `MELRA_*` name in
+  `packages/*/src` and `apps/*/src`, test files excepted, and names each one
+  missing from the table. The variables MELRA sets on its own Windows
+  PowerShell children (`MELRA_KEYS`, `MELRA_X`, `MELRA_CLICK`, ...) are
+  plumbing rather than knobs, so they sit in a literal allowlist with a reason
+  each, and an allowlisted name the code no longer uses fails too.
+
 ### Fixed
+
+- `MELRA_HARNESS_TOOLS` now has a row in the environment table in
+  `docs/INSTALLATION.md`. It was described in prose and shown in a JSON
+  snippet, but anyone scanning the table for what can be configured missed it.
+
+- Three links in the README's contents table — *Where to use it*, *How
+  execution works*, and *Repository map* — went nowhere. Their headings end in
+  an emoji carrying a variation selector, which GitHub keeps in the anchor, so
+  the links now include it.
 
 - `melra doctor` no longer uses the word "enforced" for two different things. The
   `guardrails` check reported `enforced` — meaning they are applied — two lines
