@@ -14,7 +14,7 @@ import type { Principal } from "@melra/protocol";
 import { principalRef } from "@melra/protocol";
 import { capabilitiesPayload, createMcpServer } from "./mcp-server.js";
 import type { MelraRuntime } from "./runtime.js";
-import { consolePage } from "./console-page.js";
+import { consolePage, consoleSecurityHeaders } from "./console-page.js";
 import { clientPrincipal, OAuthProvider } from "./oauth.js";
 
 export const DEFAULT_HTTP_PORT = 7457;
@@ -374,6 +374,7 @@ export async function serveHttp(
         "content-type": "text/html; charset=utf-8",
         "cache-control": "no-store",
         "content-length": Buffer.byteLength(page),
+        ...consoleSecurityHeaders(),
       });
       response.end(page);
       return;
