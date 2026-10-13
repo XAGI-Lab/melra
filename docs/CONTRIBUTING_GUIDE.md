@@ -127,7 +127,10 @@ skips both is a data leak with a passing test suite.
   does, the line is the problem.
 - Commit subjects are `type(scope): summary` — `fix(terminal):`, `docs:`,
   `bench(browser):`. Sign off with `git commit -s` (DCO, enforced by CI).
-- User-visible changes get a `CHANGELOG.md` entry under `## [Unreleased]`.
+- User-visible changes get a `CHANGELOG.md` entry under `## [Unreleased]`. Add it to
+  the existing `### Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, or `Security`
+  section rather than starting a second one; `pnpm docs:check` fails on duplicates,
+  empty sections, leftover conflict markers, and a version bump with no release notes.
 
 ## Before you open the pull request
 

@@ -45,7 +45,7 @@ strict tsc), plus two Python projects managed by `uv` (`sdk-py`,
 pnpm install --frozen-lockfile
 pnpm build                  # tsc -p per package; required before tests (see below)
 pnpm check                  # versions:check + docs:check + typecheck + test + python:check — the CI gate
-pnpm docs:check             # every relative link and #anchor in every *.md resolves; every MELRA_* variable has a row in docs/INSTALLATION.md
+pnpm docs:check             # every relative link and #anchor in every *.md resolves; every MELRA_* variable has a row in docs/INSTALLATION.md; CHANGELOG.md is in Keep a Changelog shape
 pnpm evals                  # 51 deterministic policy/execution scenarios → evals/results/latest.json
 pnpm e2e                    # packages/server/test/e2e.test.ts against a live stdio server
 pnpm pack:check              # npm pack --dry-run for the published CLI
@@ -198,7 +198,7 @@ match every `apps/*` and `packages/*` manifest, the `PRODUCT_VERSION` constant i
 ## Contribution conventions
 
 - Commits are signed off (DCO); `scripts/check-dco.mjs` and `.github/workflows/dco.yml` enforce it. Commit subjects follow `type(scope): summary`, e.g. `bench(browser): add paired evaluator`.
-- User-visible changes get a `CHANGELOG.md` entry under `## [Unreleased]` (Keep a Changelog sections).
+- User-visible changes get a `CHANGELOG.md` entry under `## [Unreleased]`, in the existing `### Added`/`Changed`/`Deprecated`/`Removed`/`Fixed`/`Security` section (canonical order, one of each). `scripts/check-changelog.mjs` enforces the shape, and `.gitattributes` merges the file with `merge=union` so parallel branches stop conflicting there locally; GitHub's web merge ignores that, so rebase before merging and rerun `pnpm docs:check`.
 - CI runs `pnpm check` on ubuntu/macos/windows × Node 22/24, so avoid platform-specific paths and shell assumptions.
 
 ## Benchmark and claims discipline

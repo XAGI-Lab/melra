@@ -4,3 +4,8 @@
 # failed the whole Windows CI job. Normalize on checkout so every platform sees
 # the same bytes; binary files are detected and left alone by `text=auto`.
 * text=auto eol=lf
+
+# Every pull request adds lines under `## [Unreleased]` at the same spot, so
+# two branches always conflict there. A union merge keeps both sides' entries;
+# scripts/check-changelog.mjs catches the duplicate headings that can leave.
+CHANGELOG.md merge=union
