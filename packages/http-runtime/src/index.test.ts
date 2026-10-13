@@ -157,4 +157,16 @@ describe("http runtime", () => {
     await expect(attempt).rejects.toThrow(/ECONNREFUSED/);
     await expect(attempt).rejects.not.toThrow(/effect_outcome_unknown/);
   });
+
+  it("does not send a mutation down an idle connection the server has closed", async () => {
+    const charge = operation({ method: "POST", url: `${origin}/orders`, content: "first" });
+    await runtime().execute(charge);
+    // The server times out its idle keep-alive connections, and the client has
+    // not yet read the FIN. A pooled socket would take the next request and
+    // reset, reported as an unknown outcome for a request no server ever saw.
+    server.closeIdleConnections();
+    const result = await runtime().execute({ ...charge, content: "second" });
+    expect(result.status).toBe(201);
+    expect(seen.body).toBe("second");
+  });
 });

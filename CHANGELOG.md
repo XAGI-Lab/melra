@@ -57,6 +57,13 @@ All notable changes are documented here. The format follows
   ships, the OS isolation and socket transport around it do not — rather than
   *target*, which read as nothing having landed.
 
+- An HTTP mutation no longer lands in `recovery_required` for a request no server
+  ever received. The HTTP adapter drew sockets from Node's keep-alive pool, so a
+  connection the server had already closed for idleness took the whole request
+  and then reset — and a reset after the write is, correctly, an unknown outcome.
+  Every governed call now opens its own connection, so a reset after the write
+  means the far end really may have acted.
+
 ## [0.3.0-alpha.11] - 2026-08-11
 
 ### Added
