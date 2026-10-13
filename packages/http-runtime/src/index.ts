@@ -94,6 +94,13 @@ export class HttpRuntime {
           // address the socket went to, or pinning would break every https URL.
           ...(secure ? { servername: url.hostname } : {}),
           timeout: operation.timeoutMs,
+          // A fresh connection per effect, never one from Node's keep-alive
+          // pool. A pooled socket the server has already closed takes the whole
+          // request and then resets, and below that reads as "the far end may
+          // have acted" — a request that never reached anyone parked for
+          // reconciliation. On a connection of its own, a reset after the write
+          // really is an unknown outcome.
+          agent: false,
         },
         (response: IncomingMessage) => {
           const chunks: Buffer[] = [];
