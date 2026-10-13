@@ -6,6 +6,17 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+### Security
+
+- Cleared every advisory `pnpm audit --prod` and `pip-audit` reported, which had
+  turned the scheduled Dependency Audit red on `main` and on every open pull
+  request. `@modelcontextprotocol/sdk` moves to 1.32.1 (its OAuth client could
+  send credentials to the wrong authorization server), and overrides pin the
+  patched transitive versions of `hono` 4.13.13, `@hono/node-server` 2.1.5,
+  `fast-uri` 3.1.8 (SSRF and host confusion), `ip-address` 10.7.4, `qs` 6.16.0,
+  and `proxy-addr` 2.0.8 (IP spoofing through IPv4-mapped IPv6). `pyjwt` moves
+  to 2.15.1 in the Python SDK and the browser benchmark.
+
 ### Fixed
 
 - `melra doctor` no longer uses the word "enforced" for two different things. The
