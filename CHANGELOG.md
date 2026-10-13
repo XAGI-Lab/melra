@@ -43,7 +43,22 @@ All notable changes are documented here. The format follows
   MELRA's own entry, so it doubles as the way to repoint a client after an
   upgrade.
 
+- **`pnpm docs:check` fails when a doc link stops resolving.** Renaming a
+  heading silently broke every link to its anchor; one was found by hand during
+  the unsafe-local rename, which is not a plan. `scripts/check-links.mjs` walks
+  every `*.md` in the repo and checks that each relative link target exists and
+  each `#anchor` — local or `other.md#anchor` — matches a heading under GitHub's
+  slug rules, duplicate-heading suffixes and explicit `<a id>` anchors included.
+  Code blocks and inline code are ignored, and external links are out of scope,
+  since a check that fails when someone else's site is down is one people learn
+  to ignore. Every failure is reported as `file:line`, and `pnpm check` runs it.
+
 ### Fixed
+
+- Three links in the README's contents table — *Where to use it*, *How
+  execution works*, and *Repository map* — went nowhere. Their headings end in
+  an emoji carrying a variation selector, which GitHub keeps in the anchor, so
+  the links now include it.
 
 - `melra doctor` no longer uses the word "enforced" for two different things. The
   `guardrails` check reported `enforced` — meaning they are applied — two lines

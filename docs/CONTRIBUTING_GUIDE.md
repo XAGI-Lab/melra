@@ -20,7 +20,7 @@ pnpm melra doctor   # should print a green report
 through their `exports` map, which points at `dist/`. A test failing with an
 unresolved `@melra/*` import means a stale or missing `dist`, not a broken test.
 
-The full gate is `pnpm check` (versions + typecheck + README examples + tests +
+The full gate is `pnpm check` (versions + doc links + typecheck + README examples + tests +
 Python). It is what CI runs. On a 16 GiB machine it peaks around 13 GiB, so
 close your browser first — or run the pieces individually while iterating:
 
