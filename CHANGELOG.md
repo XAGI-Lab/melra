@@ -17,6 +17,17 @@ All notable changes are documented here. The format follows
   and `proxy-addr` 2.0.8 (IP spoofing through IPv4-mapped IPv6). `pyjwt` moves
   to 2.15.1 in the Python SDK and the browser benchmark.
 
+- The release workflow no longer hands every job the publishing token. It
+  granted `contents`, `packages`, and `id-token: write` workflow-wide while
+  running actions by mutable tag (`anchore/sbom-action@v0` among them), and the
+  `installed` job — which deliberately installs an unpinned MCP SDK — held the
+  same token. Permissions are now read-only by default and granted per job,
+  every action is pinned to a full commit SHA, no checkout persists its
+  credentials, and the publishing job restores no cache another workflow could
+  have written. A new Workflow Lint job runs `zizmor` so none of that drifts
+  back; it went from 39 high-severity findings to none. The container base
+  image is pinned by digest and Dependabot now tracks it.
+
 ### Fixed
 
 - `melra doctor` no longer uses the word "enforced" for two different things. The
