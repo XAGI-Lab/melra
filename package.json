@@ -40,7 +40,7 @@
     "test:peak-rss": "node scripts/peak-rss.mjs -- pnpm test",
     "typecheck": "pnpm build && node scripts/run-recursive.mjs typecheck",
     "versions:check": "node scripts/check-versions.mjs",
-    "docs:check": "node scripts/check-links.mjs",
+    "docs:check": "node scripts/check-links.mjs && node scripts/check-env-docs.mjs",
     "versions:set": "node scripts/set-version.mjs",
     "check": "pnpm versions:check && pnpm docs:check && pnpm typecheck && node scripts/check-readme-examples.mjs && pnpm test && pnpm python:check",
     "pack:check": "pnpm build && pnpm --dir apps/cli pack:check",

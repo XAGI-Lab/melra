@@ -45,7 +45,7 @@ strict tsc), plus two Python projects managed by `uv` (`sdk-py`,
 pnpm install --frozen-lockfile
 pnpm build                  # tsc -p per package; required before tests (see below)
 pnpm check                  # versions:check + docs:check + typecheck + test + python:check — the CI gate
-pnpm docs:check             # every relative link and #anchor in every *.md resolves
+pnpm docs:check             # every relative link and #anchor in every *.md resolves; every MELRA_* variable has a row in docs/INSTALLATION.md
 pnpm evals                  # 51 deterministic policy/execution scenarios → evals/results/latest.json
 pnpm e2e                    # packages/server/test/e2e.test.ts against a live stdio server
 pnpm pack:check              # npm pack --dry-run for the published CLI

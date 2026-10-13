@@ -127,6 +127,7 @@ MELRA uses these environment variables:
 | `MELRA_HTTP_PORT` | Port for `melra serve --http` | `7457` |
 | `MELRA_HTTP_TOKEN` | Bearer token for `melra serve --http` | a fresh random token, printed at startup |
 | `MELRA_HTTP_OAUTH` | Set to `0` so that token is the only way in and no client can register itself | unset (clients may register, on loopback) |
+| `MELRA_HARNESS_TOOLS` | Set to `1` (or `true`, `yes`, `on`) to add thirteen plainly named tools such as `read_file` and `run_command` alongside the eleven `melra_*` tools — see [ordinary tool names](#ordinary-tool-names) | unset (only the `melra_*` tools) |
 
 Back up `payload.key` with the SQLite files. Changing or losing it makes
 persisted task and workflow payloads unreadable. Never place it in a client
