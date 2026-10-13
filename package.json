@@ -11,9 +11,12 @@
   },
   "pnpm": {
     "overrides": {
-      "@hono/node-server": "2.0.12",
-      "hono": "^4.12.34",
-      "fast-uri": "^3.1.5"
+      "@hono/node-server": "^2.1.5",
+      "hono": "^4.13.13",
+      "fast-uri": "^3.1.8",
+      "qs": "^6.16.0",
+      "ip-address": "^10.7.4",
+      "proxy-addr": "^2.0.8"
     }
   },
   "scripts": {
@@ -43,7 +46,7 @@
     "readme:check": "pnpm build && node scripts/check-readme-examples.mjs"
   },
   "devDependencies": {
-    "@modelcontextprotocol/sdk": "1.30.0",
+    "@modelcontextprotocol/sdk": "1.32.1",
     "@types/node": "22.20.1",
     "playwright-core": "1.62.0",
     "tsx": "4.23.5",
