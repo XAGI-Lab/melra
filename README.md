@@ -398,9 +398,16 @@ npx @melra/cli@alpha setup
 ```
 
 One command: writes a safe local policy, prints a ready-to-paste MCP client
-config, and runs every readiness check. Add `--client claude|cursor|vscode|codex`
-to label the config for a specific client. Use `doctor` alone to check readiness
-without writing anything.
+config, and runs every readiness check. Name your client to get its own config
+format and file, and add `--write` to have MELRA merge itself in for you:
+
+```bash
+npx @melra/cli@alpha setup --client cursor --write
+```
+
+Supported: `claude-code`, `claude-desktop`, `cursor`, `vscode`, `windsurf`,
+`codex`, `gemini`, `zed`, `cline`, `opencode`, `kiro`, and `generic`. Use
+`doctor` alone to check readiness without writing anything.
 
 **Container (no Node install needed):**
 

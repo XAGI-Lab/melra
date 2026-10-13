@@ -28,6 +28,21 @@ All notable changes are documented here. The format follows
   back; it went from 39 high-severity findings to none. The container base
   image is pinned by digest and Dependabot now tracks it.
 
+### Added
+
+- `melra setup --client <name>` now emits each client's own configuration
+  format and names the file it belongs in, instead of one `mcpServers` blob for
+  every client — which VS Code, Zed, OpenCode, and Codex ignore or cannot
+  parse. Supported: `claude-code` (`claude` still works), `claude-desktop`,
+  `cursor`, `vscode`, `windsurf`, `codex` (TOML), `gemini`, `zed`, `cline`,
+  `opencode`, `kiro`, and `generic`. An unknown name is now an error rather
+  than a label.
+- `--write` merges that configuration into the client's file, keeping every
+  other entry and saving the previous file as `<file>.bak`. It refuses JSON
+  with comments rather than silently dropping them, and a rerun replaces
+  MELRA's own entry, so it doubles as the way to repoint a client after an
+  upgrade.
+
 ### Fixed
 
 - `melra doctor` no longer uses the word "enforced" for two different things. The

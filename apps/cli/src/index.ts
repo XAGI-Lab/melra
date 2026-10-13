@@ -48,6 +48,13 @@ import {
   serverLaunch,
 } from "./environment.js";
 import { runConformance } from "./conformance.js";
+import {
+  CLIENTS,
+  clientConfig,
+  clientConfigPath,
+  resolveClient,
+  writeClientConfig,
+} from "./clients.js";
 
 async function existingPolicyPath(env: CliEnvironment): Promise<string | undefined> {
   if (env.policyPath !== undefined) return env.policyPath;
@@ -513,25 +520,44 @@ async function init(
       { flag: "wx" },
     );
   }
-  const client = argument("--client", args) ?? "generic";
-  const config = {
-    mcpServers: {
-      melra: {
-        ...serverLaunch(import.meta.dirname, PRODUCT_VERSION),
-        env: {
-          MELRA_WORKSPACE: env.workspaceRoot,
-          MELRA_HOME: env.dataDirectory,
-          MELRA_POLICY: policyPath,
-        },
-      },
+  const client = resolveClient(argument("--client", args) ?? "generic");
+  const label = CLIENTS[client]?.label ?? client;
+  const config = clientConfig(client, {
+    ...serverLaunch(import.meta.dirname, PRODUCT_VERSION),
+    env: {
+      MELRA_WORKSPACE: env.workspaceRoot,
+      MELRA_HOME: env.dataDirectory,
+      MELRA_POLICY: policyPath,
     },
-  };
+  });
+  const configPath = clientConfigPath(client, env.workspaceRoot);
+  if (args.includes("--write")) {
+    if (configPath === undefined) {
+      throw new Error("--write needs a named --client; see 'melra help' for the list");
+    }
+    const { backup } = await writeClientConfig(configPath, config);
+    return {
+      initialized: true,
+      client,
+      policyPath,
+      configPath,
+      written: true,
+      ...(backup === undefined ? {} : { backup }),
+      config,
+      note: `Added melra to ${configPath}. Restart ${label} to load it.`,
+    };
+  }
   return {
     initialized: true,
     client,
     policyPath,
+    ...(configPath === undefined ? {} : { configPath }),
     config,
-    note: `Add the mcpServers.melra entry to ${client}'s MCP configuration.`,
+    note:
+      configPath === undefined
+        ? "Add the mcpServers.melra entry to your client's MCP configuration, " +
+          "or rerun with --client <name> for that client's own format."
+        : `Add this to ${configPath}, or rerun with --write to merge it there for you.`,
   };
 }
 
@@ -684,10 +710,10 @@ function help(): void {
   process.stdout.write(`MELRA ${PRODUCT_VERSION}
 
 Usage:
-  melra setup [--client <claude|cursor|vscode|codex|generic>]
+  melra setup [--client <name>] [--write]
   melra doctor
   melra conformance [--url <mcp-url> --token <token>] [--level <1|2|3>]
-  melra init [--client <claude|cursor|vscode|codex|generic>]
+  melra init [--client <name>] [--write]
   melra serve [--http] [--port <port>] [--open]
   melra run --request <task.json>
   melra inspect <task-id>
@@ -703,6 +729,12 @@ Usage:
   melra version
 
 Flags:
+  --client <name>  Emit the MCP config in this client's own format and say
+                   where it goes: claude-code (or claude), claude-desktop,
+                   cursor, vscode, windsurf, codex, gemini, zed, cline,
+                   opencode, kiro, or generic (default).
+  --write          With --client, merge the config into that client's file,
+                   keeping everything else and saving the old file as .bak.
   --unsafe-local   Run with no policy and no guardrails. Everything the OS user
                    can do, any caller can now do. Same as MELRA_UNHINGED=1.
                    Refused outright when --mode enforced. Was --unhinged, which
@@ -797,11 +829,11 @@ async function main(): Promise<void> {
       return;
     }
     case "init":
-      rejectUnknownFlags(args, ["--client"]);
+      rejectUnknownFlags(args, ["--client", "--write"]);
       output(await init(args, env));
       return;
     case "setup":
-      rejectUnknownFlags(args, ["--client"]);
+      rejectUnknownFlags(args, ["--client", "--write"]);
       process.exitCode = await setup(args, env);
       return;
     case "serve": {

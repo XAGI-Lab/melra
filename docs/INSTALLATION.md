@@ -10,12 +10,20 @@ npx @melra/cli@alpha setup
 
 `setup` writes a safe local policy, prints an MCP client configuration that
 names a command your client can actually spawn, and runs every readiness check
-— in one step, with nothing installed beforehand. Add
-`--client claude|cursor|vscode|codex|generic` to label the configuration for a
-specific client. It exits non-zero if any readiness check fails, and it never
-overwrites an existing policy.
+— in one step, with nothing installed beforehand. It exits non-zero if any
+readiness check fails, and it never overwrites an existing policy.
 
-Paste the printed `mcpServers.melra` object into your client's MCP
+Name your client and MELRA writes itself into that client's own config file,
+in that client's own format, keeping everything already there and saving the
+previous file as `<file>.bak`:
+
+```bash
+npx @melra/cli@alpha setup --client cursor --write
+```
+
+Leave out `--write` to print the config and the path it belongs in instead; see
+[MCP clients](#mcp-clients) for every supported client. With no `--client`,
+paste the printed `mcpServers.melra` object into your client's MCP
 configuration and you are done. The rest of this page covers the other install
 paths, every environment variable, and the hardened Docker invocation.
 
@@ -603,7 +611,31 @@ do not control, or on a machine holding credentials you cannot rotate.
 
 ## MCP clients
 
-Use the client’s `mcpServers` configuration field:
+`melra setup --client <name>` (or `init`) prints the configuration in the
+named client's own format together with the file it belongs in, and `--write`
+merges it there for you:
+
+| `--client` | Client | Where `--write` puts it | Format |
+|---|---|---|---|
+| `claude-code` (or `claude`) | Claude Code | `<workspace>/.mcp.json` | `mcpServers` |
+| `claude-desktop` | Claude Desktop | `claude_desktop_config.json` in the OS app-config directory | `mcpServers` |
+| `cursor` | Cursor | `~/.cursor/mcp.json` | `mcpServers` |
+| `vscode` | VS Code (Copilot agent mode) | `<workspace>/.vscode/mcp.json` | `servers`, `type: "stdio"` |
+| `windsurf` | Windsurf | `~/.codeium/windsurf/mcp_config.json` | `mcpServers` |
+| `codex` | OpenAI Codex CLI | `$CODEX_HOME/config.toml` (default `~/.codex`) | TOML `[mcp_servers.melra]` |
+| `gemini` | Gemini CLI | `~/.gemini/settings.json` | `mcpServers` |
+| `zed` | Zed | Zed's `settings.json` | `context_servers` |
+| `cline` | Cline (VS Code) | `cline_mcp_settings.json` in Cline's global storage | `mcpServers` |
+| `opencode` | OpenCode | `~/.config/opencode/opencode.json` | `mcp`, `type: "local"` |
+| `kiro` | Kiro | `~/.kiro/settings/mcp.json` | `mcpServers` |
+| `generic` | Anything else | — (printed only) | `mcpServers` |
+
+`--write` refuses a file that is not plain JSON — Zed and VS Code settings
+often carry comments, which a JSON round-trip would drop — and leaves it
+untouched; paste the printed block in by hand instead. Rerunning it replaces
+MELRA's own entry, so it is also how you repoint a client after an upgrade.
+
+For any other client, use the common `mcpServers` configuration field:
 
 ```json
 {
@@ -647,10 +679,9 @@ Otherwise replace `melra` with the absolute path to `dist/bin.js` from the
 release tarball, or use `docker` with the arguments in [Docker](#docker) below.
 
 This structure is accepted by Claude Desktop and clients that implement the
-common MCP server configuration format. Cursor and VS Code use the same command,
-arguments, and environment values but may place them under their own MCP
-settings UI or file. Always follow the current client documentation for the
-configuration-file location.
+common MCP server configuration format. Clients with their own format use the
+same command, arguments, and environment values under a different key; the
+table above lists them.
 
 The repository’s automated compatibility claim is the official MCP SDK over
 stdio. Named graphical clients remain release-gated until their current
