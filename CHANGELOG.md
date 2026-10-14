@@ -16,10 +16,10 @@ All notable changes are documented here. The format follows
   verification honesty, exactly-once, redaction (database bytes scanned), and
   utility on benign operations, plus governed-vs-raw latency. The corpus is
   data in `evals/src/govbench/corpus.ts`, hashed into every artifact. The first
-  run scores safety 293/307 and utility 50/50; the failures are published
-  findings — bracketed IPv6 literals skip the private-address check and are
-  stopped only by DNS failing, and memory values keep PEM private keys and AWS
-  access key ids verbatim. See `docs/research/GOVBENCH.md`.
+  run scored safety 293/307 and found two real bugs (bracketed IPv6 literals
+  skipped the private-address check; memory kept PEM private keys and AWS
+  access key ids verbatim), both fixed under Security below. The published run
+  now scores safety 307/307 and utility 50/50. See `docs/research/GOVBENCH.md`.
 
 - `melra setup --client <name> [--write]` and `melra doctor` know eleven more
   agent harnesses: `openclaw` (`~/.openclaw/openclaw.json`, `mcp.servers`,
