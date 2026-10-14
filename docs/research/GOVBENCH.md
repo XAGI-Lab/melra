@@ -11,29 +11,36 @@ that the harness starts itself.
 
 | | Result |
 |---|---:|
-| Safety (containment + approval + verification + exactly-once + redaction) | **307/307** (100%) |
+| Safety (containment + approval + verification + exactly-once + redaction) | **312/312** (100%) |
 | Utility (benign operations allowed and `verified_success`) | **50/50** (100%) |
 | Containment | 197/197 |
 | Approval integrity | 19/19 |
-| Verification honesty | 25/25 |
+| Verification honesty | 30/30 |
 | Exactly-once | 11/11 |
 | Redaction | 55/55 |
 
-These scores come from corpus `1.0.0` (sha256 `6a7d5229…`), run against MELRA
-`0.3.0-alpha.11` at commit `ac1abe7` (clean tree) on an Apple M4 with Node
+These scores come from the 362-case corpus (sha256 `e09038f9…`), run against
+MELRA `0.3.0-alpha.12` at commit `02a9533` (clean tree) on an Apple M4 with Node
 `v26.8.2` and Chrome present. No cases were skipped. The full run takes about
 15–30 s. The raw artifact is
+[`results/govbench-0.3.0-alpha.12-2026-10-14.json`](results/govbench-0.3.0-alpha.12-2026-10-14.json).
+
+That corpus adds five verification cases for `custom` evidence to the
+original 357: a satisfied and an unsatisfied registered verifier, one pointed
+outside the workspace, evidence no registered verifier can check (refused at
+plan time), and `custom` naming a built-in (refused). The earlier 357-case run,
+safety `307/307`, is kept as
 [`results/govbench-0.3.0-alpha.11-2026-10-14.json`](results/govbench-0.3.0-alpha.11-2026-10-14.json).
 
 Governance overhead on that run, median of 40 against the raw adapter call:
-file read +0.70 ms, approved file write +0.55 ms, loopback HTTP GET +0.49 ms,
-approved memory put +0.46 ms, approved terminal run +1.42 ms. Overhead depends
+file read +0.57 ms, approved file write +0.57 ms, loopback HTTP GET +0.51 ms,
+approved memory put +0.47 ms, approved terminal run +1.31 ms. Overhead depends
 on machine load; the first run, taken while other builds were running, measured
 +1.1 to +4.4 ms.
 
 ### What the first run found
 
-The first run, from the same corpus before any fix, scored **293/307** safety.
+The first run, on the original 357-case corpus before any fix, scored **293/307** safety.
 Its 14 failures were not marked as expected; they were two real bugs, both since
 fixed, and the run above is the same corpus after the fixes:
 
@@ -68,7 +75,7 @@ fixed, and the run above is the same corpus after the fixes:
 |---|---:|---|
 | Containment | 197 | Refused at the schema, plan-time policy, execute-time policy, or the adapter boundary, with the documented reason. No effect is observed: the loopback canary is not hit, the directory outside the workspace is byte-identical, no outside content is returned, and no `pwned*` file appears. Anything that asks for approval **is approved**, so a pass means the boundary held after a human said yes. Shell-metacharacter arguments to `echo` must stay inert. |
 | Approval integrity | 19 | Missing, wrong, case-changed, padded, wrong-id, other-task, expired, replayed, cancelled, and policy-blocked approvals are refused, and the effect (file or fixture hit) never happens. Plans made under a looser policy are refused at execute after a restart under a tighter one, covering mutations, grants, allowlist, network trait, localhost, domains, and unhinged → guarded. |
-| Verification honesty | 25 | The final status is exactly the expected one. Adapter success with failing evidence is `partial`. Evidence pointing outside the workspace or at its root never passes. Non-zero exits and 5xx/3xx responses are `failed`. A mutation sent but never answered is `recovery_required`, while a read is `failed`. |
+| Verification honesty | 30 | The final status is exactly the expected one. Adapter success with failing evidence is `partial`. Evidence pointing outside the workspace or at its root never passes. Non-zero exits and 5xx/3xx responses are `failed`. A mutation sent but never answered is `recovery_required`, while a read is `failed`. `custom` evidence decides through its registered verifier, gets no read outside the workspace, and is refused at plan time when no verifier is registered or when it names a built-in. |
 | Exactly-once | 11 | The side effect is counted at the source (fixture hits, file content, memory rows). Same idempotency key twice, concurrent executes, re-execute, restart with the same key, re-executing a parked task, and `maxRetries` on a mutation all produce one effect. |
 | Redaction | 55 | Seven fake secret shapes go into seven sinks (plus headers and URL queries for three of them). After the runtime closes, every file in the data directory (`melra.sqlite`, `-wal`, `-shm`, artifacts) is scanned byte-for-byte for the secret, its JSON-escaped form, and its long fragments. |
 | Utility | 50 | Routine file, terminal, HTTP (loopback with `allowLocalhost`), memory, system, and browser work must be allowed and end `verified_success`. This is the false-positive rate. |
@@ -76,8 +83,9 @@ fixed, and the run above is the same corpus after the fixes:
 **Overhead** is measured separately. For each operation, the harness compares
 40 governed operations (plan + approve + execute + verify + receipt) against
 the same operation through `runtime.router` (the bare adapter dispatch), after
-3 warm-up runs. On the recorded machine the median added cost was 1.1–4.4 ms
-per operation. The per-operation numbers are in the artifact's `overhead`
+3 warm-up runs. On the recorded machine the median added cost was about
+0.5 ms per operation, and 1.3 ms for a terminal run (1.1–4.4 ms when the
+machine was busy with other builds). The per-operation numbers are in the artifact's `overhead`
 field. Latency depends on the machine; the correctness scores do not.
 
 ## Run it

@@ -579,7 +579,7 @@ repeated. They are settled by re-observation, or they park in `recovery_required
 | Your own evidence types | A registered verifier answers `{ "type": "custom" }` evidence; planning refuses an unregistered one, and custom evidence is always the weakest strength |
 | Setup for 26 agent apps | `melra setup` writes each app's own format; Claude Code, OpenCode, and Hermes Agent connected to a packed release on a real Mac |
 | OS isolation you can check | `melra doctor` reports capabilities, `no_new_privs`, seccomp, and a read-only root; CI runs it under the hardened Docker and systemd recipes |
-| A self-authored governance benchmark | GovBench: 357 cases through the real runtime, safety `307/307`, utility `50/50` |
+| A self-authored governance benchmark | GovBench: 362 cases through the real runtime, safety `312/312`, utility `50/50` |
 
 See the full [CHANGELOG](CHANGELOG.md).
 
@@ -597,7 +597,7 @@ or that unlike benchmarks are comparable.
 |:--:|---|---:|---|
 | ✅ | Safety and execution evals | **51/51** | Deterministic policy, capability-grant, credential-scope, traversal, terminal, memory, computer, HTTP, cancellation and verification scenarios |
 | 🔁 | Durable Core eval | **8/8** | 100% expected recovery, 0 duplicate execution, 0 false success, 100% event consistency |
-| 🛡️ | [GovBench](docs/research/GOVBENCH.md) (self-authored) | **307/307** safety, **50/50** utility | 357 model-free cases through the real runtime: containment, approval integrity, verification honesty, exactly-once, redaction, and false positives on legitimate work. Its first run found two real bugs (293/307), both fixed; governance adds about 0.5–1.4 ms per action |
+| 🛡️ | [GovBench](docs/research/GOVBENCH.md) (self-authored) | **312/312** safety, **50/50** utility | 362 model-free cases through the real runtime: containment, approval integrity, verification honesty, exactly-once, redaction, and false positives on legitimate work. Its first run found two real bugs (293/307), both fixed; governance adds about 0.5–1.4 ms per action |
 | 🧠 | LoCoMo retrieval | **0.7597** coverage@20 | 1,982 evidence-bearing questions with zero model, embedding or network calls; re-run on 2026-10-14 and identical on every metric |
 | 🧠 | Synthetic recall | **100/100** Recall@1 | Planted-fact regression over 1,000 records |
 | 🌐 | Static-page settle | **183.7 ms** p50 vs 301.3 ms | 39% less waiting with identical 10/10 correct reads |
@@ -607,7 +607,7 @@ or that unlike benchmarks are comparable.
 
 Raw artifacts: [core microbenchmarks](docs/research/results/core-microbenchmarks.json),
 [LoCoMo](docs/research/results/locomo-retrieval.json) and
-[GovBench](docs/research/results/govbench-0.3.0-alpha.11-2026-10-14.json).
+[GovBench](docs/research/results/govbench-0.3.0-alpha.12-2026-10-14.json).
 
 The repository also contains a pre-registered browser-agent harness (MiniWoB-125 and
 the WebArena-Verified Hard-30 registered subset) whose task IDs, upstream revisions and
@@ -628,7 +628,7 @@ pnpm --filter @melra/evals evaluate:durable-core -- --publishable
 # memory, browser, terminal and computer microbenchmarks
 pnpm benchmark:core
 
-# governance benchmark: 357 model-free cases, loopback fixtures only
+# governance benchmark: 362 model-free cases, loopback fixtures only
 pnpm benchmark:govbench
 
 # LoCoMo (dataset not vendored: CC BY-NC 4.0)

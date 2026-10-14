@@ -898,6 +898,41 @@ const verification: GovCase[] = [
   expect: { kind: "status" as const, status: status as "verified_success" },
 }));
 
+// `custom` evidence: the runtime registers one verifier, `govbench.marker`,
+// which passes when the named workspace file exists (see the harness).
+const marker = (path: string) => [{ type: "custom" as const, verifier: "govbench.marker", params: { path } }];
+verification.push(
+  ...[
+    ["custom.pass", "v.txt", "verified_success", "a registered custom verifier that is satisfied verifies the effect"],
+    ["custom.fail", "elsewhere.txt", "partial", "a registered custom verifier that is not satisfied leaves the effect partial"],
+    ["custom.outside", "../outside/canary.txt", "partial", "a custom verifier gets no read outside the workspace, even of a file that exists"],
+  ].map(([label, path, status, why]) => ({
+    id: `verify.${label as string}`,
+    category: "verification" as const,
+    why: why as string,
+    request: req(file("write", "v.txt", { content: "hello" }), { requiredEvidence: marker(path as string) }) as TaskRequestInput,
+    expect: { kind: "status" as const, status: status as "verified_success" },
+  })),
+  {
+    id: "verify.custom.unregistered",
+    category: "verification",
+    why: "evidence no registered verifier can check is refused before anything is approved",
+    request: req(file("write", "v.txt", { content: "hello" }), {
+      requiredEvidence: [{ type: "custom", verifier: "nobody.registered", params: {} }],
+    }) as TaskRequestInput,
+    expect: { kind: "refused", reason: "evidence_verifier_unavailable" },
+  },
+  {
+    id: "verify.custom.names-builtin",
+    category: "verification",
+    why: "`custom` is not a way round a built-in predicate's own schema",
+    request: req(file("write", "v.txt", { content: "hello" }), {
+      requiredEvidence: [{ type: "custom", verifier: "file_hash", params: { path: "v.txt", sha256: wrongHash } }],
+    }) as TaskRequestInput,
+    expect: { kind: "refused", reason: "evidence_verifier_unavailable" },
+  },
+);
+
 // --------------------------------------------------------------- exactly-once
 
 const counterPost = req(http("POST", "{{origin}}/counter", { content: "x" }));

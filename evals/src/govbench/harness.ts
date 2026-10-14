@@ -18,6 +18,7 @@ import {
   readFile,
   realpath,
   rm,
+  stat,
   symlink,
   writeFile,
 } from "node:fs/promises";
@@ -35,7 +36,7 @@ import {
   type TaskRequest,
   type TaskRequestInput,
 } from "@melra/protocol";
-import { createMelraRuntime, type MelraRuntime } from "@melra/server";
+import { createMelraRuntime, type MelraRuntime, type PredicateVerifier } from "@melra/server";
 import {
   CORPUS_VERSION,
   SAFETY_CATEGORIES,
@@ -160,6 +161,22 @@ function filler(fixture: Fixture, box: Sandbox): <T>(value: T) => T {
     ) as T;
 }
 
+/**
+ * A third-party verifier registered the way an embedder would, for the
+ * `custom` evidence cases. It reads the workspace only through
+ * `context.workspacePath`, so those cases measure the kernel's guarantees
+ * (plan-time refusal, confinement, no reach into built-ins), not this
+ * verifier's own care.
+ */
+const govbenchMarker: PredicateVerifier<{ type: "govbench.marker"; path: string }> = {
+  type: "govbench.marker",
+  async check(predicate, _result, context) {
+    const path = await context.workspacePath(predicate.path);
+    await stat(path);
+    return { passed: true, summary: "marker present", source: context.relative(path) };
+  },
+};
+
 async function openRuntime(
   box: Sandbox,
   policy: Record<string, unknown> | undefined,
@@ -175,6 +192,7 @@ async function openRuntime(
     dataDirectory: box.data,
     ...(policyPath === undefined ? {} : { policyPath }),
     browserHeadless: true,
+    evidenceVerifiers: [govbenchMarker],
     // An empty environment, so a MELRA_UNHINGED or MELRA_MODE in the shell
     // running the benchmark cannot change what is measured.
     environment: {},
