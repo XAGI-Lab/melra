@@ -2,11 +2,11 @@
 
 Last updated: 2026-10-14
 
-Version: `0.3.0-alpha.11`
+Version: `0.3.0-alpha.12`
 
 ## Engineering Complete
 
-- ✅ **Test suites green on `main`**: 506 Vitest cases pass (6 platform-skipped) and 5 Python SDK pytest cases on the ubuntu / Node 24 CI job at `ac1abe7`. The same run had one Windows / Node 22 failure in `packages/browser-runtime/src/stalled-calls.test.ts`, which passed on the other five Node jobs
+- ✅ **Test suites green on `main`**: 506 Vitest cases pass (6 platform-skipped) and 5 Python SDK pytest cases on the ubuntu / Node 24 CI job at `ac1abe7`. The same run had one Windows / Node 22 failure in `packages/browser-runtime/src/stalled-calls.test.ts`; that was a test racing a slow runner, fixed in #128
 - ✅ **Versions consistent** across the root manifest, every `apps/*` and `packages/*` manifest, the protocol constant, sdk-py, and both uv locks (`pnpm versions:check`)
 - ✅ **Gate green at the `v0.3.0-alpha.11` tag**: `pnpm check`, `pnpm e2e`, `pnpm security:audit` all passed in the release workflow
 - ✅ **Conformance L3 verified effects**: `melra conformance` reports 14/14 checks against this build's own stdio server, and L1 under `MELRA_UNHINGED=1` — both asserted in CI. Levels and their limits: [CONFORMANCE.md](CONFORMANCE.md)
@@ -40,7 +40,7 @@ leaving it for a tag push to discover.
 **From VALIDATION.md:**
 > Before `1.0`, a clean released artifact must pass on supported Linux, macOS, and Windows machines, and an independent security review must resolve all critical findings.
 
-**Current state:** Threat model reviewed for 0.3.0-alpha.11, no independent audit yet.
+**Current state:** Threat model reviewed for 0.3.0-alpha.12, no independent audit yet.
 
 **Action:** Engage external security reviewer when approaching beta/1.0.
 
