@@ -50,9 +50,9 @@ a six-file one that actually lands.
   — scoped so the description names the files to open.
 - [`help wanted`](https://github.com/XAGI-Lab/melra/labels/help%20wanted)
   — larger, still well-specified.
-- [Roadmap milestones](https://github.com/XAGI-Lab/melra/milestones) — P2, P3
-  and P4, each with a design issue open *before* the code exists. That is the
-  cheapest moment to disagree with it.
+- [Roadmap milestones](https://github.com/XAGI-Lab/melra/milestones) — P2 and
+  P3 are still open (P4 has shipped), each with a design issue open *before*
+  the code exists. That is the cheapest moment to disagree with it.
 
 ## Pull requests
 

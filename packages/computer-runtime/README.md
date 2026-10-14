@@ -2,7 +2,9 @@
 
 Screen and input control for [MELRA](https://github.com/XAGI-Lab/melra):
 capabilities, inspect, screenshot, click, move, drag, type, key, and scroll,
-driven through the host's own automation tooling.
+driven through the host's own automation tooling: native scripts on macOS,
+Windows PowerShell and .NET on Windows, and screenshot tools plus `xdotool` on
+Linux/X11.
 
 ```bash
 npm install @melra/computer-runtime

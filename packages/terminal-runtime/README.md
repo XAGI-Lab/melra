@@ -1,7 +1,9 @@
 # @melra/terminal-runtime
 
 Bounded process execution for [MELRA](https://github.com/XAGI-Lab/melra):
-one-shot `run`, plus `start`/`status`/`output`/`stop` for longer-lived processes.
+one-shot `run`, plus `start`/`status`/`output`/`stop` for longer-lived processes
+and `send` to answer a job started with `interactive: true` (stdin is a pipe,
+not a pseudo-terminal).
 
 ```bash
 npm install @melra/terminal-runtime
@@ -33,8 +35,10 @@ Output is captured up to the operation's `maxOutputChars` and flagged
 budget actually stops work rather than just reporting a timeout.
 
 `redactTerminalOutput` strips credential-shaped values from captured output
-before it is persisted — tokens, `Authorization` headers, and connection strings
-show up in stdout more often than anyone expects.
+before it is persisted — keys, tokens, and `Authorization` headers show up in
+stdout more often than anyone expects. It applies the same `SECRET_PATTERNS`
+list as receipts and memory, from
+[`@melra/receipt-schema`](https://www.npmjs.com/package/@melra/receipt-schema).
 
 Allowlisting decides which commands may run at all, and that lives in
 [`@melra/policy-core`](https://www.npmjs.com/package/@melra/policy-core), not

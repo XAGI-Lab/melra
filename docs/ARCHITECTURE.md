@@ -2,7 +2,7 @@
 
 MELRA is a local-first autonomy kernel: the layer an agent asks to change the
 world through, rather than a layer that decides what to change. MCP, CLI, SDK,
-and loopback HTTP callers use the same task and workflow services; no interface
+loopback HTTP, and Unix-socket callers use the same task and workflow services; no interface
 bypasses schema validation, policy, approval, budgets, verification, or durable
 evidence.
 
@@ -62,12 +62,14 @@ plan cannot ride a policy that has since been tightened.
 
 `IDENTITY` and `CAPABILITY` are real stages but weak ones: the principal is a
 claim the caller makes rather than something MELRA authenticates, and grants are
-checked only where an operator has issued them. `CREDENTIALS` is still a no-op —
-adapters use the ambient process environment, so an agent that can reach the
-kernel can reach whatever the kernel's process can. Closing those two is
-[P2](../ROADMAP.md#p2--hard-capability-boundary) and
-[P4](../ROADMAP.md#p4--credentials-and-api-effects) work, listed here because
-the lifecycle is the contract even where the implementation is still one step.
+checked only where an operator has issued them. `CREDENTIALS` is real for HTTP:
+secrets an operator configured under `policy.credentials` are injected by the
+kernel at send time, scoped by host and capability, and never returned to the
+caller ([P4](../ROADMAP.md#p4--credentials-and-api-effects)). Other adapters
+still use the ambient process environment, so an agent that can reach the
+kernel can reach whatever the kernel's process can. Authenticating identity is
+[P2](../ROADMAP.md#p2--hard-capability-boundary) work, listed here because the
+lifecycle is the contract even where the implementation is still one step.
 
 ## Effect contract
 
@@ -138,7 +140,7 @@ flowchart LR
     Plan --> Policy{"Policy decision"}
     Policy -->|deny| Blocked["Policy blocked"]
     Policy -->|allow or exact approval| Task["Governed task attempt"]
-    Task --> Adapter["File · terminal · browser · memory · computer · system"]
+    Task --> Adapter["File · terminal · browser · computer · HTTP · memory · system"]
     Adapter --> Verify["Independent verifier where available"]
     Verify --> Evidence["Receipt and certificate"]
     Evidence --> Event["Workflow event + projection"]
@@ -308,9 +310,9 @@ same durable record; none of them is a shortcut past a stage of the lifecycle.
 | MCP | Streamable HTTP on loopback | A client that cannot spawn processes |
 | MCP and JSON API | Streamable HTTP on a mode-`0600` Unix socket | A sandboxed harness on the same host, as its only door |
 | CLI | argv | Humans, scripts, CI |
-| TypeScript SDK | stdio subprocess | Node applications and custom harnesses |
-| Python SDK | stdio subprocess | Python applications and custom harnesses |
-| JSON API | loopback HTTP, read-only | Consoles and dashboards |
+| TypeScript SDK | stdio subprocess, or a running server over loopback HTTP or the Unix socket | Node applications and custom harnesses |
+| Python SDK | stdio subprocess, or a running server over loopback HTTP or the Unix socket | Python applications and custom harnesses |
+| JSON API | loopback HTTP or the Unix socket, read-only | Consoles and dashboards |
 
 The MCP surface is exactly eleven tools:
 
@@ -325,7 +327,8 @@ The MCP surface is exactly eleven tools:
 
 The CLI exposes `workflow plan`, `workflow advance`, `workflow inspect`,
 `workflow cancel`, and the operator halts `workflow pause`, `workflow resume`,
-and `workflow suspend`. The TypeScript and Python SDKs call the same workflow
+and `workflow suspend`; `tasks`, `watch`, and `status` read the local database
+read-only, with or without a server running. The TypeScript and Python SDKs call the same workflow
 tools and do not implement a second execution engine.
 
 ## Packages
@@ -342,7 +345,7 @@ implementations that must pass through those services to reach anything.
 | `@melra/verifier-core` | Deterministic evidence evaluation |
 | `@melra/receipt-schema` | Canonical receipts, certificates, hashes, and redaction |
 | `@melra/memory` | Operational memory: scoped local retrieval, lifecycle, redaction |
-| `@melra/server` | Runtime composition and the MCP/HTTP transports |
+| `@melra/server` | Runtime composition and the MCP/HTTP/Unix-socket transports |
 
 | Reference effect adapter | Effects it can perform |
 |---|---|
@@ -401,9 +404,9 @@ exactly-once everywhere:
 | `read-only` | No state change; safe to retry | Reads, which are the only retried effects |
 | `at-most-once` | Executed zero or one times; never retried | Every mutation and destructive operation |
 | `at-least-once` | May execute more than once; the effect must tolerate it | Not used |
-| `provider-idempotent` | Exactly-once because the provider accepts an idempotency key | Roadmap, with the HTTP adapter |
+| `provider-idempotent` | Exactly-once because the provider accepts an idempotency key | Not derived yet: the HTTP adapter sends `Idempotency-Key`, but MELRA cannot check a provider honours it |
 | `reconciliation-required` | Outcome may be unknown; settled by re-reading the provider rather than re-running | A request that declared `reconciliation` predicates, and interrupted mutations without independent file evidence |
-| `compensatable` | Undone by a declared inverse effect | `compensation` workflow nodes |
+| `compensatable` | Undone by a declared inverse effect | Not derived on a single task yet; `compensation` workflow nodes provide the inverse |
 
 The plan publishes the value as `contract.executionGuarantee` and the receipt
 repeats it, so a caller learns a write will not be retried *before* it approves
@@ -486,8 +489,8 @@ did with it. Recovery asks *what do the durable facts say happened*, never
 |---|---|---|
 | Boundary | A policy file the caller can edit | Not reachable by the caller |
 | Harness | Holds credentials, may also hold native tools | Sandboxed, no privileged secrets, no raw production shell |
-| Transport | stdio or loopback HTTP | Authenticated IPC to a privileged local daemon |
-| Status | Shipped | [P2](../ROADMAP.md#p2--hard-capability-boundary) |
+| Transport | stdio, loopback HTTP, or a Unix socket | Token-authenticated IPC: a mode-`0600` Unix socket or loopback, never a public bind |
+| Status | Shipped | `MELRA_MODE=enforced` ships the refusals MELRA owns; the OS isolation around the harness is the operator's ([P2](../ROADMAP.md#p2--hard-capability-boundary)) |
 
 Developer mode is the honest default for adoption: MELRA is a governed path, and
 a harness that also has an unrestricted native terminal can simply not use it.
@@ -503,8 +506,9 @@ autonomous effects performed through those resources.
 
 ## Verification boundary
 
-Filesystem predicates independently re-read the workspace (level 1). Result,
-terminal, URL, and page predicates currently evaluate adapter-returned
+Filesystem predicates independently re-read the workspace (level 1), and
+`http_resource_matches` asks the provider over a second request (level 2).
+Result, terminal, URL, and page predicates evaluate adapter-returned
 observations (level 0). Predicates are caller-authored, so a weak predicate can
 prove too little. Models and adapters cannot approve actions or mark a workflow
 complete, but MELRA is not yet an independent semantic judge of arbitrary goals.

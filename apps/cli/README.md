@@ -6,10 +6,13 @@ Everything in one command, with nothing installed beforehand:
 npx @melra/cli@alpha setup
 ```
 
-`setup` writes a safe local policy, prints an MCP client configuration you can
-paste straight into your client, and runs every readiness check (Node,
-workspace, SQLite, browser, computer-use adapter, policy). It exits non-zero if
-a check fails and never overwrites an existing policy.
+`setup` writes a safe local policy, produces an MCP client configuration, and
+runs every readiness check (Node, workspace, SQLite, browser, computer-use
+adapter, policy, MCP clients). In a terminal it asks which detected client to
+set up and offers to write MELRA into that client's own config file;
+`--client <name> --write` does the same without asking, and piped or with
+`--json` it prints JSON. It exits non-zero if a check fails and never
+overwrites an existing policy.
 
 To keep a resolved copy on the machine instead of resolving on every run:
 
@@ -24,8 +27,10 @@ version that wrote the config, since an `npx` install leaves no `melra` on your
 `PATH`.
 
 Individual steps are still available: `melra doctor` checks readiness and writes
-nothing, `melra init` writes the policy and config without checking. Run
-`melra help` for the full command list.
+nothing, `melra init` writes the policy and config without checking. `melra
+serve` speaks stdio, `--http` loopback HTTP with the console, and `--socket
+<path>` a mode-`0600` Unix socket; `melra tasks`, `watch`, and `status` show what
+MELRA is doing without a server. Run `melra help` for the full command list.
 
 `melra conformance` checks a running endpoint rather than a build — its own
 stdio server by default, or `--url` for a loopback HTTP one — and reports the

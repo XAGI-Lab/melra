@@ -27,7 +27,8 @@ model router, a planner, a prompt library, semantic memory about the user —
 belongs to the agent above and does not go in this repo.
 
 MCP over stdio is one of several interfaces onto the same runtime (MCP stdio,
-MCP over loopback HTTP, CLI, TypeScript SDK, Python SDK, read-only JSON API);
+MCP over loopback HTTP or a mode-`0600` Unix socket, CLI, TypeScript SDK, Python
+SDK, read-only JSON API);
 none of them is a shortcut past a stage of the pipeline. Eleven MCP tools sit in
 front of five reference effect adapters (files, terminal, browser, computer, http)
 plus
@@ -45,14 +46,14 @@ strict tsc), plus two Python projects managed by `uv` (`sdk-py`,
 pnpm install --frozen-lockfile
 pnpm build                  # tsc -p per package; required before tests (see below)
 pnpm typecheck              # builds, then tsc -p tsconfig.test.json per package (src + tests, no emit)
-pnpm check                  # versions:check + docs:check + typecheck + check-dist (no tests in dist/) + test + python:check — the CI gate
+pnpm check                  # versions:check + docs:check + typecheck + check-dist (no tests in dist/) + README examples + test + python:check — the CI gate
 pnpm docs:check             # every relative link and #anchor in every *.md resolves; every MELRA_* variable has a row in docs/INSTALLATION.md; CHANGELOG.md is in Keep a Changelog shape
 pnpm evals                  # 51 deterministic policy/execution scenarios → evals/results/latest.json
 pnpm e2e                    # packages/server/test/e2e.test.ts against a live stdio server
 pnpm pack:check              # npm pack --dry-run for the published CLI
 pnpm readme:check           # typecheck every ```ts block in every package README
 pnpm security:audit          # pnpm audit --prod + scripts/python-audit.mjs
-pnpm melra <cmd>            # run the CLI from source via tsx (doctor | setup | init | serve | run | inspect | conformance | clients | workflow | policy test)
+pnpm melra <cmd>            # run the CLI from source via tsx (setup | doctor | conformance | init | serve | run | inspect | export | tasks | watch | status | workflow | demo | clients | policy test | version)
 ```
 
 Single test file (vitest args pass through the package script):
@@ -73,6 +74,7 @@ Benchmarks (see README "Reproduce the scores" for the full MiniWoB/LoCoMo invoca
 
 ```bash
 pnpm benchmark:core         # builds, then scripts/bench-core.mjs
+pnpm benchmark:govbench     # builds, then GovBench (evals/src/govbench) → docs/research/results/govbench-*.json
 pnpm benchmark:locomo -- --dataset <locomo10.json> --output <artifact.json>
 pnpm benchmark:browser:verify-upstream
 ```
@@ -154,7 +156,7 @@ Adding or changing an operation action touches a fixed set of places, in this or
 
 1. `packages/protocol/src/index.ts` — the `*OperationSchema` (all schemas are `.strict()`, bounded, with defaults; unknown fields are rejected by design).
 2. `packages/policy-core` `classifyOperation` — effect, risk, capability string, target.
-3. The owning runtime package (`file-runtime`, `terminal-runtime`, `browser-runtime`, `computer-runtime`, `memory`).
+3. The owning runtime package (`file-runtime`, `terminal-runtime`, `browser-runtime`, `computer-runtime`, `http-runtime`, `memory`).
 4. `RuntimeRouter` in `packages/server/src/runtime.ts` if a new `kind` is introduced.
 5. A scenario in `evals/src/scenarios.ts` asserting both `expectedPlan` and `expectedFinal`.
 
@@ -164,7 +166,9 @@ anything outside the workspace root, including the root itself — keep that con
 adding predicates.
 
 Redaction happens at multiple layers: `redactStructuredValue` on task requests, results, and
-error messages before persistence, plus `redactMemoryValue` inside the memory package. Raw
+error messages before persistence, plus `redactMemoryValue` inside the memory package and
+`redactTerminalOutput` in the terminal runtime. All three apply one secret-pattern list,
+`SECRET_PATTERNS` in `packages/receipt-schema`, so a new secret format is added there once. Raw
 output goes only to the live caller; SQLite holds the redacted copy. New fields that can
 carry secrets must pass through one of these.
 
@@ -200,14 +204,15 @@ Schema changes need a new migration, not an edit to the version-1 statements.
 
 `scripts/check-versions.mjs` (run by `pnpm check`) requires the root `package.json` version to
 match every `apps/*` and `packages/*` manifest, the `PRODUCT_VERSION` constant in
-`packages/protocol/src/index.ts`, and `sdk-py/pyproject.toml` (with `-alpha.N` rewritten as
-`aN`). Bump all four together.
+`packages/protocol/src/index.ts`, `sdk-py/pyproject.toml` (with `-alpha.N` rewritten as
+`aN`), and the `melra` entry in `sdk-py/uv.lock` and `benchmarks/browser-agent/uv.lock`. Bump
+them together with `pnpm versions:set <version>`.
 
 ## Contribution conventions
 
 - Commits are signed off (DCO); `scripts/check-dco.mjs` and `.github/workflows/dco.yml` enforce it. Commit subjects follow `type(scope): summary`, e.g. `bench(browser): add paired evaluator`.
 - User-visible changes get a `CHANGELOG.md` entry under `## [Unreleased]`, in the existing `### Added`/`Changed`/`Deprecated`/`Removed`/`Fixed`/`Security` section (canonical order, one of each). `scripts/check-changelog.mjs` enforces the shape, and `.gitattributes` merges the file with `merge=union` so parallel branches stop conflicting there locally; GitHub's web merge ignores that, so rebase before merging and rerun `pnpm docs:check`.
-- CI runs `pnpm check` on ubuntu/macos/windows × Node 22/24, so avoid platform-specific paths and shell assumptions.
+- CI runs `pnpm check` on ubuntu/macos/windows × Node 22/24 (Python 3.11), plus the Python SDK tests and pyright on CPython 3.12–3.14, so avoid platform-specific paths and shell assumptions.
 
 ## Benchmark and claims discipline
 

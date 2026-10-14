@@ -68,8 +68,10 @@ Run the readiness check on its own at any time:
 melra doctor
 ```
 
-The command reports Node, workspace, data-directory, SQLite, browser,
-computer-use adapter, and policy readiness without exposing credentials. Unlike
+The command reports Node, guardrails, deployment mode, workspace,
+data-directory, SQLite, browser, computer-use adapter, and policy readiness —
+plus the `MELRA_SOCKET` path when one is set, and MCP clients — without exposing
+credentials. Unlike
 `setup`, it changes no configuration: the only thing it may create is the data
 directory, if it does not exist yet.
 
@@ -188,7 +190,7 @@ Back up `payload.key` with the SQLite files. Changing or losing it makes
 persisted task and workflow payloads unreadable. Never place it in a client
 configuration committed to source control.
 
-These three variables exist for benchmark and diagnostic harnesses. Leave them
+These four variables exist for benchmark and diagnostic harnesses. Leave them
 unset for normal use, which keeps the default isolated browser behavior:
 
 | Variable | Purpose | Default |
@@ -508,10 +510,12 @@ It serves exactly what `--http` serves — Streamable HTTP MCP at `/mcp`, the
 read-only JSON API, the event stream, and the console — through the same
 request handler, so nothing reached over the socket skips a pipeline stage. A
 client names `http://localhost` in its URLs and connects to the socket path.
-The TypeScript SDK does both for you —
+Both SDKs do both for you —
 `MelraClient.connect({ socketPath, token })`, or `{ url, token }` for
-`--http` — and refuses to send the token over plain `http:` to anything but
-loopback; see [Connecting to a running server](../packages/sdk-ts/README.md#connecting-to-a-running-server).
+`--http`, in TypeScript, and `MelraClient.connect_socket(path, token=...)` or
+`connect_http(url, token=...)` in Python — and refuse to send the token over
+plain `http:` to anything but loopback; see [Connecting to a running server](../packages/sdk-ts/README.md#connecting-to-a-running-server)
+and [sdk-py/README.md](../sdk-py/README.md).
 
 - **The socket is created mode `0600`, and the kernel refuses `connect` from
   any other OS user.** The umask is narrowed around the bind, so the socket never
@@ -697,7 +701,8 @@ closing every door it owns:
   boundary cannot be bypassed cannot also ship a bypass flag. Either flag or
   variable, the process exits with `enforced_mode_refuses_unsafe_local` before
   anything runs.
-- **No bind outside loopback.** `serve --http --host 0.0.0.0` fails with
+- **No bind outside loopback.** The CLI has no `--host` flag at all, and an
+  embedder calling `serveHttp({ host: "0.0.0.0" })` fails with
   `enforced_mode_refuses_public_bind`. A sandbox talks to its kernel over IPC; a
   listener on a routable interface is a machine-control API on a network.
   [`--socket`](#over-a-unix-socket) is allowed, and is the stricter choice: a
@@ -845,7 +850,8 @@ the interactive `hermes mcp add`); `--write` produces the same entry without
 the client running.
 
 Each path and format above is taken from that client's own documentation or
-source, linked beside its entry in `apps/cli/src/clients.ts`. Warp may ask you
+source; the entries added most recently link theirs beside them in
+`apps/cli/src/clients.ts`. Warp may ask you
 to approve a change to its MCP file the next time it starts.
 
 Clients with no file `--write` can safely target — add MELRA in the app's own
@@ -922,7 +928,7 @@ OpenAI Agents SDK, the Vercel AI SDK, or the MCP SDKs directly — spawn the sam
 short snippet for each.
 
 The repository’s automated compatibility claim is the official MCP SDK over
-stdio. Named graphical clients remain release-gated until their current
+stdio, loopback HTTP, and the Unix socket. Named graphical clients remain release-gated until their current
 versions have been manually exercised; see [VALIDATION.md](VALIDATION.md).
 
 ## Ordinary tool names

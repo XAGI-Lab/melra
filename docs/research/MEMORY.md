@@ -83,7 +83,10 @@ the committed artifact records SHA-256
 ## Next benchmark gates
 
 - official LongMemEval full-500 retrieval run;
-- semantic embedding and lexical/semantic ablation;
 - aggregation-aware retrieval depth;
 - prompt-injection and memory-poisoning evaluation;
 - end-to-end answer accuracy with pinned reader and judge prompts.
+
+Semantic embeddings are no longer a gate: the kernel deliberately ships
+model-free retrieval, and a harness that wants vectors indexes what search and
+export return ([roadmap](../../ROADMAP.md#memory)).

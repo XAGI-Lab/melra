@@ -11,7 +11,7 @@ Two kinds of work appear below, and the distinction is the point:
   durably, deduplicate, run under a budget, verify against evidence, receipt.
   Those nine are the guarantees, and they must hold no matter which agent is
   above or which adapter is below.
-- **Reference effect adapters** — files, terminal, browser, computer, and later
+- **Reference effect adapters** — files, terminal, browser, computer, and
   HTTP/API. Replaceable implementations that reach the world *through* the kernel
   services. An adapter that could skip them would not be an adapter.
 
@@ -92,9 +92,24 @@ them as promises was the wrong call:
 - [x] CLI doctor, init, serve, run, inspect, export, and policy test.
 - [x] TypeScript and Python client SDKs.
 - [x] Docker image and hardened Compose configuration.
-- [x] Forty-two deterministic safety/execution scenarios plus eight durable
-      crash, recovery, and concurrency scenarios.
+- [x] Deterministic safety/execution scenarios (fifty-one today) plus eight
+      durable crash, recovery, and concurrency scenarios.
 - [x] Real MCP stdio, browser, container, and Python interoperability tests.
+- [x] Guided `melra setup`: in a terminal it lists the MCP clients it finds,
+      asks which one, and writes MELRA into that client's own file — 25 named
+      clients and harnesses, JSONC and YAML edited in place with comments kept
+      and a `.bak` saved. `melra doctor` reports which clients point at MELRA
+      and the command that repoints a stale one. Formats are checked against
+      each client's documentation or source, not exercised in the app.
+- [x] Readable terminal output for `doctor`, `setup`, `init`, and `version`,
+      with the same JSON as before when piped or given `--json`; `melra tasks`,
+      `watch`, and `status` read the local database read-only, server or not.
+- [x] The MCP server sends `instructions` on connect, so a model learns the
+      plan → execute → verify loop and what each status means without a failed
+      first call.
+- [x] MELRA GovBench: a self-authored, model-free benchmark of the kernel's own
+      guarantees through the real runtime (`pnpm benchmark:govbench`), see
+      [docs/research/GOVBENCH.md](docs/research/GOVBENCH.md).
 - [x] Linux, macOS, and Windows CI definitions.
 - [x] CodeQL, dependency review, Dependabot, DCO, and secret protections.
 - [x] Release workflow for checksums, SBOM, and signed provenance.
@@ -157,6 +172,10 @@ them as promises was the wrong call:
   target with `computer_target_confidence_too_low` — worth telling a caller
   about, not worth acting on.
 - [x] Popup and multi-window policy (`policy.popups`).
+- [x] Every browser call bounded by the action's timeout and the task's cancel
+  signal, so a stalled page fails with `browser_call_timeout:<call>` instead of
+  hanging; a mutation that stalls after its input went out is reported as an
+  unknown outcome, not a failure.
 - [x] Interactive terminal input (`interactive` + `send`). A real pseudo-TTY is
   still open: stdin is piped, so a program that checks `isatty` and refuses
   unless it owns a terminal is out of reach without a native PTY dependency.
@@ -168,6 +187,11 @@ them as promises was the wrong call:
 ### Transport and identity
 
 - [x] Local Streamable HTTP transport.
+- [x] Unix-socket transport: `melra serve --socket <path>` serves the same
+  surface on a mode-`0600` socket, token still required, refused on Windows.
+- [x] Both SDKs connect to a running server over loopback HTTP or the socket,
+  not only by spawning one; the token is passed explicitly and plain `http:` to
+  a remote host is refused unless the caller opts in.
 - [x] Local OAuth and client identity. A client that was never handed the
   startup token registers itself (RFC 7591), is approved by a person in a
   browser, and exchanges an authorization code for a bearer token under PKCE

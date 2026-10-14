@@ -16,8 +16,10 @@ const verifier = await Verifier.create(workspaceRoot);
 const items = await verifier.verify(request.requiredEvidence, output);
 ```
 
-Supported predicates cover file existence, content hashes, path absence, exit
-codes, output matches, and HTTP status. Read-only operations with no declared
+Supported predicates cover file existence, absence, and content hashes, exit
+codes, result values and substrings, URL globs, page text, and
+`http_resource_matches`, a second `GET`/`HEAD` that asks the provider rather
+than the call that acted. Read-only operations with no declared
 evidence get a synthetic `operation_completed` item, so a receipt never has an
 empty evidence list.
 

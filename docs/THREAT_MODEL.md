@@ -57,7 +57,7 @@ The residual risk is the assertion itself. See
 | Prompt-driven destructive action | effect classification, required evidence, exact scoped approval | user may approve a misleading but accurately displayed operation |
 | Argument or schema smuggling | strict schemas reject unknown fields | semantic intent can still be ambiguous |
 | Unbounded retries | read-only retry budget; one attempt for mutations | independent tasks can repeat the same request |
-| Duplicate workflow advance | process-local per-workflow serialization, state-version compare-and-swap, idempotency commit | multiple server processes sharing one data directory are unsupported |
+| Duplicate workflow advance | process-local per-workflow serialization, an expiring cross-process SQLite lease, state-version compare-and-swap, idempotency commit | a process that dies mid-advance holds its lease until it expires, so other processes wait rather than proceed |
 | Crash after an adapter effect | independent file re-observation or explicit `recovery_required` | non-filesystem mutations may require operator reconciliation |
 | False completion | explicit predicates and `partial` status | a weak caller-chosen predicate may prove too little |
 | Path traversal | lexical and realpath confinement; symlink tests | host race conditions outside the configured workspace model |
@@ -69,7 +69,7 @@ The residual risk is the assertion itself. See
 | Unintended computer input | typed actions, named-key allowlist, high-risk approval | focus can change between approval and action |
 | Desktop observation leakage | local-only screenshot artifact with explicit invocation | screenshots may contain sensitive on-screen data |
 | Secret persistence | executable payload encryption plus redacted projections, events, receipts, and logs | novel secret formats may not match redaction patterns; key loss is unrecoverable |
-| Memory poisoning | explicit mutation approval, scopes, provenance | content-level poisoning classifier is not implemented |
+| Memory poisoning | explicit mutation approval, scopes, provenance | no content-level poisoning classifier; classifying text is left to the harness, and a poisoned memory still has to pass policy, approval, and evidence to become an effect |
 | Receipt tampering | canonical digests and task-linked certificate | receipts and projections are not encrypted or externally signed |
 | A local process taking the HTTP surface | bearer token compared in constant time, loopback binding, read-only JSON API; or `--socket`, a mode-`0600` Unix socket the kernel closes to every other OS user, with the token still required | a loopback port is reachable by every local process, so there the token is the only barrier; on either transport, anything running as the same OS user (or root) can connect and read the token from the process that holds it; no socket transport on Windows |
 | A client granting itself HTTP access | registration grants nothing; a person approves in a browser, PKCE S256 binds the code, loopback-or-private redirect URIs keep the code on the machine, codes are single-use | approval is a human judgement about a name the client chose for itself |
@@ -101,6 +101,9 @@ Browser requests reject:
 - hostnames resolving to a disallowed address;
 - redirects and subresources that cross the same checks.
 
+The HTTP adapter applies the same destination checks, connects to the
+address it checked, and does not follow redirects.
+
 A domain allowlist controls intended public destinations. Wildcard domain
 access is convenient for local experimentation but should be replaced with
 specific domains in reviewed policies.
@@ -119,10 +122,10 @@ specific domains in reviewed policies.
 ## Required work before stable release
 
 - OS-level sandbox profiles outside Docker;
-- content-level memory-poisoning defenses;
 - browser download scanning hooks;
-- active-window, focus, secure-input, and multi-display verification;
-- post-action desktop observation and task-specific evidence fixtures;
+- focus verification between approval and action, and multi-display
+  verification (macOS secure-input refusal and frontmost-window and display
+  observation ship);
 - automatic reconciliation for arbitrary non-filesystem mutations (cross-process
   workflow leases are implemented; reconciliation beyond filesystem effects is
   not);

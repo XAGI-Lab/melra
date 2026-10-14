@@ -33,7 +33,9 @@ needs no model call, and never sends anything anywhere. `rankMemories` and
 `tokenize` are exported if you want the ranking without the store.
 
 Every value passes through `redactMemoryValue` before it is written, so a token
-pasted into a memory entry is not preserved in the database.
+pasted into a memory entry is not preserved in the database. It applies the same
+`SECRET_PATTERNS` list receipts and terminal output use, from
+[`@melra/receipt-schema`](https://www.npmjs.com/package/@melra/receipt-schema).
 
 Reads and deletes are scope-aware: a scope only sees its own entries, so one
 task cannot read what another stored by guessing a key.

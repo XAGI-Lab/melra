@@ -70,7 +70,7 @@ Actions: `list`, `read`, `stat`, `hash`, `write`, `move`, `delete`, `mkdir`.
 
 ### Terminal
 
-Actions: `run`, `start`, `status`, `output`, `stop`.
+Actions: `run`, `start`, `status`, `output`, `stop`, `send`.
 
 - Commands are spawned directly, never through a shell.
 - Shell interpreters, privilege escalation, and platform scripting shells are
@@ -79,7 +79,10 @@ Actions: `run`, `start`, `status`, `output`, `stop`.
   bounded.
 - Background jobs are supervised only for the life of the server process.
 
-Interactive pseudo-terminal sessions are not implemented in `0.3`.
+A job started with `interactive: true` keeps stdin open, and `send` writes a line
+to it ([commands that ask a question](INSTALLATION.md#commands-that-ask-a-question)).
+Stdin is a pipe, not a pseudo-terminal: interactive PTY sessions are not
+implemented in `0.3`.
 
 ### Browser
 
@@ -168,7 +171,9 @@ Scopes: `session`, `task`, `project`, `workspace`, `user`, `procedural`.
 
 - Stored records include source, confidence, timestamps, and optional speaker,
   episode ID, and sequence metadata.
-- Common API keys, bearer tokens, passwords, and GitHub tokens are redacted.
+- PEM private keys, AWS access key IDs, JWTs, Slack and GitHub tokens, common
+  API keys, bearer tokens, and password/secret assignments are redacted — the
+  same `SECRET_PATTERNS` list receipts and terminal output use.
 - Search is local and scoped with BM25-style lexical evidence, exact phrases,
   explicit speaker matching, bounded adjacent episode context, confidence,
   freshness, and bounded head diversity.
@@ -178,7 +183,8 @@ Scopes: `session`, `task`, `project`, `workspace`, `user`, `procedural`.
   are excluded by default.
 
 Memory is not a password manager. Semantic embeddings, automatic
-consolidation, and poisoning detection remain roadmap work.
+consolidation, and poisoning classifiers are deliberately left to the harness
+above; the [roadmap](../ROADMAP.md#memory) says why.
 
 ### Computer
 
@@ -377,7 +383,9 @@ Mutations and destructive operations have one execution attempt.
 
 - Supported: local stdio, and loopback Streamable HTTP (`melra serve --http`)
   guarded by a bearer token, alongside a read-only JSON API, an SSE workflow
-  event stream, and the Community console.
+  event stream, and the Community console. `melra serve --socket <path>` serves
+  the same surface on a mode-`0600` Unix socket, token still required, OAuth
+  off; not on Windows.
 - Supported over loopback HTTP: OAuth 2.1 client registration, browser approval,
   and per-client identity — an approved client is named at the head of the
   delegation chain on every receipt. `MELRA_HTTP_OAUTH=0` turns it off.

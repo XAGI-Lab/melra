@@ -56,15 +56,13 @@ works, and is silently classified as a mutation with the wrong risk.
    is `.strict()`, bounded, and has defaults. Unknown fields are rejected by
    design; do not relax that to make a field optional.
 2. **`packages/policy-core/src/index.ts`** — `classifyOperation`. Effect
-   (`read` / `mutation` / `destructive`), risk, capability string, target. This
+   (`read` / `mutate` / `destructive`), risk, capability string, target. This
    is the single place classification lives.
 3. **The owning runtime package** — `file-runtime`, `terminal-runtime`,
-   `browser-runtime`, `computer-runtime`, or `memory`.
+   `browser-runtime`, `computer-runtime`, `http-runtime`, or `memory`.
 4. **`packages/server/src/runtime.ts`** — `RuntimeRouter`, only if you introduced
    a new `kind`.
-5. **`packages/server/src/mcp-server.ts`** — the `operations` map inside
-   `melra_capabilities`. It is hand-maintained, not derived from the schemas.
-6. **`evals/src/scenarios.ts`** — a scenario asserting both `expectedPlan` and
+5. **`evals/src/scenarios.ts`** — a scenario asserting both `expectedPlan` and
    `expectedFinal`. Not optional: an operation without a scenario is an operation
    whose policy behaviour nobody has stated.
 
@@ -112,7 +110,9 @@ version-1 statements — someone out there has a database that already ran them.
 ### …touch anything that can carry a secret
 
 It must pass through `redactStructuredValue` (task requests, results, error
-messages) or `redactMemoryValue` (memory). Raw output goes only to the live
+messages) or `redactMemoryValue` (memory). Both apply the one secret-pattern
+list, `SECRET_PATTERNS` in `packages/receipt-schema/src/index.ts`; a new secret
+format belongs there, not in a second list. Raw output goes only to the live
 caller; SQLite holds the redacted copy. A new field that carries a token and
 skips both is a data leak with a passing test suite.
 
@@ -136,7 +136,7 @@ skips both is a data leak with a passing test suite.
 
 - [ ] `pnpm check` passes
 - [ ] new behaviour has a test that fails without your change
-- [ ] `pnpm evals` still reports 48/48 if you touched policy or execution
+- [ ] `pnpm evals` still reports 51/51 (or more, with your new scenario) if you touched policy or execution
 - [ ] docs updated for any public contract
 - [ ] `CHANGELOG.md` entry under `## [Unreleased]` if a user would notice
 - [ ] commits signed off
@@ -152,9 +152,9 @@ are scoped so that the description tells you which files to open.
 [`help wanted`](https://github.com/XAGI-Lab/melra/labels/help%20wanted) is larger
 work that is nonetheless well-specified. The
 [roadmap milestones](https://github.com/XAGI-Lab/melra/milestones) hold the big
-pieces — P2 enforced mode, P3 verification framework, P4 credentials and API
-effects — each with an issue explaining the design before any code exists, which
-is the right time to argue with it.
+pieces still open — P2 hard capability boundary and P3 verification framework
+(P4, credentials and API effects, has shipped) — each with an issue explaining
+the design before any code exists, which is the right time to argue with it.
 
 Unsure whether an idea fits? Open a
 [discussion](https://github.com/XAGI-Lab/melra/discussions) rather than a pull

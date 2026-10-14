@@ -7,7 +7,7 @@ does not tell you.
 
 ```bash
 npx -y @melra/cli conformance                        # spawn a local stdio server and check it
-npx -y @melra/cli conformance --url http://127.0.0.1:8787/mcp --token "$MELRA_TOKEN"
+npx -y @melra/cli conformance --url http://127.0.0.1:7457/mcp --token "$MELRA_HTTP_TOKEN"
 npx -y @melra/cli conformance --level 2              # claim L2; exit 0 if the endpoint reaches it
 ```
 
@@ -105,6 +105,8 @@ report says so in `uncleanedProbeFile` rather than staying quiet.
 
 ## Reproducing
 
-`pnpm conformance` runs the suite from source against a temporary workspace.
+`pnpm conformance` builds, then runs the suite from source against a stdio
+server in the current workspace (`MELRA_WORKSPACE`, or the directory you run it
+from), where it writes and removes the one probe file.
 The result observed for this release is recorded in
 [VALIDATION.md](VALIDATION.md).
