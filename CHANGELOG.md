@@ -6,54 +6,6 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
-### Changed
-
-Found by installing the packed release into a clean project on macOS and
-setting up the harnesses installed there:
-
-- `melra setup --client claude-code` says what Claude Code actually needs next:
-  approve the project's `melra` server when `claude` asks. Until then
-  `claude mcp list` shows it as *Pending approval*, which "restart Claude
-  Code" did not explain.
-- `setup --write` on a config that already holds exactly this entry leaves the
-  file alone and says so ("already set up; nothing changed"). It used to
-  rewrite the file and replace a useful `.bak` with a copy of the result.
-- The setup wizard detects Claude Desktop, Cursor, Windsurf, Kiro, VS Code,
-  Zed, Warp, and LM Studio from their macOS app bundles, so a freshly
-  installed app is offered first even before it has a config file.
-- `melra conformance` prints a readable report in a terminal: each check by
-  level, the level reached, and what the suite does not prove. `--json`, or
-  any pipe, still gives the JSON report.
-- `melra tasks` and `melra watch` show a command as what ran (`pnpm check`,
-  with its already-redacted arguments) rather than `command:pnpm`.
-- Hints no longer point at repository paths an npm install does not have: the
-  empty `melra tasks` suggests `melra demo durable-core`, and the doctor
-  isolation hint links the Docker recipe on GitHub.
-
-### Fixed
-
-- `melra demo durable-core` works from an npm install. It read its workflow
-  from the repository's `examples/` directory, which the published package does
-  not contain, so outside a checkout it failed with `ENOENT`. The workflow now
-  ships inside the CLI, with a test holding it equal to the example file.
-  `melra demo` with no name runs it, since it is the only one.
-
-- Planning a workflow definition that is already stored starts a new run
-  instead of failing with a raw SQLite `UNIQUE constraint` error. Running the
-  demo twice, or `melra workflow plan --definition` on the same file twice as
-  the README shows, hit it. The same id and version with *different* content
-  is refused as `workflow_definition_conflict`, checked against the sealed
-  exact definition, so a change only a redacted secret carried is caught too.
-
-### Security
-
-- Tests run on Vitest 4. Vitest 3's worker pool, `tinypool` 1.x, falls entirely
-  inside two critical advisories (GHSA-85c8-ppgw-ccpr, GHSA-5gmw-xhrv-c9v3);
-  Vitest 4 does not use it. The `nanoid` it brings in through Vite is held at
-  3.3.18 or later (GHSA-2v37-7h3g-55p8). Test-only; no published package
-  changes. `scripts/run-recursive.mjs` now caps workers through
-  `VITEST_MAX_WORKERS`, the one variable Vitest 4 reads.
-
 ## [0.3.0-alpha.12] - 2026-10-14
 
 ### Added
@@ -260,6 +212,25 @@ setting up the harnesses installed there:
   tests both, so the release job now installs the published package and drives
   it over MCP on Node 22 and 24 on every OS, rather than on 22 alone.
 
+- `melra setup --client claude-code` says what Claude Code actually needs next:
+  approve the project's `melra` server when `claude` asks. Until then
+  `claude mcp list` shows it as *Pending approval*, which "restart Claude
+  Code" did not explain.
+- `setup --write` on a config that already holds exactly this entry leaves the
+  file alone and says so ("already set up; nothing changed"). It used to
+  rewrite the file and replace a useful `.bak` with a copy of the result.
+- The setup wizard detects Claude Desktop, Cursor, Windsurf, Kiro, VS Code,
+  Zed, Warp, and LM Studio from their macOS app bundles, so a freshly
+  installed app is offered first even before it has a config file.
+- `melra conformance` prints a readable report in a terminal: each check by
+  level, the level reached, and what the suite does not prove. `--json`, or
+  any pipe, still gives the JSON report.
+- `melra tasks` and `melra watch` show a command as what ran (`pnpm check`,
+  with its already-redacted arguments) rather than `command:pnpm`.
+- Hints no longer point at repository paths an npm install does not have: the
+  empty `melra tasks` suggests `melra demo durable-core`, and the doctor
+  isolation hint links the Docker recipe on GitHub.
+
 ### Fixed
 
 - `melra setup --client goose` and `melra doctor` look for Goose's config
@@ -340,6 +311,19 @@ setting up the harnesses installed there:
   anything was sent, such as a timeout resolving its target, is still a plain
   failure.
 
+- `melra demo durable-core` works from an npm install. It read its workflow
+  from the repository's `examples/` directory, which the published package does
+  not contain, so outside a checkout it failed with `ENOENT`. The workflow now
+  ships inside the CLI, with a test holding it equal to the example file.
+  `melra demo` with no name runs it, since it is the only one.
+
+- Planning a workflow definition that is already stored starts a new run
+  instead of failing with a raw SQLite `UNIQUE constraint` error. Running the
+  demo twice, or `melra workflow plan --definition` on the same file twice as
+  the README shows, hit it. The same id and version with *different* content
+  is refused as `workflow_definition_conflict`, checked against the sealed
+  exact definition, so a change only a redacted secret carried is caught too.
+
 ### Security
 
 - Development and benchmark dependencies: `source-map-js` is held at 1.2.2 or
@@ -395,6 +379,13 @@ setting up the harnesses installed there:
   have written. A new Workflow Lint job runs `zizmor` so none of that drifts
   back; it went from 39 high-severity findings to none. The container base
   image is pinned by digest and Dependabot now tracks it.
+
+- Tests run on Vitest 4. Vitest 3's worker pool, `tinypool` 1.x, falls entirely
+  inside two critical advisories (GHSA-85c8-ppgw-ccpr, GHSA-5gmw-xhrv-c9v3);
+  Vitest 4 does not use it. The `nanoid` it brings in through Vite is held at
+  3.3.18 or later (GHSA-2v37-7h3g-55p8). Test-only; no published package
+  changes. `scripts/run-recursive.mjs` now caps workers through
+  `VITEST_MAX_WORKERS`, the one variable Vitest 4 reads.
 
 ## [0.3.0-alpha.11] - 2026-08-11
 

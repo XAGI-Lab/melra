@@ -6,7 +6,7 @@ Version: `0.3.0-alpha.12`
 
 ## Engineering Complete
 
-- ✅ **Test suites green on `main`**: 506 Vitest cases pass (6 platform-skipped) and 5 Python SDK pytest cases on the ubuntu / Node 24 CI job at `ac1abe7`. The same run had one Windows / Node 22 failure in `packages/browser-runtime/src/stalled-calls.test.ts`; that was a test racing a slow runner, fixed in #128
+- ✅ **Test suites green on `main`**: 515 Vitest cases pass (6 platform-skipped) and 6 Python SDK pytest cases on Vitest 4, with every Node job (ubuntu, macOS, Windows × Node 22, 24) green in the CI run for #134, whose tree is `main` at `09e43f5`
 - ✅ **Versions consistent** across the root manifest, every `apps/*` and `packages/*` manifest, the protocol constant, sdk-py, and both uv locks (`pnpm versions:check`)
 - ✅ **Gate green at the `v0.3.0-alpha.11` tag**: `pnpm check`, `pnpm e2e`, `pnpm security:audit` all passed in the release workflow
 - ✅ **Conformance L3 verified effects**: `melra conformance` reports 14/14 checks against this build's own stdio server, and L1 under `MELRA_UNHINGED=1` — both asserted in CI. Levels and their limits: [CONFORMANCE.md](CONFORMANCE.md)
