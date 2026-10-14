@@ -965,6 +965,16 @@ async function main(): Promise<void> {
               })
             : undefined;
       if (endpoint?.socketPath !== undefined) {
+        // An exported MELRA_SOCKET also reaches every stdio client spawned from
+        // that shell, which then waits forever for JSON-RPC on stdout. Name the
+        // variable where those clients log stderr, so the hang has a cause.
+        if (argument("--socket", args) === undefined) {
+          process.stderr.write(
+            `melra: MELRA_SOCKET is set, so 'serve' is on the socket below, not stdio.\n` +
+              `  An MCP client that started this process will get no reply; unset\n` +
+              `  MELRA_SOCKET for it, or pass --socket explicitly when you mean it.\n`,
+          );
+        }
         process.stderr.write(
           `MELRA server listening on Unix socket ${endpoint.socketPath} (mode 0600)\n` +
             `  MCP:      ${endpoint.mcpUrl}, connecting to that socket\n` +

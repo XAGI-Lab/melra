@@ -191,6 +191,12 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- `melra serve` now says so on stderr when `MELRA_SOCKET` alone moved it off
+  stdio. Exported in a shell profile, the variable also reaches every stdio MCP
+  client launched from that shell, which then waited for a reply that never
+  came, with nothing in its log to say why. The warning names the variable;
+  `--socket <path>` given on purpose stays quiet. (#105)
+
 - The published `@melra/*` packages no longer ship their compiled unit tests.
   Fourteen packages keep tests beside the code as `src/*.test.ts`, and the build
   emitted them into `dist/` and so into every tarball, as `*.test.js` files

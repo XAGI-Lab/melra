@@ -440,7 +440,13 @@ describe("melra CLI", () => {
       .toMatchObject({ status: "fail", detail: expect.stringContaining("parent directory missing") });
     expect((await socketReport(env))?.detail).toContain("not listening");
 
-    const server = spawn(process.execPath, [entry, "serve"], { cwd: root, env, stdio: "ignore" });
+    const server = spawn(process.execPath, [entry, "serve"], {
+      cwd: root,
+      env,
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    let stderr = "";
+    server.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
     try {
       for (let attempt = 0; attempt < 100 && !existsSync(socketPath); attempt += 1) {
         await new Promise((resolveWait) => setTimeout(resolveWait, 100));
@@ -472,6 +478,9 @@ describe("melra CLI", () => {
     }
     // A clean shutdown takes the socket with it.
     expect(existsSync(socketPath)).toBe(false);
+    // A stdio client spawned under an exported MELRA_SOCKET would hang, so the
+    // variable is named where such a client logs.
+    expect(stderr).toContain("MELRA_SOCKET is set, so 'serve' is on the socket below, not stdio");
   });
 
   it("refuses to start in enforced mode with the local bypass", async () => {
