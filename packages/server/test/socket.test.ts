@@ -18,6 +18,7 @@ import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { createMelraRuntime, serveHttp } from "../src/index.js";
 import type { MelraHttpServer } from "../src/http-server.js";
 import type { MelraRuntime } from "../src/runtime.js";
@@ -156,10 +157,13 @@ describe.skipIf(process.platform === "win32")("melra over a Unix socket", () => 
     const fetchOverSocket = socketFetch(socketPath);
     const client = new Client({ name: "socket-test", version: "0.0.0" });
     await client.connect(
+      // The SDK types `sessionId` as `string | undefined`, which
+      // `exactOptionalPropertyTypes` rejects against `Transport`'s optional
+      // `sessionId?: string`. Same cast as src/http-server.ts.
       new StreamableHTTPClientTransport(new URL(endpoint.mcpUrl), {
         fetch: fetchOverSocket,
         requestInit: { headers: { authorization: "Bearer test-token" } },
-      }),
+      }) as unknown as Transport,
     );
     try {
       const planned = await client.callTool({

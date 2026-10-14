@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { createMelraRuntime, serveHttp } from "../src/index.js";
 import { redirectUriAllowed } from "../src/oauth.js";
 import type { MelraHttpServer } from "../src/http-server.js";
@@ -125,9 +126,12 @@ describe("melra oauth", () => {
     const token = await authorize("Test Harness");
     const client = new Client({ name: "oauth-test", version: "0.0.0" });
     await client.connect(
+      // The SDK types `sessionId` as `string | undefined`, which
+      // `exactOptionalPropertyTypes` rejects against `Transport`'s optional
+      // `sessionId?: string`. Same cast as src/http-server.ts.
       new StreamableHTTPClientTransport(new URL(`${base}/mcp`), {
         requestInit: { headers: { authorization: `Bearer ${token}` } },
-      }),
+      }) as unknown as Transport,
     );
     try {
       const planned = await client.callTool({

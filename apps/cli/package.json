@@ -31,7 +31,7 @@
     "start": "tsx src/index.ts",
     "pack:check": "npm pack --dry-run",
     "test": "vitest run --testTimeout=20000",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.test.json"
   },
   "dependencies": {
     "@melra/browser-runtime": "workspace:*",

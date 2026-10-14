@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { createMelraRuntime, serveHttp } from "../src/index.js";
 import type { MelraHttpServer } from "../src/http-server.js";
 import type { MelraRuntime } from "../src/runtime.js";
@@ -139,9 +140,12 @@ describe("melra http server", () => {
   it("drives a real task over the HTTP MCP transport and reads it back", async () => {
     const client = new Client({ name: "http-test", version: "0.0.0" });
     await client.connect(
+      // The SDK types `sessionId` as `string | undefined`, which
+      // `exactOptionalPropertyTypes` rejects against `Transport`'s optional
+      // `sessionId?: string`. Same cast as src/http-server.ts.
       new StreamableHTTPClientTransport(new URL(`${base}/mcp`), {
         requestInit: { headers: { authorization: "Bearer test-token" } },
-      }),
+      }) as unknown as Transport,
     );
     try {
       const tools = await client.listTools();
@@ -193,9 +197,10 @@ describe("melra http server", () => {
     const connect = async (name: string) => {
       const client = new Client({ name, version: "0.0.0" });
       await client.connect(
+        // Same SDK typing gap as above.
         new StreamableHTTPClientTransport(new URL(`${base}/mcp`), {
           requestInit: { headers: { authorization: "Bearer test-token" } },
-        }),
+        }) as unknown as Transport,
       );
       return client;
     };
