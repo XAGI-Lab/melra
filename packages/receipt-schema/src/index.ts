@@ -4,7 +4,7 @@
 import { createHash, randomUUID } from "node:crypto";
 
 const SENSITIVE_KEY =
-  /^(?:args?|authorization|constraints|content|cookie|env|goal|headers?|pass(?:word|wd)?|secret|std(?:out|err)|text|token|api[_-]?key|values?)$/i;
+  /^(?:arg|authorization|constraints|content|cookie|env|goal|headers?|pass(?:word|wd)?|secret|std(?:out|err)|text|token|api[_-]?key|values?)$/i;
 /**
  * Secret shapes redacted wherever MELRA persists free text: receipts and task
  * records here, memory values, and terminal output. One list, exported, because
@@ -41,6 +41,62 @@ export function redactSecrets(text: string): { value: string; redactions: string
     if (value !== before && !redactions.includes(replacement)) redactions.push(replacement);
   }
   return { value, redactions };
+}
+
+// A flag whose value is a credential, `--token x` or `--token=x`, matched on
+// the flag's name because the value itself may have no recognisable shape.
+const SECRET_FLAG =
+  /^(--?(?:[a-z0-9]+[-_])*(?:token|password|passwd|pass|secret|api[-_]?key|apikey|auth|authorization|credentials?|cookie|private[-_]?key))(?:=([\s\S]*))?$/i;
+// `-u user:pass` / `--user user:pass` (curl, wget): only the part after the
+// colon is a secret, and `sort -u`, `git add -u` take no value at all.
+const USER_FLAG = /^(?:-u|--user)$/;
+// `-pPASSWORD` (mysql and friends). Never the next argument: `mkdir -p dir`,
+// `ssh -p 22`. A remainder under three characters is read as bundled short
+// flags (`-pv`, `-pr`), not a password.
+const ATTACHED_PASSWORD = /^-p(.{3,})$/s;
+// `NAME=value` with a credential-like name, as `env FOO_TOKEN=x cmd` passes it.
+const SECRET_ASSIGNMENT =
+  /^([A-Za-z_][A-Za-z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|PASS|AUTH|CREDENTIALS?))=[\s\S]*$/i;
+// A header given as one argument, as `curl -H 'Authorization: Bearer x'` does.
+const SECRET_HEADER =
+  /^((?:proxy-)?authorization|cookie|[a-z0-9-]*(?:token|api-?key|secret))\s*:[\s\S]*$/i;
+// Credentials inside a URL or connection string: `postgres://user:pass@host`.
+const URL_CREDENTIALS = /(\/\/)[^\s/@:]+:[^\s/@]+@/g;
+const REDACTED_ARG = "[REDACTED_SENSITIVE_ARG]";
+
+function redactOneArg(arg: string, previous: string | undefined): string {
+  if (previous !== undefined) {
+    const flag = SECRET_FLAG.exec(previous);
+    if (flag !== null && flag[2] === undefined) return REDACTED_ARG;
+    if (USER_FLAG.test(previous) && arg.includes(":")) {
+      return `${arg.slice(0, arg.indexOf(":"))}:${REDACTED_ARG}`;
+    }
+  }
+  const flag = SECRET_FLAG.exec(arg);
+  if (flag?.[2] !== undefined) return `${flag[1]}=${REDACTED_ARG}`;
+  if (ATTACHED_PASSWORD.test(arg)) return `-p${REDACTED_ARG}`;
+  if (SECRET_ASSIGNMENT.test(arg)) return arg.replace(SECRET_ASSIGNMENT, `$1=${REDACTED_ARG}`);
+  if (SECRET_HEADER.test(arg)) return arg.replace(SECRET_HEADER, `$1: ${REDACTED_ARG}`);
+  return arg.replace(URL_CREDENTIALS, `$1${REDACTED_ARG}@`);
+}
+
+/**
+ * A command's arguments with the credentials taken out and everything else
+ * kept, so a receipt still says what ran (#122). A credential-named flag loses
+ * its value, attached or as the next argument; so do `-pPASSWORD`, the password
+ * half of `-u user:pass`, credential-named `NAME=value` assignments, auth
+ * headers, and URL userinfo. Every argument then goes through SECRET_PATTERNS.
+ */
+export function redactArgv(argv: readonly string[]): { value: string[]; redactions: string[] } {
+  const redactions = new Set<string>();
+  const value = argv.map((arg, index) => {
+    const out = redactOneArg(arg, index === 0 ? undefined : argv[index - 1]);
+    if (out !== arg) redactions.add(REDACTED_ARG);
+    const redacted = redactSecrets(out);
+    for (const kind of redacted.redactions) redactions.add(kind);
+    return redacted.value;
+  });
+  return { value, redactions: [...redactions] };
 }
 
 export type CertificateResult =
@@ -199,6 +255,16 @@ export function redactStructuredValue(value: unknown): {
   const visit = (current: unknown, key?: string): unknown => {
     if (key !== undefined && SENSITIVE_KEY.test(key)) {
       return redactWholeValue(current);
+    }
+    if (key === "args") {
+      // Arguments are what a receipt most needs to show, so only their
+      // credentials go; anything that is not a list of strings goes whole.
+      if (!Array.isArray(current) || !current.every((item) => typeof item === "string")) {
+        return redactWholeValue(current);
+      }
+      const redacted = redactArgv(current);
+      for (const kind of redacted.redactions) redactions.add(kind);
+      return redacted.value;
     }
     if (key === "url" && typeof current === "string") {
       try {

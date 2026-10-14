@@ -184,6 +184,19 @@ All notable changes are documented here. The format follows
 
 ### Changed
 
+- Terminal receipts and task records keep a command's arguments, so they show
+  what ran: `terminal.run pnpm check` rather than
+  `terminal.run pnpm [REDACTED_SENSITIVE_FIELD]`. Only credentials are taken
+  out, by the new `redactArgv` in `@melra/receipt-schema`:
+  - the value of a credential-named flag (`--token x`, `--api-key=x`);
+  - `-pPASSWORD`, and the password half of `-u user:pass`;
+  - credential-named `NAME=value` assignments;
+  - `Authorization:` and other secret headers;
+  - URL userinfo such as `postgres://user:pass@host`.
+
+  Every argument still goes through the shared secret patterns. GovBench
+  redaction stays 55/55. (#122)
+
 - The container image and the release artifacts are built on Node 24, the
   current LTS line, instead of 22. `engines` still says `>=22` and CI still
   tests both, so the release job now installs the published package and drives
