@@ -462,6 +462,10 @@ It serves exactly what `--http` serves — Streamable HTTP MCP at `/mcp`, the
 read-only JSON API, the event stream, and the console — through the same
 request handler, so nothing reached over the socket skips a pipeline stage. A
 client names `http://localhost` in its URLs and connects to the socket path.
+The TypeScript SDK does both for you —
+`MelraClient.connect({ socketPath, token })`, or `{ url, token }` for
+`--http` — and refuses to send the token over plain `http:` to anything but
+loopback; see [Connecting to a running server](../packages/sdk-ts/README.md#connecting-to-a-running-server).
 
 - **The socket is created mode `0600`, and the kernel refuses `connect` from
   any other OS user.** The umask is narrowed around the bind, so the socket never

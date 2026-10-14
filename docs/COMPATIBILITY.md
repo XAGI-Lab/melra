@@ -52,7 +52,9 @@ The normative automated clients are:
 - the repository Python `melra` client `0.3.x` alpha.
 
 The TypeScript SDK validates workflow definitions and returned workflow
-records with the shared Zod contracts. The Python SDK validates identifiers and
+records with the shared Zod contracts, and connects over stdio, loopback (or
+`https:`) Streamable HTTP, or a Unix socket; its tests drive the same calls
+over HTTP and the socket against a live in-process server. The Python SDK validates identifiers and
 response shape, while the server remains the schema authority.
 
 Claude Desktop, Cursor, VS Code, and other clients can use the documented

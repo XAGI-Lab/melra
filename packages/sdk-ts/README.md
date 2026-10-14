@@ -3,8 +3,9 @@
 TypeScript client for [MELRA](https://github.com/XAGI-Lab/melra), a local-only
 MCP server that turns one tool call into a governed, verified, receipted task.
 
-The client spawns a MELRA server over stdio and speaks the task and workflow
-tools for you, so you work with typed requests instead of raw MCP plumbing.
+The client spawns a MELRA server over stdio, or connects to one already running
+over HTTP or a Unix socket, and speaks the task and workflow tools for you, so
+you work with typed requests instead of raw MCP plumbing.
 
 ```bash
 npm install @melra/sdk
@@ -62,6 +63,44 @@ const melra = await MelraClient.connect({
   env: { MELRA_WORKSPACE: "/path/to/project" },
 });
 ```
+
+## Connecting to a running server
+
+`melra serve --http` and `melra serve --socket <path>` serve the same MCP tools
+to any number of clients. Pass `url` or `socketPath` instead of a command, plus
+the bearer token the server printed (or was given as `MELRA_HTTP_TOKEN`). Every
+method below works the same on all three transports.
+
+```ts
+import { MelraClient } from "@melra/sdk";
+
+const token = process.env.MELRA_HTTP_TOKEN;
+if (token === undefined) throw new Error("set MELRA_HTTP_TOKEN");
+
+// The MCP URL `serve --http` prints; the bare origin works too.
+const overHttp = await MelraClient.connect({
+  url: "http://127.0.0.1:7457/mcp",
+  token,
+});
+
+// Not on Windows, where the server refuses sockets as well.
+const overSocket = await MelraClient.connect({
+  socketPath: `${process.env.XDG_RUNTIME_DIR}/melra.sock`,
+  token,
+});
+
+await overHttp.close();
+await overSocket.close();
+```
+
+The token is never read from the environment for you: a library that picks up
+a credential on its own and sends it to whatever URL it was handed is how
+tokens leak. A plain `http:` URL is refused unless its host is loopback
+(`localhost`, `127.0.0.0/8`, `[::1]`) — the token drives the machine, and over
+cleartext it is readable by anything on the path. Put TLS in front and use
+`https:`, or, on a network you trust end to end such as a private container
+network, pass `allowInsecureHttp: true`. A wrong token fails `connect()` with
+`melra_unauthorized`.
 
 ## Workflows
 
