@@ -654,12 +654,19 @@ merges it there for you:
 | `cline` | Cline (VS Code) | `cline_mcp_settings.json` in Cline's global storage | `mcpServers` |
 | `opencode` | OpenCode | `~/.config/opencode/opencode.json` | `mcp`, `type: "local"` |
 | `kiro` | Kiro | `~/.kiro/settings/mcp.json` | `mcpServers` |
+| `goose` | Goose | `~/.config/goose/config.yaml` (Windows: `%APPDATA%\Block\goose\config\config.yaml`) | YAML `extensions.melra`, `type: stdio` |
+| `continue` | Continue | `<workspace>/.continue/mcpServers/melra.yaml` | YAML block file, `mcpServers` list |
+| `amp` | Amp | `~/.config/amp/settings.json` (or an existing `settings.jsonc`) | `amp.mcpServers` |
 | `generic` | Anything else | — (printed only) | `mcpServers` |
 
-`--write` refuses a file that is not plain JSON — Zed and VS Code settings
-often carry comments, which a JSON round-trip would drop — and leaves it
-untouched; paste the printed block in by hand instead. Rerunning it replaces
-MELRA's own entry, so it is also how you repoint a client after an upgrade.
+`--write` refuses a file that is not plain JSON — Zed, VS Code, and Amp
+settings often carry comments, which a JSON round-trip would drop — and leaves
+it untouched; paste the printed block in by hand instead. For Goose it edits
+only MELRA's own entry under `extensions:` and leaves every other line as it
+was, and refuses a `config.yaml` it cannot edit that way (flow-style
+`extensions`, tabs, uneven indentation). Continue's file belongs to MELRA, so it
+is replaced whole. Rerunning it replaces MELRA's own entry, so it is also how
+you repoint a client after an upgrade.
 
 For any other client, use the common `mcpServers` configuration field:
 
