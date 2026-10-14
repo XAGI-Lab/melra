@@ -195,15 +195,37 @@ function attributeRequests(value: unknown, client: Principal): void {
   for (const item of Object.values(record)) attributeRequests(item, client);
 }
 
+/**
+ * How to use MELRA, for the model on the other end. Kept short and literal:
+ * every claim here is enforced by the pipeline, so it cannot drift into advice.
+ */
+export const SERVER_INSTRUCTIONS = [
+  "MELRA runs effects for you under policy: files, terminal, browser, HTTP, desktop, and memory. Use its tools instead of acting directly, and treat its results as the record of what happened.",
+  "For each action:",
+  "1. melra_capabilities (once): the operations available and the policy in force: allowed commands and domains, and whether mutations need approval.",
+  "2. melra_plan with a goal, one operation, and requiredEvidence. Nothing runs yet. status policy_blocked means refused: read the reason and change the request; the same request will be refused again. status awaiting_approval returns an approval challenge.",
+  "3. melra_execute with the taskId, plus the challenge id and its exact phrase if one was issued. Policy is checked again here.",
+  "4. Read the status. verified_success means the operation ran and every requiredEvidence check passed. partial means it ran but evidence did not hold. recovery_required means a change may or may not have happened: inspect the world before trying again, never re-run blindly. Only reads are retried for you.",
+  "5. melra_receipt returns the receipt and certificate when you need to show what was done.",
+  "Rules: any operation that is not a read must declare requiredEvidence describing how to confirm it (result_equals, result_contains, exit_code, file_exists, file_absent, file_hash, page_contains, url_matches, http_resource_matches). Leave constraints empty; free-text constraints are refused because they cannot be enforced.",
+  "For multi-step jobs that must survive restarts, use melra_workflow_plan and melra_workflow_advance; each step still goes through the same policy, approval, and verification.",
+].join("\n");
+
 export function createMcpServer(
   runtime: MelraRuntime,
   /** Who the transport authenticated, if it authenticated anyone. */
   client?: Principal,
 ): McpServer {
-  const server = new McpServer({
-    name: "melra",
-    version: PRODUCT_VERSION,
-  });
+  const server = new McpServer(
+    {
+      name: "melra",
+      version: PRODUCT_VERSION,
+    },
+    // Clients that support it (Claude Code among them) put this in the model's
+    // context once, so the loop below is learned up front instead of pieced
+    // together from eleven tool descriptions after a failed first call.
+    { instructions: SERVER_INSTRUCTIONS },
+  );
 
   server.registerTool(
     "melra_capabilities",
