@@ -11,8 +11,8 @@ All notable changes are documented here. The format follows
 - The Python SDK can attach to a MELRA that is already running instead of
   only spawning one over stdio: `MelraClient.connect_http(url, token=...)` for
   `melra serve --http` and `MelraClient.connect_socket(path, token=...)` for
-  `melra serve --socket` (not on Windows). The token defaults to
-  `MELRA_HTTP_TOKEN` and is sent as a bearer header; a wrong one raises
+  `melra serve --socket` (not on Windows). The token is required, never read
+  from the environment, and sent as a bearer header; a wrong one raises
   `PermissionError`. Plain `http://` to a non-loopback host is refused unless
   `allow_insecure_http=True`, so the token does not cross a network in clear
   text by accident. No new dependencies.

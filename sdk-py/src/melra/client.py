@@ -56,14 +56,14 @@ class MelraClient:
         cls,
         url: str,
         *,
-        token: str | None = None,
+        token: str,
         allow_insecure_http: bool = False,
     ) -> Self:
         """Connect to a server already running under `melra serve --http`.
 
         `url` is the MCP endpoint printed at startup (`http://127.0.0.1:7457/mcp`);
-        a URL without the `/mcp` path gets it appended. `token` defaults to
-        `MELRA_HTTP_TOKEN`. The token drives the machine, so plain `http://` is
+        a URL without the `/mcp` path gets it appended. `token` is required and
+        never read from the environment. It drives the machine, so plain `http://` is
         refused for anything but a loopback host unless `allow_insecure_http` is
         set; use `https://` to reach a server through a TLS proxy.
         """
@@ -82,11 +82,11 @@ class MelraClient:
         return client
 
     @classmethod
-    def connect_socket(cls, path: str | Path, *, token: str | None = None) -> Self:
+    def connect_socket(cls, path: str | Path, *, token: str) -> Self:
         """Connect to a server already running under `melra serve --socket <path>`.
 
         The socket is mode 0600, so only this OS user gets in; the token is still
-        required and defaults to `MELRA_HTTP_TOKEN`. Not available on Windows.
+        required. Not available on Windows.
         """
         if sys.platform == "win32":
             raise OSError("socket_transport_unsupported_on_windows: use connect_http on loopback")
@@ -124,7 +124,7 @@ class MelraClient:
             # group; name the one failure a caller can fix.
             if group.subgroup(_unauthorized) is not None:
                 raise PermissionError(
-                    "MELRA rejected the token (HTTP 401); check token or MELRA_HTTP_TOKEN"
+                    "MELRA rejected the token (HTTP 401); check the token"
                 ) from group
             raise
         self._session = session
@@ -336,10 +336,13 @@ def _is_loopback(host: str) -> bool:
         return False
 
 
-def _token(token: str | None) -> str:
-    resolved = (token if token is not None else os.environ.get("MELRA_HTTP_TOKEN", "")).strip()
+def _token(token: str) -> str:
+    # Never read from the environment here: a library that picks up a
+    # credential on its own and sends it to whatever URL it was handed is how
+    # tokens leak. The caller reads MELRA_HTTP_TOKEN explicitly if it wants to.
+    resolved = token.strip()
     if not resolved:
-        raise ValueError("token is required (or set MELRA_HTTP_TOKEN)")
+        raise ValueError("token is required")
     return resolved
 
 

@@ -22,7 +22,10 @@ async with MelraClient.connect_socket("/run/user/1000/melra.sock", token=token) 
     ...
 ```
 
-`token` defaults to `MELRA_HTTP_TOKEN`. A wrong token raises `PermissionError`.
+`token` is required and never read from the environment for you: a library that
+picks up a credential on its own and sends it to whatever URL it was handed is
+how tokens leak, so pass `os.environ["MELRA_HTTP_TOKEN"]` yourself if that is
+where it lives. A wrong token raises `PermissionError`.
 The token can drive the machine, so `connect_http` refuses plain `http://` to
 anything but a loopback host; reach a remote server over `https://`, or pass
 `allow_insecure_http=True` on a network you trust.

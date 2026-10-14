@@ -226,9 +226,10 @@ def test_python_sdk_refuses_to_send_the_token_where_it_should_not(
     MelraClient.connect_http("http://melra.internal/mcp", token=TOKEN, allow_insecure_http=True)
     with pytest.raises(ValueError, match="http:// or https://"):
         MelraClient.connect_http("ftp://127.0.0.1/mcp", token=TOKEN)
-    monkeypatch.delenv("MELRA_HTTP_TOKEN", raising=False)
+    # Required, and never taken from the environment even when it is set there.
+    monkeypatch.setenv("MELRA_HTTP_TOKEN", TOKEN)
     with pytest.raises(ValueError, match="token is required"):
-        MelraClient.connect_http("http://127.0.0.1:7457/mcp")
+        MelraClient.connect_http("http://127.0.0.1:7457/mcp", token="  ")
     monkeypatch.setattr(sys, "platform", "win32")
     with pytest.raises(OSError, match="unsupported_on_windows"):
         MelraClient.connect_socket("/tmp/melra.sock", token=TOKEN)
