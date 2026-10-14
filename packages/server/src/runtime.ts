@@ -35,7 +35,7 @@ import {
 } from "@melra/runtime-core";
 import { SqliteStore } from "@melra/storage-sqlite";
 import { TerminalRuntime } from "@melra/terminal-runtime";
-import { Verifier } from "@melra/verifier-core";
+import { Verifier, type RegisteredVerifier } from "@melra/verifier-core";
 import { loadPayloadKey } from "./payload-key.js";
 
 export interface MelraRuntimeOptions {
@@ -71,6 +71,12 @@ export interface MelraRuntimeOptions {
    * to be logged into again on the next task. From `MELRA_BROWSER_PROFILE`.
    */
   browserProfileDir?: string;
+  /**
+   * Verifiers for `{ type: "custom", verifier: "<name>" }` evidence. Code only,
+   * like `computerAdapter`: what counts as proof is not something a config
+   * file or an environment variable should be able to swap in.
+   */
+  evidenceVerifiers?: ReadonlyArray<RegisteredVerifier>;
   environment?: NodeJS.ProcessEnv;
 }
 
@@ -193,6 +199,8 @@ export class RuntimeRouter implements OperationExecutor {
 export interface MelraRuntime {
   controller: TaskController;
   workflows: WorkflowController;
+  /** Names a `custom` evidence predicate may use with this runtime. */
+  customEvidence: string[];
   policy: LocalPolicy;
   store: SqliteStore;
   router: RuntimeRouter;
@@ -295,11 +303,8 @@ export async function createMelraRuntime(
     memory,
     http,
   );
-  const controller = new TaskController(
-    store,
-    policy,
-    router,
-    await Verifier.create(runtimeRoot, {
+  const verifier = await Verifier.create(runtimeRoot, {
+      ...(options.evidenceVerifiers === undefined ? {} : { verifiers: options.evidenceVerifiers }),
       // The same adapter the effects go through, so a verification request is
       // checked against the destination boundary, the allowlist, and the
       // credential scope like any other call. A read that could reach where an
@@ -315,15 +320,15 @@ export async function createMelraRuntime(
             timeoutMs: request.timeoutMs,
           }),
         ),
-    }),
-    cipher,
-  );
+    });
+  const controller = new TaskController(store, policy, router, verifier, cipher);
   const workflows = new WorkflowController(store, controller, cipher);
   await controller.recoverInterrupted();
   await workflows.recoverInterrupted();
   return {
     controller,
     workflows,
+    customEvidence: verifier.customVerifiers(),
     policy,
     store,
     router,

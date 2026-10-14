@@ -265,6 +265,8 @@ const BUILT_IN: ReadonlyArray<RegisteredVerifier> = [
   fileHash,
   httpResourceMatches,
 ];
+const BUILT_IN_TYPES: ReadonlySet<string> = new Set(BUILT_IN.map((verifier) => verifier.type));
+
 
 export interface VerifierOptions {
   /** Absent means `http_resource_matches` fails rather than passes. */
@@ -286,11 +288,49 @@ export class Verifier {
   ) {
     for (const verifier of BUILT_IN) this.verifiers.set(verifier.type, verifier);
     for (const verifier of extra) {
-      if (this.verifiers.has(verifier.type)) {
+      // `custom` is the request-side wrapper, not a type a verifier can own.
+      if (this.verifiers.has(verifier.type) || verifier.type === "custom") {
         throw new Error(`verifier_type_taken:${verifier.type}`);
+      }
+      // The name a `custom` predicate in a request must be able to carry.
+      if (!/^[a-z][a-z0-9_.-]{0,63}$/.test(verifier.type)) {
+        throw new Error(`verifier_name_invalid:${verifier.type}`);
       }
       this.verifiers.set(verifier.type, verifier);
     }
+  }
+
+  /** Names of the registered verifiers the kernel does not ship. */
+  customVerifiers(): string[] {
+    return [...this.verifiers.keys()].filter((type) => !BUILT_IN_TYPES.has(type));
+  }
+
+  /** Whether a verifier is registered for this predicate; planning asks first. */
+  supports(predicate: EvidencePredicate | { type: string; [field: string]: unknown }): boolean {
+    return this.resolve(predicate).verifier !== undefined;
+  }
+
+  /**
+   * The verifier for a predicate, the evidence type to stamp, and what `check`
+   * receives. A request's `{ type: "custom", verifier, params }` reaches only a
+   * registered custom verifier, never a built-in: a built-in's fields are
+   * validated by its own schema arm, and `custom` must not be a way round it.
+   */
+  private resolve(predicate: EvidencePredicate | { type: string; [field: string]: unknown }): {
+    verifier: RegisteredVerifier | undefined;
+    type: string;
+    input: unknown;
+  } {
+    if (predicate.type !== "custom") {
+      return { verifier: this.verifiers.get(predicate.type), type: predicate.type, input: predicate };
+    }
+    const name = String((predicate as { verifier?: unknown }).verifier);
+    const params = (predicate as { params?: Record<string, unknown> }).params ?? {};
+    return {
+      verifier: BUILT_IN_TYPES.has(name) ? undefined : this.verifiers.get(name),
+      type: `custom:${name}`,
+      input: { ...params, type: name },
+    };
   }
 
   static async create(
@@ -354,15 +394,15 @@ export class Verifier {
     };
     const evidence: EvidenceItem[] = [];
     for (const predicate of predicates) {
-      const verifier = this.verifiers.get(predicate.type);
+      const { verifier, type, input } = this.resolve(predicate);
       try {
         // An unregistered type is a question nobody here can answer: it fails.
-        if (verifier === undefined) throw new Error(`verification_unsupported:${predicate.type}`);
-        const found = await verifier.check(predicate as never, result, context);
-        evidence.push({ ...found, type: predicate.type });
+        if (verifier === undefined) throw new Error(`verification_unsupported:${type}`);
+        const found = await verifier.check(input as never, result, context);
+        evidence.push({ ...found, type });
       } catch (error) {
         evidence.push({
-          type: predicate.type,
+          type,
           passed: false,
           summary: error instanceof Error ? error.message : String(error),
         });

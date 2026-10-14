@@ -18,8 +18,16 @@ All notable changes are documented here. The format follows
   anything a verifier returns, so a new type reads as the weakest claim; a type
   with no verifier, or a `check` that throws, fails; a built-in type cannot be
   replaced; and file access is only through a confined
-  `context.workspacePath()`. A `TaskRequest` still takes only the built-in
-  types. (#53)
+  `context.workspacePath()`. (#53)
+
+- A task can require custom evidence:
+  `{ "type": "custom", "verifier": "<name>", "params": { … } }` (flat scalars),
+  checked by a verifier passed to `createMelraRuntime` as `evidenceVerifiers`.
+  `melra_capabilities` lists the registered names under `customEvidence`, and
+  planning refuses an unregistered one (`evidence_verifier_unavailable`)
+  before anything is approved, so a mutation cannot run against evidence
+  nothing can check. `custom` never reaches a built-in verifier, and its
+  evidence (`custom:<name>`) is always the weakest strength. (#139)
 
 - `melra doctor` has an `isolation` line: which OS restrictions the process is
   actually under, read from `/proc` on Linux: container, an empty capability

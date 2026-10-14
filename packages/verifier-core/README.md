@@ -59,8 +59,11 @@ What a verifier does **not** decide:
 - **Where files are.** The only file access offered is
   `context.workspacePath()`, which applies the confinement above.
 
-A `TaskRequest` still accepts only the built-in predicate types; custom ones
-are for code that calls `verify` itself.
+A task request reaches a registered verifier with
+`{ "type": "custom", "verifier": "row_exists", "params": { "id": "r1" } }`, once
+the runtime has it (`createMelraRuntime({ evidenceVerifiers })` in
+`@melra/server`). The evidence is stamped `custom:row_exists`, and `custom` can
+never name a built-in.
 
 Requires Node.js 22 or newer. Full documentation:
 [github.com/XAGI-Lab/melra](https://github.com/XAGI-Lab/melra)

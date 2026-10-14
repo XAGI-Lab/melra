@@ -71,6 +71,9 @@ export function capabilitiesPayload(runtime: MelraRuntime): unknown {
               : [schema.shape.action.value],
           ]),
         ),
+        // Names for `{ type: "custom", verifier }` evidence; planning refuses
+        // any other, so an agent should only offer one of these.
+        customEvidence: runtime.customEvidence,
         workflowNodes: [
           "operation",
           "approval",
@@ -207,7 +210,7 @@ export const SERVER_INSTRUCTIONS = [
   "3. melra_execute with the taskId, plus the challenge id and its exact phrase if one was issued. Policy is checked again here.",
   "4. Read the status. verified_success means the operation ran and every requiredEvidence check passed. partial means it ran but evidence did not hold. recovery_required means a change may or may not have happened: inspect the world before trying again, never re-run blindly. Only reads are retried for you.",
   "5. melra_receipt returns the receipt and certificate when you need to show what was done.",
-  "Rules: any operation that is not a read must declare requiredEvidence describing how to confirm it (result_equals, result_contains, exit_code, file_exists, file_absent, file_hash, page_contains, url_matches, http_resource_matches). Leave constraints empty; free-text constraints are refused because they cannot be enforced.",
+  "Rules: any operation that is not a read must declare requiredEvidence describing how to confirm it (result_equals, result_contains, exit_code, file_exists, file_absent, file_hash, page_contains, url_matches, http_resource_matches, custom). custom takes a verifier name from customEvidence in melra_capabilities. Leave constraints empty; free-text constraints are refused because they cannot be enforced.",
   "For multi-step jobs that must survive restarts, use melra_workflow_plan and melra_workflow_advance; each step still goes through the same policy, approval, and verification.",
 ].join("\n");
 
