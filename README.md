@@ -1,64 +1,59 @@
 <div align="center">
 
-<img src="docs/assets/melra-logo.png" alt="MELRA logo" width="150" />
+<img src="docs/assets/melra-logo.png" alt="MELRA logo" width="132" />
 
 # MELRA
 
 **M**odular **E**xecution **L**ayer for **R**eliable **A**utonomy
 
-### The open-source autonomy kernel
+### Your AI agent decides what to do. MELRA makes sure it happens safely, once, and provably.
 
-### The LLM reasons. The harness manages the loop. MELRA owns the effect lifecycle.
-
-An agent-independent effect runtime for governed, durable, and verifiable
-autonomous execution. MELRA begins where the tool call leaves the model loop.
-
-**Your models can change. Your agents can change. Your execution foundation
-shouldn't have to.**
+An open-source **autonomy kernel**: the layer every agent action passes through on its
+way to your files, terminal, browser, desktop and APIs. It checks each action against
+your rules, asks you before anything risky, runs it exactly once, verifies it actually
+worked, and keeps a receipt. Any agent, any model, same guarantees.
 
 <br />
 
-<!-- Build & quality -->
+<!-- Build & quality (live) -->
 <a href="https://github.com/XAGI-Lab/melra/actions/workflows/ci.yml"><img src="https://github.com/XAGI-Lab/melra/actions/workflows/ci.yml/badge.svg" alt="CI status" /></a>
 <a href="https://github.com/XAGI-Lab/melra/actions/workflows/codeql.yml"><img src="https://github.com/XAGI-Lab/melra/actions/workflows/codeql.yml/badge.svg" alt="CodeQL status" /></a>
 <a href="https://github.com/XAGI-Lab/melra/actions/workflows/audit.yml"><img src="https://github.com/XAGI-Lab/melra/actions/workflows/audit.yml/badge.svg" alt="Dependency audit status" /></a>
 <a href="https://github.com/XAGI-Lab/melra/actions/workflows/container.yml"><img src="https://github.com/XAGI-Lab/melra/actions/workflows/container.yml/badge.svg" alt="Container build status" /></a>
 
-<!-- Evidence -->
-<img src="https://img.shields.io/badge/evals-51_scenarios_passing-22c55e?style=flat-square&logo=checkmarx&logoColor=white" alt="51 deterministic evaluation scenarios passing" />
-<img src="https://img.shields.io/badge/tests-412_passing-22c55e?style=flat-square&logo=vitest&logoColor=white" alt="412 JavaScript tests passing" />
-<img src="https://img.shields.io/badge/MCP_E2E-13_passing-22c55e?style=flat-square&logo=testcafe&logoColor=white" alt="13 real MCP end-to-end cases passing" />
-<img src="https://img.shields.io/badge/runtime_vulnerabilities-0_known-22c55e?style=flat-square&logo=snyk&logoColor=white" alt="No known production runtime vulnerabilities" />
-
-<br />
-
-<!-- Stack -->
-<img src="https://img.shields.io/badge/TypeScript-strict-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript strict" />
-<img src="https://img.shields.io/badge/Node.js-22_%7C_24-5FA04E?style=flat-square&logo=nodedotjs&logoColor=white" alt="Node.js 22 and 24" />
-<img src="https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.11 or newer" />
-<img src="https://img.shields.io/badge/pnpm-9.5-F69220?style=flat-square&logo=pnpm&logoColor=white" alt="pnpm 9.5" />
-<img src="https://img.shields.io/badge/SQLite-local_state-003B57?style=flat-square&logo=sqlite&logoColor=white" alt="SQLite local state" />
-<img src="https://img.shields.io/badge/Playwright-browser-2EAD33?style=flat-square&logo=playwright&logoColor=white" alt="Playwright browser runtime" />
-<img src="https://img.shields.io/badge/Docker-hardened-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Hardened Docker image" />
-
-<br />
-
-<!-- Platform & project -->
-<img src="https://img.shields.io/badge/macOS-supported-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS supported" />
-<img src="https://img.shields.io/badge/Linux-supported-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux supported" />
-<img src="https://img.shields.io/badge/Windows-supported-0078D4?style=flat-square&logo=windows&logoColor=white" alt="Windows supported" />
-<img src="https://img.shields.io/badge/transport-stdio_%2B_local_HTTP-475569?style=flat-square" alt="Local stdio and loopback HTTP transports" />
+<!-- Release & project -->
+<a href="https://github.com/XAGI-Lab/melra/releases"><img src="https://img.shields.io/github/v/release/XAGI-Lab/melra?include_prereleases&style=flat-square&color=8b5cf6&logo=github&label=release" alt="Latest release" /></a>
+<a href="https://www.npmjs.com/package/@melra/cli"><img src="https://img.shields.io/npm/v/@melra/cli/alpha?style=flat-square&logo=npm&label=%40melra%2Fcli&color=cb3837" alt="@melra/cli on npm" /></a>
+<a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-f97316?style=flat-square" alt="Apache-2.0 license" /></a>
+<img src="https://img.shields.io/badge/evals-51%2F51-22c55e?style=flat-square&logo=checkmarx&logoColor=white" alt="51 of 51 deterministic evaluation scenarios passing" />
 <img src="https://img.shields.io/badge/telemetry-off-0f172a?style=flat-square" alt="Telemetry off" />
 
-<br />
-
-<a href="https://github.com/XAGI-Lab/melra/releases"><img src="https://img.shields.io/github/v/release/XAGI-Lab/melra?include_prereleases&style=flat-square&color=8b5cf6&logo=github" alt="Latest release" /></a>
-<a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-f97316?style=flat-square" alt="Apache-2.0 license" /></a>
-<a href="CONTRIBUTING.md"><img src="https://img.shields.io/badge/DCO-required-6366f1?style=flat-square&logo=git&logoColor=white" alt="DCO sign-off required" /></a>
-<a href="https://github.com/XAGI-Lab/melra/discussions"><img src="https://img.shields.io/badge/discussions-join-2563eb?style=flat-square&logo=github" alt="GitHub Discussions" /></a>
-<a href="CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-welcome-ec4899?style=flat-square" alt="Pull requests welcome" /></a>
+<!-- Platforms & stack -->
+<img src="https://img.shields.io/badge/macOS-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS" />
+<img src="https://img.shields.io/badge/Linux-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux" />
+<img src="https://img.shields.io/badge/Windows-0078D4?style=flat-square&logo=windows&logoColor=white" alt="Windows" />
+<img src="https://img.shields.io/badge/Node.js-22%20%7C%2024-5FA04E?style=flat-square&logo=nodedotjs&logoColor=white" alt="Node.js 22 and 24" />
+<img src="https://img.shields.io/badge/Python-3.11--3.14-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.11 to 3.14" />
+<img src="https://img.shields.io/badge/Docker-hardened-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Hardened Docker image" />
 
 <br /><br />
+
+**Works with** &nbsp;
+<img src="https://img.shields.io/badge/Claude_Code-D97757?style=flat-square&logo=claude&logoColor=white" alt="Claude Code" />
+<img src="https://img.shields.io/badge/Claude_Desktop-D97757?style=flat-square&logo=claude&logoColor=white" alt="Claude Desktop" />
+<img src="https://img.shields.io/badge/Codex-000000?style=flat-square&logo=openai&logoColor=white" alt="OpenAI Codex" />
+<img src="https://img.shields.io/badge/Cursor-000000?style=flat-square&logo=cursor&logoColor=white" alt="Cursor" />
+<img src="https://img.shields.io/badge/VS_Code-007ACC?style=flat-square&logo=vscodium&logoColor=white" alt="VS Code" />
+<img src="https://img.shields.io/badge/Gemini_CLI-8E75B2?style=flat-square&logo=googlegemini&logoColor=white" alt="Gemini CLI" />
+<img src="https://img.shields.io/badge/Zed-084CCF?style=flat-square&logo=zedindustries&logoColor=white" alt="Zed" />
+<img src="https://img.shields.io/badge/Windsurf-0B100F?style=flat-square&logo=windsurf&logoColor=white" alt="Windsurf" />
+<img src="https://img.shields.io/badge/+_any_MCP_client-475569?style=flat-square" alt="and any MCP client" />
+
+<br /><br />
+
+[**Quick start**](#quick-start) &nbsp;·&nbsp; [**How it works**](#how-it-works) &nbsp;·&nbsp; [**See what it is doing**](#see-what-it-is-doing) &nbsp;·&nbsp; [**Docs**](#documentation) &nbsp;·&nbsp; [**Discussions**](https://github.com/XAGI-Lab/melra/discussions)
+
+<br />
 
 <img src="docs/assets/melra-hero.png" alt="MELRA governed execution flow" width="100%" />
 
@@ -67,91 +62,345 @@ shouldn't have to.**
 <br />
 
 > [!WARNING]
-> **MELRA is an alpha release.** Its local stdio runtime is tested end to
-> end, but APIs may change before `1.0`. Use an isolated workspace, keep domain
-> and command allowlists narrow, and review every consequential approval.
-
-### Durable Core Alpha — `0.3.0-alpha.11`
-
-| Shipped in this source release | Evidence |
-|---|---|
-| Restart-safe bounded workflows across nine node kinds | Real MCP process is stopped, replaced, and resumed in E2E |
-| Encrypted exact task, workflow, and result payloads | AES-256-GCM storage plus plaintext-leak checks across SQLite/WAL and public projections |
-| Eleven MCP tools for tasks and workflows | Container and stdio discovery checks require the exact tool set |
-| Recovery without silent mutation replay | 8/8 deterministic recovery scenarios, zero duplicates, zero false success |
-| Loopback HTTP transport, event stream, and read-only console | Same runtime as stdio, token on every route, `405` on any non-`GET` to the JSON API |
-| The same surface on a Unix socket only its OS user can open (`melra serve --socket`) | Created mode `0600` with no wider window, read back before serving; a real MCP client plans, executes, and reads a receipt through it; a stale socket is replaced and a regular file is never removed |
-| A client authenticates itself and is named on every receipt | OAuth 2.1 registration through approval to a token, then the approved client at the head of the delegation chain |
-| Two deployment modes, so a kernel can say whether it is the only door | `--unsafe-local` and a non-loopback bind are both refused under `MELRA_MODE=enforced`, no client can self-register, and `mode` is stamped on every receipt |
-| HTTP and API calls as a first-class effect | Same nine stages as a file write; a mutation whose reply never arrived is reported `unknown` rather than `failed` |
-| Agents receive capabilities, not credentials | The kernel holds the secret and scopes it by host and capability; grants carry a size as well as an expiry and are drawn down durably |
-| Evidence says how it is known | `execution` / `state` / `independent` / `semantic`, derived in one place from the predicate type, so a caller can tell a re-read of the target from the adapter's own word |
-| An effect can be confirmed by a channel that did not perform it | `http_resource_matches` executes through `POST` and verifies through a separate `GET`, so an accepted-but-not-done request lands `partial` |
+> **MELRA is alpha software.** The local runtime is tested end to end, but APIs may
+> change before `1.0`. Use an isolated workspace, keep domain and command allowlists
+> narrow, and read every approval before you give it.
 
 ---
 
-## Contents
+## What is MELRA?
 
-| | | |
+AI agents no longer just talk. They edit files, run commands, click through websites
+and call APIs on your behalf. Four questions come with that, and most agents answer
+them differently, or not at all:
+
+<table>
+<tr>
+<td width="25%" valign="top">
+
+### 🛡️ Is it allowed?
+
+Every action is checked against **your** policy, and checked again at the moment it
+runs. Risky changes wait for your exact approval.
+
+</td>
+<td width="25%" valign="top">
+
+### ✅ Did it really work?
+
+"No error" is not success. An action counts only when the **evidence you declared**
+holds: the file exists, the exit code is 0, the page says what it should.
+
+</td>
+<td width="25%" valign="top">
+
+### 🔁 What if it crashes?
+
+Every action is **recorded before it runs** and runs **at most once**. After a crash,
+MELRA settles what happened instead of blindly repeating it.
+
+</td>
+<td width="25%" valign="top">
+
+### 🧾 What happened?
+
+Every action leaves a **redacted, hash-linked receipt**, so you can audit what ran,
+who asked, and why it was allowed.
+
+</td>
+</tr>
+</table>
+
+MELRA answers those questions once, in one place, for **every** agent. It sits
+underneath your agent, the way an operating system sits underneath your apps:
+
+<p align="center">
+  <img src="docs/assets/readme/layers.svg" alt="Where MELRA sits: the model reasons, your agent runs the loop, MELRA owns every effect, and effect adapters do the work on your systems." width="100%" />
+</p>
+
+> **The LLM reasons. The harness manages the loop. MELRA owns the effect lifecycle.**
+> Swap the model or the agent on Friday; your policies, approvals, credentials,
+> history and receipts are still there on Monday.
+
+---
+
+## Quick start
+
+You need **Node.js 22 or newer**. One command sets everything up:
+
+```bash
+npx @melra/cli@alpha setup
+```
+
+In a terminal, `setup` is a short wizard. It writes a safe local policy, finds the
+agent apps on your machine, asks which one should use MELRA, and writes MELRA into
+that app's own config file, keeping everything else in it (and saving a `.bak` first):
+
+```text
+Which MCP client should use MELRA?
+
+  1)   Claude Code                      detected: 'claude' on PATH
+  2)   Cursor                           detected: config file found
+  3)   Gemini CLI                       detected: config folder found
+  ...
+
+Choose 1-15 [1]: 1
+Write it into ~/project/.mcp.json? [Y/n]
+
+  ✓  Policy       ~/.melra/policy.json
+  ✓  Claude Code  ~/project/.mcp.json
+
+Next: Restart Claude Code, then ask it to use the melra tools.
+```
+
+Then restart your agent app and ask it to do something, for example *"use melra to
+show me the system info"*. That's it.
+
+<details>
+<summary><b>Prefer flags, a container, or building from source?</b></summary>
+
+<br />
+
+| How | Command |
+|---|---|
+| One client, no questions | `npx @melra/cli@alpha setup --client cursor --write` |
+| Print the config instead of writing it | `npx @melra/cli@alpha setup --client codex` |
+| Install globally | `npm install -g @melra/cli@alpha && melra setup` |
+| Container (no Node needed) | `docker run --rm ghcr.io/xagi-lab/melra:alpha doctor` |
+| Prebuilt release | download from [releases](https://github.com/XAGI-Lab/melra/releases), verify against `SHA256SUMS`, then `node melra/dist/bin.js doctor` |
+| From source | `git clone https://github.com/XAGI-Lab/melra.git && cd melra && corepack enable && pnpm install --frozen-lockfile && pnpm build && pnpm melra setup` |
+
+Every command prints readable output in a terminal and plain JSON when piped or with
+`--json`, so scripts keep working. MELRA creates `<MELRA_HOME>/payload.key` with
+private permissions on first start; back it up with the SQLite files, because losing
+it makes persisted payloads unreadable. See [installation](docs/INSTALLATION.md) for
+every install path, environment variable, and the hardened Docker invocation.
+
+</details>
+
+> [!CAUTION]
+> The **unscoped** npm package `melra` and the PyPI package `melra` are **unrelated
+> third-party projects**. This project publishes only under the `@melra/` npm scope:
+> `@melra/cli` is the CLI. Install from that scope, from this repository, or from the
+> official [releases](https://github.com/XAGI-Lab/melra/releases).
+
+---
+
+## Works with your agent
+
+MELRA speaks the [Model Context Protocol](https://modelcontextprotocol.io), so any MCP
+client can use it. For these, `melra setup --client <name>` writes the config in the
+client's own format and location, and `melra doctor` tells you whether each one is
+pointed at MELRA:
+
+| Agent | `--client` | Config it writes |
 |---|---|---|
-| [Why MELRA](#why-melra) | [Where it sits](#where-it-sits-) | [Quickstart](#quickstart-) |
-| [Reference effect adapters](#reference-effect-adapters-) | [Where to use it](#where-you-can-use-melra-%EF%B8%8F) | [MCP tool surface](#a-deliberately-small-mcp-surface-) |
-| [How execution works](#how-execution-works-%EF%B8%8F) | [Safe defaults](#safe-defaults-) | [Evidence](#evidence-not-leaderboard-theatre-) |
-| [Reproduce the scores](#reproduce-the-scores-) | [SDKs](#sdks-and-implementation-languages-) | [Repository map](#repository-map-%EF%B8%8F) |
-| [Documentation](#documentation-) | [Contributing](#contributing-) | [Roadmap](ROADMAP.md) |
+| <img src="https://cdn.simpleicons.org/claude" width="16" alt="" /> **Claude Code** | `claude-code` | `<project>/.mcp.json` |
+| <img src="https://cdn.simpleicons.org/claude" width="16" alt="" /> **Claude Desktop** | `claude-desktop` | `claude_desktop_config.json` |
+| <img src="https://cdn.simpleicons.org/openai/888888" width="16" alt="" /> **OpenAI Codex CLI** | `codex` | `~/.codex/config.toml` |
+| <img src="https://cdn.simpleicons.org/cursor/888888" width="16" alt="" /> **Cursor** | `cursor` | `~/.cursor/mcp.json` |
+| 🟦 **VS Code** (Copilot agent mode) | `vscode` | `<project>/.vscode/mcp.json` |
+| <img src="https://cdn.simpleicons.org/googlegemini" width="16" alt="" /> **Gemini CLI** | `gemini` | `~/.gemini/settings.json` |
+| <img src="https://cdn.simpleicons.org/windsurf/888888" width="16" alt="" /> **Windsurf** | `windsurf` | `~/.codeium/windsurf/mcp_config.json` |
+| <img src="https://cdn.simpleicons.org/zedindustries" width="16" alt="" /> **Zed** | `zed` | Zed `settings.json` (comments kept) |
+| 🧩 **Cline** | `cline` | Cline's `cline_mcp_settings.json` |
+| ⬛ **OpenCode** | `opencode` | `~/.config/opencode/opencode.json` |
+| 👻 **Kiro** | `kiro` | `~/.kiro/settings/mcp.json` |
+| 🪿 **Goose** | `goose` | `~/.config/goose/config.yaml` |
+| ▶️ **Continue** | `continue` | `<project>/.continue/mcpServers/melra.yaml` |
+| ⚡ **Amp** | `amp` | `~/.config/amp/settings.json` |
+| 🔌 **Anything else** (OpenClaw, Hermes, your own) | `generic` | prints the standard `mcpServers` block |
+
+Building your own agent? Use the [TypeScript SDK](packages/sdk-ts) or the
+[Python SDK](sdk-py). Both can spawn MELRA or connect to one that is already running
+over loopback HTTP or a private Unix socket.
+
+> [!NOTE]
+> A named client is marked **verified** only after the *released package*, not a
+> source checkout, passes discovery, planning, approval, execution, cancellation and
+> receipt retrieval in that client. Per-client status lives in
+> [COMPATIBILITY.md](docs/COMPATIBILITY.md).
+
+---
+
+## How it works
+
+Every action an agent wants to take is called an **effect**: `file.write`,
+`terminal.run`, `browser.click`, `http.request`, and so on. MELRA does exactly nine
+things to every effect, split across two calls so that **nothing runs at planning
+time**:
+
+<p align="center">
+  <img src="docs/assets/readme/pipeline.svg" alt="The nine stages: melra_plan types, classifies, authorises, issues an approval challenge and records the task; melra_execute checks policy again, deduplicates, runs under a budget, verifies evidence and writes a receipt." width="100%" />
+</p>
+
+Here is one change from start to finish:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant A as Your agent
+    participant M as MELRA
+    participant You
+    participant W as Your system
+    A->>M: melra_plan: write notes.md, evidence "file contains 'done'"
+    M->>M: type, classify, check policy, record
+    M-->>A: awaiting_approval + challenge "APPROVE 3f9c…"
+    A->>You: May I write notes.md?
+    You-->>A: yes
+    A->>M: melra_execute with the exact phrase
+    M->>M: policy again, not already done?
+    M->>W: write the file (under a budget)
+    M->>W: read it back, independently
+    M-->>A: verified_success + receipt
+```
+
+**What the final status means**, and what an agent should do next:
+
+| Status | Meaning | Next step |
+|---|---|---|
+| 🟢 `verified_success` | It ran and every declared check passed | Done |
+| 🟡 `partial` | It ran, but the evidence did not hold | Look at the evidence, then decide |
+| 🔴 `policy_blocked` | Refused before anything ran | Read the reason; the same request will be refused again |
+| 🔵 `awaiting_approval` | A change is waiting for your exact phrase | Approve it from the agent that planned it |
+| 🟣 `recovery_required` | A change may or may not have happened | **Check the world first**; never re-run blindly |
+| ⚪ `failed` · `cancelled` · `budget_exhausted` | It did not complete | Safe to plan again |
+
+<details>
+<summary><b>Show the request an agent actually sends</b></summary>
+
+<br />
+
+The agent resolves "run the checks" into one bounded operation, plus the evidence that
+would prove it worked:
+
+```json
+{
+  "goal": "Run the repository checks",
+  "operation": { "kind": "terminal", "action": "run", "command": "pnpm", "args": ["check"] },
+  "requiredEvidence": [{ "type": "exit_code", "value": 0 }]
+}
+```
+
+The task reaches `verified_success` only if the process exits `0`. A process that runs
+and exits `1` completed the action but failed the evidence, so it is reported as
+`partial`. MELRA never receives a goal like *"fix the production server"*: that needs
+judgement, which belongs to the model. A kernel that interpreted sentences would be a
+kernel whose guarantees depended on a model.
+
+</details>
+
+When an agent connects, MELRA also sends it a short guide to this loop (the MCP
+server's `instructions`), so a model knows to declare evidence, read the status, and
+never blindly retry an unknown outcome, without anyone prompt-engineering it.
+
+---
+
+## See what it is doing
+
+You can see every action, its policy decision, its evidence and its receipt, from the
+terminal or the browser. Nothing here can approve or start work, and approval phrases
+are never displayed.
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+**From the terminal**
+
+```text
+$ melra status
+MELRA 0.3.0-alpha.11  developer mode
+  Tasks       3 total: 1 awaiting_approval,
+              1 policy_blocked, 1 verified_success
+  Waiting     1 waiting for approval
+  HTTP        127.0.0.1:7457 not running
+
+$ melra tasks
+ID        STATUS             OPERATION     UPDATED
+64199678  awaiting_approval  file.write    0s ago
+ca4aec7a  policy_blocked     terminal.run  1s ago
+a1285e0f  verified_success   system.info   1s ago
+
+$ melra watch          # live, until Ctrl-C
+6:07:21 PM  task 882cf55c  verified_success
+6:07:22 PM  task f813364c  awaiting_approval
+```
+
+`melra doctor` checks Node, SQLite, the browser and policy, and reports which of your
+agent apps point at MELRA, with the one command that fixes anything wrong.
+
+</td>
+<td width="50%" valign="top">
+
+**In the browser:** `melra serve --http --open`
+
+<img src="docs/assets/readme/console-tasks.png" alt="The MELRA console's Tasks view: a filterable list of tasks with status badges, and one task's policy decision, evidence and certificate." width="100%" />
+
+An overview, a searchable task list, and durable workflows with a live event stream.
+It works at phone width and in light and dark, and it is served with a strict
+Content-Security-Policy.
+
+</td>
+</tr>
+</table>
+
+---
+
+## Safe by default
+
+| | Default |
+|:--:|---|
+| 🏠 | **Local only.** stdio, loopback HTTP behind a token, or a mode-`0600` Unix socket only your OS user can open. No account and no hosted service. |
+| 📴 | **Telemetry is off.** |
+| ✍️ | **Changes need two things:** declared evidence *and* an exact, expiring, task-scoped approval phrase. |
+| 📁 | **Paths stay inside your workspace**, including terminal working directories; symlink escapes are refused. |
+| 🚫 | **Shells, `sudo`/`su` and arbitrary desktop key names are denied.** Terminal commands must be on the allowlist by name. |
+| 🌐 | **Private, link-local, loopback and cloud-metadata addresses are blocked** by the browser and HTTP adapters themselves, after DNS resolution, before any allowlist is consulted. |
+| ⚠️ | **Web page content is marked untrusted** and can never change policy. |
+| 🔑 | **Secrets are redacted** before anything is stored, and agents get capabilities, never your raw credentials. |
+| ⏱️ | **Every call is bounded** by a budget and a cancel signal; a stalled browser fails with a clear error instead of hanging. |
+
+<details>
+<summary><b>Unsafe-local mode and the two deployment modes</b></summary>
+
+<br />
+
+Every row above can be switched off at once with `melra serve --unsafe-local` (or
+`MELRA_UNHINGED=1`): no policy, no approvals, no evidence requirement, no workspace
+confinement, no destination checks. The agent gets exactly the reach your OS user has.
+The mode announces itself on stderr, in `melra doctor` and in `melra_capabilities`,
+and receipts still record what ran. See
+[unsafe-local mode](docs/INSTALLATION.md#unsafe-local-mode).
+
+The honest gap in a default install is that MELRA governs the effects it is *asked
+for*. An agent holding both a MELRA terminal and a native one makes the kernel
+optional. `MELRA_MODE` is where you say which situation you are in:
+
+| Mode | Meaning |
+|---|---|
+| `developer` (default) | MELRA governs what it is asked for; the agent may have another path, and you accept that. This is why MELRA can be tried in thirty seconds. |
+| `enforced` | You assert the alternative is gone: the agent is sandboxed, holds no privileged secrets, and reaches these systems only through here. |
+
+MELRA cannot verify that assertion from inside its own process, and it does not
+pretend to; the isolation is the operating system's job. What enforced mode does is
+close every door MELRA owns: `--unsafe-local` is refused outright, nothing binds
+outside loopback (a `0600` Unix socket is allowed), no client can register itself, and
+`mode` is stamped on every receipt. See
+[deployment modes](docs/INSTALLATION.md#deployment-modes),
+the [threat model](docs/THREAT_MODEL.md) and the [security policy](SECURITY.md).
+
+</details>
 
 ---
 
 ## Why MELRA
 
-An LLM decides *what* to do. A harness runs the loop that gets it there.
-Something still has to decide whether the resulting effect is allowed, run it
-exactly once, prove it worked, and survive a crash in the middle. Today that
-machinery is rebuilt inside every agent harness, in a way that dies with the
-harness.
-
-MELRA is that machinery, factored out and made agent-independent:
-
-> **The LLM reasons. The harness manages the loop. MELRA owns the effect
-> lifecycle.**
-
-An **effect** is a named operation that changes or observes the world outside
-the model — `file.write`, `terminal.execute`, `browser.click`,
-`computer.keyboard`, `http.request`, `database.mutate`, `stripe.refund`,
-`github.merge`. MELRA does exactly nine things to every one of them, and
-nothing else:
-
-| | MELRA does | Which answers |
-|:--:|---|---|
-| 1 | **Types** the effect against a strict, bounded schema | *Exactly what may change?* |
-| 2 | **Classifies** it as read, mutation, or destructive | *How much does this matter?* |
-| 3 | **Authorises** it against policy, re-checked at execution | *Is this allowed, still?* |
-| 4 | **Gates** it on an exact human approval phrase | *Does a person decide?* |
-| 5 | **Records** it durably before anything runs | *What was in flight?* |
-| 6 | **Deduplicates** it by idempotency key | *Has this already happened?* |
-| 7 | **Runs** it under a budget and a cancel signal | *When does it stop?* |
-| 8 | **Verifies** it against declared evidence | *What proves it worked?* |
-| 9 | **Receipts** it, redacted and hash-linked | *What can be audited later?* |
-
-That list is the whole job. Everything upstream of it — what to attempt, in
-what order, and why — stays with the model and the harness.
-
-Which is why MELRA never receives a goal. "Fix the production server" requires
-judgement about what is broken and what should change; that is reasoning, and
-it belongs to the model. The model resolves it to a bounded operation, and
-*that* is what arrives:
-
-```json
-{ "effect": "terminal.execute", "command": "systemctl",
-  "args": ["restart", "api"], "environment": "production" }
-```
-
-An interface that accepted the sentence would have to interpret it, and a
-kernel that interprets is a kernel whose guarantees depend on a model.
-
-Most tool servers hand a model a tool and hope. A command runs, a click lands,
-a file is written — and "it returned without an error" is treated as success.
-MELRA separates **the action succeeded** from **the goal was achieved**.
+An LLM decides *what* to do. A harness runs the loop that gets it there. Something
+still has to decide whether the resulting effect is allowed, run it exactly once,
+prove it worked, and survive a crash in the middle. Today that machinery is rebuilt
+inside every agent harness, and it dies with the harness. MELRA is that machinery,
+factored out and made agent-independent.
 
 <table>
 <tr>
@@ -164,7 +413,7 @@ MELRA separates **the action succeeded** from **the goal was achieved**.
 - Tool call executes immediately
 - Success = no exception thrown
 - Policy, if any, checked once
-- Mutations are indistinguishable from reads
+- Changes look the same as reads
 - Output is trusted
 - No durable record
 - Rules live inside one agent
@@ -172,11 +421,11 @@ MELRA separates **the action succeeded** from **the goal was achieved**.
 </td>
 <td>
 
-- **Plan** and **execute** are separate tool calls
-- Success = declared evidence predicates passed
-- Policy re-evaluated **at execution time**
-- Mutations need evidence **and** an exact approval phrase
-- Page content is explicitly marked untrusted
+- **Plan** and **execute** are separate calls
+- Success = declared evidence passed
+- Policy checked again **at execution time**
+- Changes need evidence **and** an exact approval
+- Page content is explicitly untrusted
 - Redacted receipt + SHA-256 execution certificate
 - Rules outlive the agent that used them
 
@@ -184,21 +433,12 @@ MELRA separates **the action succeeded** from **the goal was achieved**.
 </tr>
 </table>
 
-If a mutation succeeds but its required evidence is missing or false, the task
-is `partial` — **never** `verified_success`.
-
-**Agents should be replaceable. The infrastructure that owns consequences
-should not be.** Swap the harness on Friday; the policies, approvals,
-credentials, workflow history, idempotency records, and receipts are still
-there on Monday.
-
 Next to the two layers it is most often mistaken for:
 
 |  | Agent harness | MCP server | MELRA |
 |---|:---:|:---:|:---:|
 | Model loop and reasoning | ✓ | ✗ | ✗ |
 | Tools | ✓ | ✓ | via adapters |
-| Execution | ✓ | ✓ | ✓ |
 | Agent-independent policy | usually ✗ | possible | **core** |
 | Durable effect state | sometimes | rarely | **core** |
 | Idempotency across restarts | varies | rare | **core** |
@@ -209,301 +449,81 @@ Next to the two layers it is most often mistaken for:
 | Credential isolation | varies | varies | **core** |
 | Hard capability boundary | varies | usually ✗ | *partly shipped* |
 
-Plenty of MCP servers *can* do these things — this is not a claim that none of
-them do. The difference is that in MELRA they are the execution contract rather
-than a per-tool option. The boundary is *partly shipped*: `MELRA_MODE=enforced`
-closes every door MELRA owns, but the OS isolation that stops a harness reaching
-the filesystem *around* the kernel is the operator's to build. MELRA's side of
-that now includes a mode-`0600` Unix-socket transport; runnable hardened
-deployment recipes are still to come ([#52](https://github.com/XAGI-Lab/melra/issues/52)).
-A kernel cannot verify it is the only door; enforced mode is the operator
-asserting that, and MELRA holding up its end.
+Plenty of MCP servers *can* do these things; this is not a claim that none of them do.
+The difference is that in MELRA they are the execution contract rather than a per-tool
+option. The boundary is *partly shipped*: `MELRA_MODE=enforced` closes every door
+MELRA owns, but the OS isolation that stops a harness reaching the filesystem *around*
+the kernel is the operator's to build; runnable hardened deployment recipes are still
+to come ([#52](https://github.com/XAGI-Lab/melra/issues/52)).
+
+**The feature test.** Anything that would still make sense if the request came from
+ordinary deterministic software belongs in MELRA: authorisation, idempotency,
+credential isolation, recovery, verification, effect history. Prompt optimisation, LLM
+memory, model selection, a planner and agent personality belong to the harness above.
+That is why nothing in MELRA's execution path ever calls a model.
 
 ---
 
-## Where it sits 🧭
+## What it can do
 
-Three layers, not two. The reasoning loop is the model and the harness
-together; the effect lifecycle is below both of them.
+### Effect adapters
 
-```text
-            ┌────────────────────────────────────────────┐
-  reasoning │  LLM    Claude · GPT · Gemini · Llama      │
-            │  reasons · decides what should happen      │
-            └────────────────────────────────────────────┘
-                           ▲ tool call   │ tools + context
-                           │             ▼
-            ┌────────────────────────────────────────────┐
-   the loop │  AGENT HARNESS   OpenClaw · Hermes ·       │
-            │  ATLAS · Claude Code · your own            │
-            │  sessions · context · prompts · dispatch   │
-            └────────────────────────────────────────────┘
-                                   │  effect request
-                                   ▼
-            ╔════════════════════════════════════════════╗
-    effects ║  MELRA — autonomy kernel                   ║
-            ║                                            ║
-            ║  identity · capability · policy ·          ║
-            ║  authorization · credential broker ·       ║
-            ║  durable execution · idempotency ·         ║
-            ║  recovery · verification · evidence        ║
-            ╚════════════════════════════════════════════╝
-                                   │
-                                   ▼
-            ┌────────────────────────────────────────────┐
-   adapters │  EFFECT ADAPTERS                           │
-            │  files · terminal · browser · computer ·   │
-            │  HTTP — planned: database · cloud · SaaS   │
-            └────────────────────────────────────────────┘
-                                   ▼
-             Linux · macOS · Windows · APIs · cloud
-```
-
-Many harnesses, one execution foundation:
-
-```text
-   OpenClaw ─┐
-   Hermes ───┤
-   ATLAS ────┼──→  MELRA  ──→  your systems
-   Custom ───┘
-```
-
-Who owns what, and this does not move:
-
-| Layer | Owns |
-|---|---|
-| **LLM** | Reasoning · tool selection · planning |
-| **Harness** | Conversation · prompt construction · model routing · semantic memory · agent personality · subagent reasoning |
-| **MELRA** | Effect authorization · effect execution · durable effect state · recovery · verification · evidence · credentials and capabilities |
-
-MCP is *one* way to reach the kernel, not what the kernel is. MCP, CLI, SDK,
-loopback HTTP, and a Unix socket all enter the same runtime, take the same policy decision,
-and write the same durable record.
-
----
-
-## Reference effect adapters 🔌
-
-The kernel is the contract; these are its shipped implementations of it. Every
-one passes through the same policy, approval, budget, verification, receipt,
-and certificate pipeline — an adapter that skipped it would not be an adapter.
+The kernel is the contract; these are its shipped implementations. Every one passes
+through the same policy, approval, budget, verification, receipt and certificate
+pipeline; an adapter that skipped it would not be an adapter.
 
 | | Adapter | What is implemented |
 |:--:|---|---|
-| 🗂️ | **Files** | Root-confined read, hash, atomic write, move, mkdir, and delete with symlink-escape defenses |
-| 💻 | **Terminal** | Shell-free foreground and supervised background processes with allowlists, traits, timeouts, interactive input, cancellation, and redaction |
-| 🌐 | **Browser** | Isolated Playwright sessions, semantic DOM targets, bounded artifacts, network policy, popup policy, opt-in profiles, and condition-based post-action settling |
-| 🖥️ | **Computer** | Capability discovery plus governed screenshot, pointer, keyboard, and scroll adapters on macOS and supported Linux/X11 setups |
+| 🗂️ | **Files** | Root-confined read, hash, atomic write, move, mkdir and delete, with symlink-escape defenses |
+| 💻 | **Terminal** | Shell-free foreground and supervised background processes with allowlists, traits, timeouts, interactive input, cancellation and redaction |
+| 🌐 | **Browser** | Isolated Playwright sessions, semantic DOM targets, bounded artifacts, network and popup policy, opt-in profiles, condition-based settling, and every browser call bounded so a stalled page fails clearly |
+| 🖥️ | **Computer** | Capability discovery plus governed screenshot, pointer, keyboard and scroll on macOS and supported Linux/X11 setups |
 | 📡 | **HTTP** | `GET`/`HEAD` as reads and every other method as an approval-gated at-most-once mutation, pinned to the address the destination check resolved, with credentials injected by the kernel rather than handed to the caller |
+| 🧠 | **Operational memory** | A kernel service, not an adapter: scoped SQLite storage of what MELRA knows about its own effects, with hybrid ranking, freshness, expiry, supersession, provenance and redaction |
 
-The diagram above also shows database, cloud, and SaaS adapters. Those are
-designed and on the [roadmap](ROADMAP.md) — **not shipped today**. HTTP is,
-because a serious amount of autonomous work happens through APIs rather than
-mouse clicks, and an API effect needs the same nine guarantees as a file write.
+Database, cloud and SaaS adapters are designed and on the [roadmap](ROADMAP.md), not
+shipped today. Semantic memory about the *user* (preferences, conversation history)
+belongs to the harness, not here.
 
-**Operational memory** is a kernel service rather than an adapter: what MELRA
-knows about its own effects — which operation changed what, which attempt was
-already committed, what a previous run observed. Scoped SQLite storage with
-hybrid lexical ranking, episode context, confidence, freshness, expiry,
-supersession, provenance, and redaction. Semantic memory about the *user* —
-preferences, project context, conversation history — belongs to the harness
-above, not here.
+### A deliberately small tool surface
 
+Eleven tools in front of the adapters and one durable workflow controller. The CLI,
+both SDKs, loopback HTTP and the Unix socket reach the same eleven operations; this
+list is the kernel contract, not an MCP-specific API.
 
----
+| Tool | Purpose |
+|---|---|
+| `melra_capabilities` | Discover operations, platform support, limits and policy posture |
+| `melra_plan` | Validate, persist and policy-check one bounded operation |
+| `melra_execute` | Execute an approved plan and verify the declared outcome |
+| `melra_task_status` | Read durable task state |
+| `melra_task_cancel` | Cooperatively cancel pending or running work |
+| `melra_receipt` | Retrieve redacted evidence and the execution certificate |
+| `melra_workflow_plan` | Validate, preflight, encrypt and persist a bounded workflow |
+| `melra_workflow_advance` | Execute one ready scheduling wave |
+| `melra_workflow_status` | Read the durable workflow projection |
+| `melra_workflow_cancel` | Cooperatively cancel nonterminal workflow work |
+| `melra_workflow_control` | Pause, resume or suspend a run without losing its place |
 
-## Where you can use MELRA 🛠️
+Prefer tool names your model already knows? Set `MELRA_HARNESS_TOOLS=1` and thirteen
+more appear alongside these (`read_file`, `write_file`, `run_command`, `browser_click`,
+`approve`, …). They are not a second path: each one builds an ordinary task and runs
+the same pipeline. See [ordinary tool names](docs/INSTALLATION.md#ordinary-tool-names).
 
-MELRA works with any MCP client that can launch a local stdio server.
+### Durable, restart-safe workflows
 
-<div align="center">
-
-| Client | Setup | Status |
-|---|:--:|:--:|
-| **Claude Desktop** | [docs](docs/INSTALLATION.md) | <img src="https://img.shields.io/badge/documented-2563eb?style=flat-square" alt="documented" /> |
-| **Cursor** | [docs](docs/INSTALLATION.md) | <img src="https://img.shields.io/badge/documented-2563eb?style=flat-square" alt="documented" /> |
-| **VS Code** | [docs](docs/INSTALLATION.md) | <img src="https://img.shields.io/badge/documented-2563eb?style=flat-square" alt="documented" /> |
-| **Any stdio MCP client** | [docs](docs/INSTALLATION.md) | <img src="https://img.shields.io/badge/documented-2563eb?style=flat-square" alt="documented" /> |
-
-</div>
-
-> [!NOTE]
-> A named client is marked **verified** only after the *released artifact* —
-> not a source checkout — passes discovery, planning, approval, execution,
-> cancellation, and receipt retrieval in that client. Current per-client status
-> is tracked in [COMPATIBILITY.md](docs/COMPATIBILITY.md).
-
-### What people actually do with it
-
-| | Use case | Small example | Verified outcome |
-|:--:|---|---|---|
-| 👩‍💻 | **Coding clients** | Inspect a repository, run `pnpm check`, write a bounded file change | Exit code, file existence, content, or hash |
-| 🌐 | **Browser workflows** | Open an allowlisted page, inspect it, fill a form after approval | Final URL and page content |
-| 💻 | **Terminal automation** | Run a shell-free build or supervise a background process | Exit code and bounded stdout |
-| 🖥️ | **Computer use** | Discover local support, capture a screenshot, approve pointer or keyboard input | Adapter result plus declared evidence |
-| 🧠 | **Project memory** | Store a test command, architectural decision, or operating procedure | Scoped record with provenance and redaction |
-| 🔁 | **Durable workflows** | Inspect, write an approved artifact, restart between nodes, then checkpoint | Ordered events, independent file evidence, receipt, and certificate |
-
-<details>
-<summary><b>Show a governed terminal operation</b></summary>
-
-<br />
-
-A coding client submits one bounded operation with the evidence it expects:
-
-```json
-{
-  "goal": "Run the repository checks",
-  "operation": {
-    "kind": "terminal",
-    "action": "run",
-    "command": "pnpm",
-    "args": ["check"]
-  },
-  "requiredEvidence": [
-    { "type": "exit_code", "value": 0 }
-  ]
-}
-```
-
-The task reaches `verified_success` only if the process exits `0`. A process
-that runs and exits `1` is a completed action with failed evidence — reported
-as `partial`.
-
-</details>
-
-<details>
-<summary><b>Show scoped project memory</b></summary>
-
-<br />
+Workflows compose `operation`, `approval`, `condition`, `parallel`, `bounded_loop`,
+`checkpoint`, `compensation`, `human_input` and `delegation` nodes, and every effect
+still travels through the task pipeline. Each CLI call below is a new process, so this
+exercises restart persistence with no daemon:
 
 ```bash
-pnpm melra run --request examples/07-project-decision-memory/task.json
+melra workflow plan --definition examples/workflows/restart-safe.json   # save the id
+melra workflow advance <workflow-id>
+melra workflow advance <workflow-id>          # exits 3 with the write's approval challenge
+melra workflow advance <workflow-id> --approval '<approval-id>:<exact phrase>'
+melra workflow advance <workflow-id>
 ```
-
-Records are scoped, provenance-tagged, and pass through secret redaction before
-they are persisted.
-
-</details>
-
-See all [runnable examples](examples/README.md) — browser inspection, verified
-file writes, terminal checks, scoped memory, and computer capability discovery.
-
----
-
-## Quickstart 🚀
-
-**npm (fastest — needs Node 22+):**
-
-```bash
-npx @melra/cli@alpha setup
-```
-
-One command: writes a safe local policy, prints a ready-to-paste MCP client
-config, and runs every readiness check. In a terminal it lists the MCP clients
-it finds on your machine, asks which one, and offers to write the config:
-
-```text
-  1)   Cursor        detected: config file found
-  ...
-Choose 1-15 [1]: 1
-Write it into /home/you/.cursor/mcp.json? [Y/n]
-  ✓  Cursor  /home/you/.cursor/mcp.json
-Next: Restart Cursor, then ask it to use the melra tools.
-✓ Ready
-```
-
-Piped or with `--json` it asks nothing and prints JSON, as before. To skip the
-question, name your client and add `--write`:
-
-```bash
-npx @melra/cli@alpha setup --client cursor --write
-```
-
-Supported: `claude-code`, `claude-desktop`, `cursor`, `vscode`, `windsurf`,
-`codex`, `gemini`, `zed`, `cline`, `opencode`, `kiro`, `goose`, `continue`,
-`amp`, and `generic`. Use `doctor` alone to check readiness without changing
-any configuration; it also says which of those clients have MELRA configured
-and flags a stale `npx` pin.
-
-**Container (no Node install needed):**
-
-```bash
-docker run --rm ghcr.io/xagi-lab/melra:alpha doctor
-```
-
-**Prebuilt release:** Download from the [releases page](https://github.com/XAGI-Lab/melra/releases), extract, and run:
-
-```bash
-tar -xzf melra-node-<version>.tar.gz -C melra
-node melra/dist/bin.js doctor
-```
-
-**From source** (for development):
-
-```bash
-git clone https://github.com/XAGI-Lab/melra.git
-cd melra
-corepack enable
-pnpm install --frozen-lockfile
-pnpm build
-pnpm melra setup
-```
-
-<table>
-<tr><th>Goal</th><th>Command</th></tr>
-<tr><td>Set up policy, client config, and readiness at once</td><td><code>melra setup</code></td></tr>
-<tr><td>Start the stdio server</td><td><code>melra serve</code></td></tr>
-<tr><td>Start the HTTP server and console</td><td><code>melra serve --http --open</code></td></tr>
-<tr><td>Run a read-only system task</td><td><code>melra run --request examples/01-system-info/task.json</code></td></tr>
-<tr><td>Run a verified mutation</td><td><code>melra run --request examples/02-verified-file-write/task.json</code></td></tr>
-<tr><td>Inspect a stored receipt</td><td><code>melra inspect &lt;task-id&gt;</code></td></tr>
-<tr><td>See recent tasks, follow them live, or get a summary</td><td><code>melra tasks</code>, <code>melra watch</code>, <code>melra status</code></td></tr>
-<tr><td>See which clients you approved over HTTP</td><td><code>melra clients</code></td></tr>
-<tr><td>Advance a durable workflow</td><td><code>melra workflow advance &lt;workflow-id&gt;</code></td></tr>
-<tr><td>Test a policy file</td><td><code>melra policy test</code></td></tr>
-<tr><td>Check an endpoint's conformance level</td><td><code>melra conformance</code></td></tr>
-</table>
-
-Mutations pause for an exact, expiring, task-scoped approval phrase. See
-[installation and client setup](docs/INSTALLATION.md) for Claude Desktop,
-Cursor, VS Code, generic clients, Python, and Docker.
-
-MELRA creates `<MELRA_HOME>/payload.key` with private permissions on first
-start. Back it up together with the SQLite files: losing or changing the key
-makes persisted executable payloads unreadable. Never commit the key or place
-it directly in a shared client configuration.
-
-> [!CAUTION]
-> The **unscoped** npm package `melra` and the PyPI package `melra` are
-> **unrelated third-party projects**. This project publishes only under the
-> `@melra/` npm scope — `@melra/cli` is the CLI. Install from that scope, from
-> this repository, or from official
-> [XAGI-Lab releases](https://github.com/XAGI-Lab/melra/releases).
-
----
-
-## Restart-safe first workflow 🔁
-
-The committed example performs a read, pauses for an approved file write, and
-finishes at a durable checkpoint. Each CLI invocation is a new process, so this
-sequence exercises restart persistence without keeping a daemon alive:
-
-```bash
-node apps/cli/dist/bin.js workflow plan \
-  --definition examples/workflows/restart-safe.json
-# save the returned workflow id
-
-node apps/cli/dist/bin.js workflow advance <workflow-id>
-node apps/cli/dist/bin.js workflow advance <workflow-id>
-# the second command exits 3 and returns the write approval challenge
-
-node apps/cli/dist/bin.js workflow advance <workflow-id> \
-  --approval '<approval-id>:<exact phrase>'
-node apps/cli/dist/bin.js workflow advance <workflow-id>
-```
-
-Shortened output captured from the `0.3.0-alpha.0` release candidate:
 
 ```text
 planned            stateVersion=2
@@ -513,286 +533,147 @@ running            stateVersion=10  write=verified_complete
 verified_complete  stateVersion=14  checkpoint=verified_complete
 ```
 
-The final file is read independently in the real-process E2E test. Closing the
-process after any displayed boundary and running the next command against the
-same `MELRA_HOME` resumes the persisted workflow.
+Stop the process after any line and the next command resumes from the same
+`MELRA_HOME`. Interrupted reads may retry; interrupted changes are never silently
+repeated. They are settled by re-observation, or they park in `recovery_required`.
 
----
+<details>
+<summary><b>Everything shipped in this release</b></summary>
 
-## A deliberately small MCP surface ✨
+<br />
 
-Eleven tools in front of the reference effect adapters and one durable workflow
-controller. The CLI, both SDKs, and loopback HTTP reach the same eleven
-operations — this list is the kernel contract, not an MCP-specific API:
-
-| MCP tool | Purpose |
+| Shipped in `0.3.0-alpha.11` and since | Evidence |
 |---|---|
-| `melra_capabilities` | Discover operations, platform support, limits, and policy posture |
-| `melra_plan` | Validate, persist, and policy-check one bounded operation |
-| `melra_execute` | Execute an approved plan and verify the declared outcome |
-| `melra_task_status` | Read durable task state |
-| `melra_task_cancel` | Cooperatively cancel pending or running work |
-| `melra_receipt` | Retrieve redacted evidence and the execution certificate |
-| `melra_workflow_plan` | Validate, preflight, encrypt, and persist a bounded workflow |
-| `melra_workflow_advance` | Execute one ready scheduling wave |
-| `melra_workflow_status` | Read the durable workflow projection |
-| `melra_workflow_cancel` | Cooperatively cancel nonterminal workflow work |
-| `melra_workflow_control` | Pause, resume, or suspend a run without losing its place |
+| Restart-safe bounded workflows across nine node kinds | A real MCP process is stopped, replaced and resumed in E2E |
+| Encrypted exact task, workflow and result payloads | AES-256-GCM storage plus plaintext-leak checks across SQLite/WAL and public projections |
+| Recovery without silent mutation replay | 8/8 deterministic recovery scenarios, zero duplicates, zero false success |
+| Loopback HTTP, a `0600` Unix socket, an event stream and a read-only console | Same runtime as stdio, token on every route, `405` on any non-`GET` to the JSON API |
+| A client authenticates itself and is named on every receipt | OAuth 2.1 registration through approval to a token |
+| Two deployment modes | `--unsafe-local` and a non-loopback bind are refused under `MELRA_MODE=enforced` |
+| HTTP and API calls as a first-class effect | A mutation whose reply never arrived is reported unknown, not failed |
+| Agents receive capabilities, not credentials | The kernel holds the secret and scopes it by host and capability; grants carry a size and an expiry |
+| Evidence says how it is known | `execution` / `state` / `independent` / `semantic` strength on every evidence item |
+| Independent-channel verification | `http_resource_matches` executes through `POST` and verifies through a separate `GET` |
 
-Workflow definitions compose operation, approval, condition, parallel,
-bounded-loop, checkpoint, compensation, human-input, and delegation nodes while
-every effect still travels through the task policy and evidence pipeline.
+See the full [CHANGELOG](CHANGELOG.md).
 
-If you would rather your model saw the tool names it already knows, set
-`MELRA_HARNESS_TOOLS=1` and thirteen more appear alongside these — `read_file`,
-`write_file`, `run_command`, `browser_click`, `approve`, and the rest. They are
-not a second path: each one builds an ordinary task and runs the same pipeline,
-and a mutation still stops on its approval phrase. See
-[INSTALLATION.md](docs/INSTALLATION.md#ordinary-tool-names).
+</details>
 
 ---
 
-## How execution works ⚙️
+## Evidence and benchmarks
 
-```mermaid
-flowchart LR
-    Client["MCP · CLI · SDK"] --> Plan["Persist task or workflow"]
-    Plan --> Policy{"Policy at plan time"}
-    Policy -->|deny| Stop["Policy blocked"]
-    Policy -->|allow or exact approval| Recheck{"Policy at execution time"}
-    Recheck --> Runtime["File · terminal · browser · memory · computer"]
-    Runtime --> Observe["Post-action observation"]
-    Observe --> Verify{"Evidence predicates pass?"}
-    Verify -->|yes| Success["Verified success"]
-    Verify -->|no| Partial["Partial or failed"]
-    Success --> Event["Ordered event + projection"]
-    Event --> Receipt["Redacted receipt + SHA-256 certificate"]
-    Partial --> Receipt
-```
+Numbers come from committed scripts and JSON artifacts, with dataset hashes and claim
+boundaries. They are **component measurements**, not a claim that MELRA is "the best"
+or that unlike benchmarks are comparable.
 
-Task lifecycle:
-
-```text
-planned → awaiting_approval → running → verifying
-                                     ↘ verified_success
-                                     ↘ partial | failed | cancelled | budget_exhausted
-```
-
-Policy is evaluated **twice** — once when the plan is persisted and again at
-execution — so a stale plan can never ride a since-tightened policy.
-
-> [!IMPORTANT]
-> **Current alpha boundary:** exact task and workflow payloads survive restart
-> in AES-256-GCM envelopes. Interrupted reads may retry; interrupted mutations
-> are never silently repeated and are settled by re-observation — a filesystem
-> re-read, or a declared `reconciliation` predicate asking the provider — or
-> enter `recovery_required`. A request that went out and was never answered
-> parks there too, because `failed` would assert an outcome nobody holds.
-> Evidence predicates remain
-> caller-authored, and what a predicate is worth depends on where its answer
-> came from: `http_resource_matches` asks a channel that did not perform the
-> effect, filesystem predicates re-read state, and result, terminal, URL, and
-> page predicates evaluate adapter observations. Every evidence item carries
-> that level in `strength`, derived from the predicate type rather than
-> declared by the caller.
-
----
-
-## Evidence, not leaderboard theatre 📊
-
-The numbers below come from committed scripts and JSON artifacts measured on an
-Apple Silicon Mac. They are **component measurements**, not a claim that MELRA
-MCP is universally "the best" or that unlike benchmarks are comparable.
-
-| | Capability | Current public result | What it means |
+| | What | Result | What it means |
 |:--:|---|---:|---|
-| 🧠 | LoCoMo retrieval | **0.7597** mean evidence coverage@20 | 1,982 evidence-bearing questions; +20.75% relative over the previous public ranker; zero model, embedding, or network calls |
-| 🧠 | Synthetic recall | **100/100** Recall@1 | Deterministic planted-fact regression over 1,000 records |
+| ✅ | Safety and execution evals | **51/51** | Deterministic policy, capability-grant, credential-scope, traversal, terminal, memory, computer, HTTP, cancellation and verification scenarios |
+| 🔁 | Durable Core eval | **8/8** | 100% expected recovery, 0 duplicate execution, 0 false success, 100% event consistency |
+| 🧠 | LoCoMo retrieval | **0.7597** coverage@20 | 1,982 evidence-bearing questions with zero model, embedding or network calls; re-run on 2026-10-14 and identical on every metric |
+| 🧠 | Synthetic recall | **100/100** Recall@1 | Planted-fact regression over 1,000 records |
 | 🌐 | Static-page settle | **183.7 ms** p50 vs 301.3 ms | 39% less waiting with identical 10/10 correct reads |
-| 🌐 | Slow-render settle | **10/10** vs 0/10 correct | Condition-based waiting observes the final DOM; fixed 300 ms reads too early |
-| 💻 | Terminal | **30/30** verified executions | Shell-free process launch; 48.1 ms p50 on the measured machine |
-| 🖥️ | Computer control plane | **30/30** capability probes | 0.032 ms p50 adapter discovery; this is *not* a desktop task-success score |
-| ✅ | Safety/execution evals | **51/51** passing | Deterministic policy, capability-grant, credential-scope, traversal, terminal, memory, computer, HTTP, cancellation, and verification scenarios, six of them against a recorded desktop |
-| 🔁 | Durable Core eval | **8/8** valid scenarios | 100% expected recovery, 0 duplicate execution, 0 false success, 100% event consistency |
+| 🌐 | Slow-render settle | **10/10** vs 0/10 correct | Condition-based waiting sees the final DOM; a fixed 300 ms wait reads too early |
+| 💻 | Terminal | **30/30** verified | Shell-free process launch, 48.1 ms p50 on the measured machine |
+| 🖥️ | Computer control plane | **30/30** probes | 0.032 ms p50 adapter discovery; this is *not* a desktop task-success score |
 
-Read the [research index](docs/research/README.md), the
-[benchmark methodology](docs/research/METHODOLOGY.md), and the raw
-[microbenchmark](docs/research/results/core-microbenchmarks.json) and
-[LoCoMo](docs/research/results/locomo-retrieval.json) artifacts.
+The repository also contains a pre-registered browser-agent harness (MiniWoB-125 and
+the WebArena-Verified Hard-30 registered subset) whose task IDs, upstream revisions and
+dataset hashes are frozen. Its score is **not yet claimed**: it will be published only
+after a full fixed-denominator run passes the publication gate. MELRA has **not** run
+an official OSWorld, WebArena or LongMemEval submission.
 
-### Browser-agent evaluation — harness registered, score not yet claimed
+<details>
+<summary><b>Reproduce the scores</b></summary>
 
-The repository contains a pre-registered browser-agent evaluation harness:
-
-| Track | Status |
-|---|---|
-| MiniWoB-125 development suite (`browsergym-miniwob==0.14.3`) | <img src="https://img.shields.io/badge/harness-ready-2563eb?style=flat-square" alt="harness ready" /> |
-| WebArena-Verified Hard-30 registered subset (`webarena-verified==1.2.3`) | <img src="https://img.shields.io/badge/harness-ready-2563eb?style=flat-square" alt="harness ready" /> |
-| Published representative score | <img src="https://img.shields.io/badge/not_yet_run-64748b?style=flat-square" alt="not yet run" /> |
-
-Task IDs, upstream revisions, and dataset hashes are frozen in
-[`benchmarks/browser-agent/manifests/`](benchmarks/browser-agent/manifests) and
-enforced by `pnpm benchmark:browser:verify-upstream`. A score will be published
-only after a full fixed-denominator run completes without infrastructure-invalid
-pairs *and* its sanitized artifact passes the publication gate.
-
-> [!IMPORTANT]
-> MELRA has **not** run an official OSWorld, OSWorld-MCP, WebArena, or
-> LongMemEval end-to-end submission. Those scores remain unclaimed until the
-> exact public harness, environment, model policy, and evaluator are released
-> with the result.
-
----
-
-## Safe defaults 🔒
-
-| | Default |
-|:--:|---|
-| 🏠 | Local-only transports — stdio, loopback HTTP behind a token, or a mode-`0600` Unix socket behind the same token; no account or hosted service required |
-| 📴 | Telemetry is **off** |
-| 🚫 | Shell interpreters, privilege escalation, and arbitrary desktop key names are denied |
-| 📁 | Paths and terminal working directories stay inside the configured root |
-| 🌐 | Private, link-local, loopback, and cloud-metadata destinations are blocked by the browser runtime itself, before any allowlist is consulted; `allowedDomains` narrows which *public* sites are reachable |
-| ⚠️ | Browser output is marked untrusted; page content never changes policy |
-| ✍️ | Mutations require **both** declared evidence and an exact task-scoped approval |
-| 🔑 | Secret patterns are redacted before terminal output, memory, tasks, or receipts are persisted |
-| 🎛️ | Computer actions use bounded typed fields and platform adapters — not a user-supplied shell command |
-
-See the [threat model](docs/THREAT_MODEL.md) and
-[security policy](SECURITY.md) for residual risks.
-
-Every row above can be turned off at once with `melra serve --unsafe-local` (or
-`MELRA_UNHINGED=1`): no policy, no approvals, no evidence requirement, no
-workspace confinement, no destination checks. The agent gets exactly the reach
-your OS user has. The mode announces itself on stderr, in `melra doctor`, and in
-`melra_capabilities`, and receipts still record what ran. See
-[unsafe-local mode](docs/INSTALLATION.md#unsafe-local-mode) for what stays on and why.
-
-### Two deployment modes
-
-The honest gap in a default install is that MELRA governs the effects it is
-*asked for*. A harness holding both a MELRA terminal and a native one makes the
-kernel optional, and an optional boundary is not a trust boundary. `MELRA_MODE`
-is where you say which situation you are in:
-
-| Mode | Meaning |
-|---|---|
-| `developer` (default) | MELRA governs what it is asked for; the harness may have another path, and you accept that. This is why MELRA can be tried in thirty seconds. |
-| `enforced` | You assert the alternative is gone — the harness is sandboxed, holds no privileged secrets, and reaches these systems only through here. |
-
-MELRA cannot verify that assertion from inside its own process, and it does not
-pretend to: the isolation is the operating system's job, so bring a container or
-a sandbox profile. What enforced mode does is stop being one of the ways the
-claim could be false — `--unsafe-local` refused outright, no bind outside
-loopback, no client registering itself, and `mode` stamped on every receipt. A
-conformance run against it keeps the same level and narrows its caveat to naming
-whose word the rest rests on. See
-[deployment modes](docs/INSTALLATION.md#deployment-modes).
-
----
-
-## Reproduce the scores 🧪
+<br />
 
 ```bash
-# full validation gate
-pnpm check
-pnpm evals
-pnpm e2e
-pnpm pack:check
-pnpm security:audit
+# the full validation gate
+pnpm check && pnpm evals && pnpm e2e && pnpm pack:check && pnpm security:audit
 pnpm --filter @melra/evals evaluate:durable-core -- --publishable
 
-# local memory, browser, terminal, and computer microbenchmarks
+# memory, browser, terminal and computer microbenchmarks
 pnpm benchmark:core
 
-# hardened local container and real MCP smoke
-docker build -t melra:local .
-docker run --rm melra:local doctor
-pnpm docker:smoke
-```
-
-<details>
-<summary><b>LoCoMo memory retrieval</b> — dataset intentionally not vendored (CC BY-NC 4.0)</summary>
-
-<br />
-
-```bash
+# LoCoMo (dataset not vendored: CC BY-NC 4.0)
 git clone https://github.com/snap-research/locomo.git /tmp/locomo
-pnpm benchmark:locomo -- \
-  --dataset /tmp/locomo/data/locomo10.json \
+pnpm benchmark:locomo -- --dataset /tmp/locomo/data/locomo10.json \
   --output docs/research/results/locomo-retrieval.json
-```
 
-</details>
-
-<details>
-<summary><b>Browser-agent harness</b> — contract checks and the MiniWoB development suite</summary>
-
-<br />
-
-Contract and registered-selection checks run with no model and no network
-environment:
-
-```bash
+# browser-agent harness contract checks (no model, no network)
 pnpm benchmark:browser:check
 pnpm benchmark:browser:verify-upstream
+
+# hardened container and a real MCP smoke test
+docker build -t melra:local . && docker run --rm melra:local doctor && pnpm docker:smoke
 ```
 
-The MiniWoB development suite additionally needs the pinned MiniWoB++ assets, a
-built CLI (`pnpm build`), and an agent configuration whose `api_key_env` names a
-variable present in the environment:
-
-```bash
-uv run --project benchmarks/browser-agent --extra miniwob \
-  melra-browser-bench run-miniwob \
-  --manifest benchmarks/browser-agent/manifests/miniwob-125-v1.json \
-  --run-dir benchmarks/browser-agent/runs/miniwob-candidate \
-  --workspace benchmarks/browser-agent/runs/workspaces \
-  --base-url "$MINIWOB_BASE_URL" \
-  --browser-executable "$MELRA_BROWSER" \
-  --implementation-commit "$(git rev-parse HEAD)" \
-  --agent-config benchmarks/browser-agent/runs/config/agent.json
-```
-
-Run outputs — HAR, screenshots, video, and transcripts — are Git-ignored and
-must never be committed.
+The MiniWoB suite also needs the pinned MiniWoB++ assets and an agent configuration;
+see [the research index](docs/research/README.md) and the
+[methodology](docs/research/METHODOLOGY.md). Run outputs (HAR, screenshots, video,
+transcripts) are git-ignored and must never be committed.
 
 </details>
 
-Benchmark artifacts include dataset hashes, environment details, sample counts,
-latency percentiles, and explicit claim boundaries.
-
 ---
 
-## SDKs and implementation languages 🧩
+## For developers
 
-| SDK | Package | Language |
-|---|---|:--:|
-| TypeScript client | [`@melra/sdk`](packages/sdk-ts) | <img src="https://img.shields.io/badge/-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript" /> |
-| Python client | [`melra`](sdk-py) | <img src="https://img.shields.io/badge/-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python" /> |
-| JSON contracts | [`@melra/protocol`](packages/protocol) · [`@melra/receipt-schema`](packages/receipt-schema) | <img src="https://img.shields.io/badge/-000000?style=flat-square&logo=json&logoColor=white" alt="JSON" /> |
+<table>
+<tr>
+<td width="50%" valign="top">
 
-MELRA is capability-driven, not language-restricted. Rust, Go, Python,
-TypeScript, Swift, C#, or another language can be used when measurement shows a
-real improvement in isolation, portability, performance, reliability, or
-platform integration without fragmenting the public contracts.
+**SDKs**
 
----
+| | Package |
+|---|---|
+| <img src="https://cdn.simpleicons.org/typescript" width="14" alt="" /> TypeScript | [`@melra/sdk`](packages/sdk-ts) |
+| <img src="https://cdn.simpleicons.org/python" width="14" alt="" /> Python | [`melra`](sdk-py) (typed, 3.11–3.14) |
+| 📜 JSON contracts | [`@melra/protocol`](packages/protocol), [`@melra/receipt-schema`](packages/receipt-schema) |
 
-## Repository map 🗂️
+Both SDKs spawn a local server or connect to a running one over HTTP or a Unix socket.
+The token is always passed explicitly, and plain HTTP to a remote host is refused
+unless you opt in.
+
+</td>
+<td width="50%" valign="top">
+
+**CLI at a glance**
+
+| Goal | Command |
+|---|---|
+| Guided setup | `melra setup` |
+| Check this machine | `melra doctor` |
+| Serve (stdio / HTTP / socket) | `melra serve` · `--http --open` · `--socket <path>` |
+| See activity | `melra tasks` · `watch` · `status` |
+| Run one task | `melra run --request task.json` |
+| Inspect a receipt | `melra inspect <task-id>` |
+| Test a policy | `melra policy test --request task.json` |
+| Check conformance | `melra conformance` |
+
+</td>
+</tr>
+</table>
+
+<details>
+<summary><b>Repository map</b></summary>
+
+<br />
 
 ```text
 apps/cli/                   CLI and stdio entrypoint
 
 kernel services
-packages/protocol/          strict task, workflow, event, and operation schemas
+packages/protocol/          strict task, workflow, event and operation schemas
 packages/runtime-core/      task/workflow lifecycle, events, recovery
 packages/policy-core/       local policy and scoped approvals
 packages/storage-sqlite/    transactional tasks, workflows, events, evidence
 packages/verifier-core/     deterministic evidence predicates
 packages/receipt-schema/    receipts and execution certificates
 packages/memory/            operational memory: scoped retrieval and lifecycle
-packages/server/            runtime composition, MCP and loopback HTTP
+packages/server/            runtime composition, MCP, loopback HTTP and Unix socket
 
 reference effect adapters
 packages/file-runtime/      confined filesystem operations
@@ -807,58 +688,60 @@ sdk-py/                     Python client SDK
 benchmarks/browser-agent/   pre-registered browser-agent evaluation harness
 evals/                      safety and durable crash-recovery evaluations
 scripts/                    benchmark and release checks
-docs/research/              methods, findings, and raw results
+docs/research/              methods, findings and raw results
 examples/                   runnable task examples
 ```
 
+MELRA is capability-driven, not language-restricted: Rust, Go, Swift, C# or another
+language can be added when measurement shows a real benefit and the same conformance
+suite passes.
+
+</details>
+
+Runnable [examples](examples/README.md) cover a read-only system task, a verified file
+write, a terminal check, browser inspection, scoped memory, computer capability
+discovery, a governed API call, independent verification, and a restart-safe workflow.
+
 ---
 
-## Documentation 📚
+## Documentation
 
 | | | |
 |---|---|---|
 | 📦 [Installation & client setup](docs/INSTALLATION.md) | 🧭 [Capabilities & limits](docs/CAPABILITIES.md) | 🏛️ [Architecture](docs/ARCHITECTURE.md) |
-| 🔬 [Research & benchmarks](docs/research/README.md) | 🔗 [Compatibility policy](docs/COMPATIBILITY.md) | ✅ [Validation evidence](docs/VALIDATION.md) |
-| 🛡️ [Threat model](docs/THREAT_MODEL.md) | 🗺️ [Roadmap](ROADMAP.md) | 📝 [Changelog](CHANGELOG.md) |
-| 🎖️ [Conformance levels](docs/CONFORMANCE.md) | | |
+| 🔬 [Research & benchmarks](docs/research/README.md) | 🔗 [Compatibility](docs/COMPATIBILITY.md) | ✅ [Validation evidence](docs/VALIDATION.md) |
+| 🛡️ [Threat model](docs/THREAT_MODEL.md) | 🎖️ [Conformance levels](docs/CONFORMANCE.md) | 🗺️ [Roadmap](ROADMAP.md) |
+| 📝 [Changelog](CHANGELOG.md) | 🤝 [Contributing guide](docs/CONTRIBUTING_GUIDE.md) | 🔐 [Security policy](SECURITY.md) |
 
 ---
 
-## Contributing 🤝
+## Contributing
 
-Code, adapters, benchmark harnesses, verifier predicates, documentation, and
-threat analysis are all welcome.
-
-**Looking for something to pick up?**
+Code, adapters, client integrations, benchmark harnesses, verifier predicates,
+documentation and threat analysis are all welcome.
 
 | Start here | What it is |
 |---|---|
 | [good first issue](https://github.com/XAGI-Lab/melra/labels/good%20first%20issue) | Scoped, with the files to touch named in the issue |
-| [help wanted](https://github.com/XAGI-Lab/melra/labels/help%20wanted) | Larger, still well-defined |
-| [Milestones](https://github.com/XAGI-Lab/melra/milestones) | The roadmap phases, as trackable work |
-| [docs/CONTRIBUTING_GUIDE.md](docs/CONTRIBUTING_GUIDE.md) | How the pipeline fits together and which files one change touches |
+| [help wanted](https://github.com/XAGI-Lab/melra/labels/help%20wanted) | Larger, still well defined |
+| [Contributing guide](docs/CONTRIBUTING_GUIDE.md) | How the pipeline fits together and which files one change touches |
 
-Adding an operation or an evidence predicate touches a fixed, short list of
-places — the guide names them in order, so a first pull request does not have to
-be discovered by grep.
-
-1. Read [CONTRIBUTING.md](CONTRIBUTING.md) and the
-   [Code of Conduct](CODE_OF_CONDUCT.md).
+1. Read [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md).
 2. Sign your commits under the DCO (`git commit -s`).
-3. Run `pnpm check` before opening a pull request.
+3. Run `pnpm check` before opening a pull request; it also checks links, the
+   environment-variable table and the CHANGELOG shape.
 4. Report vulnerabilities through
-   [GitHub private vulnerability reporting](https://github.com/XAGI-Lab/melra/security/advisories/new)
-   — never in a public issue.
+   [private vulnerability reporting](https://github.com/XAGI-Lab/melra/security/advisories/new),
+   never in a public issue.
 
 ---
 
-## License 📄
+## License
 
-Software and documentation are licensed under the
-[Apache License 2.0](LICENSE). The official logo and hero artwork are licensed
-under [CC BY-ND 4.0](LICENSES/CC-BY-ND-4.0.txt).
-Third-party benchmark datasets retain their own licenses and are not included
-in this repository.
+Software and documentation are licensed under the [Apache License 2.0](LICENSE). The
+official logo and hero artwork are licensed under
+[CC BY-ND 4.0](LICENSES/CC-BY-ND-4.0.txt). Third-party benchmark datasets keep their
+own licenses and are not included in this repository.
 
 <div align="center">
 <br />

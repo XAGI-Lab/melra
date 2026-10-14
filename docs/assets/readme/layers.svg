@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 600" width="960" height="600" role="img" aria-labelledby="t d">
+  <title id="t">Where MELRA sits</title>
+  <desc id="d">The model reasons, the agent harness runs the loop, and every effect the agent wants passes down through MELRA, which types, classifies, authorises, gates, records, deduplicates, runs, verifies and receipts it, before the effect adapters touch your systems.</desc>
+  <defs>
+    <linearGradient id="kernel" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#2bb8a8"/>
+      <stop offset="1" stop-color="#3f6fe8"/>
+    </linearGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" class="arrowhead"/>
+    </marker>
+    <style>
+      .band { fill: #f6f8fa; stroke: #d0d7de; stroke-width: 1.5; }
+      .title { font: 700 19px -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: #1f2328; }
+      .sub { font: 400 14px -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: #59636e; }
+      .tag { font: 600 12px -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: #59636e; letter-spacing: .08em; }
+      .chip { fill: #ffffff; stroke: #d0d7de; }
+      .chiptext { font: 600 13px -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: #1f2328; }
+      .ktitle { font: 800 22px -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: #ffffff; }
+      .ksub { font: 500 14px -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: #e9f7ff; }
+      .kchip { fill: rgba(255,255,255,.16); stroke: rgba(255,255,255,.55); }
+      .kchiptext { font: 700 13px -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: #ffffff; }
+      .flow { stroke: #8c959f; stroke-width: 2; fill: none; }
+      .arrowhead { fill: #8c959f; }
+      .flowlabel { font: 600 13px -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: #59636e; }
+      .accent { fill: #f5a033; }
+      @media (prefers-color-scheme: dark) {
+        .band { fill: #161b22; stroke: #30363d; }
+        .title, .chiptext { fill: #e6edf3; }
+        .sub, .tag, .flowlabel { fill: #9198a1; }
+        .chip { fill: #0d1117; stroke: #30363d; }
+        .flow { stroke: #6e7681; }
+        .arrowhead { fill: #6e7681; }
+      }
+    </style>
+  </defs>
+
+  <!-- Layer 1: the model -->
+  <rect class="band" x="40" y="20" width="880" height="84" rx="14"/>
+  <text class="tag" x="64" y="48">REASONS</text>
+  <text class="title" x="64" y="76">The AI model</text>
+  <text class="sub" x="214" y="76">Claude · GPT · Gemini · Llama · decides what should happen</text>
+
+  <path class="flow" d="M480 104 V132" marker-end="url(#arrow)"/>
+
+  <!-- Layer 2: the harness -->
+  <rect class="band" x="40" y="136" width="880" height="104" rx="14"/>
+  <text class="tag" x="64" y="164">RUNS THE LOOP</text>
+  <text class="title" x="64" y="192">Your agent</text>
+  <g transform="translate(64 206)">
+    <rect class="chip" x="0" y="0" width="112" height="24" rx="12"/><text class="chiptext" x="56" y="17" text-anchor="middle">Claude Code</text>
+    <rect class="chip" x="122" y="0" width="74" height="24" rx="12"/><text class="chiptext" x="159" y="17" text-anchor="middle">Codex</text>
+    <rect class="chip" x="206" y="0" width="76" height="24" rx="12"/><text class="chiptext" x="244" y="17" text-anchor="middle">Cursor</text>
+    <rect class="chip" x="292" y="0" width="90" height="24" rx="12"/><text class="chiptext" x="337" y="17" text-anchor="middle">OpenClaw</text>
+    <rect class="chip" x="392" y="0" width="80" height="24" rx="12"/><text class="chiptext" x="432" y="17" text-anchor="middle">Hermes</text>
+    <rect class="chip" x="482" y="0" width="84" height="24" rx="12"/><text class="chiptext" x="524" y="17" text-anchor="middle">VS Code</text>
+    <rect class="chip" x="576" y="0" width="98" height="24" rx="12"/><text class="chiptext" x="625" y="17" text-anchor="middle">Gemini CLI</text>
+    <rect class="chip" x="684" y="0" width="108" height="24" rx="12"/><text class="chiptext" x="738" y="17" text-anchor="middle">your own</text>
+  </g>
+
+  <path class="flow" d="M480 240 V276" marker-end="url(#arrow)"/>
+  <text class="flowlabel" x="494" y="264">every action it wants to take</text>
+
+  <!-- Layer 3: MELRA -->
+  <rect x="40" y="280" width="880" height="154" rx="16" fill="url(#kernel)"/>
+  <rect class="accent" x="40" y="280" width="8" height="154" rx="4"/>
+  <text class="ksub" x="68" y="308" style="letter-spacing:.08em;font-weight:700;font-size:12px">OWNS EVERY EFFECT</text>
+  <text class="ktitle" x="68" y="338">MELRA</text>
+  <text class="ksub" x="160" y="338">checks it, asks you when it matters, runs it once, proves it worked</text>
+  <g transform="translate(68 356)">
+    <rect class="kchip" x="0" y="0" width="84" height="28" rx="14"/><text class="kchiptext" x="42" y="19" text-anchor="middle">type</text>
+    <rect class="kchip" x="94" y="0" width="84" height="28" rx="14"/><text class="kchiptext" x="136" y="19" text-anchor="middle">classify</text>
+    <rect class="kchip" x="188" y="0" width="90" height="28" rx="14"/><text class="kchiptext" x="233" y="19" text-anchor="middle">authorise</text>
+    <rect class="kchip" x="288" y="0" width="84" height="28" rx="14"/><text class="kchiptext" x="330" y="19" text-anchor="middle">approve</text>
+    <rect class="kchip" x="382" y="0" width="80" height="28" rx="14"/><text class="kchiptext" x="422" y="19" text-anchor="middle">record</text>
+    <rect class="kchip" x="472" y="0" width="80" height="28" rx="14"/><text class="kchiptext" x="512" y="19" text-anchor="middle">dedupe</text>
+    <rect class="kchip" x="562" y="0" width="66" height="28" rx="14"/><text class="kchiptext" x="595" y="19" text-anchor="middle">run</text>
+    <rect class="kchip" x="638" y="0" width="74" height="28" rx="14"/><text class="kchiptext" x="675" y="19" text-anchor="middle">verify</text>
+    <rect class="kchip" x="722" y="0" width="90" height="28" rx="14"/><text class="kchiptext" x="767" y="19" text-anchor="middle">receipt</text>
+  </g>
+  <text class="ksub" x="68" y="416" style="font-size:13px">policy · approvals · credentials · durable state · crash recovery · evidence</text>
+
+  <path class="flow" d="M480 434 V466" marker-end="url(#arrow)"/>
+
+  <!-- Layer 4: adapters -->
+  <rect class="band" x="40" y="470" width="880" height="110" rx="14"/>
+  <text class="tag" x="64" y="498">DOES THE WORK</text>
+  <text class="title" x="64" y="526">Effect adapters</text>
+  <g transform="translate(64 540)">
+    <rect class="chip" x="0" y="0" width="70" height="24" rx="12"/><text class="chiptext" x="35" y="17" text-anchor="middle">Files</text>
+    <rect class="chip" x="80" y="0" width="90" height="24" rx="12"/><text class="chiptext" x="125" y="17" text-anchor="middle">Terminal</text>
+    <rect class="chip" x="180" y="0" width="86" height="24" rx="12"/><text class="chiptext" x="223" y="17" text-anchor="middle">Browser</text>
+    <rect class="chip" x="276" y="0" width="96" height="24" rx="12"/><text class="chiptext" x="324" y="17" text-anchor="middle">Computer</text>
+    <rect class="chip" x="382" y="0" width="70" height="24" rx="12"/><text class="chiptext" x="417" y="17" text-anchor="middle">HTTP</text>
+    <rect class="chip" x="462" y="0" width="86" height="24" rx="12"/><text class="chiptext" x="505" y="17" text-anchor="middle">Memory</text>
+  </g>
+  <text class="sub" x="640" y="557">→ macOS · Linux · Windows · APIs</text>
+</svg>
