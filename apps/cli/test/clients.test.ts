@@ -3,7 +3,7 @@
 
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   CLIENTS,
@@ -327,6 +327,21 @@ describe("client configs", () => {
         "",
       ].join("\n"),
     );
+  });
+
+  it("finds Goose's file under an absolute GOOSE_PATH_ROOT, as Goose does", () => {
+    const saved = process.env.GOOSE_PATH_ROOT;
+    try {
+      const root = resolve("/g");
+      process.env.GOOSE_PATH_ROOT = root;
+      expect(clientConfigPath("goose", "/ws")).toBe(join(root, "config", "config.yaml"));
+      // Goose ignores a relative root, so the default location still applies.
+      process.env.GOOSE_PATH_ROOT = "relative";
+      expect(clientConfigPath("goose", "/ws")).not.toContain("relative");
+    } finally {
+      if (saved === undefined) delete process.env.GOOSE_PATH_ROOT;
+      else process.env.GOOSE_PATH_ROOT = saved;
+    }
   });
 
   it("finds OpenClaw's and Hermes's files through their own overrides", () => {

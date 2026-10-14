@@ -191,6 +191,11 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- `melra setup --client goose` and `melra doctor` look for Goose's config
+  under `GOOSE_PATH_ROOT` when it is set, as Goose does: `<root>/config/config.yaml`,
+  and only for an absolute root. Before, an operator who had moved Goose's tree
+  got a config written where Goose never reads it. (#103)
+
 - `melra serve` now says so on stderr when `MELRA_SOCKET` alone moved it off
   stdio. Exported in a shell profile, the variable also reaches every stdio MCP
   client launched from that shell, which then waited for a reply that never
