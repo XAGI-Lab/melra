@@ -24,6 +24,62 @@ body:
         - Other
     validations:
       required: true
+  - type: dropdown
+    id: client
+    attributes:
+      label: Client
+      description: What was talking to MELRA when this happened?
+      options:
+        - Claude Code
+        - Claude Desktop
+        - Cursor
+        - VS Code
+        - Windsurf
+        - Codex CLI
+        - Gemini CLI
+        - Zed
+        - Cline
+        - OpenCode
+        - Kiro
+        - Goose
+        - Continue
+        - Amp
+        - TypeScript SDK (@melra/sdk)
+        - Python SDK (melra)
+        - melra CLI directly
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: Install method
+      options:
+        - npx @melra/cli
+        - npm install -g @melra/cli
+        - Container (ghcr.io/xagi-lab/melra)
+        - Release tarball
+        - From source
+    validations:
+      required: true
+  - type: dropdown
+    id: transport
+    attributes:
+      label: Transport
+      options:
+        - stdio (melra serve)
+        - Loopback HTTP (melra serve --http)
+        - Unix socket (melra serve --socket)
+        - Not applicable
+  - type: textarea
+    id: doctor
+    attributes:
+      label: "`melra doctor` output"
+      description: >-
+        Optional, but it answers most first questions (Node, SQLite, browser,
+        policy, and which clients point at MELRA). It never includes client
+        arguments; still check it for paths you would rather not share.
+      render: json
   - type: textarea
     id: reproduction
     attributes:
