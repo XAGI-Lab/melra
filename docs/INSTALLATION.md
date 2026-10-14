@@ -137,6 +137,7 @@ MELRA uses these environment variables:
 | `MELRA_HTTP_PORT` | Port for `melra serve --http` | `7457` |
 | `MELRA_HTTP_TOKEN` | Bearer token for `melra serve --http` | a fresh random token, printed at startup |
 | `MELRA_HTTP_OAUTH` | Set to `0` so that token is the only way in and no client can register itself | unset (clients may register, on loopback) |
+| `MELRA_SOCKET` | Unix socket path: `melra serve` listens there, mode `0600`, instead of on stdio — see [over a Unix socket](#over-a-unix-socket). Not on Windows | unset (stdio) |
 | `MELRA_HARNESS_TOOLS` | Set to `1` (or `true`, `yes`, `on`) to add thirteen plainly named tools such as `read_file` and `run_command` alongside the eleven `melra_*` tools — see [ordinary tool names](#ordinary-tool-names) | unset (only the `melra_*` tools) |
 
 Back up `payload.key` with the SQLite files. Changing or losing it makes
@@ -445,6 +446,57 @@ generated each start. **Anyone who can read the token can drive this machine** �
 the server binds loopback only, and putting it behind a proxy on a reachable
 interface hands out that reach.
 
+### Over a Unix socket
+
+A loopback port is reachable by every process on the machine; the token is all
+that stands between them and the kernel. A Unix-domain socket can be narrower
+than that, and the operating system enforces it:
+
+```bash
+melra serve --socket "$XDG_RUNTIME_DIR/melra.sock"   # or MELRA_SOCKET=<path> melra serve
+curl --unix-socket "$XDG_RUNTIME_DIR/melra.sock" \
+  -H "Authorization: Bearer $MELRA_HTTP_TOKEN" http://localhost/api/capabilities
+```
+
+It serves exactly what `--http` serves — Streamable HTTP MCP at `/mcp`, the
+read-only JSON API, the event stream, and the console — through the same
+request handler, so nothing reached over the socket skips a pipeline stage. A
+client names `http://localhost` in its URLs and connects to the socket path.
+
+- **The socket is created mode `0600`, and the kernel refuses `connect` from
+  any other OS user.** The umask is narrowed around the bind, so the socket never
+  exists with a wider mode, and the mode is read back afterwards; a socket that
+  came out wider is closed and the server refuses to start.
+- **The token is still required on every request.** The file mode is the
+  primary boundary and the token is the second one — defence in depth, and the
+  same thing every other route already asks for. Set `MELRA_HTTP_TOKEN` to know
+  it in advance; otherwise a fresh one is printed at startup.
+- **No client registers itself over OAuth.** No browser can reach a socket to
+  show a consent page, so the registration endpoints are not served.
+- **A leftover socket is replaced, nothing else is.** A socket this user owns
+  that nobody answers on — what a crashed run leaves — is removed and recreated.
+  A live server's socket fails with `socket_in_use`; a regular file, directory,
+  symlink, or another user's socket at the path fails with `socket_path_exists`
+  and is left alone. A clean shutdown removes the socket.
+- **One transport per process.** `--socket` (or `MELRA_SOCKET`) together with
+  `--http`, `--port`, or `--open` is an error rather than a guess. Setting
+  `MELRA_SOCKET` switches `melra serve` off stdio, so do not export it in a
+  shell that also launches stdio MCP clients.
+
+Put the socket in a directory only you can write — `$XDG_RUNTIME_DIR` on Linux
+is `0700` for exactly this. The socket's own mode keeps other users from
+connecting; the directory's mode keeps them from replacing the socket with one
+of their own before a client connects. `melra doctor` reports, when
+`MELRA_SOCKET` is set, whether its parent directory exists and whether a socket
+already there is owner-only.
+
+**Not on Windows.** Node can listen on a named pipe (`\\.\pipe\name`) through
+the same call, but a pipe has an ACL rather than a mode, Node can neither set
+nor read it back, and the default ACL is not "this user only". A transport whose
+whole claim is "only you can connect" that cannot check that claim would be
+worse than none, so `--socket` fails with
+`socket_transport_unsupported_on_windows`. Use stdio, or loopback HTTP.
+
 ### Clients that let themselves in
 
 Pasting a token into a client's configuration is fine for one client you
@@ -562,6 +614,8 @@ closing every door it owns:
 - **No bind outside loopback.** `serve --http --host 0.0.0.0` fails with
   `enforced_mode_refuses_public_bind`. A sandbox talks to its kernel over IPC; a
   listener on a routable interface is a machine-control API on a network.
+  [`--socket`](#over-a-unix-socket) is allowed, and is the stricter choice: a
+  mode-`0600` socket shuts out other OS users, which a loopback port cannot.
 - **No client registers itself.** The OAuth registration endpoints are not
   served at all, on loopback or anywhere else. Enforced mode admits service
   identities the operator issued, and nothing that asks to be let in — so the

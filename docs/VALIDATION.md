@@ -330,7 +330,8 @@ findings.
 
 ## Known alpha limitations
 
-- Stdio and loopback HTTP are the transports. The HTTP surface takes the
+- Stdio, loopback HTTP, and a mode-`0600` Unix socket (not on Windows) are the
+  transports. The HTTP surface, on either listener, takes the
   operator's bearer token, or a token an OAuth 2.1 client got after a person
   approved it in a browser; treat the operator's token as equal to shell access
   on the host. An approved client is named on every receipt it produces, which

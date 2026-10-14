@@ -80,6 +80,7 @@ shouldn't have to.**
 | Eleven MCP tools for tasks and workflows | Container and stdio discovery checks require the exact tool set |
 | Recovery without silent mutation replay | 8/8 deterministic recovery scenarios, zero duplicates, zero false success |
 | Loopback HTTP transport, event stream, and read-only console | Same runtime as stdio, token on every route, `405` on any non-`GET` to the JSON API |
+| The same surface on a Unix socket only its OS user can open (`melra serve --socket`) | Created mode `0600` with no wider window, read back before serving; a real MCP client plans, executes, and reads a receipt through it; a stale socket is replaced and a regular file is never removed |
 | A client authenticates itself and is named on every receipt | OAuth 2.1 registration through approval to a token, then the approved client at the head of the delegation chain |
 | Two deployment modes, so a kernel can say whether it is the only door | `--unsafe-local` and a non-loopback bind are both refused under `MELRA_MODE=enforced`, no client can self-register, and `mode` is stamped on every receipt |
 | HTTP and API calls as a first-class effect | Same nine stages as a file write; a mutation whose reply never arrived is reported `unknown` rather than `failed` |
@@ -212,8 +213,9 @@ Plenty of MCP servers *can* do these things — this is not a claim that none of
 them do. The difference is that in MELRA they are the execution contract rather
 than a per-tool option. The boundary is *partly shipped*: `MELRA_MODE=enforced`
 closes every door MELRA owns, but the OS isolation that stops a harness reaching
-the filesystem *around* the kernel is the operator's to build, and there is no
-Unix-socket transport yet ([#52](https://github.com/XAGI-Lab/melra/issues/52)).
+the filesystem *around* the kernel is the operator's to build. MELRA's side of
+that now includes a mode-`0600` Unix-socket transport; runnable hardened
+deployment recipes are still to come ([#52](https://github.com/XAGI-Lab/melra/issues/52)).
 A kernel cannot verify it is the only door; enforced mode is the operator
 asserting that, and MELRA holding up its end.
 
@@ -275,7 +277,7 @@ Who owns what, and this does not move:
 | **MELRA** | Effect authorization · effect execution · durable effect state · recovery · verification · evidence · credentials and capabilities |
 
 MCP is *one* way to reach the kernel, not what the kernel is. MCP, CLI, SDK,
-and loopback HTTP all enter the same runtime, take the same policy decision,
+loopback HTTP, and a Unix socket all enter the same runtime, take the same policy decision,
 and write the same durable record.
 
 ---
@@ -631,7 +633,7 @@ pairs *and* its sanitized artifact passes the publication gate.
 
 | | Default |
 |:--:|---|
-| 🏠 | Local-only transports — stdio, or loopback HTTP behind a token; no account or hosted service required |
+| 🏠 | Local-only transports — stdio, loopback HTTP behind a token, or a mode-`0600` Unix socket behind the same token; no account or hosted service required |
 | 📴 | Telemetry is **off** |
 | 🚫 | Shell interpreters, privilege escalation, and arbitrary desktop key names are denied |
 | 📁 | Paths and terminal working directories stay inside the configured root |

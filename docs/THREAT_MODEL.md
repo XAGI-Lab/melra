@@ -43,6 +43,10 @@ user, or a sandbox profile. What enforced mode contributes is closing every door
 MELRA itself owns: it refuses to start with `--unsafe-local`, refuses any bind
 outside loopback, serves no client-registration endpoint, and stamps `mode` on
 every receipt so an auditor need not infer which deployment produced an effect.
+Loopback still admits every process on the machine up to the token; a
+[Unix socket](INSTALLATION.md#over-a-unix-socket) created mode `0600` narrows
+that to the OS user running MELRA, which is the IPC a sandboxed harness should
+be given.
 The residual risk is the assertion itself. See
 [deployment modes](INSTALLATION.md#deployment-modes).
 
@@ -67,7 +71,7 @@ The residual risk is the assertion itself. See
 | Secret persistence | executable payload encryption plus redacted projections, events, receipts, and logs | novel secret formats may not match redaction patterns; key loss is unrecoverable |
 | Memory poisoning | explicit mutation approval, scopes, provenance | content-level poisoning classifier is not implemented |
 | Receipt tampering | canonical digests and task-linked certificate | receipts and projections are not encrypted or externally signed |
-| A local process taking the HTTP surface | bearer token compared in constant time, loopback binding, read-only JSON API | anything running as the same OS user can read the token from the process that holds it |
+| A local process taking the HTTP surface | bearer token compared in constant time, loopback binding, read-only JSON API; or `--socket`, a mode-`0600` Unix socket the kernel closes to every other OS user, with the token still required | a loopback port is reachable by every local process, so there the token is the only barrier; on either transport, anything running as the same OS user (or root) can connect and read the token from the process that holds it; no socket transport on Windows |
 | A client granting itself HTTP access | registration grants nothing; a person approves in a browser, PKCE S256 binds the code, loopback-or-private redirect URIs keep the code on the machine, codes are single-use | approval is a human judgement about a name the client chose for itself |
 | An approved client acting as another | the issued token names one client, and an MCP session id is bound to the caller that opened it | every principal a request declares beneath the authenticated one is still a claim |
 | Payload substitution | AES-256-GCM with identity/purpose-bound additional data | host compromise can read the key and database |

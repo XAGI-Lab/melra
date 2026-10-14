@@ -47,7 +47,7 @@ leaving it for a tag push to discover.
 ## Known Alpha Scope Limits
 
 Documented in docs/VALIDATION.md "Known alpha limitations":
-- Stdio and loopback HTTP transports. The HTTP surface takes the operator's
+- Stdio, loopback HTTP, and Unix-socket (not on Windows) transports. The HTTP surface takes the operator's
   token, or an OAuth 2.1 client a person approved in a browser; it is not
   reachable off loopback and is not multi-tenant
 - Browser sessions thrown away per run unless `MELRA_BROWSER_PROFILE` names a

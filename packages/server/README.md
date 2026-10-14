@@ -56,6 +56,11 @@ after that its own name — `harness:<name>#<id prefix>` — leads the delegatio
 chain on every receipt it produces, rather than the anonymous `agent:local`.
 That flow is offered on loopback only, and `MELRA_HTTP_OAUTH=0` removes it.
 
+Pass `socketPath` instead of `port` to serve the same surface on a Unix socket
+created mode `0600`, so the kernel admits only this OS user; the token is still
+required, OAuth is off, and Windows is refused because a named pipe's ACL is not
+something Node can set or check.
+
 ## What the runtime guarantees
 
 Planning never executes. `melra_execute` re-evaluates policy so a stale plan

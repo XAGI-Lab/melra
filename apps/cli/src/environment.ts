@@ -13,6 +13,8 @@ export interface CliEnvironment {
   unhinged: boolean;
   mode: DeploymentMode;
   policyPath?: string;
+  /** `MELRA_SOCKET`: `serve` listens on this Unix socket instead of stdio. */
+  socketPath?: string;
   browserExecutablePath?: string;
   browserCdpEndpoint?: string;
   browserCdpContextIndex?: number;
@@ -128,6 +130,11 @@ export function parseCliEnvironment(
     ...(source.MELRA_POLICY === undefined
       ? {}
       : { policyPath: resolve(source.MELRA_POLICY) }),
+    // Empty counts as unset, so `MELRA_SOCKET=` in a unit file turns it off
+    // rather than asking for a socket named after the working directory.
+    ...(source.MELRA_SOCKET === undefined || source.MELRA_SOCKET.trim() === ""
+      ? {}
+      : { socketPath: resolve(source.MELRA_SOCKET) }),
     ...(source.MELRA_BROWSER === undefined
       ? {}
       : { browserExecutablePath: resolve(source.MELRA_BROWSER) }),

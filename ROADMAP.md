@@ -247,7 +247,7 @@ but not in the shape the protocol should eventually name.
 | Evidence system | ✓ | Redacted receipts and SHA-256 certificates |
 | Effect adapters | partial | Files, terminal, browser, computer, HTTP; database, cloud, SaaS pending ([P4](#p4--credentials-and-api-effects)) |
 | Harness adapters | ✓ | Ordinary tool names over the same pipeline (`MELRA_HARNESS_TOOLS=1`), proven against three mismatched clients on one data directory |
-| Sandbox and boundary | partial | Enforced mode closes every door MELRA owns; the OS isolation around the harness is the operator's, and there is no socket transport yet ([P2](#p2--hard-capability-boundary)) |
+| Sandbox and boundary | partial | Enforced mode closes every door MELRA owns; the OS isolation around the harness is the operator's. A mode-`0600` Unix-socket transport ships; runnable hardened deployment recipes do not yet ([P2](#p2--hard-capability-boundary)) |
 | Workflow engine | ✓ | Nine node types, events, projections, leases |
 | Compatibility suite | ✓ | `melra conformance`, levels published in [docs/CONFORMANCE.md](docs/CONFORMANCE.md) |
 
@@ -344,10 +344,12 @@ alternative, not asking the harness not to use it.
       separate OS users, filesystem ACLs, namespaces, network isolation,
       sandbox profiles, Unix sockets, service identities, capability tokens.
       Enforced mode deliberately implements none of these itself — the isolation
-      is the operator's, brought as a container or a sandbox profile. What is
-      still missing here is MELRA's side of it: a Unix-socket transport, and
-      hardened deployment recipes that make the sandboxed-harness setup the
-      default rather than a thing to assemble.
+      is the operator's, brought as a container or a sandbox profile. MELRA's
+      side of it is half done: the Unix-socket transport has shipped
+      (`melra serve --socket` / `MELRA_SOCKET`, mode `0600`, token still
+      required, refused on Windows, checked by `melra doctor`). Still missing
+      are hardened deployment recipes that make the sandboxed-harness setup
+      the default rather than a thing to assemble.
       ([#52](https://github.com/XAGI-Lab/melra/issues/52))
 - [x] Rename `--unhinged` to something boring and descriptive
       (`--unsafe-local`), keeping the current flag as a deprecated alias, and
