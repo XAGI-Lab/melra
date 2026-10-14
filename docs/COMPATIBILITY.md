@@ -18,7 +18,7 @@ migration commitments, and stable receipt verification behavior.
 
 | Component | Compatibility target | Current evidence |
 |---|---|---|
-| Node.js | 22 and 24 | CI matrix defined for Linux, macOS, and Windows |
+| Node.js | 22 and 24 | CI matrix defined for Linux, macOS, and Windows; the packed `0.3.0-alpha.12` tarballs also installed and run on Node 26.8.2 (macOS arm64), see [MCP and SDK compatibility](#mcp-and-sdk-compatibility) |
 | pnpm | 9.5 for repository builds | Local and CI commands |
 | Python SDK | CPython 3.11+ | CI against live stdio, loopback HTTP, and Unix-socket servers (socket skipped on Windows): 3.11 on Linux, macOS, and Windows; 3.12, 3.13, and 3.14 on Linux; type-checked with pyright |
 | Container | Linux OCI, AMD64 and ARM64 build targets, on a Node 24 LTS base | Docker workflow; release-candidate smoke required |
@@ -73,7 +73,24 @@ none of these clients is driven by the automated suites, and none is
 **exercised in the app** in the sense above until someone runs that checklist
 against it. Client formats change; if one stops loading MELRA, the generic
 `mcpServers` configuration and the client's own MCP settings remain the
-fallback. Agent frameworks used from code (LangChain/LangGraph, the OpenAI
+fallback.
+
+One step further, for four harnesses: on 2026-10-14 the packed
+`0.3.0-alpha.12` tarballs were installed into a clean project on macOS arm64
+(Node 26.8.2), `melra setup --client <name> --write` wrote each config under a
+throwaway `HOME`, and each harness's **own CLI** was asked about it:
+
+| Harness | Version | Command | Result |
+|---|---|---|---|
+| Claude Code | 2.1.296 | `claude mcp list` | `✔ Connected` over stdio, and over loopback HTTP with the bearer token. A project `.mcp.json` entry shows *Pending approval* until approved, as Claude Code intends |
+| OpenCode | 1.18.34 | `opencode mcp list` | `melra connected` |
+| Hermes Agent | 0.21.2 | `hermes mcp test melra` | connected in about 1 s, 11 tools discovered |
+| Codex | 0.154.0 | `codex mcp get melra` | entry parsed: enabled, stdio, `melra serve`, env passed. Codex has no connection test that does not call a model, so none was run |
+
+That is a real handshake and tool discovery by the client, which the file
+check above is not, but it is still short of the in-app checklist: no task was
+planned, approved, or executed from inside these harnesses, so none of them is
+marked verified. Agent frameworks used from code (LangChain/LangGraph, the OpenAI
 Agents SDK, the Vercel AI SDK) are covered only by documentation snippets in
 [examples/frameworks](../examples/frameworks/README.md), which are not run in
 CI.
