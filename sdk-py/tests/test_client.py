@@ -4,8 +4,8 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
-import socket
 import subprocess
 import sys
 import tempfile
@@ -183,18 +183,20 @@ async def _plan_execute_receipt(melra: MelraClient) -> None:
 
 @pytest.mark.asyncio
 async def test_python_sdk_connects_to_a_running_http_server(tmp_path: Path) -> None:
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        port = probe.getsockname()[1]
+    # Port 0 lets the OS pick, so nothing can take the port between choosing it
+    # and binding it; the startup banner on stderr names the one it picked.
+    port = 0
+    banner = re.compile(rb"listening on http://127\.0\.0\.1:(\d+)")
 
     def listening() -> bool:
-        try:
-            socket.create_connection(("127.0.0.1", port), timeout=1).close()
-        except OSError:
-            return False
-        return True
+        nonlocal port
+        log = tmp_path / "server.log"
+        found = banner.search(log.read_bytes()) if log.exists() else None
+        if found is not None:
+            port = int(found.group(1))
+        return found is not None
 
-    with _served(tmp_path, ["--http", "--port", str(port)], listening):
+    with _served(tmp_path, ["--http", "--port", "0"], listening):
         # The console URL's base is accepted too; `/mcp` is appended.
         async with MelraClient.connect_http(f"http://127.0.0.1:{port}", token=TOKEN) as melra:
             await _plan_execute_receipt(melra)
