@@ -11,6 +11,7 @@ import { DatabaseSync } from "node:sqlite";
 import {
   ApprovalResponseSchema,
   TaskRequestSchema,
+  TaskStatusSchema,
   WorkflowDefinitionSchema,
   WorkflowInputSchema,
   PRODUCT_VERSION,
@@ -48,6 +49,7 @@ import {
   serverLaunch,
 } from "./environment.js";
 import { runConformance } from "./conformance.js";
+import { statusCommand, tasksCommand, watchCommand } from "./activity.js";
 import { clientStatuses, clientsCheck } from "./client-status.js";
 import {
   CLIENTS,
@@ -155,7 +157,7 @@ function rejectUnknownFlags(args: string[], known: readonly string[]): void {
   ]);
   // A flag's own value can look like a flag (`--input node=--x`), so skip the
   // slot after any known flag that takes one.
-  const valued = new Set(known.filter((flag) => flag !== "--http"));
+  const valued = new Set(known.filter((flag) => flag !== "--http" && flag !== "--json"));
   for (let index = 0; index < args.length; index += 1) {
     const argument_ = args[index];
     if (argument_ === undefined || !argument_.startsWith("--")) continue;
@@ -774,6 +776,9 @@ Usage:
   melra serve --socket <path>
   melra run --request <task.json>
   melra inspect <task-id>
+  melra tasks [--limit <n>] [--status <status>] [--json]
+  melra watch [--json]
+  melra status [--json]
   melra workflow plan --definition <workflow.json>
   melra workflow advance <workflow-id> [--approval <id>:<exact-phrase>]
                                        [--input <node-id>=<value>]
@@ -812,6 +817,10 @@ Flags:
   --url <mcp-url>  Endpoint for 'conformance'. Default: spawn 'melra serve'.
   --level <1|2|3>  Conformance level being claimed (default: 3). The run exits
                    non-zero if the endpoint falls short of it.
+  --json           For tasks, watch, and status: JSON (NDJSON for watch) even
+                   in a terminal. Output that is not a terminal is JSON anyway.
+  --limit <n>      How many recent tasks 'tasks' lists (default: 20, max 500).
+  --status <s>     Only tasks in this status, e.g. awaiting_approval.
 
 Environment:
   MELRA_WORKSPACE  Workspace boundary (default: current directory)
@@ -980,6 +989,33 @@ async function main(): Promise<void> {
       rejectUnknownFlags(args, []);
       await inspectTask(args, env);
       return;
+    case "tasks": {
+      rejectUnknownFlags(args, ["--limit", "--status", "--json"]);
+      const limit = Number(argument("--limit", args) ?? "20");
+      if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
+        throw new Error("--limit must be a whole number from 1 to 500");
+      }
+      const status = argument("--status", args);
+      process.exitCode = tasksCommand(env, {
+        limit,
+        json: args.includes("--json"),
+        ...(status === undefined ? {} : { status: TaskStatusSchema.parse(status) }),
+      });
+      return;
+    }
+    case "watch":
+      rejectUnknownFlags(args, ["--json"]);
+      process.exitCode = await watchCommand(env, { json: args.includes("--json") });
+      return;
+    case "status": {
+      rejectUnknownFlags(args, ["--json"]);
+      const policyPath = await existingPolicyPath(env);
+      process.exitCode = await statusCommand(env, {
+        json: args.includes("--json"),
+        ...(policyPath === undefined ? {} : { policyPath }),
+      });
+      return;
+    }
     case "workflow":
       rejectUnknownFlags(args, ["--definition", "--approval", "--input"]);
       process.exitCode = await workflowCommand(args, env);

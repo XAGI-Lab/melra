@@ -147,6 +147,45 @@ describe("SqliteStore", () => {
     expect(store.listMemories("user", 5)).toHaveLength(0);
   });
 
+  it("opens read-only beside a writer without blocking it", () => {
+    tempDirectory = mkdtempSync(join(tmpdir(), "melra-storage-readonly-"));
+    const databasePath = join(tempDirectory, "melra.sqlite");
+    // An observer must not create the database it was pointed at.
+    expect(() => new SqliteStore(databasePath, { readOnly: true })).toThrow();
+    store = new SqliteStore(databasePath);
+    const now = new Date().toISOString();
+    const task = {
+      id: "605a411d-d39d-494b-a6de-0e8c3b96a564",
+      request: TaskRequestSchema.parse({
+        goal: "Inspect the system",
+        operation: { kind: "system", action: "info" },
+      }),
+      status: "planned" as const,
+      policyDecision: {
+        outcome: "allow" as const,
+        effect: "read" as const,
+        risk: "low" as const,
+        reason: "read_only_operation",
+        policyVersion: "1",
+        traits: [],
+      },
+      receiptIds: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+    store.saveTask(task);
+    const reader = new SqliteStore(databasePath, { readOnly: true });
+    try {
+      expect(reader.taskStatusCounts()).toEqual({ planned: 1 });
+      // The writer is not held up by the open reader.
+      store.saveTask({ ...task, status: "verified_success" });
+      expect(reader.listTasks(1)[0]?.status).toBe("verified_success");
+      expect(() => reader.saveTask(task)).toThrow(/readonly/i);
+    } finally {
+      reader.close();
+    }
+  });
+
   it("compacts only memories no read path can return", () => {
     store = new SqliteStore(":memory:");
     // `supersedeMemory` stamps `updated_at` from the real clock, so `now` has to
