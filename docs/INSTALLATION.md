@@ -509,8 +509,23 @@ can start work policy has not seen. Each SSE frame carries the event's
 without gaps.
 
 The console is one self-contained page with no build step and no external
-requests: the posture you are running under (including a red banner in unsafe-local
-mode), every workflow run, each node's status, and a live event tail.
+requests, in three views:
+
+- **Overview**: counts of tasks recorded, verified, needing attention, and
+  blocked; the posture you are running under (mode, guardrails, allowed
+  commands and domains, credentials, grants), with a red banner in unsafe-local
+  mode; the effect adapters on offer; and recent activity.
+- **Tasks**: every task, filterable by outcome and searchable by id, operation,
+  target, or policy reason. A task opens to its policy decision, each evidence
+  item with how it is known, its receipts, and the redacted stored record.
+- **Workflows**: every run, each node's status with links to its tasks, the
+  command that advances it, and a live event tail.
+
+Views have their own URLs (`#/tasks/<id>`), so a task can be linked. The
+console only reads: it never renders an approval phrase even though the task
+API carries one, because approvals belong to the governed path. It is served
+with a Content-Security-Policy that admits only its own script and style by
+hash and only this server as a fetch target, and it refuses to be framed.
 
 ## Deployment modes
 

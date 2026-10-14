@@ -17,6 +17,16 @@ All notable changes are documented here. The format follows
   now merges with `merge=union` locally, so parallel branches stop conflicting
   on it.
 
+- The console (`melra serve --http --open`) shows tasks, not just workflows.
+  Most governed work is a single task, so for most users the old console was
+  an empty page. It now has an Overview (counts, posture, adapters, recent
+  activity), a searchable, filterable Tasks view whose detail shows the
+  policy decision, every evidence item with its strength, and the receipts,
+  and the Workflows view with node-to-task links and the command that
+  advances a run. Views are linkable, it works at phone width and in light
+  and dark, it is keyboard navigable, and polling no longer steals focus. It
+  stays read-only and never renders an approval phrase.
+
 - `melra setup --client <name>` now emits each client's own configuration
   format and names the file it belongs in, instead of one `mcpServers` blob for
   every client — which VS Code, Zed, OpenCode, and Codex ignore or cannot
@@ -24,6 +34,7 @@ All notable changes are documented here. The format follows
   `cursor`, `vscode`, `windsurf`, `codex` (TOML), `gemini`, `zed`, `cline`,
   `opencode`, `kiro`, and `generic`. An unknown name is now an error rather
   than a label.
+
 - `--write` merges that configuration into the client's file, keeping every
   other entry and saving the previous file as `<file>.bak`. It refuses JSON
   with comments rather than silently dropping them, and a rerun replaces
@@ -80,6 +91,12 @@ All notable changes are documented here. The format follows
   means the far end really may have acted.
 
 ### Security
+
+- The console page is served with a Content-Security-Policy that admits only
+  its own inline script and style, by SHA-256 hash, and only this server as a
+  fetch target, plus `X-Frame-Options: DENY` and `nosniff`. The page carries
+  a bearer token in its URL, so a script injected into it, or a site framing
+  it, could otherwise act with that token.
 
 - Cleared every advisory `pnpm audit --prod` and `pip-audit` reported, which had
   turned the scheduled Dependency Audit red on `main` and on every open pull

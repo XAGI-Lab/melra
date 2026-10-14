@@ -1,6 +1,7 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
+import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -95,6 +96,25 @@ describe("melra http server", () => {
     // a third party, and would break on an air-gapped machine.
     expect(page).not.toMatch(/src="https?:/);
     expect(page).not.toMatch(/href="https?:/);
+    // Values reach the DOM as text only.
+    expect(page).not.toContain("innerHTML");
+  });
+
+  it("pins the console's own script and style by hash and refuses framing", async () => {
+    const response = await authed("/");
+    const page = await response.text();
+    const csp = response.headers.get("content-security-policy") ?? "";
+    const hash = (body: string | undefined) =>
+      `'sha256-${createHash("sha256").update(body ?? "", "utf8").digest("base64")}'`;
+    // An edit to the inline script that forgot the header would ship a blank
+    // console: the browser refuses any script whose hash is not listed.
+    expect(csp).toContain(`script-src ${hash(/<script type="module">([\s\S]*?)<\/script>/.exec(page)?.[1])}`);
+    expect(csp).toContain(`style-src ${hash(/<style>([\s\S]*?)<\/style>/.exec(page)?.[1])}`);
+    expect(csp).toContain("default-src 'none'");
+    expect(csp).toContain("connect-src 'self'");
+    expect(csp).toContain("frame-ancestors 'none'");
+    expect(response.headers.get("x-frame-options")).toBe("DENY");
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
   });
 
   it("answers a missing id with 404 rather than 400", async () => {
