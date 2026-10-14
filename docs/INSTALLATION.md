@@ -70,8 +70,8 @@ melra doctor
 
 The command reports Node, guardrails, deployment mode, workspace,
 data-directory, SQLite, browser, computer-use adapter, and policy readiness —
-plus the `MELRA_SOCKET` path when one is set, and MCP clients — without exposing
-credentials. Unlike
+plus the `MELRA_SOCKET` path when one is set, the OS isolation in effect (see
+[Docker](#docker)), and MCP clients — without exposing credentials. Unlike
 `setup`, it changes no configuration: the only thing it may create is the data
 directory, if it does not exist yet.
 
@@ -83,7 +83,7 @@ to run next:
   ✓  browser         /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
   ✓  policy          /home/you/.melra/policy.json
   ⚠  clients
-      ⚠  cursor  configured  pinned to @melra/cli@0.2.0, this is 0.3.0-alpha.11; fix: …
+      ⚠  cursor  configured  pinned to @melra/cli@0.2.0, this is 0.3.0-alpha.12; fix: …
 
 ⚠ Ready, with 1 warning
 Next: melra setup --client cursor --write
@@ -113,7 +113,7 @@ npx @melra/cli@alpha setup
 ```
 
 `@alpha` is the dist-tag for the current alpha. Drop it once a stable release
-exists, or pin an exact version such as `@melra/cli@0.3.0-alpha.11`. To keep a
+exists, or pin an exact version such as `@melra/cli@0.3.0-alpha.12`. To keep a
 resolved copy on the machine instead of resolving on every run:
 
 ```bash
@@ -136,7 +136,7 @@ docker run --rm ghcr.io/xagi-lab/melra:alpha doctor
 
 Images are published for `linux/amd64` and `linux/arm64` with build
 provenance and an SBOM attested to the registry. Use `:alpha` for the latest
-alpha or pin an exact tag such as `:v0.3.0-alpha.11`. See
+alpha or pin an exact tag such as `:v0.3.0-alpha.12`. See
 [Docker](#docker) below for the hardened `serve` invocation an MCP client
 should use.
 
