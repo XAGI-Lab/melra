@@ -27,6 +27,7 @@ const SERVER_KEYS: Record<string, string> = {
   vscode: "servers",
   zed: "context_servers",
   opencode: "mcp",
+  amp: "amp.mcpServers",
 };
 
 function isExecutable(path: string): boolean {
@@ -95,6 +96,45 @@ function codexLaunch(toml: string): string[] | undefined {
   return typeof command === "string" ? [command, ...args] : undefined;
 }
 
+// The `cmd:`/`command:` and `args:` lines `setup` writes into Goose's and
+// Continue's YAML, whose values are JSON-quoted. Anything written another way
+// is left unchecked rather than guessed at.
+function yamlLaunch(lines: string[]): string[] | undefined {
+  let command: string | undefined;
+  let args: string[] = [];
+  for (const line of lines) {
+    const value = /^\s*(?:-\s+)?(cmd|command|args)\s*:\s*(.+?)\s*$/.exec(line);
+    try {
+      if (value?.[1] === "args") args = strings(JSON.parse(value[2] ?? ""));
+      else if (value !== null) command = JSON.parse(value[2] ?? "") as string;
+    } catch {
+      // A plain or single-quoted scalar: leave it unchecked.
+    }
+  }
+  return typeof command === "string" ? [command, ...args] : undefined;
+}
+
+// The lines of Goose's `extensions.melra` block, or undefined when there is none.
+function gooseBlock(yaml: string): string[] | undefined {
+  const lines = yaml.split(/\r?\n/);
+  const start = lines.findIndex((line) => /^extensions:\s*(#.*)?$/.test(line));
+  if (start < 0) return undefined;
+  let block: string[] | undefined;
+  let depth = 0;
+  for (const line of lines.slice(start + 1)) {
+    if (/^\S/.test(line)) break; // the next top-level key
+    if (line.trim() === "") continue;
+    const indent = /^ */.exec(line)?.[0].length ?? 0;
+    if (block !== undefined && indent <= depth) break;
+    if (block !== undefined) block.push(line);
+    else if (/^\s+["']?melra["']?:\s*(#.*)?$/.test(line)) {
+      block = [];
+      depth = indent;
+    }
+  }
+  return block;
+}
+
 function configured(base: { client: string; path: string }, launch: string[] | undefined): ClientStatus {
   const [command] = launch ?? [];
   if (command === undefined) {
@@ -121,6 +161,14 @@ function configured(base: { client: string; path: string }, launch: string[] | u
 
 function inspect(client: string, shape: string, path: string, text: string): ClientStatus {
   const base = { client, path };
+  if (shape === "goose") {
+    const block = gooseBlock(text);
+    return block === undefined
+      ? { ...base, state: "not configured", problems: [] }
+      : configured(base, yamlLaunch(block));
+  }
+  // MELRA owns this file outright, so its existence is the configuration.
+  if (shape === "continue") return configured(base, yamlLaunch(text.split(/\r?\n/)));
   if (shape === "codex") {
     return /^\s*\[\s*mcp_servers\.melra\s*\]/m.test(text)
       ? configured(base, codexLaunch(text))

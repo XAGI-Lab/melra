@@ -105,6 +105,33 @@ describe("doctor clients check", () => {
       zed,
       '// Zed settings\n{\n  "context_servers": {\n    "melra": { "command": "melra", "args": ["serve"] },\n  },\n}\n',
     );
+    await put(
+      join(root, ".config", "amp", "settings.json"),
+      JSON.stringify({ "amp.mcpServers": { melra: { command: "melra", args: ["serve"], env: {} } } }),
+    );
+    const goose =
+      process.platform === "win32"
+        ? join(root, "AppData", "Block", "goose", "config", "config.yaml")
+        : join(root, ".config", "goose", "config.yaml");
+    await put(
+      goose,
+      [
+        "GOOSE_PROVIDER: x",
+        "extensions:",
+        "  developer:",
+        "    cmd: \"other\"",
+        "  melra:",
+        "    type: stdio",
+        "    cmd: \"npx\"",
+        "    args: [\"-y\", \"@melra/cli@0.0.1-alpha.1\", \"serve\"]",
+        "GOOSE_MODEL: y",
+        "",
+      ].join("\n"),
+    );
+    await put(
+      join(root, ".continue", "mcpServers", "melra.yaml"),
+      'name: MELRA\nmcpServers:\n  - name: melra\n    command: "melra"\n    args: ["serve"]\n',
+    );
     const before = (await readdir(root, { recursive: true })).sort();
 
     const report = await doctor(root, bin);
@@ -121,6 +148,10 @@ describe("doctor clients check", () => {
       note: "not plain JSON, found by text search; command not checked",
       problems: [],
     });
+
+    expect(byName.amp).toMatchObject({ state: "configured", command: "melra", problems: [] });
+    expect(byName.goose).toMatchObject({ state: "configured", command: "npx", pin: "0.0.1-alpha.1" });
+    expect(byName.continue).toMatchObject({ state: "configured", command: "melra", problems: [] });
 
     const check = report.checks.find((item) => item.name === "clients");
     expect(check?.status).toBe("warn");
