@@ -2,13 +2,17 @@
 
 ## Supported versions
 
-MELRA is currently alpha software. Security fixes are applied to the
-default branch and the latest tagged alpha once releases begin.
+MELRA is alpha software. Only the latest alpha is supported: security fixes
+land on `main` and ship in the next alpha release, published to npm under the
+`alpha` dist-tag and to `ghcr.io/xagi-lab/melra:alpha`. Older alphas do not get
+backports, so upgrade rather than pin when a fix is announced.
 
 ## Report a vulnerability
 
-Use GitHub private vulnerability reporting for this repository. Do not include
-secrets, exploit details, or customer information in a public issue.
+Report privately through GitHub:
+[open a security advisory](https://github.com/XAGI-Lab/melra/security/advisories/new).
+Do not put secrets, exploit details, or customer information in a public issue,
+discussion, or pull request.
 
 Include:
 
@@ -35,9 +39,17 @@ approval-gated. Evidence is structured and common secret forms are redacted
 before persistence. A successful adapter response alone is not proof of goal
 completion.
 
-Local storage is not encrypted and is not a credential vault. Configure
-`MELRA_HOME` in a private local directory with appropriate operating-system
-permissions. Use a narrow domain and command allowlist, and run untrusted tasks
-inside the documented container profile.
+Executable payloads (exact workflow definitions and adapter results) are
+sealed with AES-256-GCM under `MELRA_PAYLOAD_KEY` or a mode-`0600` key file,
+which MELRA refuses to use if its permissions are wider. Everything else it
+stores (task projections, events, receipts, and logs) is redacted but not
+encrypted, receipts are not externally signed, and MELRA is not a credential
+vault. Losing the payload key makes sealed payloads unrecoverable.
+
+Configure `MELRA_HOME` in a private local directory with appropriate
+operating-system permissions. Use a narrow domain and command allowlist. Prefer
+stdio, or the mode-`0600` [Unix socket](docs/INSTALLATION.md#over-a-unix-socket),
+over loopback HTTP when other users share the machine, and run untrusted tasks
+inside the documented [container profile](docs/INSTALLATION.md#docker).
 
 See [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
