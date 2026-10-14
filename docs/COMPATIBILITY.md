@@ -63,6 +63,21 @@ the released artifact—not a source checkout—passes discovery, task planning,
 approval, execution, workflow restart, cancellation, and receipt retrieval in
 that client.
 
+`melra setup --client <name>` knows the config file and format of 25 named
+clients and agent harnesses, among them Claude Code, Codex, OpenClaw, and
+Hermes Agent ([the full list](INSTALLATION.md#mcp-clients)). Each entry is
+**verified against that client's documentation or source**, which is linked
+beside it in `apps/cli/src/clients.ts`, and the CLI tests write, rewrite, and
+read back every format. That is a claim about the file, not about the client:
+none of these clients is driven by the automated suites, and none is
+**exercised in the app** in the sense above until someone runs that checklist
+against it. Client formats change; if one stops loading MELRA, the generic
+`mcpServers` configuration and the client's own MCP settings remain the
+fallback. Agent frameworks used from code (LangChain/LangGraph, the OpenAI
+Agents SDK, the Vercel AI SDK) are covered only by documentation snippets in
+[examples/frameworks](../examples/frameworks/README.md), which are not run in
+CI.
+
 ## Data compatibility
 
 SQLite migration version `1` adds encrypted task payloads, workflow

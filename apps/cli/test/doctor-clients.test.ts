@@ -42,6 +42,10 @@ async function doctor(root: string, extraPath = "") {
       APPDATA: join(root, "AppData"),
       XDG_CONFIG_HOME: join(root, ".config"),
       CODEX_HOME: join(root, ".codex"),
+      OPENCLAW_CONFIG_PATH: join(root, ".openclaw", "openclaw.json"),
+      HERMES_HOME: join(root, ".hermes"),
+      COPILOT_HOME: join(root, ".copilot"),
+      KIMI_CODE_HOME: join(root, ".kimi-code"),
       MELRA_HOME: join(root, ".melra"),
       MELRA_WORKSPACE: root,
       [pathKey]: `${extraPath}${delimiter}${process.env[pathKey] ?? ""}`,
@@ -132,6 +136,40 @@ describe("doctor clients check", () => {
       join(root, ".continue", "mcpServers", "melra.yaml"),
       'name: MELRA\nmcpServers:\n  - name: melra\n    command: "melra"\n    args: ["serve"]\n',
     );
+    await put(
+      join(root, ".openclaw", "openclaw.json"),
+      '// OpenClaw\n{\n  "mcp": { "servers": { "melra": { "command": "melra", "args": ["serve"] } } },\n}\n',
+    );
+    await put(
+      join(root, ".hermes", "config.yaml"),
+      [
+        "model:",
+        "  default: x",
+        "mcp_servers:",
+        "  docs:",
+        '    command: "other"',
+        "  melra:",
+        '    command: "npx"',
+        '    args: ["-y", "@melra/cli@0.0.1-alpha.1", "serve"]',
+        "    env:",
+        '      "MELRA_WORKSPACE": "/w"',
+        "",
+      ].join("\n"),
+    );
+    await put(
+      join(root, ".copilot", "mcp-config.json"),
+      JSON.stringify({
+        mcpServers: {
+          melra: { type: "local", command: "npx", args: ["-y", "@melra/cli@0.0.1-alpha.1", "serve"], tools: ["*"] },
+        },
+      }),
+    );
+    await put(
+      join(root, ".config", "kilo", "kilo.jsonc"),
+      '{\n  // Kilo\n  "mcp": { "melra": { "type": "local", "command": ["melra", "serve"] } },\n}\n',
+    );
+    await put(join(root, ".factory", "mcp.json"), server("melra", ["serve"]));
+    await put(join(root, ".lmstudio", "mcp.json"), JSON.stringify({ mcpServers: {} }));
     const before = (await readdir(root, { recursive: true })).sort();
 
     const report = await doctor(root, bin);
@@ -150,6 +188,13 @@ describe("doctor clients check", () => {
     expect(byName.amp).toMatchObject({ state: "configured", command: "melra", problems: [] });
     expect(byName.goose).toMatchObject({ state: "configured", command: "npx", pin: "0.0.1-alpha.1" });
     expect(byName.continue).toMatchObject({ state: "configured", command: "melra", problems: [] });
+    expect(byName.openclaw).toMatchObject({ state: "configured", command: "melra", problems: [] });
+    expect(byName.hermes).toMatchObject({ state: "configured", command: "npx", pin: "0.0.1-alpha.1" });
+    expect(byName.hermes?.problems.join()).toContain("fix: melra setup --client hermes --write");
+    expect(byName.copilot).toMatchObject({ state: "configured", command: "npx", pin: "0.0.1-alpha.1" });
+    expect(byName.kilo).toMatchObject({ state: "configured", command: "melra", problems: [] });
+    expect(byName.droid).toMatchObject({ state: "configured", command: "melra", problems: [] });
+    expect(byName.lmstudio).toMatchObject({ state: "not configured", problems: [] });
 
     const check = report.checks.find((item) => item.name === "clients");
     expect(check?.status).toBe("warn");

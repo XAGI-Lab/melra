@@ -23,13 +23,20 @@ export interface ClientStatus {
 }
 
 // Where each JSON shape keeps its servers, matching what `clientConfig` writes.
-const SERVER_KEYS: Record<string, string> = {
-  mcpServers: "mcpServers",
-  vscode: "servers",
-  zed: "context_servers",
-  opencode: "mcp",
-  amp: "amp.mcpServers",
+const SERVER_KEYS: Record<string, string[]> = {
+  mcpServers: ["mcpServers"],
+  vscode: ["servers"],
+  zed: ["context_servers"],
+  opencode: ["mcp"],
+  amp: ["amp.mcpServers"],
+  openclaw: ["mcp", "servers"],
+  copilot: ["mcpServers"],
+  droid: ["mcpServers"],
+  kilo: ["mcp"],
 };
+
+// The top-level YAML map each YAML shape keeps its servers under.
+const YAML_KEYS: Record<string, string> = { goose: "extensions", hermes: "mcp_servers" };
 
 function isExecutable(path: string): boolean {
   try {
@@ -97,8 +104,8 @@ function codexLaunch(toml: string): string[] | undefined {
   return typeof command === "string" ? [command, ...args] : undefined;
 }
 
-// The `cmd:`/`command:` and `args:` lines `setup` writes into Goose's and
-// Continue's YAML, whose values are JSON-quoted. Anything written another way
+// The `cmd:`/`command:` and `args:` lines `setup` writes into Goose's,
+// Hermes's, and Continue's YAML, whose values are JSON-quoted. Anything written another way
 // is left unchecked rather than guessed at.
 function yamlLaunch(lines: string[]): string[] | undefined {
   let command: string | undefined;
@@ -115,10 +122,11 @@ function yamlLaunch(lines: string[]): string[] | undefined {
   return typeof command === "string" ? [command, ...args] : undefined;
 }
 
-// The lines of Goose's `extensions.melra` block, or undefined when there is none.
-function gooseBlock(yaml: string): string[] | undefined {
+// The lines of the `<map>.melra` block (Goose's `extensions`, Hermes's
+// `mcp_servers`), or undefined when there is none.
+function yamlBlock(yaml: string, map: string): string[] | undefined {
   const lines = yaml.split(/\r?\n/);
-  const start = lines.findIndex((line) => /^extensions:\s*(#.*)?$/.test(line));
+  const start = lines.findIndex((line) => line.replace(/\s*(#.*)?$/, "") === `${map}:`);
   if (start < 0) return undefined;
   let block: string[] | undefined;
   let depth = 0;
@@ -162,8 +170,9 @@ function configured(base: { client: string; path: string }, launch: string[] | u
 
 function inspect(client: string, shape: string, path: string, text: string): ClientStatus {
   const base = { client, path };
-  if (shape === "goose") {
-    const block = gooseBlock(text);
+  const map = YAML_KEYS[shape];
+  if (map !== undefined) {
+    const block = yamlBlock(text, map);
     return block === undefined
       ? { ...base, state: "not configured", problems: [] }
       : configured(base, yamlLaunch(block));
@@ -191,7 +200,7 @@ function inspect(client: string, shape: string, path: string, text: string): Cli
       ? { ...base, state: "configured", note: "not valid JSONC, found by text search; command not checked", problems: [] }
       : { ...base, state: "not configured", note: "not valid JSONC, searched as text", problems: [] };
   }
-  const servers = isObject(parsed) ? parsed[key] : undefined;
+  const servers = key.reduce<unknown>((at, step) => (isObject(at) ? at[step] : undefined), parsed);
   const entry = isObject(servers) ? servers.melra : undefined;
   return entry === undefined
     ? { ...base, state: "not configured", problems: [] }

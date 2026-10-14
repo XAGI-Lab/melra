@@ -47,6 +47,9 @@ worked, and keeps a receipt. Any agent, any model, same guarantees.
 <img src="https://img.shields.io/badge/Gemini_CLI-8E75B2?style=flat-square&logo=googlegemini&logoColor=white" alt="Gemini CLI" />
 <img src="https://img.shields.io/badge/Zed-084CCF?style=flat-square&logo=zedindustries&logoColor=white" alt="Zed" />
 <img src="https://img.shields.io/badge/Windsurf-0B100F?style=flat-square&logo=windsurf&logoColor=white" alt="Windsurf" />
+<img src="https://img.shields.io/badge/OpenClaw-E5484D?style=flat-square" alt="OpenClaw" />
+<img src="https://img.shields.io/badge/Hermes_Agent-6E56CF?style=flat-square" alt="Hermes Agent" />
+<img src="https://img.shields.io/badge/Copilot_CLI-000000?style=flat-square&logo=githubcopilot&logoColor=white" alt="GitHub Copilot CLI" />
 <img src="https://img.shields.io/badge/+_any_MCP_client-475569?style=flat-square" alt="and any MCP client" />
 
 <br /><br />
@@ -144,7 +147,7 @@ Which MCP client should use MELRA?
   3)   Gemini CLI                       detected: config folder found
   ...
 
-Choose 1-15 [1]: 1
+Choose 1-26 [1]: 1
 Write it into ~/project/.mcp.json? [Y/n]
 
   ✓  Policy       ~/.melra/policy.json
@@ -209,11 +212,24 @@ pointed at MELRA:
 | 🪿 **Goose** | `goose` | `~/.config/goose/config.yaml` |
 | ▶️ **Continue** | `continue` | `<project>/.continue/mcpServers/melra.yaml` |
 | ⚡ **Amp** | `amp` | `~/.config/amp/settings.json` |
-| 🔌 **Anything else** (OpenClaw, Hermes, your own) | `generic` | prints the standard `mcpServers` block |
+| 🦞 **OpenClaw** | `openclaw` | `~/.openclaw/openclaw.json` (`mcp.servers`) |
+| ⚕️ **Hermes Agent** (Nous Research) | `hermes` | `~/.hermes/config.yaml` (`mcp_servers`) |
+| <img src="https://cdn.simpleicons.org/githubcopilot/888888" width="16" alt="" /> **GitHub Copilot CLI** | `copilot` | `~/.copilot/mcp-config.json` |
+| 🐉 **Qwen Code** | `qwen` | `~/.qwen/settings.json` |
+| 🅰️ **Auggie** (Augment) | `auggie` | `~/.augment/settings.json` |
+| <img src="https://cdn.simpleicons.org/warp/888888" width="16" alt="" /> **Warp** | `warp` | `~/.warp/.mcp.json` |
+| <img src="https://cdn.simpleicons.org/jetbrains/888888" width="16" alt="" /> **Junie** (JetBrains) | `junie` | `~/.junie/mcp/mcp.json` |
+| 🤖 **Factory Droid** | `droid` | `~/.factory/mcp.json` |
+| 🌙 **Kimi Code** | `kimi` | `~/.kimi-code/mcp.json` |
+| 🪁 **Kilo Code** | `kilo` | `~/.config/kilo/kilo.jsonc` (comments kept) |
+| 🧪 **LM Studio** | `lmstudio` | `~/.lmstudio/mcp.json` |
+| 🔌 **Anything else** | `generic` | prints the standard `mcpServers` block |
 
 Building your own agent? Use the [TypeScript SDK](packages/sdk-ts) or the
 [Python SDK](sdk-py). Both can spawn MELRA or connect to one that is already running
-over loopback HTTP or a private Unix socket.
+over loopback HTTP or a private Unix socket. For agent frameworks, see the
+[framework examples](examples/frameworks/README.md): LangChain / LangGraph, the
+OpenAI Agents SDK, the Vercel AI SDK, and the official MCP SDKs.
 
 > [!NOTE]
 > A named client is marked **verified** only after the *released package*, not a

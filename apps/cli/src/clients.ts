@@ -1,7 +1,7 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -16,8 +16,8 @@ export interface ServerEntry {
 
 // Every MCP client stores the same server under a different key, in a
 // different shape, in a different file. A generic `mcpServers` blob pasted
-// into VS Code, Zed, OpenCode, Codex, Goose, Continue, or Amp is ignored or
-// fails to parse, so emit the shape the named client actually reads.
+// into any client below whose shape is not `mcpServers` is ignored or fails
+// to parse, so emit the shape the named client actually reads.
 type Shape =
   | "mcpServers"
   | "vscode"
@@ -26,7 +26,12 @@ type Shape =
   | "codex"
   | "goose"
   | "continue"
-  | "amp";
+  | "amp"
+  | "openclaw"
+  | "hermes"
+  | "copilot"
+  | "droid"
+  | "kilo";
 
 interface Client {
   label: string;
@@ -158,7 +163,134 @@ export const CLIENTS: Record<string, Client> = {
       return !existsSync(json) && existsSync(jsonc) ? jsonc : json;
     },
   },
+  // https://github.com/openclaw/openclaw/blob/main/docs/tools/mcp.md
+  // https://github.com/openclaw/openclaw/blob/main/src/config/zod-schema.mcp-server.ts
+  // https://github.com/openclaw/openclaw/blob/main/src/config/state-dir.ts
+  // https://github.com/openclaw/openclaw/blob/main/docs/help/environment.md
+  openclaw: {
+    label: "OpenClaw",
+    shape: "openclaw",
+    bin: "openclaw",
+    // JSON5 on disk. The JSONC editor covers the comments and trailing commas
+    // OpenClaw itself writes; JSON5-only syntax (unquoted keys, single quotes)
+    // fails the JSONC parse and is refused rather than rewritten. The gateway
+    // hot-reloads the file, whereas `openclaw mcp add` refuses while it runs.
+    path: () =>
+      process.env.OPENCLAW_CONFIG_PATH ??
+      join(
+        process.env.OPENCLAW_STATE_DIR ?? join(process.env.OPENCLAW_HOME ?? homedir(), ".openclaw"),
+        "openclaw.json",
+      ),
+  },
+  // https://github.com/NousResearch/hermes-agent/blob/main/website/docs/reference/mcp-config-reference.md
+  // https://github.com/NousResearch/hermes-agent/blob/main/hermes_constants.py (HERMES_HOME)
+  // https://github.com/NousResearch/hermes-agent/blob/main/tools/mcp_tool_config.py
+  hermes: {
+    label: "Hermes Agent",
+    shape: "hermes",
+    bin: "hermes",
+    // Hermes keeps its Windows home under %LOCALAPPDATA%, without the dot.
+    path: () =>
+      join(
+        process.env.HERMES_HOME ??
+          (process.platform === "win32"
+            ? join(process.env.LOCALAPPDATA ?? home("AppData", "Local"), "hermes")
+            : home(".hermes")),
+        "config.yaml",
+      ),
+  },
+  // https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-mcp-servers
+  // https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-config-dir-reference
+  copilot: {
+    label: "GitHub Copilot CLI",
+    shape: "copilot",
+    bin: "copilot",
+    // COPILOT_HOME replaces ~/.copilot; XDG_CONFIG_HOME is not honoured.
+    path: () => join(process.env.COPILOT_HOME ?? home(".copilot"), "mcp-config.json"),
+  },
+  // https://qwenlm.github.io/qwen-code-docs/en/users/features/mcp/
+  qwen: {
+    label: "Qwen Code",
+    shape: "mcpServers",
+    bin: "qwen",
+    path: () => home(".qwen", "settings.json"),
+  },
+  // https://docs.augmentcode.com/cli/integrations
+  // https://docs.augmentcode.com/cli/config
+  auggie: {
+    label: "Auggie (Augment CLI)",
+    shape: "mcpServers",
+    bin: "auggie",
+    path: () => home(".augment", "settings.json"),
+  },
+  // https://docs.warp.dev/agents/capabilities/mcp.md
+  warp: {
+    label: "Warp",
+    // Warp requires `args`, which every rendered entry carries, even if empty.
+    shape: "mcpServers",
+    // A desktop app with no CLI of its own: ~/.warp is how it is detected.
+    path: () => home(".warp", ".mcp.json"),
+  },
+  // https://junie.jetbrains.com/docs/junie-cli-mcp-configuration.html
+  junie: {
+    label: "JetBrains Junie",
+    shape: "mcpServers",
+    bin: "junie",
+    path: () => home(".junie", "mcp", "mcp.json"),
+  },
+  // https://docs.factory.com/cli/configuration/mcp
+  droid: {
+    label: "Factory Droid",
+    shape: "droid",
+    bin: "droid",
+    path: () => home(".factory", "mcp.json"),
+  },
+  // https://www.kimi.com/code/docs/en/kimi-code-cli/customization/mcp.html
+  kimi: {
+    label: "Kimi Code CLI",
+    shape: "mcpServers",
+    bin: "kimi",
+    path: () => join(process.env.KIMI_CODE_HOME ?? home(".kimi-code"), "mcp.json"),
+  },
+  // https://kilo.ai/docs/automate/mcp/using-in-cli
+  // https://kilo.ai/docs/getting-started/settings
+  kilo: {
+    label: "Kilo Code",
+    shape: "kilo",
+    bin: "kilo",
+    // ~/.config on every OS, Windows included. Edit kilo.json when that is the
+    // one already there, rather than create kilo.jsonc beside it.
+    path: () => {
+      const jsonc = home(".config", "kilo", "kilo.jsonc");
+      const json = home(".config", "kilo", "kilo.json");
+      return !existsSync(jsonc) && existsSync(json) ? json : jsonc;
+    },
+  },
+  // https://lmstudio.ai/docs/app/mcp
+  // https://lmstudio.ai/lmstudio/js-code-sandbox/files/src/findLMStudioHome.ts
+  // https://github.com/lmstudio-ai/lmstudio-bug-tracker/issues/1371
+  lmstudio: {
+    label: "LM Studio",
+    shape: "mcpServers",
+    bin: "lms",
+    path: () => join(lmStudioHome(), "mcp.json"),
+  },
 };
+
+// LM Studio's home is not always ~/.lmstudio: a pointer file names it, and
+// older installs live in ~/.cache/lm-studio. This is the order LM Studio's own
+// sample code resolves it in, minus writing the pointer, which is LM Studio's
+// job and not something reading a path should do.
+function lmStudioHome(): string {
+  try {
+    const pointed = readFileSync(home(".lmstudio-home-pointer"), "utf8").trim();
+    if (pointed !== "") return pointed;
+  } catch {
+    // No pointer yet: fall through to where LM Studio would create one.
+  }
+  const legacy = home(".cache", "lm-studio");
+  return existsSync(legacy) ? legacy : home(".lmstudio");
+}
 
 // Older names that already appear in scripts and docs.
 const ALIASES: Record<string, string> = { claude: "claude-code" };
@@ -186,6 +318,18 @@ function yamlMap(key: string, map: Record<string, string>, indent: string): stri
     `${indent}${key}:`,
     ...pairs.map(([name, value]) => `${indent}  ${q(name)}: ${q(value)}`),
   ];
+}
+
+// Hermes reads `mcp_servers.<name>` with the usual command/args/env.
+function hermesYaml(entry: ServerEntry): string {
+  return [
+    "mcp_servers:",
+    "  melra:",
+    `    command: ${q(entry.command)}`,
+    `    args: [${entry.args.map(q).join(", ")}]`,
+    ...yamlMap("env", entry.env, "    "),
+    "",
+  ].join("\n");
 }
 
 function gooseYaml(entry: ServerEntry): string {
@@ -255,6 +399,29 @@ export function clientConfig(
       return codexToml(entry);
     case "goose":
       return gooseYaml(entry);
+    case "hermes":
+      return hermesYaml(entry);
+    case "openclaw":
+      return { mcp: { servers: { melra: entry } } };
+    // Copilot CLI passes a server only PATH from its own environment, so
+    // MELRA's settings must all be in `env`, as they are. `tools: ["*"]`
+    // exposes every MELRA tool; every documented example carries it.
+    case "copilot":
+      return { mcpServers: { melra: { type: "local", ...entry, tools: ["*"] } } };
+    case "droid":
+      return { mcpServers: { melra: { type: "stdio", ...entry } } };
+    // OpenCode's format without OpenCode's $schema, which would be wrong here.
+    case "kilo":
+      return {
+        mcp: {
+          melra: {
+            type: "local",
+            command: [entry.command, ...entry.args],
+            environment: entry.env,
+            enabled: true,
+          },
+        },
+      };
     case "continue":
       return continueYaml(entry);
     case "amp":
@@ -290,12 +457,14 @@ function withoutMelraTables(toml: string): string {
     .trimEnd();
 }
 
-// Put MELRA's entry under Goose's `extensions:` map, replacing any earlier
-// one, with a line edit that leaves every other byte of the file alone. Goose
-// writes block-style YAML with one key per line, which a line edit handles;
-// anything else — flow style, tabs, odd indentation, a top level that is not a
-// plain mapping — is refused rather than guessed at.
-function withMelraExtension(path: string, yaml: string, config: string): string {
+// Put MELRA's entry under a top-level YAML map — Goose's `extensions:`,
+// Hermes's `mcp_servers:` — replacing any earlier one, with a line edit that
+// leaves every other byte of the file alone. `config` is the rendered block,
+// whose first line names the map. Both clients write block-style YAML with one
+// key per line, which a line edit handles; anything else — flow style, tabs,
+// odd indentation, a top level that is not a plain mapping — is refused rather
+// than guessed at.
+function withMelraYamlEntry(path: string, yaml: string, config: string): string {
   const refuse = (why: string) =>
     new Error(`${path}: ${why}; add the printed config to it by hand`);
   const cr = yaml.includes("\r\n") ? "\r" : "";
@@ -311,22 +480,24 @@ function withMelraExtension(path: string, yaml: string, config: string): string 
     if (/^ *\t/.test(line.text)) throw refuse("it indents with tabs");
     if (line.indent === 0 && !isKey(line.text)) throw refuse("it is not a plain YAML mapping");
   }
-  // MELRA's entry as rendered by gooseYaml, without the `extensions:` header.
-  const entry = config.split("\n").slice(1, -1);
+  // MELRA's entry as rendered, without the header naming its map.
+  const [header = "", ...rendered] = config.split("\n").slice(0, -1);
+  const map = header.slice(0, -1);
+  const entry = rendered;
   const out = (block: string[], indent: number) =>
     block.map((line) => `${" ".repeat(indent)}${line.slice(2)}${cr}`);
 
   const headers = lines.flatMap((line, index) =>
-    line.indent === 0 && named("extensions", line.text) ? [index] : [],
+    line.indent === 0 && named(map, line.text) ? [index] : [],
   );
   const start = headers[0];
   if (start === undefined) {
     const separator = yaml === "" || yaml.endsWith("\n") ? "" : `${cr}\n`;
-    return `${yaml}${separator}extensions:${cr}\n${out(entry, 2).join("\n")}\n`;
+    return `${yaml}${separator}${header}${cr}\n${out(entry, 2).join("\n")}\n`;
   }
-  if (headers.length > 1) throw refuse("it has more than one `extensions:` key");
+  if (headers.length > 1) throw refuse(`it has more than one \`${header}\` key`);
   if (!/^[^:]*: *(#.*)?$/.test(lines[start]?.text ?? "")) {
-    throw refuse("`extensions:` is not a block mapping");
+    throw refuse(`\`${header}\` is not a block mapping`);
   }
   const after = lines.findIndex(
     (line, index) => index > start && line.content && line.indent === 0,
@@ -338,7 +509,7 @@ function withMelraExtension(path: string, yaml: string, config: string): string 
   const indent = children[0]?.indent ?? 2;
   for (const child of children) {
     if (child.indent < indent || (child.indent === indent && !isKey(child.text))) {
-      throw refuse("`extensions:` is not a block mapping with even indentation");
+      throw refuse(`\`${header}\` is not a block mapping with even indentation`);
     }
   }
   // Drop every earlier `melra:` entry: its key through its last deeper line,
@@ -364,9 +535,29 @@ function withMelraExtension(path: string, yaml: string, config: string): string 
   return result.join("\n");
 }
 
+// Every place a rendered config sets something: the `melra` entry itself,
+// however deep its container sits (OpenClaw's is `mcp.servers`), and any
+// non-object setting beside it (OpenCode's `$schema`).
+function settings(config: Record<string, unknown>, at: string[] = []): Array<[string[], unknown]> {
+  return Object.entries(config).flatMap(([key, value]) =>
+    key !== "melra" && isObject(value) ? settings(value, [...at, key]) : [[[...at, key], value]],
+  );
+}
+
+// `settings` applied to a parsed object, as `upsertJsonc` applies them to text.
+function merged(before: Record<string, unknown>, path: string[], value: unknown): Record<string, unknown> {
+  const [key, ...rest] = path;
+  if (key === undefined) return before;
+  if (rest.length === 0) {
+    return key === "melra" || !Object.hasOwn(before, key) ? { ...before, [key]: value } : before;
+  }
+  const inner = before[key];
+  return { ...before, [key]: merged(isObject(inner) ? inner : {}, rest, value) };
+}
+
 // Merge a JSON-shaped config into a JSON or JSONC file by editing only the
-// members MELRA owns: each `[key, { melra }]` entry is upserted at
-// `key.melra`, and a non-object entry (OpenCode's `$schema`) is added only if
+// members MELRA owns: the `melra` entry is upserted wherever its container
+// is, and a non-object setting (OpenCode's `$schema`) is added only if
 // absent. Plain JSON goes through the same in-place edit as JSONC rather than
 // JSON.parse → JSON.stringify, so a user's formatting and key order survive
 // there too, and duplicate keys (which JSON.parse silently collapses) are
@@ -383,19 +574,12 @@ function withMelraJson(path: string, text: string, config: Record<string, unknow
     throw refuse(`it is not valid JSON or JSONC (${(error as Error).message})`);
   }
   if (!isObject(before)) throw refuse("it does not hold a JSON object");
-  const expected: Record<string, unknown> = { ...before };
+  let expected = before;
   let next = text;
   try {
-    for (const [key, value] of Object.entries(config)) {
-      if (!isObject(value)) {
-        next = upsertJsonc(next, [key], value, true);
-        if (!Object.hasOwn(before, key)) expected[key] = value;
-        continue;
-      }
-      for (const [member, inner] of Object.entries(value)) {
-        next = upsertJsonc(next, [key, member], inner);
-      }
-      expected[key] = { ...(before[key] as Record<string, unknown> | undefined), ...value };
+    for (const [path, value] of settings(config)) {
+      next = upsertJsonc(next, path, value, path.at(-1) !== "melra");
+      expected = merged(expected, path, value);
     }
   } catch (error) {
     throw refuse((error as Error).message);
@@ -434,8 +618,8 @@ export async function writeClientConfig(
   let next: string;
   if (typeof config === "string" && (existing === undefined || shape === "continue")) {
     next = config;
-  } else if (typeof config === "string" && shape === "goose") {
-    next = withMelraExtension(path, existing ?? "", config);
+  } else if (typeof config === "string" && (shape === "goose" || shape === "hermes")) {
+    next = withMelraYamlEntry(path, existing ?? "", config);
   } else if (typeof config === "string") {
     const kept = existing === undefined ? "" : withoutMelraTables(existing);
     next = kept === "" ? config : `${kept}\n\n${config}`;

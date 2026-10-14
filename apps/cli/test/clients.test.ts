@@ -314,6 +314,219 @@ describe("client configs", () => {
     expect(await readFile(path, "utf8")).toBe(original);
   });
 
+  it("emits OpenClaw's mcp.servers and Hermes's mcp_servers", () => {
+    expect(clientConfig("openclaw", entry)).toEqual({ mcp: { servers: { melra: entry } } });
+    expect(clientConfig("hermes", entry)).toBe(
+      [
+        "mcp_servers:",
+        "  melra:",
+        '    command: "melra"',
+        '    args: ["serve"]',
+        "    env:",
+        '      "MELRA_WORKSPACE": "C:\\\\w \\"x\\""',
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("finds OpenClaw's and Hermes's files through their own overrides", () => {
+    const saved = { ...process.env };
+    try {
+      delete process.env.OPENCLAW_CONFIG_PATH;
+      process.env.OPENCLAW_STATE_DIR = join("/s");
+      expect(clientConfigPath("openclaw", "/ws")).toBe(join("/s", "openclaw.json"));
+      process.env.OPENCLAW_CONFIG_PATH = join("/c", "oc.json5");
+      expect(clientConfigPath("openclaw", "/ws")).toBe(join("/c", "oc.json5"));
+      process.env.HERMES_HOME = join("/h");
+      expect(clientConfigPath("hermes", "/ws")).toBe(join("/h", "config.yaml"));
+    } finally {
+      for (const key of ["OPENCLAW_CONFIG_PATH", "OPENCLAW_STATE_DIR", "HERMES_HOME"]) {
+        if (saved[key] === undefined) delete process.env[key];
+        else process.env[key] = saved[key];
+      }
+    }
+  });
+
+  it("adds MELRA under OpenClaw's nested mcp.servers, keeping comments and other servers", async () => {
+    const path = join(await scratch(), "openclaw.json");
+    const original = [
+      "// OpenClaw config",
+      "{",
+      '  "agents": { "defaults": { "model": "x" } },',
+      '  "mcp": {',
+      '    "servers": {',
+      '      "context7": { "command": "uvx", "args": ["context7-mcp"] }, // docs',
+      "    },",
+      "  },",
+      "}",
+      "",
+    ].join("\n");
+    await writeFile(path, original);
+    await writeClientConfig(path, clientConfig("openclaw", entry), "openclaw");
+    await writeClientConfig(path, clientConfig("openclaw", entry), "openclaw");
+    const text = await readFile(path, "utf8");
+    expect(text.match(/"melra":/g)).toHaveLength(1);
+    expect(text).toContain('"context7": { "command": "uvx", "args": ["context7-mcp"] }, // docs');
+    expect(parseJsonc(text).value).toEqual({
+      agents: { defaults: { model: "x" } },
+      mcp: { servers: { context7: { command: "uvx", args: ["context7-mcp"] }, melra: entry } },
+    });
+
+    // No `mcp` key yet: the whole path is added and nothing else changes.
+    await writeFile(path, '{\n  "gateway": { "port": 1 },\n}\n');
+    await writeClientConfig(path, clientConfig("openclaw", entry), "openclaw");
+    expect(parseJsonc(await readFile(path, "utf8")).value).toEqual({
+      gateway: { port: 1 },
+      mcp: { servers: { melra: entry } },
+    });
+  });
+
+  it.each([
+    ["JSON5 unquoted keys", "{ mcp: { servers: {} } }\n", /not valid JSON or JSONC/],
+    ["a non-object mcp", '{ "mcp": true }\n', /"mcp" is not an object/],
+    ["a non-object mcp.servers", '{ "mcp": { "servers": [] } }\n', /"mcp.servers" is not an object/],
+  ])("refuses an OpenClaw file with %s and leaves it untouched", async (_, original, message) => {
+    const path = join(await scratch(), "openclaw.json");
+    await writeFile(path, original);
+    const write = writeClientConfig(path, clientConfig("openclaw", entry), "openclaw");
+    await expect(write).rejects.toThrow(message);
+    expect(await readFile(path, "utf8")).toBe(original);
+  });
+
+  it("adds MELRA to Hermes's mcp_servers, replaces it on a rerun, and keeps the rest", async () => {
+    const path = join(await scratch(), "config.yaml");
+    const before = "model:\n  default: hermes-4\nmcp_servers:\n  docs:\n    command: npx\n";
+    const after = "# tail\nterminal:\n  backend: local\n";
+    await writeFile(path, `${before}${after}`);
+    const { backup } = await writeClientConfig(path, clientConfig("hermes", entry), "hermes");
+    expect(backup).toBe(`${path}.bak`);
+    const melra = clientConfig("hermes", entry).toString().replace("mcp_servers:\n", "");
+    expect(await readFile(path, "utf8")).toBe(`${before}${melra}${after}`);
+    await writeClientConfig(path, clientConfig("hermes", { ...entry, command: "npx" }), "hermes");
+    const text = await readFile(path, "utf8");
+    expect(text.match(/melra:/g)).toHaveLength(1);
+    expect(text).toContain('    command: "npx"');
+    expect(text.startsWith(before) && text.endsWith(after)).toBe(true);
+  });
+
+  it("creates Hermes's file, or adds mcp_servers to one without it", async () => {
+    const path = join(await scratch(), ".hermes", "config.yaml");
+    await writeClientConfig(path, clientConfig("hermes", entry), "hermes");
+    expect(await readFile(path, "utf8")).toBe(clientConfig("hermes", entry));
+    await writeFile(path, "model:\n  default: x");
+    await writeClientConfig(path, clientConfig("hermes", entry), "hermes");
+    expect(await readFile(path, "utf8")).toBe(`model:\n  default: x\n${clientConfig("hermes", entry)}`);
+  });
+
+  it.each([
+    ["flow-style mcp_servers", "mcp_servers: {docs: {command: x}}\n"],
+    ["two mcp_servers keys", "mcp_servers:\n  a:\n    command: x\nmcp_servers:\n  b: {}\n"],
+    ["tab indentation", "mcp_servers:\n\tdocs: {}\n"],
+  ])("refuses a Hermes file with %s and leaves it untouched", async (_, original) => {
+    const path = join(await scratch(), "config.yaml");
+    await writeFile(path, original);
+    await expect(
+      writeClientConfig(path, clientConfig("hermes", entry), "hermes"),
+    ).rejects.toThrow(/by hand/);
+    expect(await readFile(path, "utf8")).toBe(original);
+  });
+
+  it("emits Copilot CLI's, Factory Droid's, and Kilo Code's own entries", () => {
+    expect(clientConfig("copilot", entry)).toEqual({
+      mcpServers: { melra: { type: "local", ...entry, tools: ["*"] } },
+    });
+    expect(clientConfig("droid", entry)).toEqual({ mcpServers: { melra: { type: "stdio", ...entry } } });
+    // OpenCode's shape, but never OpenCode's $schema.
+    expect(clientConfig("kilo", entry)).toEqual({
+      mcp: {
+        melra: { type: "local", command: ["melra", "serve"], environment: entry.env, enabled: true },
+      },
+    });
+    for (const name of ["qwen", "auggie", "warp", "junie", "kimi", "lmstudio"]) {
+      expect(clientConfig(name, entry), name).toEqual({ mcpServers: { melra: entry } });
+    }
+    // Warp requires `args` even when there are none.
+    expect(clientConfig("warp", { ...entry, args: [] })).toMatchObject({
+      mcpServers: { melra: { args: [] } },
+    });
+  });
+
+  it("puts each new client's file where that client reads it", async () => {
+    const root = await scratch();
+    const saved = { ...process.env };
+    const keys = ["HOME", "USERPROFILE", "COPILOT_HOME", "KIMI_CODE_HOME"];
+    try {
+      process.env.HOME = root;
+      process.env.USERPROFILE = root;
+      delete process.env.COPILOT_HOME;
+      delete process.env.KIMI_CODE_HOME;
+      const at = (name: string) => clientConfigPath(name, "/ws");
+      expect(at("copilot")).toBe(join(root, ".copilot", "mcp-config.json"));
+      expect(at("qwen")).toBe(join(root, ".qwen", "settings.json"));
+      expect(at("auggie")).toBe(join(root, ".augment", "settings.json"));
+      expect(at("warp")).toBe(join(root, ".warp", ".mcp.json"));
+      expect(at("junie")).toBe(join(root, ".junie", "mcp", "mcp.json"));
+      expect(at("droid")).toBe(join(root, ".factory", "mcp.json"));
+      expect(at("kimi")).toBe(join(root, ".kimi-code", "mcp.json"));
+      process.env.COPILOT_HOME = join(root, "cp");
+      process.env.KIMI_CODE_HOME = join(root, "km");
+      expect(at("copilot")).toBe(join(root, "cp", "mcp-config.json"));
+      expect(at("kimi")).toBe(join(root, "km", "mcp.json"));
+
+      // Kilo: kilo.jsonc, unless only a kilo.json is there.
+      expect(at("kilo")).toBe(join(root, ".config", "kilo", "kilo.jsonc"));
+      await mkdir(join(root, ".config", "kilo"), { recursive: true });
+      await writeFile(join(root, ".config", "kilo", "kilo.json"), "{}");
+      expect(at("kilo")).toBe(join(root, ".config", "kilo", "kilo.json"));
+
+      // LM Studio: the pointer file, else the legacy cache home, else ~/.lmstudio.
+      expect(at("lmstudio")).toBe(join(root, ".lmstudio", "mcp.json"));
+      await mkdir(join(root, ".cache", "lm-studio"), { recursive: true });
+      expect(at("lmstudio")).toBe(join(root, ".cache", "lm-studio", "mcp.json"));
+      await writeFile(join(root, ".lmstudio-home-pointer"), `${join(root, "lms")}\n`);
+      expect(at("lmstudio")).toBe(join(root, "lms", "mcp.json"));
+    } finally {
+      for (const key of keys) {
+        if (saved[key] === undefined) delete process.env[key];
+        else process.env[key] = saved[key];
+      }
+    }
+  });
+
+  it("merges Copilot CLI's entry beside other servers and replaces it on a rerun", async () => {
+    const path = join(await scratch(), "mcp-config.json");
+    const other = { type: "local", command: "npx", args: ["@playwright/mcp@latest"], env: {}, tools: ["*"] };
+    await writeFile(path, JSON.stringify({ mcpServers: { playwright: other } }, null, 2));
+    await writeClientConfig(path, clientConfig("copilot", { ...entry, command: "old" }), "copilot");
+    await writeClientConfig(path, clientConfig("copilot", entry), "copilot");
+    const text = await readFile(path, "utf8");
+    expect(text.match(/"melra":/g)).toHaveLength(1);
+    expect(JSON.parse(text)).toEqual({
+      mcpServers: { playwright: other, melra: { type: "local", ...entry, tools: ["*"] } },
+    });
+    await writeFile(path, '{ "mcpServers": [] }');
+    await expect(
+      writeClientConfig(path, clientConfig("copilot", entry), "copilot"),
+    ).rejects.toThrow(/"mcpServers" is not an object/);
+  });
+
+  it("adds MELRA to a commented kilo.jsonc without a $schema, keeping the rest", async () => {
+    const path = join(await scratch(), "kilo.jsonc");
+    const original = '{\n  // mine\n  "model": "x",\n  "mcp": {\n    "docs": { "type": "remote", "url": "https://d" }, // remote\n  },\n}\n';
+    await writeFile(path, original);
+    await writeClientConfig(path, clientConfig("kilo", entry), "kilo");
+    await writeClientConfig(path, clientConfig("kilo", entry), "kilo");
+    const text = await readFile(path, "utf8");
+    expect(text.startsWith('{\n  // mine\n  "model": "x",\n')).toBe(true);
+    expect(text).toContain('"docs": { "type": "remote", "url": "https://d" }, // remote');
+    expect(text).not.toContain("$schema");
+    expect(text.match(/"melra":/g)).toHaveLength(1);
+    expect(parseJsonc(text).value).toMatchObject({
+      model: "x",
+      mcp: { docs: { type: "remote" }, melra: { type: "local", command: ["melra", "serve"] } },
+    });
+  });
+
   it("writes Continue's block file whole, backing up an earlier one", async () => {
     const path = clientConfigPath("continue", await scratch()) ?? "";
     expect(path.endsWith(join(".continue", "mcpServers", "melra.yaml"))).toBe(true);

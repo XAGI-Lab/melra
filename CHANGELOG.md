@@ -21,6 +21,24 @@ All notable changes are documented here. The format follows
   stopped only by DNS failing, and memory values keep PEM private keys and AWS
   access key ids verbatim. See `docs/research/GOVBENCH.md`.
 
+- `melra setup --client <name> [--write]` and `melra doctor` know eleven more
+  agent harnesses: `openclaw` (`~/.openclaw/openclaw.json`, `mcp.servers`,
+  honouring `OPENCLAW_CONFIG_PATH`/`OPENCLAW_STATE_DIR`), `hermes` (Nous
+  Research Hermes Agent, `~/.hermes/config.yaml` `mcp_servers`, honouring
+  `HERMES_HOME`), `copilot` (GitHub Copilot CLI), `qwen` (Qwen Code), `auggie`,
+  `warp`, `junie` (JetBrains Junie), `droid` (Factory Droid), `kimi` (Kimi Code
+  CLI), `kilo` (Kilo Code), and `lmstudio` (following LM Studio's home pointer
+  file). Each writes that client's own format into its own file, keeping
+  everything else there: JSON and JSONC by the same in-place edit as before,
+  now able to reach a nested key such as OpenClaw's `mcp.servers`, and Hermes's
+  YAML by the same line edit as Goose, with the same refusals. Paths and
+  formats come from each client's documentation or source, linked in the code;
+  docs/INSTALLATION.md lists every client, how to add MELRA to Claude Code's
+  user scope with `claude mcp add-json`, and what to do for clients with no
+  editable file (JetBrains AI Assistant, Jan, Trae, Crush, Mistral Vibe).
+  `examples/frameworks/` shows MELRA connected from LangChain/LangGraph, the
+  OpenAI Agents SDK, the Vercel AI SDK, and the official MCP SDKs.
+
 - The MCP server now sends `instructions` on connect, which clients such as
   Claude Code put in the model's context: the plan, execute, verify loop in
   five steps, what each final status means (including never re-running a
