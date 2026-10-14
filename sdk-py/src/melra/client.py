@@ -3,17 +3,22 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
+import sys
 from contextlib import AsyncExitStack
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Self
+from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID
 
+import httpx
 from mcp import ClientSession, StdioServerParameters
 from mcp import types as mcp_types
 from mcp.client.stdio import stdio_client
+from mcp.client.streamable_http import streamable_http_client
 
 
 class MelraClient:
@@ -40,15 +45,88 @@ class MelraClient:
             args=args or ["serve"],
             env=env,
         )
+        # (MCP URL, bearer token, Unix socket path) when connecting to a running
+        # server instead of spawning one.
+        self._remote: tuple[str, str, str | None] | None = None
         self._stack: AsyncExitStack | None = None
         self._session: ClientSession | None = None
 
+    @classmethod
+    def connect_http(
+        cls,
+        url: str,
+        *,
+        token: str | None = None,
+        allow_insecure_http: bool = False,
+    ) -> Self:
+        """Connect to a server already running under `melra serve --http`.
+
+        `url` is the MCP endpoint printed at startup (`http://127.0.0.1:7457/mcp`);
+        a URL without the `/mcp` path gets it appended. `token` defaults to
+        `MELRA_HTTP_TOKEN`. The token drives the machine, so plain `http://` is
+        refused for anything but a loopback host unless `allow_insecure_http` is
+        set; use `https://` to reach a server through a TLS proxy.
+        """
+        parts = urlsplit(url)
+        host = parts.hostname
+        if parts.scheme not in {"http", "https"} or not host:
+            raise ValueError("url must be an http:// or https:// URL")
+        if parts.scheme == "http" and not allow_insecure_http and not _is_loopback(host):
+            raise ValueError(
+                f"refusing to send the MELRA token over plain http to {host}; "
+                "use https, a loopback address, or allow_insecure_http=True"
+            )
+        path = parts.path if parts.path.endswith("/mcp") else parts.path.rstrip("/") + "/mcp"
+        client = cls()
+        client._remote = (urlunsplit(parts._replace(path=path)), _token(token), None)
+        return client
+
+    @classmethod
+    def connect_socket(cls, path: str | Path, *, token: str | None = None) -> Self:
+        """Connect to a server already running under `melra serve --socket <path>`.
+
+        The socket is mode 0600, so only this OS user gets in; the token is still
+        required and defaults to `MELRA_HTTP_TOKEN`. Not available on Windows.
+        """
+        if sys.platform == "win32":
+            raise OSError("socket_transport_unsupported_on_windows: use connect_http on loopback")
+        client = cls()
+        client._remote = ("http://localhost/mcp", _token(token), str(path))
+        return client
+
     async def __aenter__(self) -> Self:
-        stack = AsyncExitStack()
-        read, write = await stack.enter_async_context(stdio_client(self._parameters))
-        session = await stack.enter_async_context(ClientSession(read, write))
-        await session.initialize()
-        self._stack = stack
+        try:
+            async with AsyncExitStack() as stack:
+                if self._remote is None:
+                    read, write = await stack.enter_async_context(stdio_client(self._parameters))
+                else:
+                    url, token, socket_path = self._remote
+                    http = await stack.enter_async_context(
+                        httpx.AsyncClient(
+                            headers={"Authorization": f"Bearer {token}"},
+                            # The MCP SDK's own defaults: 30 s, 5 min for the event stream.
+                            timeout=httpx.Timeout(30.0, read=300.0),
+                            transport=(
+                                None
+                                if socket_path is None
+                                else httpx.AsyncHTTPTransport(uds=socket_path)
+                            ),
+                        )
+                    )
+                    read, write, _ = await stack.enter_async_context(
+                        streamable_http_client(url, http_client=http)
+                    )
+                session = await stack.enter_async_context(ClientSession(read, write))
+                await session.initialize()
+                self._stack = stack.pop_all()
+        except BaseExceptionGroup as group:
+            # The MCP transport reports a refused request from inside its task
+            # group; name the one failure a caller can fix.
+            if group.subgroup(_unauthorized) is not None:
+                raise PermissionError(
+                    "MELRA rejected the token (HTTP 401); check token or MELRA_HTTP_TOKEN"
+                ) from group
+            raise
         self._session = session
         return self
 
@@ -247,3 +325,23 @@ class MelraClient:
         if not isinstance(value, dict):
             raise TypeError(f"MELRA {operation} returned a non-object")
         return value
+
+
+def _is_loopback(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _token(token: str | None) -> str:
+    resolved = (token if token is not None else os.environ.get("MELRA_HTTP_TOKEN", "")).strip()
+    if not resolved:
+        raise ValueError("token is required (or set MELRA_HTTP_TOKEN)")
+    return resolved
+
+
+def _unauthorized(error: BaseException) -> bool:
+    return isinstance(error, httpx.HTTPStatusError) and error.response.status_code == 401

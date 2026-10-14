@@ -856,7 +856,12 @@ uv run --project sdk-py pytest sdk-py
 ```
 
 Both SDKs expose task and durable workflow methods. They launch or connect to
-the same stdio server and do not implement a separate execution engine.
+the same server and do not implement a separate execution engine. The Python
+`MelraClient()` spawns `melra serve` over stdio;
+`MelraClient.connect_http(url, token=...)` and
+`MelraClient.connect_socket(path, token=...)` attach to a server already
+running under [`serve --http`](#http-server-and-console) or
+[`serve --socket`](#over-a-unix-socket). See [sdk-py/README.md](../sdk-py/README.md).
 
 ## Uninstall and local-data deletion
 
