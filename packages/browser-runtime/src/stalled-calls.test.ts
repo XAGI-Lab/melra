@@ -203,7 +203,7 @@ describe("stalled browser calls", () => {
     }
   }, 60_000);
 
-  it("reports a click that stalled the page as an unknown outcome", async () => {
+  it("reports a stalled click as an unknown outcome exactly when it landed", async () => {
     const context = await fixture();
     if (context === undefined) return;
     const { runtime, url } = context;
@@ -225,12 +225,16 @@ describe("stalled browser calls", () => {
           }),
         ),
       );
-      // The page stalls the moment the click lands. Whether Playwright's own
-      // post-click check or the settle after it is what runs out first, the
-      // click was delivered, so `failed` would be the false claim.
-      expect(isOutcomeUnknown(message), message).toBe(true);
+      // The page itself is the ground truth: `#status` reads "clicked" only if
+      // the click landed. The claim must match it. A click that landed and
+      // stalled the page is an unknown outcome, never a plain failure, whether
+      // Playwright's post-click check or the settle ran out first. A click
+      // that never went out is a plain failure: on a Windows runner Playwright
+      // has spent the whole bound "waiting for element to be ... stable" on
+      // both attempts, never sending it, and the runtime said so correctly.
       expect(ms).toBeLessThan(5_000);
-      expect(await status(runtime)).toBe("clicked");
+      const landed = (await status(runtime)) === "clicked";
+      expect(isOutcomeUnknown(message), `${landed ? "landed" : "never sent"}: ${message}`).toBe(landed);
     } finally {
       await runtime.close();
     }
