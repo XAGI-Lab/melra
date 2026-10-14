@@ -23,7 +23,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "clean": "rm -rf dist",
-    "test": "vitest run --testTimeout=60000 --hookTimeout=60000",
+    "test": "vitest run --no-file-parallelism --testTimeout=60000 --hookTimeout=60000",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
