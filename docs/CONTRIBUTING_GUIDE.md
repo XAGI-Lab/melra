@@ -69,7 +69,7 @@ works, and is silently classified as a mutation with the wrong risk.
 ### …add an evidence predicate
 
 - `EvidencePredicateSchema` in `packages/protocol`
-- a branch in `packages/verifier-core`
+- a `PredicateVerifier` in `packages/verifier-core`, added to `BUILT_IN`
 - the verifier resolves every path through `realpath` and rejects anything
   outside the workspace root, **including the root itself**. Keep that
   confinement. A predicate that can be pointed at `/etc` is not a predicate, it

@@ -81,22 +81,223 @@ function interpolate(template: string, result: Record<string, unknown>): string 
   });
 }
 
-export interface VerifierOptions {
-  /** Absent means `http_resource_matches` fails rather than passes. */
+/**
+ * What a verifier may use besides the predicate and the recorded result.
+ *
+ * Files are reachable only through `workspacePath`, which resolves through
+ * `realpath` and refuses anything outside the workspace root, the root
+ * included. The confinement lives here, in the kernel, so a verifier cannot
+ * opt out of it by doing its own path handling.
+ */
+export interface VerificationContext {
+  /** A confined, real path; `mayBeAbsent` for a file that should not exist. */
+  workspacePath(input: string, options?: { mayBeAbsent?: boolean }): Promise<string>;
+  /** `path` relative to the workspace root, for an item's `source`. */
+  relative(path: string): string;
+  /** Absent when the runtime has no independent channel. */
   probe?: EvidenceProbe;
 }
 
+/**
+ * One way to confirm an effect. Returns what it found; `type` and `strength`
+ * are stamped by the kernel from the predicate type, so a verifier cannot
+ * claim a stronger kind of knowing than its type is entitled to. Throwing
+ * fails the predicate.
+ */
+export interface PredicateVerifier<P extends { type: string } = { type: string }> {
+  type: P["type"];
+  check(
+    predicate: P,
+    result: Record<string, unknown>,
+    context: VerificationContext,
+  ): Promise<Omit<EvidenceItem, "type" | "strength">>;
+}
+
+/** Any verifier, whatever predicate it takes: the shape the registry holds. */
+export interface RegisteredVerifier {
+  readonly type: string;
+  check(
+    predicate: never,
+    result: Record<string, unknown>,
+    context: VerificationContext,
+  ): Promise<Omit<EvidenceItem, "type" | "strength">>;
+}
+
+type Built<T extends EvidencePredicate["type"]> = PredicateVerifier<Extract<EvidencePredicate, { type: T }>>;
+
+const resultEquals: Built<"result_equals"> = {
+  type: "result_equals",
+  async check(predicate, result) {
+    const passed = Object.is(readResultPath(result, predicate.path), predicate.value);
+    return { passed, summary: `${predicate.path} ${passed ? "matched" : "did not match"} expected value` };
+  },
+};
+
+const resultContains: Built<"result_contains"> = {
+  type: "result_contains",
+  async check(predicate, result) {
+    const observed = readResultPath(result, predicate.path);
+    const passed = typeof observed === "string" && observed.includes(predicate.value);
+    return { passed, summary: `${predicate.path} ${passed ? "contained" : "did not contain"} expected text` };
+  },
+};
+
+const exitCode: Built<"exit_code"> = {
+  type: "exit_code",
+  async check(predicate, result) {
+    const passed = result.exitCode === predicate.value;
+    return { passed, summary: `exit code ${passed ? "matched" : "did not match"} ${predicate.value}` };
+  },
+};
+
+const urlMatches: Built<"url_matches"> = {
+  type: "url_matches",
+  async check(predicate, result) {
+    const observed = result.url;
+    const passed = typeof observed === "string" && wildcardMatches(observed, predicate.pattern);
+    return { passed, summary: `final URL ${passed ? "matched" : "did not match"} expected pattern` };
+  },
+};
+
+const pageContains: Built<"page_contains"> = {
+  type: "page_contains",
+  async check(predicate, result) {
+    const observed = result.text;
+    const passed = typeof observed === "string" && observed.includes(predicate.text);
+    return { passed, summary: `page ${passed ? "contained" : "did not contain"} expected text` };
+  },
+};
+
+const fileExists: Built<"file_exists"> = {
+  type: "file_exists",
+  async check(predicate, _result, context) {
+    const path = await context.workspacePath(predicate.path);
+    const metadata = await stat(path);
+    const passed = metadata.isFile() || metadata.isDirectory();
+    return {
+      passed,
+      summary: `workspace path ${passed ? "exists" : "does not exist"}`,
+      source: context.relative(path),
+    };
+  },
+};
+
+const fileAbsent: Built<"file_absent"> = {
+  type: "file_absent",
+  async check(predicate, _result, context) {
+    const path = await context.workspacePath(predicate.path, { mayBeAbsent: true });
+    let passed = false;
+    try {
+      await lstat(path);
+    } catch (error) {
+      passed = error instanceof Error && "code" in error && error.code === "ENOENT";
+      if (!passed) throw error;
+    }
+    return {
+      passed,
+      summary: `workspace path ${passed ? "is absent" : "still exists"}`,
+      source: context.relative(path),
+    };
+  },
+};
+
+const fileHash: Built<"file_hash"> = {
+  type: "file_hash",
+  async check(predicate, _result, context) {
+    const path = await context.workspacePath(predicate.path);
+    const digest = createHash("sha256").update(await readFile(path)).digest("hex");
+    const passed = digest === predicate.sha256;
+    return {
+      passed,
+      summary: `file hash ${passed ? "matched" : "did not match"}`,
+      source: context.relative(path),
+      digest,
+    };
+  },
+};
+
+const httpResourceMatches: Built<"http_resource_matches"> = {
+  type: "http_resource_matches",
+  async check(predicate, result, context) {
+    if (context.probe === undefined) {
+      // Fails, never passes. A predicate the runtime cannot evaluate is an
+      // unanswered question, and treating it as satisfied would make the
+      // strongest evidence type the easiest one to claim.
+      throw new Error("verification_probe_unavailable");
+    }
+    const url = interpolate(predicate.url, result);
+    // Caught here rather than by the caller so a transport failure is not
+    // filed as the provider saying no. Both are `passed: false`; only this one
+    // is `inconclusive`, and that is what lets an unreachable provider leave a
+    // mutation `recovery_required` instead of `failed`. The interpolate above
+    // stays outside: an unresolved token is a caller error, and the provider
+    // is not implicated in it.
+    let observed: Record<string, unknown>;
+    try {
+      observed = withParsedBody(
+        await context.probe({ url, method: predicate.method, timeoutMs: predicate.timeoutMs }),
+      );
+    } catch (error) {
+      return {
+        passed: false,
+        inconclusive: true,
+        summary: `independent read unavailable: ${error instanceof Error ? error.message : String(error)}`,
+        source: url,
+      };
+    }
+    const passed = Object.is(readResultPath(observed, predicate.path), predicate.value);
+    return {
+      passed,
+      summary: `independent read of ${predicate.path} ${passed ? "matched" : "did not match"} expected value`,
+      source: url,
+    };
+  },
+};
+
+const BUILT_IN: ReadonlyArray<RegisteredVerifier> = [
+  resultEquals,
+  resultContains,
+  exitCode,
+  urlMatches,
+  pageContains,
+  fileExists,
+  fileAbsent,
+  fileHash,
+  httpResourceMatches,
+];
+
+export interface VerifierOptions {
+  /** Absent means `http_resource_matches` fails rather than passes. */
+  probe?: EvidenceProbe;
+  /**
+   * Verifiers for predicate types the kernel does not ship. A built-in type
+   * cannot be replaced: what `file_hash` means is not an embedder's to change.
+   */
+  verifiers?: ReadonlyArray<RegisteredVerifier>;
+}
+
 export class Verifier {
+  private readonly verifiers = new Map<string, RegisteredVerifier>();
+
   private constructor(
     readonly root: string,
     private readonly probe: EvidenceProbe | undefined,
-  ) {}
+    extra: ReadonlyArray<RegisteredVerifier>,
+  ) {
+    for (const verifier of BUILT_IN) this.verifiers.set(verifier.type, verifier);
+    for (const verifier of extra) {
+      if (this.verifiers.has(verifier.type)) {
+        throw new Error(`verifier_type_taken:${verifier.type}`);
+      }
+      this.verifiers.set(verifier.type, verifier);
+    }
+  }
 
   static async create(
     root: string,
     options: VerifierOptions = {},
   ): Promise<Verifier> {
-    return new Verifier(await realpath(root), options.probe);
+    return new Verifier(await realpath(root), options.probe, options.verifiers ?? []);
   }
 
   private async filePath(input: string): Promise<string> {
@@ -141,158 +342,24 @@ export class Verifier {
   }
 
   async verify(
-    predicates: EvidencePredicate[],
+    // A built-in predicate, or one a registered verifier understands.
+    predicates: ReadonlyArray<EvidencePredicate | { type: string; [field: string]: unknown }>,
     result: Record<string, unknown>,
   ): Promise<{ verified: boolean; evidence: EvidenceItem[] }> {
+    const context: VerificationContext = {
+      workspacePath: (input, options) =>
+        options?.mayBeAbsent === true ? this.potentiallyAbsentFilePath(input) : this.filePath(input),
+      relative: (path) => relative(this.root, path),
+      ...(this.probe === undefined ? {} : { probe: this.probe }),
+    };
     const evidence: EvidenceItem[] = [];
     for (const predicate of predicates) {
+      const verifier = this.verifiers.get(predicate.type);
       try {
-        switch (predicate.type) {
-          case "result_equals": {
-            const observed = readResultPath(result, predicate.path);
-            const passed = Object.is(observed, predicate.value);
-            evidence.push({
-              type: predicate.type,
-              passed,
-              summary: `${predicate.path} ${passed ? "matched" : "did not match"} expected value`,
-            });
-            break;
-          }
-          case "result_contains": {
-            const observed = readResultPath(result, predicate.path);
-            const passed =
-              typeof observed === "string" && observed.includes(predicate.value);
-            evidence.push({
-              type: predicate.type,
-              passed,
-              summary: `${predicate.path} ${passed ? "contained" : "did not contain"} expected text`,
-            });
-            break;
-          }
-          case "exit_code": {
-            const passed = result.exitCode === predicate.value;
-            evidence.push({
-              type: predicate.type,
-              passed,
-              summary: `exit code ${passed ? "matched" : "did not match"} ${predicate.value}`,
-            });
-            break;
-          }
-          case "url_matches": {
-            const observed = result.url;
-            const passed =
-              typeof observed === "string" &&
-              wildcardMatches(observed, predicate.pattern);
-            evidence.push({
-              type: predicate.type,
-              passed,
-              summary: `final URL ${passed ? "matched" : "did not match"} expected pattern`,
-            });
-            break;
-          }
-          case "page_contains": {
-            const observed = result.text;
-            const passed =
-              typeof observed === "string" && observed.includes(predicate.text);
-            evidence.push({
-              type: predicate.type,
-              passed,
-              summary: `page ${passed ? "contained" : "did not contain"} expected text`,
-            });
-            break;
-          }
-          case "file_exists": {
-            const path = await this.filePath(predicate.path);
-            const metadata = await stat(path);
-            const passed = metadata.isFile() || metadata.isDirectory();
-            evidence.push({
-              type: predicate.type,
-              passed,
-              summary: `workspace path ${passed ? "exists" : "does not exist"}`,
-              source: relative(this.root, path),
-            });
-            break;
-          }
-          case "file_absent": {
-            const path = await this.potentiallyAbsentFilePath(predicate.path);
-            let passed = false;
-            try {
-              await lstat(path);
-            } catch (error) {
-              passed =
-                error instanceof Error &&
-                "code" in error &&
-                error.code === "ENOENT";
-              if (!passed) throw error;
-            }
-            evidence.push({
-              type: predicate.type,
-              passed,
-              summary: `workspace path ${passed ? "is absent" : "still exists"}`,
-              source: relative(this.root, path),
-            });
-            break;
-          }
-          case "file_hash": {
-            const path = await this.filePath(predicate.path);
-            const digest = createHash("sha256")
-              .update(await readFile(path))
-              .digest("hex");
-            const passed = digest === predicate.sha256;
-            evidence.push({
-              type: predicate.type,
-              passed,
-              summary: `file hash ${passed ? "matched" : "did not match"}`,
-              source: relative(this.root, path),
-              digest,
-            });
-            break;
-          }
-          case "http_resource_matches": {
-            if (this.probe === undefined) {
-              // Fails, never passes. A predicate the runtime cannot evaluate is
-              // an unanswered question, and treating it as satisfied would make
-              // the strongest evidence type the easiest one to claim.
-              throw new Error("verification_probe_unavailable");
-            }
-            const url = interpolate(predicate.url, result);
-            // Caught here rather than by the outer handler so a transport
-            // failure is not filed as the provider saying no. Both are
-            // `passed: false`; only this one is `inconclusive`, and that is
-            // what lets an unreachable provider leave a mutation
-            // `recovery_required` instead of `failed`. The interpolate above
-            // stays outside: an unresolved token is a caller error, and the
-            // provider is not implicated in it.
-            let observed: Record<string, unknown>;
-            try {
-              observed = withParsedBody(
-                await this.probe({
-                  url,
-                  method: predicate.method,
-                  timeoutMs: predicate.timeoutMs,
-                }),
-              );
-            } catch (error) {
-              evidence.push({
-                type: predicate.type,
-                passed: false,
-                inconclusive: true,
-                summary: `independent read unavailable: ${error instanceof Error ? error.message : String(error)}`,
-                source: url,
-              });
-              break;
-            }
-            const value = readResultPath(observed, predicate.path);
-            const passed = Object.is(value, predicate.value);
-            evidence.push({
-              type: predicate.type,
-              passed,
-              summary: `independent read of ${predicate.path} ${passed ? "matched" : "did not match"} expected value`,
-              source: url,
-            });
-            break;
-          }
-        }
+        // An unregistered type is a question nobody here can answer: it fails.
+        if (verifier === undefined) throw new Error(`verification_unsupported:${predicate.type}`);
+        const found = await verifier.check(predicate as never, result, context);
+        evidence.push({ ...found, type: predicate.type });
       } catch (error) {
         evidence.push({
           type: predicate.type,
@@ -303,9 +370,10 @@ export class Verifier {
     }
     return {
       verified: evidence.every((item) => item.passed),
-      // Stamped once here rather than at each branch above: strength is a
-      // property of the predicate type, so deriving it in one place keeps a
-      // new branch from quietly shipping without one.
+      // Stamped once here, after every verifier has run, and over whatever a
+      // verifier returned: strength is a property of the predicate type, so an
+      // unrecognised type reads as the weakest claim and no verifier can raise
+      // its own.
       evidence: evidence.map((item) => ({
         ...item,
         strength: evidenceStrength(item.type),

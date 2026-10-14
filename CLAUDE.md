@@ -160,8 +160,9 @@ Adding or changing an operation action touches a fixed set of places, in this or
 4. `RuntimeRouter` in `packages/server/src/runtime.ts` if a new `kind` is introduced.
 5. A scenario in `evals/src/scenarios.ts` asserting both `expectedPlan` and `expectedFinal`.
 
-New evidence predicate types need `EvidencePredicateSchema` plus a branch in
-`packages/verifier-core`. The verifier resolves every path through `realpath` and rejects
+New evidence predicate types need `EvidencePredicateSchema` plus a `PredicateVerifier` in
+`packages/verifier-core`'s `BUILT_IN` list; strength is stamped from the type in `verify`, never by
+the verifier. The verifier resolves every path through `realpath` and rejects
 anything outside the workspace root, including the root itself — keep that confinement when
 adding predicates.
 
