@@ -117,8 +117,20 @@ export class SqliteStore {
   readonly path: string;
   readonly database: DatabaseSync;
 
-  constructor(path: string) {
+  /**
+   * `readOnly` is for observers (`melra tasks`, `status`, `watch`) that sit
+   * beside a live server. Such a connection never migrates, never switches the
+   * journal mode, and cannot take a write lock, so a poll can never stall a
+   * writer — in WAL mode a reader and a writer do not block each other. The
+   * database must already exist; an observer has no business creating one.
+   */
+  constructor(path: string, options: { readOnly?: boolean } = {}) {
     this.path = path;
+    if (options.readOnly === true) {
+      this.database = new DatabaseSync(path, { readOnly: true });
+      this.database.exec("PRAGMA busy_timeout = 5000");
+      return;
+    }
     if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
     this.database = new DatabaseSync(path);
     this.database.exec("PRAGMA busy_timeout = 5000");
@@ -346,11 +358,31 @@ export class SqliteStore {
     return row === undefined ? undefined : (JSON.parse(row.data) as TaskRecord);
   }
 
-  listTasks(limit = 50): TaskRecord[] {
-    const rows = this.database
-      .prepare("SELECT data FROM tasks ORDER BY updated_at DESC LIMIT ?")
-      .all(limit) as unknown as JsonRow[];
+  // The status filter runs in SQL, before the limit: filtering the newest N
+  // afterwards would silently drop older matches.
+  listTasks(limit = 50, status?: TaskRecord["status"]): TaskRecord[] {
+    const rows = (
+      status === undefined
+        ? this.database
+            .prepare("SELECT data FROM tasks ORDER BY updated_at DESC LIMIT ?")
+            .all(limit)
+        : this.database
+            .prepare(
+              "SELECT data FROM tasks WHERE json_extract(data, '$.status') = ? ORDER BY updated_at DESC LIMIT ?",
+            )
+            .all(status, limit)
+    ) as unknown as JsonRow[];
     return rows.map((row) => JSON.parse(row.data) as TaskRecord);
+  }
+
+  /** Counted in SQL so a summary does not have to load every task to add them up. */
+  taskStatusCounts(): Record<string, number> {
+    const rows = this.database
+      .prepare(
+        "SELECT json_extract(data, '$.status') AS status, COUNT(*) AS count FROM tasks GROUP BY 1",
+      )
+      .all() as unknown as Array<{ status: string; count: number }>;
+    return Object.fromEntries(rows.map((row) => [row.status, Number(row.count)]));
   }
 
   saveTaskPayload(

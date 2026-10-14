@@ -127,6 +127,18 @@ All notable changes are documented here. The format follows
   whether its parent directory exists and whether a socket there is
   owner-only. ([#52](https://github.com/XAGI-Lab/melra/issues/52))
 
+- `melra tasks`, `melra watch`, and `melra status` show what MELRA is doing
+  from a terminal, without starting a server. `tasks` lists recent tasks (a
+  table in a terminal, JSON when piped or with `--json`; `--limit`,
+  `--status`); `watch` prints a line, or an NDJSON event, whenever a task or
+  workflow changes status, until Ctrl-C; `status` reports version, mode,
+  paths, database size, task and workflow counts, how many tasks await
+  approval, and whether a server is reachable. They open the database
+  read-only, so they never create it or hold a lock a running server waits on,
+  print only the stored (redacted) records, and never print an approval phrase
+  or a token. `SqliteStore` gains a `readOnly` option, `taskStatusCounts()`,
+  and a status filter on `listTasks`.
+
 ### Changed
 
 - The container image and the release artifacts are built on Node 24, the

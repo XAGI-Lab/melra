@@ -445,6 +445,7 @@ pnpm melra setup
 <tr><td>Run a read-only system task</td><td><code>melra run --request examples/01-system-info/task.json</code></td></tr>
 <tr><td>Run a verified mutation</td><td><code>melra run --request examples/02-verified-file-write/task.json</code></td></tr>
 <tr><td>Inspect a stored receipt</td><td><code>melra inspect &lt;task-id&gt;</code></td></tr>
+<tr><td>See recent tasks, follow them live, or get a summary</td><td><code>melra tasks</code>, <code>melra watch</code>, <code>melra status</code></td></tr>
 <tr><td>See which clients you approved over HTTP</td><td><code>melra clients</code></td></tr>
 <tr><td>Advance a durable workflow</td><td><code>melra workflow advance &lt;workflow-id&gt;</code></td></tr>
 <tr><td>Test a policy file</td><td><code>melra policy test</code></td></tr>

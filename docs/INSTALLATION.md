@@ -595,6 +595,42 @@ API carries one, because approvals belong to the governed path. It is served
 with a Content-Security-Policy that admits only its own script and style by
 hash and only this server as a fetch target, and it refuses to be framed.
 
+## See what MELRA is doing
+
+Three commands read the local database directly, so they work with or without a
+server running:
+
+```bash
+melra tasks                         # recent tasks, most recently active first
+melra tasks --status awaiting_approval --limit 50
+melra watch                         # a line per new task or status change; Ctrl-C stops
+melra status                        # version, mode, paths, counts, server reachability
+```
+
+In a terminal `melra tasks` prints a table:
+
+```
+ID        STATUS             OPERATION     TARGET             EFFECT           UPDATED
+64199678  awaiting_approval  file.write    melra-example.txt  mutate/medium    2m ago
+ca4aec7a  policy_blocked     terminal.run  command:bash       mutate/critical  3m ago
+a1285e0f  verified_success   system.info   local-system       read/low         3m ago
+
+1 waiting for approval — approve from the agent that planned them
+```
+
+Piped, or with `--json`, `tasks` and `status` print JSON (the task records are
+the ones `/api/tasks` returns) and `watch` prints one JSON event per line.
+Colour follows [`NO_COLOR`](https://no-color.org).
+
+They open the database read-only and never create it, and in WAL mode a reader
+does not block a writer, so leaving `melra watch` open beside `melra serve`
+costs the server nothing. What they print is the stored, already-redacted copy.
+Like the console, they never print an approval phrase: approvals belong to the
+agent that planned the task. `melra status` tells whether a server is up by
+opening a TCP connection to `127.0.0.1:$MELRA_HTTP_PORT` (and to
+`MELRA_SOCKET`, if set) and closing it without sending anything — no token, no
+request.
+
 ## Deployment modes
 
 MELRA governs the effects it is asked for. It cannot see whether the harness
