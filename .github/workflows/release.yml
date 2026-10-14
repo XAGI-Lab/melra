@@ -108,6 +108,27 @@ jobs:
           for tarball in "${RUNNER_TEMP}"/npm/*.tgz; do
             npm publish "${tarball}" --tag "${tag}" --access public --provenance
           done
+      # Every release up to 0.3.0-alpha.12 passed --provenance and shipped
+      # without it, unnoticed, because nothing looked. This looks: each
+      # published package must carry a provenance attestation, or the release
+      # stops before the GitHub release is created.
+      - name: Check npm provenance
+        shell: bash
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          node -e 'const fs=require("node:fs");for(const p of fs.globSync("{apps,packages}/*/package.json")){const m=JSON.parse(fs.readFileSync(p,"utf8"));if(!m.private)console.log(m.name)}' \
+            | while read -r name; do
+                for attempt in 1 2 3 4 5 6 7 8 9 10; do
+                  provenance="$(npm view "${name}@${version}" dist.attestations.provenance.predicateType 2>/dev/null || true)"
+                  [ -n "${provenance}" ] && break
+                  sleep 15
+                done
+                if [ -z "${provenance}" ]; then
+                  echo "::error::${name}@${version} has no npm provenance attestation"
+                  exit 1
+                fi
+                echo "${name}@${version}: ${provenance}"
+              done
       - name: Point latest at this prerelease
         if: ${{ contains(github.ref_name, '-') }}
         shell: bash
