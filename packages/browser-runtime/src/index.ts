@@ -164,9 +164,19 @@ export function captchaReport(frameUrls: string[]): Record<string, unknown> {
  * error, so that line is Playwright's own record that the input left. Keyboard,
  * fill, select, and upload calls log no such line; their timeouts stay plain
  * failures, which for them is overwhelmingly a field that never became ready.
+ *
+ * Playwright paints the call log dim when colour is on (a TTY, FORCE_COLOR),
+ * so each line can end in an escape code; those are stripped first. Without
+ * that, a click delivered under colour read as never sent: a plain failure
+ * where the outcome was unknown, seen first on the Windows CI runners.
  */
-function inputSent(error: unknown): boolean {
-  return error instanceof Error && /^\s*- performing .+ action$/m.test(error.message);
+export function inputSent(error: unknown): boolean {
+  return error instanceof Error && /^\s*- performing .+ action$/m.test(withoutColour(error.message));
+}
+
+/** Playwright's terminal colour codes, which mean nothing in a stored record. */
+function withoutColour(text: string): string {
+  return text.replace(/\u001b\[[0-9;]*m/g, "");
 }
 
 /**
@@ -965,6 +975,8 @@ export class BrowserRuntime {
       // itself timed out after it had sent the input. A failure before either,
       // including a timeout resolving the target, is an ordinary failure:
       // nothing was sent, and for a read the controller may simply retry.
+      // The message is stored on the task record and shown in the console.
+      if (error instanceof Error) error.message = withoutColour(error.message);
       if (!this.dispatched && !inputSent(error)) throw error;
       throw outcomeUnknown(error instanceof Error ? error.message : String(error));
     }

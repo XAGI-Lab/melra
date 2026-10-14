@@ -195,10 +195,11 @@ describe("stalled browser calls", () => {
     if (context === undefined) return;
     const { runtime, url } = context;
     try {
-      // A longer stall and a roomier bound than the other cases: the bound
-      // also covers resolving and reaching the button, which a slow Windows
-      // runner has taken over 500 ms to do, failing the click before it was
-      // sent. That is the right answer for an unsent click, but not this case.
+      // A longer stall and a roomier bound than the other cases, so the click
+      // is sent before the bound on any runner. Whether it then returns (and
+      // the settle times out) or Playwright's own post-click check does, the
+      // answer must be unknown; the second path is the one that read a
+      // coloured call log as "never sent" (see `inputSent`).
       await runtime.execute(op({ action: "navigate", url: `${url}?ms=6000` }));
       const { message, ms } = await failure(
         runtime.execute(
