@@ -23,7 +23,7 @@ migration commitments, and stable receipt verification behavior.
 | Python SDK | CPython 3.11+ | CI against live stdio, loopback HTTP, and Unix-socket servers (socket skipped on Windows): 3.11 on Linux, macOS, and Windows; 3.12, 3.13, and 3.14 on Linux; type-checked with pyright |
 | Container | Linux OCI, AMD64 and ARM64 build targets, on a Node 24 LTS base | Docker workflow; release-candidate smoke required |
 | Browser | Installed Chrome, Chromium, or Edge | Installed Chrome verified locally on macOS arm64 |
-| MCP transport | stdio; loopback Streamable HTTP | Real child-process MCP suite; HTTP suite drives the official SDK client against a live server |
+| MCP transport | stdio; loopback Streamable HTTP; Streamable HTTP on a mode-`0600` Unix socket (not on Windows) | Real child-process MCP suite; HTTP and socket suites drive the official SDK client and both MELRA SDKs against a live server |
 
 A workflow definition in CI is not clean-machine certification. The current
 host evidence and unverified claims are listed in [VALIDATION.md](VALIDATION.md).
@@ -46,7 +46,7 @@ limits. An implementation claiming compatibility should publish that report.
 
 The normative automated clients are:
 
-- Model Context Protocol TypeScript SDK `1.30.x`;
+- Model Context Protocol TypeScript SDK `1.32.x`;
 - Model Context Protocol Python SDK `1.28.x`;
 - `@melra/sdk` `0.3.x` alpha;
 - the repository Python `melra` client `0.3.x` alpha.
@@ -66,9 +66,9 @@ that client.
 `melra setup --client <name>` knows the config file and format of 25 named
 clients and agent harnesses, among them Claude Code, Codex, OpenClaw, and
 Hermes Agent ([the full list](INSTALLATION.md#mcp-clients)). Each entry is
-**verified against that client's documentation or source**, which is linked
-beside it in `apps/cli/src/clients.ts`, and the CLI tests write, rewrite, and
-read back every format. That is a claim about the file, not about the client:
+**checked against that client's documentation or source** — the entries added
+most recently link theirs beside them in `apps/cli/src/clients.ts` — and the
+CLI tests write, rewrite, and read back every format. That is a claim about the file, not about the client:
 none of these clients is driven by the automated suites, and none is
 **exercised in the app** in the sense above until someone runs that checklist
 against it. Client formats change; if one stops loading MELRA, the generic

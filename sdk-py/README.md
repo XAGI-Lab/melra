@@ -1,6 +1,8 @@
 # MELRA Python SDK
 
 Async Python client for MELRA task, evidence, and durable workflow interfaces.
+Requires Python 3.11 or newer (CI covers 3.11 through 3.14), and the wheel ships
+`py.typed`, so mypy and pyright use its annotations.
 
 ```python
 from melra import MelraClient

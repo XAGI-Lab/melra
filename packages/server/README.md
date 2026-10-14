@@ -1,9 +1,9 @@
 # @melra/server
 
 The official local Model Context Protocol server and workflow runtime for
-[MELRA](https://github.com/XAGI-Lab/melra). Eleven MCP tools over stdio, sitting
-in front of five capability runtimes: files, terminal, browser, memory, and
-computer.
+[MELRA](https://github.com/XAGI-Lab/melra). Eleven MCP tools over stdio,
+loopback HTTP, or a Unix socket, sitting in front of the file, terminal,
+browser, computer, and HTTP runtimes and operational memory.
 
 Most people should not install this directly — use
 [`@melra/cli`](https://www.npmjs.com/package/@melra/cli), which wraps this
@@ -31,7 +31,8 @@ await serveStdio(melra);
 
 `createMelraRuntime` resolves the policy, opens SQLite, wires the runtimes, and
 returns the task controller, workflow controller, and store. `serveStdio`
-registers the MCP tools and connects the stdio transport — stdout is the
+registers the MCP tools, along with the `instructions` a client puts in the
+model's context, and connects the stdio transport — stdout is the
 protocol, so anything you print there corrupts it; use stderr.
 
 ## Over loopback HTTP

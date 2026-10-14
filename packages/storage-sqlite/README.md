@@ -11,7 +11,7 @@ npm install @melra/storage-sqlite
 ```ts
 import { SqliteStore } from "@melra/storage-sqlite";
 
-const store = new SqliteStore(`${dataDirectory}/melra.db`);
+const store = new SqliteStore(`${dataDirectory}/melra.sqlite`);
 ```
 
 Workflow transitions append events and update the projection inside one
@@ -28,6 +28,10 @@ processes share one `MELRA_HOME` without two of them advancing the same workflow
 Persisted values are the redacted copies. Exact task requests and adapter results
 are sealed with AES-256-GCM bound to record identity and purpose, so reading the
 database file does not hand over the payloads.
+
+Pass `{ readOnly: true }` to open an existing database without creating it or
+taking a write lock — what `melra tasks`, `watch`, and `status` do beside a
+running server.
 
 Schema changes need a new migration rather than an edit to an existing one.
 

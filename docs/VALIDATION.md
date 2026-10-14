@@ -18,9 +18,9 @@ Host exercised locally: macOS arm64, Node.js 24.10.0, Python 3.11.14
 |---|---|
 | Package-version consistency | all 16 workspace manifests, protocol constant, and Python distribution match |
 | TypeScript build and strict typecheck | passed across 15 packages/apps |
-| JavaScript/Vitest cases | 392 passed |
+| JavaScript/Vitest cases | 506 passed, 6 platform-skipped (current `main`, ubuntu / Node 24 CI) |
 | Python lint and SDK tests | ruff passed; 2 tests passed |
-| Safety/execution evaluation | 50 of 50 passed |
+| Safety/execution evaluation | 51 of 51 passed |
 | Durable Core evaluation | 8 valid, 0 invalid |
 | Durable recovery rate | `1.0` |
 | Duplicate-execution rate | `0.0` |
@@ -96,7 +96,7 @@ Host exercised locally: macOS arm64 (Darwin 25.5.0), Node.js 24, Python 3.11.14
 | Gate | Result |
 |---|---|
 | `pnpm check` | passed (versions, strict typecheck, tests, Python) |
-| TypeScript/Vitest cases | 392 passed |
+| TypeScript/Vitest cases | 506 passed, 6 platform-skipped (current `main`, ubuntu / Node 24 CI) |
 | `pnpm evals` | 51 of 51 scenarios passed, 0 failed |
 | `pnpm e2e` | 13 end-to-end cases passed over real stdio |
 | `pnpm pack:check` | passed |
@@ -208,7 +208,8 @@ listed under known limitations below.
 - output and memory secret patterns are redacted;
 - exact executable payloads are encrypted and identity-bound while public
   projections and evidence remain redacted;
-- private and metadata network targets are rejected;
+- private and metadata network targets are rejected, including bracketed IPv6
+  literals, which are checked as addresses rather than looked up as names;
 - mutations without required evidence are policy-blocked;
 - wrong or missing approval phrases are rejected;
 - a mutation planned by one harness stays gated after that harness's process is
@@ -221,12 +222,15 @@ listed under known limitations below.
 - duplicate concurrent advances do not duplicate adapter effects;
 - workflow event sequences are transactional, monotonic, and replay-validated;
 - wall-clock budget exhaustion is distinguished from user cancellation;
+- a stalled browser page fails the action within its bound instead of hanging,
+  stops on the task's cancel signal, and a mutation that stalls after its input
+  was sent is reported as an unknown outcome rather than `failed`;
 - failed verification cannot become `verified_success`;
 - memory reads and deletion remain scope-aware;
 - computer input is classified high-risk and requires scoped approval.
 
 Every item above describes the default posture. Unsafe-local mode
-(`--unhinged` / `MELRA_UNHINGED=1`) removes rows 1–5 and 7–9 by design; what is
+(`--unsafe-local` / `MELRA_UNHINGED=1`) removes rows 1–3 and 6–9 by design; what is
 covered *about* that mode is separate:
 
 - the mode is off unless explicitly enabled, and only `1`/`true`/`yes`/`on`
@@ -351,11 +355,11 @@ findings.
   handle one as the session itself.
 - Browser requests are routed through a loopback proxy so a destination connects
   to the address it was validated against. Attaching to a running browser over
-  CDP (`MELRA_BROWSER_CDP`) cannot use it, so that path stays open to DNS
+  CDP (`MELRA_BROWSER_CDP_ENDPOINT`) cannot use it, so that path stays open to DNS
   rebinding.
 - Computer screenshot and input adapters are alpha; focus verification,
-  interactive PTY, semantic embeddings, and extension loading remain roadmap
-  items. Accessibility targeting ships on macOS and Windows. X11 exposes no
+  an interactive PTY, and extension loading remain roadmap items, and semantic
+  memory embeddings are deliberately left to the harness. Accessibility targeting ships on macOS and Windows. X11 exposes no
   element tree, so a named target on Linux resolves by reading the screen, which
   needs `tesseract` installed and only finds text — an unlabelled icon is
   unreachable there.

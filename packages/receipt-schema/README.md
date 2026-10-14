@@ -9,7 +9,7 @@ npm install @melra/receipt-schema
 ```
 
 ```ts
-import { createCertificate, redactStructuredValue, sha256 } from "@melra/receipt-schema";
+import { createCertificate, redactSecrets, redactStructuredValue, sha256 } from "@melra/receipt-schema";
 ```
 
 A receipt records one action: the operation, the policy decision, the evidence
@@ -20,8 +20,14 @@ rather than trusted.
 `canonicalJson` sorts keys and normalises formatting before hashing, so the same
 logical value always produces the same digest across processes and platforms.
 
-`redactStructuredValue` strips credential-shaped values — tokens, keys, auth
-headers, connection strings — from anything before it is persisted. Raw output
+`redactStructuredValue` strips credential-shaped values from anything before
+it is persisted: fields named like secrets (`authorization`, `headers`,
+`cookie`, `token`, `password`, `env`, `content`, `stdout`, …) are replaced
+whole, URL query strings and fragments are dropped, and every other string goes
+through `redactSecrets`. `SECRET_PATTERNS` — PEM private keys, AWS key IDs,
+JWTs, Slack and GitHub tokens, common API keys, bearer tokens, and
+password/secret assignments — is the one list memory and terminal output use
+too, so a new secret format is added here once. Raw output
 goes to the live caller only; the durable copy is the redacted one. A new field
 that can carry a secret must pass through this, or through the memory package's
 equivalent, before it reaches storage.
