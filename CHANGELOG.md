@@ -324,6 +324,15 @@ All notable changes are documented here. The format follows
   is refused as `workflow_definition_conflict`, checked against the sealed
   exact definition, so a change only a redacted secret carried is caught too.
 
+- A browser click that Playwright timed out *after* sending the input is
+  reported as an unknown outcome whenever colour output is on (a TTY, or
+  `FORCE_COLOR`). Playwright paints its call log with escape codes, so the
+  `performing click action` line MELRA reads as proof the input left never
+  matched, and a delivered click came back as a plain failure: the false
+  "nothing happened" an unknown outcome exists to prevent. The codes are
+  stripped before matching, and from the stored error message. Found as an
+  intermittent Windows CI failure that #128 had put down to runner speed.
+
 ### Security
 
 - Development and benchmark dependencies: `source-map-js` is held at 1.2.2 or
