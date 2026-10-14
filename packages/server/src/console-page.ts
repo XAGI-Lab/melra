@@ -368,7 +368,7 @@ function gettingStarted() {
     el("h3", { text: "Nothing has run through MELRA yet" }),
     el("p", {}, "Point an agent at this kernel, then ask it to do something. Every effect lands here with its policy decision, evidence, and receipt."),
     el("p", {}, el("code", { text: "melra setup --client claude-code --write" })),
-    el("p", { class: "muted" }, "Also: cursor, vscode, windsurf, codex, gemini, zed, cline, opencode, kiro, claude-desktop."),
+    el("p", { class: "muted" }, "Also: cursor, vscode, windsurf, codex, gemini, zed, cline, opencode, kiro, goose, continue, amp, claude-desktop."),
   );
 }
 

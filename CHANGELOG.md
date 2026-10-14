@@ -54,6 +54,13 @@ All notable changes are documented here. The format follows
   MELRA's own entry, so it doubles as the way to repoint a client after an
   upgrade.
 
+- `melra setup --client` supports `goose`, `continue`, and `amp`. Goose and
+  Continue read YAML, emitted without a YAML dependency. `--write` replaces
+  only MELRA's own entry under Goose's `extensions:` and refuses a
+  `config.yaml` it cannot edit line by line; Continue gets its own
+  `.continue/mcpServers/melra.yaml` block file; Amp is merged into
+  `amp.mcpServers` in its `settings.json`.
+
 - **`pnpm docs:check` fails when a doc link stops resolving.** Renaming a
   heading silently broke every link to its anchor; one was found by hand during
   the unsafe-local rename, which is not a plan. `scripts/check-links.mjs` walks

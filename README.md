@@ -406,9 +406,10 @@ npx @melra/cli@alpha setup --client cursor --write
 ```
 
 Supported: `claude-code`, `claude-desktop`, `cursor`, `vscode`, `windsurf`,
-`codex`, `gemini`, `zed`, `cline`, `opencode`, `kiro`, and `generic`. Use
-`doctor` alone to check readiness without writing anything; it also says which
-of those clients have MELRA configured and flags a stale `npx` pin.
+`codex`, `gemini`, `zed`, `cline`, `opencode`, `kiro`, `goose`, `continue`,
+`amp`, and `generic`. Use `doctor` alone to check readiness without changing
+any configuration; it also says which of those clients have MELRA configured
+and flags a stale `npx` pin.
 
 **Container (no Node install needed):**
 
