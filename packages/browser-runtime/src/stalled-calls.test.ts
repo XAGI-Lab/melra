@@ -117,10 +117,14 @@ async function failure(action: Promise<unknown>): Promise<{ message: string; ms:
   throw new Error("expected the action to fail");
 }
 
-/** Read the status text, waiting out any stall still in progress. */
+/**
+ * Read the status text, waiting out any stall still in progress. 30 s, the
+ * default for reads: the stall can have most of its 6 s left when this starts,
+ * and a macOS runner has taken over 10 s to answer after it.
+ */
 const status = async (runtime: BrowserRuntime): Promise<string> => {
   const inspected = await runtime.execute(
-    op({ action: "inspect", target: { selector: "#status" }, timeoutMs: 10_000 }),
+    op({ action: "inspect", target: { selector: "#status" }, timeoutMs: 30_000 }),
   );
   return String(inspected.text ?? "").trim();
 };
