@@ -44,7 +44,9 @@ interface Popup {
 
 /**
  * `/` opens a window on click; `/set` plants a cookie; `/read` reports whether
- * the cookie survived. One server covers both halves of this file.
+ * the cookie survived. One server covers both halves of this file. `/slow`
+ * answers late, because Playwright only announces a popup once its first
+ * response has arrived — long after the opener's DOM has gone quiet.
  */
 async function serve(): Promise<string> {
   const server = createServer((request, response) => {
@@ -55,6 +57,13 @@ async function serve(): Promise<string> {
         "set-cookie": "melra=kept; Path=/; Max-Age=3600",
       });
       response.end("<!doctype html><title>set</title><body>set</body>");
+      return;
+    }
+    if (path === "/slow") {
+      setTimeout(() => {
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        response.end("<!doctype html><title>slow</title><body>slow</body>");
+      }, 1_500);
       return;
     }
     if (path === "/read") {
@@ -69,9 +78,13 @@ async function serve(): Promise<string> {
     response.end(
       `<!doctype html><title>opener</title><body>
 <button id="pop">Open</button>
+<button id="slow">Open slowly</button>
 <script>
   document.getElementById('pop').addEventListener('click', () => {
     window.open('/read', '_blank');
+  });
+  document.getElementById('slow').addEventListener('click', () => {
+    window.open('/slow', '_blank');
   });
 </script>
 </body>`,
@@ -130,6 +143,32 @@ describe("browser popups", () => {
 
       // And it is gone by the time the next action runs, not eventually.
       const tabs = await session.execute(op({ action: "tabs" }));
+      expect((tabs.tabs as Tab[]).length).toBe(1);
+    } finally {
+      await session.close();
+    }
+  }, 120_000);
+
+  it("reports a window whose page answers after the opener has settled", async () => {
+    const executablePath = await detectBrowserExecutable();
+    if (executablePath === undefined) return;
+    const url = await serve();
+    const session = runtime(await root("popup-slow"), executablePath);
+    try {
+      await session.execute(op({ action: "navigate", url }));
+      // The opener is quiet within its 180ms settle window; the popup's
+      // response takes 1.5s. That gap is the Windows CI flake made certain.
+      const clicked = await session.execute(
+        op({ action: "click", target: { selector: "#slow" } }),
+      );
+      expect(clicked.popups).toEqual([
+        expect.objectContaining({ url: `${url}/slow`, blocked: true }),
+      ]);
+
+      // Reported and closed by the click itself, so the next action neither
+      // inherits the report nor sees the window.
+      const tabs = await session.execute(op({ action: "tabs" }));
+      expect(tabs.popups).toBeUndefined();
       expect((tabs.tabs as Tab[]).length).toBe(1);
     } finally {
       await session.close();
