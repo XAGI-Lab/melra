@@ -6,6 +6,15 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+### Security
+
+- Tests run on Vitest 4. Vitest 3's worker pool, `tinypool` 1.x, falls entirely
+  inside two critical advisories (GHSA-85c8-ppgw-ccpr, GHSA-5gmw-xhrv-c9v3);
+  Vitest 4 does not use it. The `nanoid` it brings in through Vite is held at
+  3.3.18 or later (GHSA-2v37-7h3g-55p8). Test-only; no published package
+  changes. `scripts/run-recursive.mjs` now caps workers through
+  `VITEST_MAX_WORKERS`, the one variable Vitest 4 reads.
+
 ## [0.3.0-alpha.12] - 2026-10-14
 
 ### Added

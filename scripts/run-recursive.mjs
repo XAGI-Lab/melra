@@ -54,13 +54,9 @@ const child = spawn(
     shell: process.platform === "win32",
     env: {
       ...process.env,
-      // Vitest reads these when a project declares no pool options, which is
-      // the case for every package here. Both pairs are set because a package
-      // may switch pools; whichever is active honours its own pair.
-      VITEST_MAX_FORKS: String(maxWorkers),
-      VITEST_MAX_THREADS: String(maxWorkers),
-      VITEST_MIN_FORKS: "1",
-      VITEST_MIN_THREADS: "1",
+      // Vitest reads this when a project sets no `maxWorkers` of its own,
+      // which is the case for every package here, whichever pool it uses.
+      VITEST_MAX_WORKERS: String(maxWorkers),
     },
   },
 );
