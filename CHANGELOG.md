@@ -177,6 +177,23 @@ All notable changes are documented here. The format follows
   holds the action's result until it is reported, bounded by the action's
   `timeoutMs`. Actions that open nothing pay one round trip, not a delay.
 
+- A browser page that stops answering now fails the action within its
+  `timeoutMs` with `browser_call_timeout:<call>` (for example
+  `browser_call_timeout:title`), instead of holding it until the task budget ran
+  out — or forever, since the browser adapter never received the task's cancel
+  signal. Every Playwright call that took no timeout of its own (`title()`,
+  `evaluate()`, `count()`, `isVisible()`, tab and popup closes, CDP round trips)
+  is now bounded by the action's `timeoutMs`; the post-action settle by its
+  `settleTimeoutMs` plus one second; and all of them stop as soon as the task is
+  cancelled or its budget runs out. A read that times out is an ordinary,
+  retryable failure. A mutation that fails *after* its click, keystrokes,
+  selection, upload, or tab close went out — a stalled settle or snapshot, a
+  page that closed under it, or a click Playwright itself timed out after
+  sending — now lands in `recovery_required` as an unknown outcome rather than
+  `failed`, because the page may already have acted; one that fails before
+  anything was sent, such as a timeout resolving its target, is still a plain
+  failure.
+
 ### Security
 
 - The Unix-socket transport is created mode `0600` under a narrowed umask, so

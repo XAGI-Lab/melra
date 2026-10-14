@@ -15,6 +15,8 @@ import type {
   Route,
 } from "playwright-core";
 import type { BrowserOperation, BrowserTarget } from "@melra/protocol";
+import { outcomeUnknown } from "@melra/protocol";
+import { bounded, BrowserCallTimeoutError } from "./bounded.js";
 import {
   connectBrowser,
   type BrowserConnection,
@@ -99,6 +101,21 @@ const WAIT_POLL_MS = 100;
 const WINDOW_POLL_MS = 25;
 
 /**
+ * Bound on the one-time wiring of a fresh context: the destination guard, HAR
+ * replay, and the target-tracking session. Not the action's `timeoutMs`,
+ * because loading a large replay archive is legitimately slower than a 100ms
+ * action deadline, and this runs once per context rather than per action.
+ */
+const SETUP_TIMEOUT_MS = 30_000;
+
+/**
+ * Bound on each teardown call in `close()`. Shutdown has no action to take a
+ * deadline from, and a browser that stopped answering must not keep the server
+ * from exiting.
+ */
+const CLOSE_TIMEOUT_MS = 10_000;
+
+/**
  * Frame URLs of the widgets that gate a page behind a human check.
  *
  * These are reported, never solved. Detecting one turns an opaque "click timed
@@ -134,6 +151,22 @@ export function captchaReport(frameUrls: string[]): Record<string, unknown> {
       note: "A human-verification challenge is present. MELRA does not solve or bypass captchas; the page needs a human, a pre-authenticated session, or a different route.",
     },
   };
+}
+
+/**
+ * Whether a Playwright action failed after its input had already been sent.
+ *
+ * A click's own timeout covers more than waiting for the element: after the
+ * mouse events go out, Playwright still asks the page to stop its hit-target
+ * check. When the click handler stalls the page, that request is what times
+ * out — with the click already delivered. Playwright logs `performing <name>
+ * action` immediately before dispatching, and the call log is part of the
+ * error, so that line is Playwright's own record that the input left. Keyboard,
+ * fill, select, and upload calls log no such line; their timeouts stay plain
+ * failures, which for them is overwhelmingly a field that never became ready.
+ */
+function inputSent(error: unknown): boolean {
+  return error instanceof Error && /^\s*- performing .+ action$/m.test(error.message);
 }
 
 /**
@@ -267,8 +300,34 @@ export class BrowserRuntime {
   private windowsAdopted = 0;
   /** This context's id in CDP, resolved on first use and then fixed. */
   private contextId: string | undefined;
+  /**
+   * The running action's cancel signal and `timeoutMs`, read by `call`. Same
+   * per-action lifetime as `dialogs`, set by `execute`.
+   */
+  private signal: AbortSignal | undefined;
+  private callMs = 30_000;
+  /**
+   * Set once the running action's effect call has returned. From then on the
+   * page may have acted on it, so a failure is no longer evidence that nothing
+   * happened — see `execute`.
+   */
+  private dispatched = false;
 
   constructor(private readonly options: BrowserRuntimeOptions) {}
+
+  /**
+   * Bound a Playwright call that takes no timeout of its own by the running
+   * action's `timeoutMs` and cancel signal.
+   *
+   * `title()`, `evaluate()`, `count()`, `isVisible()`, `close()` and CDP
+   * `send` all wait for the renderer or the browser to answer, and one that
+   * stopped answering held the action until the task budget ran out — or
+   * forever, where nothing armed one. Failing with `browser_call_timeout:<what>`
+   * instead spends the budget on something that can still answer.
+   */
+  private call<T>(promise: Promise<T>, what: string, ms = this.callMs): Promise<T> {
+    return bounded(promise, ms, what, this.signal);
+  }
 
   private async uploadPaths(paths: string[]): Promise<string[]> {
     const root = await realpath(this.options.workspaceRoot);
@@ -376,16 +435,32 @@ export class BrowserRuntime {
         await route.abort("blockedbyclient");
       }
     };
-    await this.context.route("**/*", this.routeHandler);
-    if (this.options.replayHarPath !== undefined) {
-      // Registered after the destination guard so it runs first: a replayed
-      // request is served from the file and never becomes a socket, and
-      // `notFound: "abort"` means a request the archive is missing fails
-      // visibly rather than falling through to the network the guard would
-      // have allowed.
-      await this.context.routeFromHAR(this.options.replayHarPath, {
-        notFound: "abort",
-      });
+    try {
+      await this.call(
+        this.context.route("**/*", this.routeHandler),
+        "route",
+        SETUP_TIMEOUT_MS,
+      );
+      if (this.options.replayHarPath !== undefined) {
+        // Registered after the destination guard so it runs first: a replayed
+        // request is served from the file and never becomes a socket, and
+        // `notFound: "abort"` means a request the archive is missing fails
+        // visibly rather than falling through to the network the guard would
+        // have allowed.
+        await this.call(
+          this.context.routeFromHAR(this.options.replayHarPath, {
+            notFound: "abort",
+          }),
+          "route_from_har",
+          SETUP_TIMEOUT_MS,
+        );
+      }
+    } catch (error) {
+      // `this.context` is already set, so the next action would skip straight
+      // past this method onto a context whose destination guard may never
+      // have been installed. Tearing it down makes the next action start over.
+      await this.close();
+      throw error;
     }
     /**
      * Answer dialogs instead of letting Playwright discard them.
@@ -478,16 +553,28 @@ export class BrowserRuntime {
     this.contextId = undefined;
     // A session left from a context that closed under us would count into the
     // fresh map below and make every action wait for windows that never come.
-    await this.targets?.detach().catch(() => undefined);
+    if (this.targets !== undefined) {
+      await this.call(this.targets.detach(), "cdp_detach", SETUP_TIMEOUT_MS).catch(
+        () => undefined,
+      );
+    }
     try {
-      const targets = await connection.browser.newBrowserCDPSession();
+      const targets = await this.call(
+        connection.browser.newBrowserCDPSession(),
+        "cdp_session",
+        SETUP_TIMEOUT_MS,
+      );
       targets.on("Target.targetCreated", ({ targetInfo }) => {
         // `browser_ui`, workers, and prerenders never become Playwright pages.
         if (targetInfo.type !== "page" || targetInfo.subtype !== undefined) return;
         const id = targetInfo.browserContextId ?? "";
         this.windowsCreated.set(id, (this.windowsCreated.get(id) ?? 0) + 1);
       });
-      await targets.send("Target.setDiscoverTargets", { discover: true });
+      await this.call(
+        targets.send("Target.setDiscoverTargets", { discover: true }),
+        "cdp:Target.setDiscoverTargets",
+        SETUP_TIMEOUT_MS,
+      );
       // Chromium announces the windows that already exist before it replies.
       // Playwright had them before the `page` handler did, so they are owed no
       // event here.
@@ -517,17 +604,20 @@ export class BrowserRuntime {
       if (this.contextId === undefined) {
         const page = context.pages()[0];
         if (page === undefined) return;
-        const session = await context.newCDPSession(page);
+        const session = await this.call(context.newCDPSession(page), "cdp_session");
         try {
-          const { targetInfo } = await session.send("Target.getTargetInfo");
+          const { targetInfo } = await this.call(
+            session.send("Target.getTargetInfo"),
+            "cdp:Target.getTargetInfo",
+          );
           this.contextId = targetInfo.browserContextId ?? "";
         } finally {
-          await session.detach().catch(() => undefined);
+          await this.call(session.detach(), "cdp_detach").catch(() => undefined);
         }
       }
       // Events arrive ahead of the reply on the same session, so after this
       // every window created before now has been counted.
-      await targets.send("Browser.getVersion");
+      await this.call(targets.send("Browser.getVersion"), "cdp:Browser.getVersion");
       const deadline = Date.now() + timeoutMs;
       while (
         this.windowsAdopted < (this.windowsCreated.get(this.contextId) ?? 0) &&
@@ -536,7 +626,10 @@ export class BrowserRuntime {
         await new Promise((done) => setTimeout(done, WINDOW_POLL_MS));
       }
     } catch {
-      // The browser went away mid-action; nothing more will be delivered.
+      // The browser went away mid-action, or stopped answering within the
+      // action's bound; either way nothing more will be delivered in time, and
+      // this wait only ever decides which action reports a window, so it is
+      // not worth failing an action over.
     }
   }
 
@@ -550,7 +643,7 @@ export class BrowserRuntime {
   private async openPage(context: BrowserContext): Promise<Page> {
     this.openingTab = true;
     try {
-      return await context.newPage();
+      return await this.call(context.newPage(), "new_page");
     } finally {
       this.openingTab = false;
     }
@@ -579,7 +672,7 @@ export class BrowserRuntime {
       context.pages().map(async (item, index) => ({
         index,
         url: item.url(),
-        title: await item.title(),
+        title: await this.call(item.title(), "title"),
         active: item === this.activePage,
       })),
     );
@@ -641,6 +734,10 @@ export class BrowserRuntime {
    *
    * A target that matches nothing is reported as such instead of being handed to
    * Playwright to fail as an opaque action timeout thirty seconds later.
+   *
+   * Resolution only reads the page and always runs before an action's effect,
+   * so a `count` that times out here fails a click or a fill cleanly: nothing
+   * was sent, and `execute` does not report it as an unknown outcome.
    */
   private async locator(
     page: Page,
@@ -648,7 +745,7 @@ export class BrowserRuntime {
   ): Promise<Locator> {
     if (target === undefined) throw new Error("browser_action_requires_target");
     for (const candidate of this.candidates(page, target)) {
-      if ((await candidate.count()) > 0) return candidate;
+      if ((await this.call(candidate.count(), "count")) > 0) return candidate;
     }
     throw new Error(
       `browser_target_not_found:${JSON.stringify(target)}`,
@@ -686,8 +783,8 @@ export class BrowserRuntime {
         // so absence is an answer here: it satisfies `hidden` and `detached`.
         const present =
           state === "attached" || state === "detached"
-            ? (await element.count()) > 0
-            : await element.isVisible();
+            ? (await this.call(element.count(), "count")) > 0
+            : await this.call(element.isVisible(), "is_visible");
         if (negated) {
           if (present) {
             reached = false;
@@ -727,22 +824,28 @@ export class BrowserRuntime {
     const field = locator.first();
     if (operation.clearFirst) {
       await field.fill("", { timeout: operation.timeoutMs });
+      this.dispatched = true;
     }
     await field.pressSequentially(value, {
       delay: operation.delayMs,
       timeout: operation.timeoutMs,
     });
+    this.dispatched = true;
   }
 
   private async snapshot(page: Page, maxChars: number): Promise<Record<string, unknown>> {
     const frames = this.frames(page);
     const collected = await Promise.all(
-      frames.map(async (frame) => {
+      frames.map(async (frame, index) => {
         try {
-          return await frame.evaluate(collectFrame, maxChars);
-        } catch {
+          return await this.call(frame.evaluate(collectFrame, maxChars), "evaluate");
+        } catch (error) {
+          // The main document not answering is a failed inspect: reporting it
+          // as empty would hand back a plausible snapshot of nothing.
+          if (index === 0 && error instanceof BrowserCallTimeoutError) throw error;
           // A frame that navigated or detached mid-evaluate is not a failed
-          // inspect. Losing an ad frame should not lose the page.
+          // inspect. Losing an ad frame should not lose the page, and neither
+          // should one whose out-of-process renderer stopped answering.
           return undefined;
         }
       }),
@@ -765,7 +868,7 @@ export class BrowserRuntime {
       .map((element, index) => ({ index, ...element }));
     return {
       url: page.url(),
-      title: await page.title(),
+      title: await this.call(page.title(), "title"),
       text: main?.text ?? "",
       truncated: main?.truncated ?? false,
       elements,
@@ -793,7 +896,7 @@ export class BrowserRuntime {
     ]);
     return {
       url: page.url(),
-      title: await page.title(),
+      title: await this.call(page.title(), "title"),
       target: operation.target,
       text: text.slice(0, operation.maxChars),
       html: html.slice(0, operation.maxChars),
@@ -807,17 +910,26 @@ export class BrowserRuntime {
     page: Page,
     operation: BrowserOperation,
   ): Promise<Record<string, unknown>> {
-    const settle = await waitForStableDom(page, {
-      quietWindowMs: operation.settleQuietMs,
-      timeoutMs: operation.settleTimeoutMs,
-    });
+    // Bounded by its own `settleTimeoutMs` plus a grace, not by `timeoutMs`:
+    // the settle window is a deliberate wait and must not be cut short.
+    const settle = await waitForStableDom(
+      page,
+      {
+        quietWindowMs: operation.settleQuietMs,
+        timeoutMs: operation.settleTimeoutMs,
+      },
+      this.signal,
+    );
     return {
       settle,
       ...(await this.snapshot(page, operation.maxChars)),
     };
   }
 
-  async execute(operation: BrowserOperation): Promise<Record<string, unknown>> {
+  async execute(
+    operation: BrowserOperation,
+    signal?: AbortSignal,
+  ): Promise<Record<string, unknown>> {
     // Every branch reports `success: true` on the way out, because a caller who
     // declared no evidence is held to exactly that field: policy derives
     // `result_equals success true` for browser mutations, and a result without
@@ -825,20 +937,37 @@ export class BrowserRuntime {
     // throw, so reaching a return is what success means here.
     this.dialogs = [];
     this.popups = [];
-    const ran = await this.run(operation);
-    await this.awaitOpenedWindows(operation.timeoutMs);
-    // A blocked popup is closed from an event handler, which has no way to join
-    // the action that provoked it. Waiting here is what stops the next action
-    // from seeing a tab this one already reported as closed.
-    await Promise.all(this.closing.splice(0));
-    const result = { success: true, ...ran };
-    // Only present when the page actually asked something, so a caller can test
-    // for the field rather than for an empty array.
-    return {
-      ...result,
-      ...(this.dialogs.length === 0 ? {} : { dialogs: this.dialogs }),
-      ...(this.popups.length === 0 ? {} : { popups: this.popups }),
-    };
+    this.signal = signal;
+    this.callMs = operation.timeoutMs;
+    this.dispatched = false;
+    try {
+      const ran = await this.run(operation);
+      await this.awaitOpenedWindows(operation.timeoutMs);
+      // A blocked popup is closed from an event handler, which has no way to
+      // join the action that provoked it. Waiting here is what stops the next
+      // action from seeing a tab this one already reported as closed.
+      await this.call(Promise.all(this.closing.splice(0)), "close_popup");
+      const result = { success: true, ...ran };
+      // Only present when the page actually asked something, so a caller can
+      // test for the field rather than for an empty array.
+      return {
+        ...result,
+        ...(this.dialogs.length === 0 ? {} : { dialogs: this.dialogs }),
+        ...(this.popups.length === 0 ? {} : { popups: this.popups }),
+      };
+    } catch (error) {
+      // Only mutations ever set `dispatched`, and only once their effect call
+      // has returned. Anything that fails after that — the settle, the
+      // snapshot, the popup close, a bound or the task budget running out —
+      // fails after the page may have acted, so it is reported as an unknown
+      // outcome for the controller to park rather than as a failure it would
+      // read as "nothing happened". So is a pointer action that Playwright
+      // itself timed out after it had sent the input. A failure before either,
+      // including a timeout resolving the target, is an ordinary failure:
+      // nothing was sent, and for a read the controller may simply retry.
+      if (!this.dispatched && !inputSent(error)) throw error;
+      throw outcomeUnknown(error instanceof Error ? error.message : String(error));
+    }
   }
 
   private async run(operation: BrowserOperation): Promise<Record<string, unknown>> {
@@ -941,6 +1070,12 @@ export class BrowserRuntime {
         await (await this.locator(page, operation.target)).first().click({
           timeout: operation.timeoutMs,
         });
+        // Set after the click returns, not before: Playwright's own timeout
+        // mostly fires while it waits for the element to become clickable,
+        // and reporting that as "may have clicked" would park every covered
+        // button for reconciliation. A timeout after the input went out is
+        // caught by `inputSent` instead. See `execute` for what this changes.
+        this.dispatched = true;
         return {
           clicked: true,
           ...(await this.settledSnapshot(page, operation)),
@@ -983,6 +1118,7 @@ export class BrowserRuntime {
           await (await this.locator(page, operation.target)).first().click({
             timeout: operation.timeoutMs,
           });
+          this.dispatched = true;
         }
         return {
           filled: operation.fields.length,
@@ -995,6 +1131,7 @@ export class BrowserRuntime {
         const selected = await (await this.locator(page, operation.target))
           .first()
           .selectOption(operation.values, { timeout: operation.timeoutMs });
+        this.dispatched = true;
         return {
           selected,
           ...(await this.settledSnapshot(page, operation)),
@@ -1007,6 +1144,7 @@ export class BrowserRuntime {
             ? page.locator("body")
             : await this.locator(page, operation.target);
         await locator.first().press(operation.key, { timeout: operation.timeoutMs });
+        this.dispatched = true;
         return {
           pressed: operation.key,
           ...(await this.settledSnapshot(page, operation)),
@@ -1021,20 +1159,23 @@ export class BrowserRuntime {
         } else {
           // A fixed ±600 was too small for a long article and too large for a
           // short scroll container, and nothing could change it.
-          await page.evaluate(
-            ({ value, pixels }) => {
-              if (value === "top") window.scrollTo(0, 0);
-              else if (value === "bottom") window.scrollTo(0, document.body.scrollHeight);
-              else window.scrollBy(0, value === "up" ? -pixels : pixels);
-            },
-            { value: direction, pixels: operation.pixels },
+          await this.call(
+            page.evaluate(
+              ({ value, pixels }) => {
+                if (value === "top") window.scrollTo(0, 0);
+                else if (value === "bottom") window.scrollTo(0, document.body.scrollHeight);
+                else window.scrollBy(0, value === "up" ? -pixels : pixels);
+              },
+              { value: direction, pixels: operation.pixels },
+            ),
+            "evaluate",
           );
         }
         return {
           scrolled: direction,
           // Where we ended up, so a caller paging through a document can tell
           // it has hit the bottom rather than scrolling forever.
-          scrollY: await page.evaluate(() => window.scrollY),
+          scrollY: await this.call(page.evaluate(() => window.scrollY), "evaluate"),
           ...(await this.settledSnapshot(page, operation)),
         };
       }
@@ -1043,7 +1184,12 @@ export class BrowserRuntime {
           this.options.artifactDirectory,
           `browser-${randomUUID()}.png`,
         );
-        await page.screenshot({ path, fullPage: operation.fullPage, type: "png" });
+        await page.screenshot({
+          path,
+          fullPage: operation.fullPage,
+          type: "png",
+          timeout: operation.timeoutMs,
+        });
         const bytes = await readFile(path);
         return {
           captured: true,
@@ -1051,7 +1197,7 @@ export class BrowserRuntime {
           size: bytes.byteLength,
           sha256: createHash("sha256").update(bytes).digest("hex"),
           url: page.url(),
-          title: await page.title(),
+          title: await this.call(page.title(), "title"),
         };
       }
       case "upload": {
@@ -1062,6 +1208,7 @@ export class BrowserRuntime {
         await (await this.locator(page, operation.target)).first().setInputFiles(files, {
           timeout: operation.timeoutMs,
         });
+        this.dispatched = true;
         return {
           uploaded: files.length,
           ...(await this.settledSnapshot(page, operation)),
@@ -1071,16 +1218,24 @@ export class BrowserRuntime {
         const downloadPromise = page.waitForEvent("download", {
           timeout: operation.timeoutMs,
         });
+        // If resolving or clicking the target throws first, nobody awaits the
+        // download wait, and its own timeout would surface as an unhandled
+        // rejection long after this action failed.
+        downloadPromise.catch(() => undefined);
         await (await this.locator(page, operation.target)).first().click({
           timeout: operation.timeoutMs,
         });
+        this.dispatched = true;
         const download = await downloadPromise;
         const suggested = download.suggestedFilename().replaceAll(/[^A-Za-z0-9._-]/g, "_");
         const path = join(
           this.options.artifactDirectory,
           `${randomUUID()}-${suggested || "download"}`,
         );
-        await download.saveAs(path);
+        // Bounded by the task budget only. Saving waits for the whole file to
+        // arrive, and how long that legitimately takes depends on the file, not
+        // on the per-call `timeoutMs`.
+        await this.call(download.saveAs(path), "save_download", Infinity);
         const bytes = await readFile(path);
         return {
           downloaded: true,
@@ -1089,10 +1244,14 @@ export class BrowserRuntime {
           size: bytes.byteLength,
           sha256: createHash("sha256").update(bytes).digest("hex"),
           url: page.url(),
-          settle: await waitForStableDom(page, {
-            quietWindowMs: operation.settleQuietMs,
-            timeoutMs: operation.settleTimeoutMs,
-          }),
+          settle: await waitForStableDom(
+            page,
+            {
+              quietWindowMs: operation.settleQuietMs,
+              timeoutMs: operation.settleTimeoutMs,
+            },
+            this.signal,
+          ),
         };
       }
       case "tabs": {
@@ -1126,7 +1285,7 @@ export class BrowserRuntime {
         // Bring the tab to the front so a screenshot of it is what the user
         // would actually see; a background page still renders, but modal and
         // focus behaviour differ.
-        await target.bringToFront();
+        await this.call(target.bringToFront(), "bring_to_front");
         this.activePage = target;
         return {
           switched: true,
@@ -1144,7 +1303,11 @@ export class BrowserRuntime {
             : pages[operation.tabIndex];
         if (target === undefined) throw new Error("browser_tab_not_found");
         const url = target.url();
-        await target.close();
+        // Set before the close, unlike the other mutations: this call is the
+        // effect and has no wait-for-ready phase, so once it is in flight a
+        // bound running out cannot say whether the tab went away.
+        this.dispatched = true;
+        await this.call(target.close(), "close");
         this.activePage = context.pages().at(-1);
         return { closed: true, url, tabs: await this.describeTabs(context) };
       }
@@ -1153,23 +1316,23 @@ export class BrowserRuntime {
 
   async close(): Promise<void> {
     const connection = this.connection;
+    const quietly = (call: Promise<unknown>, what: string) =>
+      bounded(call, CLOSE_TIMEOUT_MS, what).catch(() => undefined);
     // An attached browser outlives us; stop asking it to narrate its targets.
-    await this.targets?.detach().catch(() => undefined);
+    if (this.targets !== undefined) await quietly(this.targets.detach(), "cdp_detach");
     this.targets = undefined;
     if (
       connection !== undefined &&
       !connection.ownsContext &&
       this.routeHandler !== undefined
     ) {
-      await connection.context
-        .unroute("**/*", this.routeHandler)
-        .catch(() => undefined);
+      await quietly(connection.context.unroute("**/*", this.routeHandler), "unroute");
     }
     if (connection?.ownsContext === true) {
-      await connection.context.close().catch(() => undefined);
+      await quietly(connection.context.close(), "close_context");
     }
     if (connection?.ownsBrowser === true) {
-      await connection.browser.close().catch(() => undefined);
+      await quietly(connection.browser.close(), "close_browser");
     }
     // After the browser, so a request in flight is not left without a proxy.
     await this.proxy?.close().catch(() => undefined);
@@ -1196,3 +1359,4 @@ export * from "./pinning-proxy.js";
 export * from "./selector.js";
 export * from "./stable-dom.js";
 export * from "./browser-connection.js";
+export * from "./bounded.js";

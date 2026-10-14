@@ -151,7 +151,7 @@ export class RuntimeRouter implements OperationExecutor {
       case "terminal":
         return await this.terminal.execute(operation, signal);
       case "browser":
-        return await this.browser.execute(operation);
+        return await this.browser.execute(operation, signal);
       case "memory":
         return this.memory.execute(operation);
       case "computer":
