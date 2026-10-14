@@ -8,6 +8,7 @@ import { join } from "node:path";
 import type { Page } from "playwright-core";
 import { BrowserOperationSchema, isOutcomeUnknown } from "@melra/protocol";
 import { afterEach, describe, expect, it } from "vitest";
+import { bounded } from "./bounded.js";
 import { BrowserRuntime, detectBrowserExecutable } from "./index.js";
 
 /**
@@ -129,23 +130,29 @@ describe("stalled browser calls", () => {
     const context = await fixture();
     if (context === undefined) return;
     const { runtime, url } = context;
+    // Each wait has its own named bound well inside the test's, so a hang on
+    // CI (#145) fails as `browser_call_timeout:test:<step>` naming the wait
+    // that never returned, rather than as a bare test timeout.
+    const step = <T>(what: string, promise: Promise<T>, ms = 15_000) =>
+      bounded(promise, ms, `test:${what}`);
     try {
-      await runtime.execute(op({ action: "navigate", url }));
+      await step("navigate", runtime.execute(op({ action: "navigate", url })));
       const stalled = stall(runtime);
-      const { message, ms } = await failure(
-        runtime.execute(op({ action: "inspect", timeoutMs: BOUND_MS })),
+      const { message, ms } = await step(
+        "bounded inspect",
+        failure(runtime.execute(op({ action: "inspect", timeoutMs: BOUND_MS }))),
       );
       // A read that timed out is an ordinary failure the controller may retry,
       // never an unknown outcome.
       expect(message).toBe("browser_call_timeout:evaluate");
       expect(ms).toBeLessThan(STALL_MS - 500);
-      await stalled;
-      const inspected = await runtime.execute(op({ action: "inspect" }));
+      await step("raw stall evaluate", stalled);
+      const inspected = await step("recovery inspect", runtime.execute(op({ action: "inspect" })), 35_000);
       expect(inspected.title).toBe("stall");
     } finally {
-      await runtime.close();
+      await step("close", runtime.close());
     }
-  }, 60_000);
+  }, 90_000);
 
   it("gives up on a stalled call as soon as the task is cancelled", async () => {
     const context = await fixture();
