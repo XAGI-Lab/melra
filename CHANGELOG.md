@@ -8,6 +8,13 @@ All notable changes are documented here. The format follows
 
 ### Added
 
+- GovBench covers custom evidence: five verification cases check that a
+  registered verifier decides success, that it cannot read outside the
+  workspace, and that evidence no verifier can check, or `custom` naming a
+  built-in, is refused at plan time. 362 cases; safety `312/312`, utility
+  `50/50`, published in
+  `docs/research/results/govbench-0.3.0-alpha.12-2026-10-14.json`.
+
 - A macOS sandbox profile, `examples/deploy/macos/melra.sb`: under
   `sandbox-exec`, the kernel confines every write by MELRA and the commands it
   runs to the workspace, the data directory, and temp folders, and refuses
