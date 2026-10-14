@@ -51,6 +51,7 @@ import {
 import { runConformance } from "./conformance.js";
 import { statusCommand, tasksCommand, watchCommand } from "./activity.js";
 import { clientStatuses, clientsCheck, detectClients } from "./client-status.js";
+import { detectIsolation, isolationCheck } from "./isolation.js";
 import {
   renderDoctor,
   renderInit,
@@ -549,6 +550,7 @@ async function doctor(env: CliEnvironment): Promise<{
     });
   }
   if (env.socketPath !== undefined) checks.push(await socketCheck(env.socketPath));
+  checks.push(isolationCheck(await detectIsolation(), env.mode));
   const clients = await clientStatuses(env.workspaceRoot);
   checks.push(clientsCheck(clients));
   const failed = checks.some((check) => check.status === "fail");

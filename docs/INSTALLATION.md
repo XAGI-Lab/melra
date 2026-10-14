@@ -997,6 +997,19 @@ docker run --rm -i \
 For an MCP client, set `command` to `docker` and use the arguments above,
 including `-i`. Do not use `-t`; stdio MCP requires clean JSON-RPC streams.
 
+To see what those flags bought, run `doctor` with the same arguments in place
+of `serve`. Its `isolation` line reads the restrictions from `/proc` inside
+the container:
+
+```text
+  ✓  isolation       container, no capabilities, no_new_privs, seccomp filter, read-only root
+```
+
+`pnpm docker:smoke` requires all five, so the recipe above and what `doctor`
+reports stay in step. Outside Linux, `doctor` cannot see a macOS sandbox
+profile or a Windows Job Object and says so. With `MELRA_MODE=enforced`, it
+warns when it finds no restriction at all, or when it cannot read any.
+
 ## Python SDK
 
 For repository development:
