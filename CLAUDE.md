@@ -85,7 +85,7 @@ test failing with an unresolved `@melra/*` import means a stale or missing `dist
 
 `build`, `typecheck`, and `test` go through `scripts/run-recursive.mjs` rather than calling
 `pnpm -r <script>` directly, because every recursive fan-out here multiplies. There is no
-vitest config in the repo, so every package defaults to a fork pool of `cores−1`; multiplied
+vitest pool config in the repo (`packages/browser-runtime/vitest.config.ts` sets only a CI retry), so every package defaults to a fork pool of `cores−1`; multiplied
 by pnpm's default workspace-concurrency of 4 that is roughly `4 × (cores−1)` Node processes,
 each with its own V8 heap. `tsc` has one level instead of two but holds a whole program graph
 per process, so four builds in flight is several GiB on its own. Either one is enough to
