@@ -42,7 +42,7 @@
     "versions:check": "node scripts/check-versions.mjs",
     "docs:check": "node scripts/check-links.mjs && node scripts/check-env-docs.mjs && node scripts/check-changelog.mjs",
     "versions:set": "node scripts/set-version.mjs",
-    "check": "pnpm versions:check && pnpm docs:check && pnpm typecheck && node scripts/check-readme-examples.mjs && pnpm test && pnpm python:check",
+    "check": "pnpm versions:check && pnpm docs:check && pnpm typecheck && node scripts/check-dist.mjs && node scripts/check-readme-examples.mjs && pnpm test && pnpm python:check",
     "pack:check": "pnpm build && pnpm --dir apps/cli pack:check",
     "readme:check": "pnpm build && node scripts/check-readme-examples.mjs"
   },
