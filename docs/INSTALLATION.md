@@ -173,6 +173,8 @@ A window the page opens by itself is governed by policy, not by the caller:
 
 `"block"` is the default: the window is closed and reported on the action that
 provoked it, as `popups: [{ "url": "...", "blocked": true }]` in the result.
+An action that opened a window waits, up to its own `timeoutMs`, for that
+window's first response, so a slow popup still lands on the right result.
 `"allow"` keeps it as an addressable tab. Either way the caller is told — the
 setting governs whether the window survives, not whether it is reported, and
 `assertSafeUrl` still decides where it may load from. Unsafe-local mode allows

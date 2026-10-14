@@ -159,6 +159,15 @@ All notable changes are documented here. The format follows
   Every governed call now opens its own connection, so a reset after the write
   means the far end really may have acted.
 
+- A browser action that opens a window now reports it every time. Playwright
+  announces a popup only once the popup's first response arrives, so when that
+  was slower than the opener took to settle — a slow ad server, or simply a
+  loaded Windows CI runner — the click returned with no `popups` field, and the
+  report and the close landed in whichever action ran next, or nowhere. The
+  runtime now hears about the window from Chromium the moment it is created and
+  holds the action's result until it is reported, bounded by the action's
+  `timeoutMs`. Actions that open nothing pay one round trip, not a delay.
+
 ### Security
 
 - The Unix-socket transport is created mode `0600` under a narrowed umask, so

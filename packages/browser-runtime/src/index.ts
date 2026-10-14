@@ -8,6 +8,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type {
   Browser,
   BrowserContext,
+  CDPSession,
   Frame,
   Locator,
   Page,
@@ -90,6 +91,12 @@ const MAX_POPUPS = 20;
 
 /** How often `waitForTarget` re-resolves the target across the frame list. */
 const WAIT_POLL_MS = 100;
+
+/**
+ * How often `awaitOpenedWindows` rechecks while a window it knows about is
+ * still unreported. Only ever spent when a window is actually pending.
+ */
+const WINDOW_POLL_MS = 25;
 
 /**
  * Frame URLs of the widgets that gate a page behind a human check.
@@ -247,6 +254,19 @@ export class BrowserRuntime {
   private closing: Promise<unknown>[] = [];
   /** True only while `tab_new` is opening the tab the caller asked for. */
   private openingTab = false;
+  /**
+   * Browser-level session that hears about a new window the moment Chromium
+   * creates it, which is what lets an action wait for a popup it knows exists
+   * instead of guessing how long one might take. Absent if the browser would
+   * not grant one; popups are then reported on Playwright's timing alone.
+   */
+  private targets: CDPSession | undefined;
+  /** Windows Chromium has created since tracking began, by browser context. */
+  private windowsCreated = new Map<string, number>();
+  /** Windows Playwright has handed to the `page` handler, popup or not. */
+  private windowsAdopted = 0;
+  /** This context's id in CDP, resolved on first use and then fixed. */
+  private contextId: string | undefined;
 
   constructor(private readonly options: BrowserRuntimeOptions) {}
 
@@ -418,6 +438,10 @@ export class BrowserRuntime {
      * this governs whether it stays.
      */
     this.context.on("page", (opened) => {
+      // Counted before the early return: every window Chromium creates raises
+      // exactly one of these, including tabs MELRA opened and windows that
+      // closed before Playwright finished with them.
+      this.windowsAdopted += 1;
       if (opened === this.activePage || this.openingTab) return;
       // Closing a window the page opened is MELRA's judgement about what the
       // caller should be looking at, so unhinged mode drops it. Reporting it is
@@ -431,7 +455,89 @@ export class BrowserRuntime {
       // must not turn into the action's error.
       this.closing.push(opened.close().catch(() => undefined));
     });
+    /**
+     * Hear about new windows when Chromium creates them, not when Playwright
+     * announces them.
+     *
+     * Playwright raises `page` for a popup only once the popup's first response
+     * has committed, so a click whose window loaded slowly returned with no
+     * `popups` field and the report — and, in block mode, the close — landed in
+     * whatever ran next. Chromium creates the target synchronously inside
+     * `window.open` or the `target=_blank` click, so this count is already
+     * right when the action finishes and `awaitOpenedWindows` knows how many
+     * reports are still owed. It sees every way of opening a window, and the
+     * page cannot see or tamper with it, which an injected `window.open` hook
+     * could not promise.
+     *
+     * Registered after the `page` handler, so any miscount during setup is a
+     * window adopted but never counted — at worst one later wait ends early —
+     * rather than one counted and never adopted, which no wait could satisfy.
+     */
+    this.windowsCreated = new Map();
+    this.windowsAdopted = 0;
+    this.contextId = undefined;
+    // A session left from a context that closed under us would count into the
+    // fresh map below and make every action wait for windows that never come.
+    await this.targets?.detach().catch(() => undefined);
+    try {
+      const targets = await connection.browser.newBrowserCDPSession();
+      targets.on("Target.targetCreated", ({ targetInfo }) => {
+        // `browser_ui`, workers, and prerenders never become Playwright pages.
+        if (targetInfo.type !== "page" || targetInfo.subtype !== undefined) return;
+        const id = targetInfo.browserContextId ?? "";
+        this.windowsCreated.set(id, (this.windowsCreated.get(id) ?? 0) + 1);
+      });
+      await targets.send("Target.setDiscoverTargets", { discover: true });
+      // Chromium announces the windows that already exist before it replies.
+      // Playwright had them before the `page` handler did, so they are owed no
+      // event here.
+      this.windowsCreated.clear();
+      this.targets = targets;
+    } catch {
+      this.targets = undefined;
+    }
     return this.context;
+  }
+
+  /**
+   * Hold the action's result until Playwright has handed over every window
+   * Chromium created, so the action that opened a window is the one that
+   * reports it.
+   *
+   * Costs one round trip when nothing was opened. Waits only while a window is
+   * known to exist and is still unreported, bounded by the action's own
+   * timeout: the window is part of what the action did. A window still pending
+   * after that is reported by the action running when Playwright delivers it.
+   */
+  private async awaitOpenedWindows(timeoutMs: number): Promise<void> {
+    const targets = this.targets;
+    const context = this.context;
+    if (targets === undefined || context === undefined) return;
+    try {
+      if (this.contextId === undefined) {
+        const page = context.pages()[0];
+        if (page === undefined) return;
+        const session = await context.newCDPSession(page);
+        try {
+          const { targetInfo } = await session.send("Target.getTargetInfo");
+          this.contextId = targetInfo.browserContextId ?? "";
+        } finally {
+          await session.detach().catch(() => undefined);
+        }
+      }
+      // Events arrive ahead of the reply on the same session, so after this
+      // every window created before now has been counted.
+      await targets.send("Browser.getVersion");
+      const deadline = Date.now() + timeoutMs;
+      while (
+        this.windowsAdopted < (this.windowsCreated.get(this.contextId) ?? 0) &&
+        Date.now() < deadline
+      ) {
+        await new Promise((done) => setTimeout(done, WINDOW_POLL_MS));
+      }
+    } catch {
+      // The browser went away mid-action; nothing more will be delivered.
+    }
   }
 
   /**
@@ -720,6 +826,7 @@ export class BrowserRuntime {
     this.dialogs = [];
     this.popups = [];
     const ran = await this.run(operation);
+    await this.awaitOpenedWindows(operation.timeoutMs);
     // A blocked popup is closed from an event handler, which has no way to join
     // the action that provoked it. Waiting here is what stops the next action
     // from seeing a tab this one already reported as closed.
@@ -1046,6 +1153,9 @@ export class BrowserRuntime {
 
   async close(): Promise<void> {
     const connection = this.connection;
+    // An attached browser outlives us; stop asking it to narrate its targets.
+    await this.targets?.detach().catch(() => undefined);
+    this.targets = undefined;
     if (
       connection !== undefined &&
       !connection.ownsContext &&
