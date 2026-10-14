@@ -143,11 +143,9 @@ describe("doctor clients check", () => {
     expect(byName.windsurf).toMatchObject({ state: "not configured", problems: [] });
     expect(byName.codex).toMatchObject({ state: "configured", command: "npx", pin: PRODUCT_VERSION });
     expect(byName.codex?.problems.join()).not.toContain("pinned");
-    expect(byName.zed).toMatchObject({
-      state: "configured",
-      note: "not plain JSON, found by text search; command not checked",
-      problems: [],
-    });
+    // Commented JSONC is read properly, so its command is checked too.
+    expect(byName.zed).toMatchObject({ state: "configured", command: "melra", problems: [] });
+    expect(byName.zed).not.toHaveProperty("note");
 
     expect(byName.amp).toMatchObject({ state: "configured", command: "melra", problems: [] });
     expect(byName.goose).toMatchObject({ state: "configured", command: "npx", pin: "0.0.1-alpha.1" });

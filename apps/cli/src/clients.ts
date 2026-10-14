@@ -5,6 +5,8 @@ import { existsSync } from "node:fs";
 import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
+import { parseJsonc, upsertJsonc } from "./jsonc.js";
 
 export interface ServerEntry {
   command: string;
@@ -336,12 +338,60 @@ function withMelraExtension(path: string, yaml: string, config: string): string 
   return result.join("\n");
 }
 
+// Merge a JSON-shaped config into a JSON or JSONC file by editing only the
+// members MELRA owns: each `[key, { melra }]` entry is upserted at
+// `key.melra`, and a non-object entry (OpenCode's `$schema`) is added only if
+// absent. Plain JSON goes through the same in-place edit as JSONC rather than
+// JSON.parse → JSON.stringify, so a user's formatting and key order survive
+// there too, and duplicate keys (which JSON.parse silently collapses) are
+// refused everywhere. The result is parsed back and compared, whole, with the
+// merge it was meant to be, so a file is never written that does not say
+// exactly what was intended.
+function withMelraJson(path: string, text: string, config: Record<string, unknown>): string {
+  const refuse = (why: string) =>
+    new Error(`${path}: ${why}; add the printed config to it by hand`);
+  let before: unknown;
+  try {
+    before = parseJsonc(text).value;
+  } catch (error) {
+    throw refuse(`it is not valid JSON or JSONC (${(error as Error).message})`);
+  }
+  if (!isObject(before)) throw refuse("it does not hold a JSON object");
+  const expected: Record<string, unknown> = { ...before };
+  let next = text;
+  try {
+    for (const [key, value] of Object.entries(config)) {
+      if (!isObject(value)) {
+        next = upsertJsonc(next, [key], value, true);
+        if (!Object.hasOwn(before, key)) expected[key] = value;
+        continue;
+      }
+      for (const [member, inner] of Object.entries(value)) {
+        next = upsertJsonc(next, [key, member], inner);
+      }
+      expected[key] = { ...(before[key] as Record<string, unknown> | undefined), ...value };
+    }
+  } catch (error) {
+    throw refuse((error as Error).message);
+  }
+  let after: unknown;
+  try {
+    after = parseJsonc(next).value;
+  } catch {
+    after = undefined;
+  }
+  if (!isDeepStrictEqual(after, expected)) {
+    throw refuse("editing it in place did not produce the intended settings");
+  }
+  return next;
+}
+
 /**
  * Merge MELRA into the client's own config file, keeping everything else in
- * it. The previous file is copied to `<file>.bak` first. A file that is not
- * plain JSON — Zed and VS Code settings often carry comments — is refused
- * rather than rewritten, because a round-trip through JSON.parse would drop
- * those comments. Continue's file is MELRA's alone, so it is replaced whole.
+ * it. The previous file is copied to `<file>.bak` first. JSON and JSONC files
+ * are edited in place by `withMelraJson`, so comments, trailing commas, and
+ * formatting outside MELRA's own entry survive; a file that is not valid JSONC
+ * is refused. Continue's file is MELRA's alone, so it is replaced whole.
  */
 export async function writeClientConfig(
   path: string,
@@ -363,29 +413,10 @@ export async function writeClientConfig(
   } else if (typeof config === "string") {
     const kept = existing === undefined ? "" : withoutMelraTables(existing);
     next = kept === "" ? config : `${kept}\n\n${config}`;
+  } else if (existing === undefined || existing.trim() === "") {
+    next = `${JSON.stringify(config, null, 2)}\n`;
   } else {
-    let parsed: unknown = {};
-    if (existing !== undefined && existing.trim() !== "") {
-      try {
-        parsed = JSON.parse(existing);
-      } catch {
-        throw new Error(
-          `${path} is not plain JSON (comments?); add the printed config to it by hand`,
-        );
-      }
-    }
-    if (!isObject(parsed)) throw new Error(`${path} does not hold a JSON object`);
-    for (const [key, value] of Object.entries(config)) {
-      const current = parsed[key];
-      if (!isObject(value)) {
-        parsed[key] = current ?? value;
-      } else if (current === undefined || isObject(current)) {
-        parsed[key] = { ...current, ...value };
-      } else {
-        throw new Error(`${path}: "${key}" is not an object; add the printed config by hand`);
-      }
-    }
-    next = `${JSON.stringify(parsed, null, 2)}\n`;
+    next = withMelraJson(path, existing, config);
   }
   await mkdir(dirname(path), { recursive: true });
   const backup = existing === undefined ? undefined : `${path}.bak`;

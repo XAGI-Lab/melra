@@ -49,10 +49,14 @@ All notable changes are documented here. The format follows
   only reads the files. The report also carries a structured `clients` array.
 
 - `--write` merges that configuration into the client's file, keeping every
-  other entry and saving the previous file as `<file>.bak`. It refuses JSON
-  with comments rather than silently dropping them, and a rerun replaces
-  MELRA's own entry, so it doubles as the way to repoint a client after an
-  upgrade.
+  other entry and saving the previous file as `<file>.bak`. JSON files are
+  edited in place, writing only MELRA's own entry, so commented settings
+  (JSONC, as Zed, VS Code, and Amp use) keep their comments, trailing commas,
+  formatting, key order, and CRLF line endings byte for byte, with no new
+  dependency (#74). The result is parsed back and checked before anything is
+  written; a file that is not valid JSONC, or that names the target key twice,
+  is refused and left untouched. A rerun replaces MELRA's own entry, so it
+  doubles as the way to repoint a client after an upgrade.
 
 - `melra setup --client` supports `goose`, `continue`, and `amp`. Goose and
   Continue read YAML, emitted without a YAML dependency. `--write` replaces

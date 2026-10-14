@@ -6,6 +6,7 @@ import { readFile } from "node:fs/promises";
 import { delimiter, extname, join } from "node:path";
 import { PRODUCT_VERSION } from "@melra/protocol";
 import { CLIENTS, isObject } from "./clients.js";
+import { parseJsonc } from "./jsonc.js";
 
 export interface ClientStatus {
   client: string;
@@ -180,13 +181,15 @@ function inspect(client: string, shape: string, path: string, text: string): Cli
   }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(text);
+    // JSONC, because Zed and VS Code settings usually carry comments and
+    // trailing commas; read with the same parser `setup --write` edits with.
+    parsed = parseJsonc(text).value;
   } catch {
-    // Zed and VS Code settings are usually JSONC. A text search still answers
-    // the question people ask, just not what the entry launches.
+    // Not even JSONC. A text search still answers the question people ask,
+    // just not what the entry launches.
     return /"melra"\s*:/.test(text)
-      ? { ...base, state: "configured", note: "not plain JSON, found by text search; command not checked", problems: [] }
-      : { ...base, state: "not configured", note: "not plain JSON, searched as text", problems: [] };
+      ? { ...base, state: "configured", note: "not valid JSONC, found by text search; command not checked", problems: [] }
+      : { ...base, state: "not configured", note: "not valid JSONC, searched as text", problems: [] };
   }
   const servers = isObject(parsed) ? parsed[key] : undefined;
   const entry = isObject(servers) ? servers.melra : undefined;
