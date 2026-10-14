@@ -10,6 +10,7 @@ import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { PRODUCT_VERSION } from "@melra/protocol";
+import { RESTART_SAFE_WORKFLOW } from "../src/demo-workflow.js";
 import { parseCliEnvironment, serverLaunch } from "../src/environment.js";
 
 const execute = promisify(execFile);
@@ -735,7 +736,8 @@ describe("melra CLI", () => {
     roots.push(root);
     const result = await execute(
       process.execPath,
-      [entry, "demo", "durable-core"],
+      // Bare `demo` runs the only demo there is.
+      [entry, "demo"],
       {
         cwd: root,
         env: {
@@ -746,11 +748,17 @@ describe("melra CLI", () => {
       },
     );
     const demo = JSON.parse(result.stdout) as {
-      examplePath: string;
+      example: string;
       workflow: { status: string };
       next: string;
     };
-    expect(demo.examplePath).toMatch(/restart-safe\.json$/);
+    expect(demo.example).toBe("restart-safe-verified-file");
+    // The CLI's own copy, used because npm installs have no examples/
+    // directory, must not drift from the one the docs point at.
+    const example = JSON.parse(
+      await readFile(resolve(import.meta.dirname, "../../../examples/workflows/restart-safe.json"), "utf8"),
+    );
+    expect(RESTART_SAFE_WORKFLOW).toEqual(example);
     expect(demo.workflow.status).toBe("running");
     expect(demo.next).toMatch(/^melra workflow advance /);
   });

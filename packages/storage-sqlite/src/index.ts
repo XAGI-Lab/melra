@@ -490,14 +490,22 @@ export class SqliteStore {
         );
   }
 
+  /**
+   * Store a new run. `payload` undefined means the definition is already
+   * stored under this id and version (the caller has checked it is the same
+   * one), so only the run and its events are written.
+   */
   createWorkflow(
     redactedDefinition: WorkflowDefinition,
-    payload: EncryptedPayload,
+    payload: EncryptedPayload | undefined,
     run: WorkflowRun,
     events: WorkflowEvent[],
   ): void {
     const definition = WorkflowDefinitionSchema.parse(redactedDefinition);
-    const sealed = EncryptedPayloadSchema.parse(payload);
+    const sealed = payload === undefined ? undefined : EncryptedPayloadSchema.parse(payload);
+    if (sealed === undefined && this.getWorkflowPayload(definition.id, definition.version) === undefined) {
+      throw new Error("workflow_payload_not_found");
+    }
     const projection = WorkflowRunSchema.parse(run);
     const parsedEvents = events.map((item) => WorkflowEventSchema.parse(item));
     if (
@@ -515,30 +523,32 @@ export class SqliteStore {
     );
 
     this.transaction(() => {
-      this.database
-        .prepare(`
-          INSERT INTO workflow_definitions(id, version, data, created_at)
-          VALUES (?, ?, ?, ?)
-        `)
-        .run(
-          definition.id,
-          definition.version,
-          JSON.stringify(definition),
-          projection.createdAt,
-        );
-      this.database
-        .prepare(`
-          INSERT INTO workflow_payloads(
-            workflow_id, workflow_version, payload, created_at
-          )
-          VALUES (?, ?, ?, ?)
-        `)
-        .run(
-          definition.id,
-          definition.version,
-          JSON.stringify(sealed),
-          projection.createdAt,
-        );
+      if (sealed !== undefined) {
+        this.database
+          .prepare(`
+            INSERT INTO workflow_definitions(id, version, data, created_at)
+            VALUES (?, ?, ?, ?)
+          `)
+          .run(
+            definition.id,
+            definition.version,
+            JSON.stringify(definition),
+            projection.createdAt,
+          );
+        this.database
+          .prepare(`
+            INSERT INTO workflow_payloads(
+              workflow_id, workflow_version, payload, created_at
+            )
+            VALUES (?, ?, ?, ?)
+          `)
+          .run(
+            definition.id,
+            definition.version,
+            JSON.stringify(sealed),
+            projection.createdAt,
+          );
+      }
       this.database
         .prepare(`
           INSERT INTO workflow_runs(

@@ -110,12 +110,24 @@ export class WorkflowController {
     const redacted = WorkflowDefinitionSchema.parse(
       redactStructuredValue(parsed).value,
     );
+    // A definition is stored once per id and version, and any number of runs
+    // may use it: planning the same file twice is a second run, not an error.
+    // The same id and version with different content is refused, because
+    // runs already planned from the stored one must keep meaning what they did.
+    const purpose = `workflow:${parsed.id}:${parsed.version}:definition`;
+    const stored = this.store.getWorkflowPayload(parsed.id, parsed.version);
+    if (
+      stored !== undefined &&
+      canonicalJson(WorkflowDefinitionSchema.parse(this.payloadCipher.open(stored, purpose))) !==
+        canonicalJson(parsed)
+    ) {
+      throw new Error(
+        `workflow_definition_conflict:${parsed.id}@${parsed.version}: a different definition is stored under this id and version; bump "version"`,
+      );
+    }
     this.store.createWorkflow(
       redacted,
-      this.payloadCipher.seal(
-        parsed,
-        `workflow:${parsed.id}:${parsed.version}:definition`,
-      ),
+      stored === undefined ? this.payloadCipher.seal(parsed, purpose) : undefined,
       planned,
       [created, plannedEvent],
     );

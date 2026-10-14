@@ -6,6 +6,21 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- `melra demo durable-core` works from an npm install. It read its workflow
+  from the repository's `examples/` directory, which the published package does
+  not contain, so outside a checkout it failed with `ENOENT`. The workflow now
+  ships inside the CLI, with a test holding it equal to the example file.
+  `melra demo` with no name runs it, since it is the only one.
+
+- Planning a workflow definition that is already stored starts a new run
+  instead of failing with a raw SQLite `UNIQUE constraint` error. Running the
+  demo twice, or `melra workflow plan --definition` on the same file twice as
+  the README shows, hit it. The same id and version with *different* content
+  is refused as `workflow_definition_conflict`, checked against the sealed
+  exact definition, so a change only a redacted secret carried is caught too.
+
 ### Security
 
 - Tests run on Vitest 4. Vitest 3's worker pool, `tinypool` 1.x, falls entirely
