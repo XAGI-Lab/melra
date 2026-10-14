@@ -21,3 +21,7 @@ benchmarks/browser-agent/**/*.png
 benchmarks/browser-agent/**/*.webm
 benchmarks/browser-agent/**/*transcript*.json
 .worktrees/
+# Coding agents' per-machine state. A worktree in here is a full checkout of
+# this repository, and `git add -A` would commit it as an embedded repo.
+.claude/worktrees/
+.claude/settings.local.json
