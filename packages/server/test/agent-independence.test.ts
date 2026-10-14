@@ -28,6 +28,7 @@ import { promisify } from "node:util";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { TaskRecord } from "@melra/protocol";
 import { createMelraRuntime, serveHttp } from "../src/index.js";
@@ -123,6 +124,9 @@ describe("one kernel underneath two harnesses", () => {
     });
     harnessB = new Client({ name: "harness-b", version: "1.0.0" });
     await harnessB.connect(
+      // The SDK types `sessionId` as `string | undefined`, which
+      // `exactOptionalPropertyTypes` rejects against `Transport`'s optional
+      // `sessionId?: string`. Same cast as src/http-server.ts.
       new StreamableHTTPClientTransport(
         new URL(`http://${httpB.host}:${httpB.port}/mcp`),
         {
@@ -130,7 +134,7 @@ describe("one kernel underneath two harnesses", () => {
             headers: { authorization: "Bearer independence-token" },
           },
         },
-      ),
+      ) as unknown as Transport,
     );
   }, 60_000);
 

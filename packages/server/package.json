@@ -23,7 +23,7 @@
     "clean": "rm -rf dist",
     "test": "vitest run --testTimeout=30000",
     "test:e2e": "vitest run test/e2e.test.ts",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.test.json"
   },
   "dependencies": {
     "@melra/browser-runtime": "workspace:*",

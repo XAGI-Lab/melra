@@ -44,7 +44,8 @@ strict tsc), plus two Python projects managed by `uv` (`sdk-py`,
 ```bash
 pnpm install --frozen-lockfile
 pnpm build                  # tsc -p per package; required before tests (see below)
-pnpm check                  # versions:check + docs:check + typecheck + test + python:check — the CI gate
+pnpm typecheck              # builds, then tsc -p tsconfig.test.json per package (src + tests, no emit)
+pnpm check                  # versions:check + docs:check + typecheck + check-dist (no tests in dist/) + test + python:check — the CI gate
 pnpm docs:check             # every relative link and #anchor in every *.md resolves; every MELRA_* variable has a row in docs/INSTALLATION.md; CHANGELOG.md is in Keep a Changelog shape
 pnpm evals                  # 51 deterministic policy/execution scenarios → evals/results/latest.json
 pnpm e2e                    # packages/server/test/e2e.test.ts against a live stdio server
@@ -96,7 +97,10 @@ lowers the fork count): `storage-sqlite`, and `browser-runtime`, whose files eac
 Chrome and hang on macOS CI runners when several run at once.
 
 There is no ESLint/Prettier for TypeScript — `tsc --strict` is the only static gate. Python
-uses ruff (line-length 100, py311).
+uses ruff (line-length 100, py311). Vitest strips types without checking them, so tests are
+type-checked only by `pnpm typecheck`: each package's `tsconfig.json` is the build (`src/`,
+minus `src/**/*.test.ts`, so tests never reach `dist/` or the tarball) and its
+`tsconfig.test.json` extends it with `src/` + `test/` and `noEmit`. A new package needs both.
 
 ## Execution pipeline (the core invariant)
 

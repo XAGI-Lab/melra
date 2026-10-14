@@ -127,6 +127,13 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- The published `@melra/*` packages no longer ship their compiled unit tests.
+  Fourteen packages keep tests beside the code as `src/*.test.ts`, and the build
+  emitted them into `dist/` and so into every tarball, as `*.test.js` files
+  that import `vitest`, which is not a dependency. The build now leaves them
+  out; `pnpm typecheck` still checks them, along with the `test/` directories
+  it never covered before.
+
 - Clicking GitHub's **Update branch** on a pull request no longer fails the DCO
   check. That button commits a merge as GitHub itself, with no sign-off and
   nothing the author wrote, and `scripts/check-dco.mjs` treated it like any
