@@ -6,6 +6,16 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- A macOS sandbox profile, `examples/deploy/macos/melra.sb`: under
+  `sandbox-exec`, the kernel confines every write by MELRA and the commands it
+  runs to the workspace, the data directory, and temp folders, and refuses
+  `sudo`/`su`/`login`. CI runs MELRA inside it on macOS: conformance must reach
+  L3, a workspace write must succeed, and a write to the home folder must be
+  refused. The browser adapter is not covered, since Chrome will not start
+  inside another sandbox. (#52)
+
 ### Changed
 
 - Releases publish to npm by trusted publishing: the registry accepts the

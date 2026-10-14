@@ -1,8 +1,9 @@
 name: Deployment recipes
 
-# Runs MELRA under the hardened systemd unit in examples/deploy/systemd, via
-# systemd-run with the unit's own [Service] settings: `doctor` must report the
-# restrictions, and conformance must still reach L3 inside them (#52).
+# Runs MELRA under each hardened recipe in examples/deploy: the systemd unit
+# (via systemd-run with its own [Service] settings) and the macOS sandbox
+# profile (via sandbox-exec). MELRA must still reach conformance L3 inside
+# each, and each must actually refuse what it claims to (#52).
 
 on:
   pull_request:
@@ -11,6 +12,7 @@ on:
       - "packages/**"
       - "examples/deploy/**"
       - "scripts/systemd-smoke.mjs"
+      - "scripts/macos-sandbox-smoke.mjs"
       - "package.json"
       - "pnpm-lock.yaml"
       - ".github/workflows/deploy-recipes.yml"
@@ -22,6 +24,7 @@ on:
       - "packages/**"
       - "examples/deploy/**"
       - "scripts/systemd-smoke.mjs"
+      - "scripts/macos-sandbox-smoke.mjs"
       - "package.json"
       - "pnpm-lock.yaml"
       - ".github/workflows/deploy-recipes.yml"
@@ -46,3 +49,20 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - run: node scripts/systemd-smoke.mjs
+
+  macos-sandbox:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 9.5.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: node scripts/macos-sandbox-smoke.mjs

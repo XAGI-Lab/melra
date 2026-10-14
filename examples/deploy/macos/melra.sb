@@ -1,0 +1,37 @@
+;; MELRA under the macOS sandbox (sandbox-exec / Seatbelt), for #52.
+;;
+;; Everything MELRA and the commands it runs write is confined by the kernel to
+;; the workspace, MELRA's data directory, and the per-user temp folders; a
+;; terminal command that tries to write anywhere else is refused by macOS, not
+;; just by MELRA's own path checks.
+;;
+;;   sandbox-exec -f melra.sb \
+;;     -D WORKSPACE="$PWD" -D MELRA_HOME="$HOME/.melra" \
+;;     melra serve
+;;
+;; Not covered: the browser adapter. Chrome brings its own Seatbelt sandbox and
+;; will not start inside another one; leave it to a separate, unsandboxed MELRA
+;; or to the Docker / systemd recipes. `sandbox-exec` is marked deprecated by
+;; Apple but is what ships and works on current macOS.
+;; `scripts/macos-sandbox-smoke.mjs` checks this file in CI.
+
+(version 1)
+(allow default)
+
+(deny file-write*)
+(allow file-write*
+  (subpath (param "WORKSPACE"))
+  (subpath (param "MELRA_HOME"))
+  ;; Node, npm, and most tools write scratch files here.
+  (subpath "/private/tmp")
+  (subpath "/private/var/folders")
+  (literal "/dev/null")
+  (literal "/dev/zero")
+  (literal "/dev/tty")
+  (regex #"^/dev/fd/"))
+
+;; No raising privilege from inside.
+(deny process-exec
+  (literal "/usr/bin/sudo")
+  (literal "/usr/bin/su")
+  (literal "/usr/bin/login"))
