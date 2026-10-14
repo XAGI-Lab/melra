@@ -41,6 +41,11 @@ interface Client {
   // The client's own executable, if it has one, so `setup` can tell a client is
   // installed before it has ever written a config file.
   bin?: string;
+  // The macOS app bundle, for desktop clients with no CLI on PATH and (VS Code)
+  // a config that lives in the workspace, so nothing on disk says they exist.
+  app?: string;
+  // What to do after `--write`, when it is more than restarting the client.
+  next?: string;
 }
 
 // The per-OS application-config directory: where Electron apps and Zed keep
@@ -64,20 +69,26 @@ export const CLIENTS: Record<string, Client> = {
     shape: "mcpServers",
     bin: "claude",
     path: (workspace) => join(workspace, ".mcp.json"),
+    // A project .mcp.json server waits for the user's approval; until then
+    // `claude mcp list` shows it as "Pending approval" and no tool appears.
+    next: "Start claude in this workspace and approve the 'melra' server when it asks; 'claude mcp list' then shows it connected.",
   },
   "claude-desktop": {
     label: "Claude Desktop",
+    app: "Claude.app",
     shape: "mcpServers",
     path: () => appConfig("Claude", "claude_desktop_config.json"),
   },
   cursor: {
     label: "Cursor",
+    app: "Cursor.app",
     shape: "mcpServers",
     bin: "cursor",
     path: () => home(".cursor", "mcp.json"),
   },
   windsurf: {
     label: "Windsurf",
+    app: "Windsurf.app",
     shape: "mcpServers",
     bin: "windsurf",
     path: () => home(".codeium", "windsurf", "mcp_config.json"),
@@ -90,6 +101,7 @@ export const CLIENTS: Record<string, Client> = {
   },
   kiro: {
     label: "Kiro",
+    app: "Kiro.app",
     shape: "mcpServers",
     bin: "kiro",
     path: () => home(".kiro", "settings", "mcp.json"),
@@ -109,12 +121,14 @@ export const CLIENTS: Record<string, Client> = {
   },
   vscode: {
     label: "VS Code",
+    app: "Visual Studio Code.app",
     shape: "vscode",
     bin: "code",
     path: (workspace) => join(workspace, ".vscode", "mcp.json"),
   },
   zed: {
     label: "Zed",
+    app: "Zed.app",
     shape: "zed",
     bin: "zed",
     path: () =>
@@ -232,6 +246,7 @@ export const CLIENTS: Record<string, Client> = {
   // https://docs.warp.dev/agents/capabilities/mcp.md
   warp: {
     label: "Warp",
+    app: "Warp.app",
     // Warp requires `args`, which every rendered entry carries, even if empty.
     shape: "mcpServers",
     // A desktop app with no CLI of its own: ~/.warp is how it is detected.
@@ -277,6 +292,7 @@ export const CLIENTS: Record<string, Client> = {
   // https://github.com/lmstudio-ai/lmstudio-bug-tracker/issues/1371
   lmstudio: {
     label: "LM Studio",
+    app: "LM Studio.app",
     shape: "mcpServers",
     bin: "lms",
     path: () => join(lmStudioHome(), "mcp.json"),
@@ -613,7 +629,7 @@ export async function writeClientConfig(
   path: string,
   config: Record<string, unknown> | string,
   name: string,
-): Promise<{ backup?: string }> {
+): Promise<{ backup?: string; unchanged?: true }> {
   let existing: string | undefined;
   try {
     existing = await readFile(path, "utf8");
@@ -634,6 +650,8 @@ export async function writeClientConfig(
   } else {
     next = withMelraJson(path, existing, config);
   }
+  // Already exactly this: rewriting would only replace a good .bak with a copy.
+  if (next === existing) return { unchanged: true };
   await mkdir(dirname(path), { recursive: true });
   const backup = existing === undefined ? undefined : `${path}.bak`;
   if (backup !== undefined) await copyFile(path, backup);

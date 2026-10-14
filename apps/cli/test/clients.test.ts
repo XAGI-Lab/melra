@@ -280,8 +280,14 @@ describe("client configs", () => {
       "extensions:\r\n    melra:\r\n        cmd: old\r\n\r\n        args: []\r\n" +
         "    other:\r\n        cmd: keep\r\n",
     );
-    await writeClientConfig(path, clientConfig("goose", entry), "goose");
-    await writeClientConfig(path, clientConfig("goose", entry), "goose");
+    expect(await writeClientConfig(path, clientConfig("goose", entry), "goose")).toHaveProperty("backup");
+    // Second time the file is already right: nothing is written, and the
+    // backup of the original is not overwritten with a copy of the result.
+    await writeFile(`${path}.bak`, "original");
+    expect(await writeClientConfig(path, clientConfig("goose", entry), "goose")).toEqual({
+      unchanged: true,
+    });
+    expect(await readFile(`${path}.bak`, "utf8")).toBe("original");
     const text = await readFile(path, "utf8");
     expect(text.match(/melra:/g)).toHaveLength(1);
     expect(text).not.toContain("old");

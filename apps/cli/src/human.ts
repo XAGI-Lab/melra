@@ -33,6 +33,8 @@ export interface InitResult {
   configPath?: string;
   written?: true;
   backup?: string;
+  // The file already held exactly this entry, so it was left alone.
+  unchanged?: true;
   config: Record<string, unknown> | string;
   note: string;
 }
@@ -71,7 +73,7 @@ export function nextStep(report: DoctorReport): string | undefined {
       case "socket":
         return "fix or unset MELRA_SOCKET (see the socket line above)";
       case "isolation":
-        return "run MELRA in the hardened container (docs/INSTALLATION.md#docker), or another OS sandbox";
+        return "run MELRA in the hardened container (https://github.com/XAGI-Lab/melra/blob/main/docs/INSTALLATION.md#docker), or another OS sandbox";
       case "guardrails":
         return "unset MELRA_UNHINGED and drop --unsafe-local to turn the guardrails back on";
       case "browser":
@@ -162,14 +164,13 @@ export function renderInit(result: InitResult): string {
   const rows = [[mark("pass"), "Policy", result.policyPath]];
   if (result.written === true && result.configPath !== undefined) {
     rows.push([mark("pass"), label, result.configPath]);
-    if (result.backup !== undefined) {
+    if (result.unchanged === true) {
+      rows.push(["", "", paint.dim("already set up; nothing changed")]);
+    } else if (result.backup !== undefined) {
       rows.push(["", "", paint.dim(`previous file saved as ${result.backup}`)]);
     }
-    return [
-      table(rows, { indent: 2 }),
-      "",
-      `Next: ${paint.bold(`Restart ${label}, then ask it to use the melra tools.`)}`,
-    ].join("\n");
+    const next = CLIENTS[result.client]?.next ?? `Restart ${label}, then ask it to use the melra tools.`;
+    return [table(rows, { indent: 2 }), "", `Next: ${paint.bold(next)}`].join("\n");
   }
   const where =
     result.configPath === undefined
@@ -272,4 +273,46 @@ export async function setupWizard(
   } finally {
     rl.close();
   }
+}
+
+export interface ConformanceReport {
+  suite: string;
+  level: number;
+  claimed: number;
+  claim: string;
+  passed: number;
+  of: number;
+  checks: Array<{ level: number; name: string; passed: boolean; detail: string }>;
+  mode: string;
+  notProven: string[];
+  uncleanedProbeFile?: string;
+}
+
+// The checks by level, the level reached, and what it does not prove: the
+// last part is what an operator has to read before quoting the level.
+export function renderConformance(report: ConformanceReport): string {
+  const rows = report.checks.map((check) => [
+    mark(check.passed ? "pass" : "fail"),
+    `L${check.level}`,
+    check.name,
+    paint.dim(check.detail),
+  ]);
+  const reached = report.level === 0 ? "no level reached" : report.claim;
+  const verdict =
+    report.level >= report.claimed
+      ? `${mark("pass")} ${reached}`
+      : `${mark("fail")} ${reached}, short of the L${report.claimed} claimed`;
+  return [
+    paint.bold(`MELRA conformance ${report.suite}`) + paint.dim(` · ${report.mode} mode`),
+    "",
+    table(rows, { indent: 2 }),
+    "",
+    `${verdict} ${paint.dim(`(${report.passed} of ${report.of} checks)`)}`,
+    ...(report.uncleanedProbeFile === undefined
+      ? []
+      : ["", `${mark("warn")} probe file left behind: ${report.uncleanedProbeFile}`]),
+    "",
+    paint.dim("Not proven by this suite:"),
+    ...report.notProven.map((item) => paint.dim(`  - ${item}`)),
+  ].join("\n");
 }

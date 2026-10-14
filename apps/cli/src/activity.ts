@@ -115,7 +115,14 @@ function operationName(task: TaskRecord): string {
 // From the one classifier policy uses, run over the stored (redacted) request,
 // so the target shown is the target that was authorised. A record written by an
 // older version may not classify; it still lists, just without a target.
-function target(task: TaskRecord): string {
+export function taskTarget(task: TaskRecord): string {
+  // A command shows as what ran, `pnpm check`, not the classifier's
+  // `command:pnpm`: the stored arguments are already redacted (#122), and the
+  // console shows them the same way.
+  const operation = task.request.operation as { kind: string; command?: string; args?: string[] };
+  if (operation.kind === "terminal" && operation.command !== undefined) {
+    return [operation.command, ...(operation.args ?? [])].join(" ");
+  }
   try {
     return classifyOperation(task.request.operation).target;
   } catch {
@@ -150,7 +157,8 @@ export function tasksCommand(env: CliEnvironment, options: TasksOptions): number
   if (tasks.length === 0) {
     write(
       options.status === undefined
-        ? "No tasks yet. Try: melra run --request examples/01-system-info/task.json"
+        ? // Not a file under examples/: an npm install has none.
+          "No tasks yet. Try: melra demo durable-core, or melra conformance"
         : `No ${options.status} tasks.`,
     );
     return 0;
@@ -160,7 +168,7 @@ export function tasksCommand(env: CliEnvironment, options: TasksOptions): number
     shortId(task.id),
     task.status,
     operationName(task),
-    truncate(target(task), 48),
+    truncate(taskTarget(task), 48),
     `${task.policyDecision.effect}/${task.policyDecision.risk}`,
     ago(task.updatedAt),
   ]);
@@ -256,7 +264,7 @@ export function watchCommand(env: CliEnvironment, options: { json: boolean }): P
         status: task.status,
         ...(previous === undefined ? {} : { previous }),
         operation: operationName(task),
-        target: target(task),
+        target: taskTarget(task),
         effect: task.policyDecision.effect,
         risk: task.policyDecision.risk,
       });
