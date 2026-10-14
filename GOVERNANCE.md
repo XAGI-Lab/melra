@@ -13,7 +13,7 @@ Anyone who submits issues, documentation, tests, design feedback, or code.
 Maintainers review changes, triage issues, cut releases, and protect the
 versioned contract. The initial maintainers are:
 
-- `@dheeraj-codingdesk`
+- `@dhe-eraj-s`
 - `@bhavana-sanal`
 
 Maintainers may add maintainers after sustained, trusted contribution.
