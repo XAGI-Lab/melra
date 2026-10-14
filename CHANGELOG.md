@@ -40,6 +40,14 @@ All notable changes are documented here. The format follows
   `opencode`, `kiro`, and `generic`. An unknown name is now an error rather
   than a label.
 
+- `melra doctor` reports a `clients` check: for every supported MCP client
+  whose config file exists, whether MELRA is configured, unconfigured, or the
+  file is unreadable; whether the configured command is on `PATH`; and whether
+  an `npx` launch pins an older `@melra/cli`, with the exact
+  `melra setup --client <name> --write` command that fixes it. JSON with
+  comments is searched as text and says so. It warns at most, never fails, and
+  only reads the files. The report also carries a structured `clients` array.
+
 - `--write` merges that configuration into the client's file, keeping every
   other entry and saving the previous file as `<file>.bak`. It refuses JSON
   with comments rather than silently dropping them, and a rerun replaces

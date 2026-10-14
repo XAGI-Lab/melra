@@ -48,6 +48,7 @@ import {
   serverLaunch,
 } from "./environment.js";
 import { runConformance } from "./conformance.js";
+import { clientStatuses, clientsCheck } from "./client-status.js";
 import {
   CLIENTS,
   clientConfig,
@@ -489,6 +490,8 @@ async function doctor(env: CliEnvironment): Promise<{
       detail: error instanceof Error ? error.message : String(error),
     });
   }
+  const clients = await clientStatuses(env.workspaceRoot);
+  checks.push(clientsCheck(clients));
   const failed = checks.some((check) => check.status === "fail");
   return {
     report: {
@@ -500,6 +503,8 @@ async function doctor(env: CliEnvironment): Promise<{
       unhinged: env.unhinged,
       mode: env.mode,
       checks,
+      // Per client, so a script can find a stale pin without parsing `detail`.
+      clients,
     },
     failed,
   };

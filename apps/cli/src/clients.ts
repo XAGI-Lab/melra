@@ -156,7 +156,7 @@ export function clientConfigPath(name: string, workspace: string): string | unde
   return CLIENTS[name]?.path?.(workspace);
 }
 
-const isObject = (value: unknown): value is Record<string, unknown> =>
+export const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
 // Drop every `[mcp_servers.melra]` table (and its subtables) so a rerun after
