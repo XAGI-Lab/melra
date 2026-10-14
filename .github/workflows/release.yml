@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write # the GitHub release
-      id-token: write # npm provenance and artifact attestation
+      id-token: write # npm trusted publishing (OIDC), provenance, and attestation
       attestations: write
       artifact-metadata: write
     steps:
@@ -81,30 +81,35 @@ jobs:
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-checksums: release/SHA256SUMS
+      # Trusted publishing: npm authenticates this workflow by its OIDC token
+      # (the `id-token: write` above) against the trusted publisher registered
+      # for each package, so no npm token exists to leak or expire. 11.21.0 is
+      # the first npm that also moves dist-tags this way. Provenance is
+      # attached automatically.
+      - run: npm install -g npm@11.21.0
       - name: Publish to npm
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         shell: bash
         run: |
-          printf '//registry.npmjs.org/:_authToken=%s\n' "${NODE_AUTH_TOKEN}" >> .npmrc
-          npm whoami --registry=https://registry.npmjs.org/
           case "${GITHUB_REF_NAME}" in
             *-alpha*) tag=alpha ;;
             *-beta*)  tag=beta ;;
             *-rc*)    tag=rc ;;
             *)        tag=latest ;;
           esac
-          # Publishing runs before the GitHub release is created. There is no
-          # reliable pre-flight for this: a dry run never issues a PUT, so it
-          # cannot detect a missing scope or a token without rights to one, and
-          # the registry's org endpoints answer 403 for every scope a granular
-          # token cannot read, existing or not. The publish itself is the only
-          # honest check, so it runs first and a failure leaves no release behind.
-          pnpm -r publish --tag "${tag}" --provenance --no-git-checks --access public
+          # pnpm packs, which turns `workspace:*` into the released version;
+          # npm publishes, because npm is what speaks OIDC to the registry.
+          # Publishing runs before the GitHub release is created, so a failure
+          # here leaves no release behind.
+          mkdir -p "${RUNNER_TEMP}/npm"
+          node -e 'const fs=require("node:fs");for(const p of fs.globSync("{apps,packages}/*/package.json")){const m=JSON.parse(fs.readFileSync(p,"utf8"));if(!m.private)console.log(require("node:path").dirname(p))}' \
+            | while read -r dir; do
+                (cd "${dir}" && pnpm pack --pack-destination "${RUNNER_TEMP}/npm" >/dev/null)
+              done
+          for tarball in "${RUNNER_TEMP}"/npm/*.tgz; do
+            npm publish "${tarball}" --tag "${tag}" --access public --provenance
+          done
       - name: Point latest at this prerelease
         if: ${{ contains(github.ref_name, '-') }}
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         shell: bash
         run: |
           # No stable release exists yet, so `latest` — what a bare
