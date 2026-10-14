@@ -10,6 +10,17 @@ All notable changes are documented here. The format follows
 
 ### Added
 
+- Evidence predicates are pluggable. Each type is checked by a
+  `PredicateVerifier` from `@melra/verifier-core`, and all nine built-ins are
+  now implemented that way; `Verifier.create(root, { verifiers })` registers
+  more for types the kernel does not ship. The kernel keeps what decides
+  success: `type` and `strength` are stamped from the predicate type over
+  anything a verifier returns, so a new type reads as the weakest claim; a type
+  with no verifier, or a `check` that throws, fails; a built-in type cannot be
+  replaced; and file access is only through a confined
+  `context.workspacePath()`. A `TaskRequest` still takes only the built-in
+  types. (#53)
+
 - `melra doctor` has an `isolation` line: which OS restrictions the process is
   actually under, read from `/proc` on Linux: container, an empty capability
   set, `no_new_privs`, a seccomp filter, a read-only root. In enforced mode
