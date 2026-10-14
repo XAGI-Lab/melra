@@ -397,11 +397,20 @@ alternative, not asking the harness not to use it.
       the same adapter and destination boundary as any other call, `GET`/`HEAD`
       only, and a runtime with no HTTP channel fails the predicate rather than
       passing it. It carries `strength: "independent"`; nothing else does.
-- [ ] Pluggable verifiers — file, process, HTTP, database, browser, cloud,
-      SaaS, webhook — behind one predicate interface.
-      ([#53](https://github.com/XAGI-Lab/melra/issues/53))
+- [x] Pluggable verifiers behind one predicate interface. Every built-in
+      predicate is a `PredicateVerifier` in `@melra/verifier-core`, and an
+      embedder registers more with `createMelraRuntime({ evidenceVerifiers })`;
+      a request names one as `{ "type": "custom", "verifier": … }`. The kernel
+      keeps what decides success: strength is stamped from the type (custom
+      evidence is always `execution`), an unregistered verifier is refused at
+      plan time, `custom` cannot reach a built-in, and file access stays
+      confined. Database, cloud, SaaS, and webhook verifiers are for embedders
+      to write; none ships here.
+      ([#53](https://github.com/XAGI-Lab/melra/issues/53),
+      [#139](https://github.com/XAGI-Lab/melra/issues/139))
 - [ ] Semantic verification, labelled probabilistic everywhere it appears, and
-      never the sole evidence for a destructive effect.
+      never the sole evidence for a destructive effect. Design proposal under
+      discussion on the issue.
       ([#54](https://github.com/XAGI-Lab/melra/issues/54))
 
 ### P4 — credentials and API effects
