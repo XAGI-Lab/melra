@@ -301,6 +301,12 @@ exercised in the then-current versions of:
 - VS Code’s MCP support;
 - at least one additional independent MCP inspector or client.
 
+Partial progress: Claude Code, OpenCode, and Hermes Agent each completed an MCP
+handshake and tool discovery against the packed `0.3.0-alpha.12` install, run by
+their own CLIs, and Codex parsed the entry
+([details](COMPATIBILITY.md#mcp-and-sdk-compatibility)). That covers discovery only; the
+rest of the checklist has not been run in any of them.
+
 The two HTML surfaces — the console at `/` and the OAuth consent page at
 `/oauth/authorize` — are covered at the HTTP level against a live `melra serve
 --http`: the console is served with its posture line, workflow list and
