@@ -1,6 +1,6 @@
 # Runnable examples
 
-Each directory contains a complete task request accepted by:
+Each numbered directory contains a complete task request accepted by:
 
 ```bash
 pnpm melra run --request examples/<example>/task.json
@@ -63,3 +63,8 @@ adapter's own report cannot produce. The evidence item carries
 | `07-project-decision-memory` | memory | a project procedure is stored with provenance |
 | `08-governed-api-call` | http | a 200 from an allowlisted API, verified against the status |
 | `09-independent-verification` | http | a `POST` confirmed by a separate `GET`, not by its own response |
+
+[`workflows/`](workflows/) holds durable workflow definitions, and
+[`frameworks/`](frameworks/) shows how to connect MELRA from agent frameworks
+in code — LangChain/LangGraph, the OpenAI Agents SDK, the Vercel AI SDK, and
+the official MCP SDKs.

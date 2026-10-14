@@ -22,9 +22,9 @@ Which MCP client should use MELRA?
   1)   Cursor            detected: config file found
   2)   Claude Code       detected: 'claude' on PATH
   ...
-  15)  generic (just print the config)
+  26)  generic (just print the config)
 
-Choose 1-15 [1]: 1
+Choose 1-26 [1]: 1
 Write it into /home/you/.cursor/mcp.json? [Y/n]
 
   ✓  Policy  /home/you/.melra/policy.json
@@ -797,6 +797,17 @@ merges it there for you:
 | `goose` | Goose | `~/.config/goose/config.yaml` (Windows: `%APPDATA%\Block\goose\config\config.yaml`) | YAML `extensions.melra`, `type: stdio` |
 | `continue` | Continue | `<workspace>/.continue/mcpServers/melra.yaml` | YAML block file, `mcpServers` list |
 | `amp` | Amp | `~/.config/amp/settings.json` (or an existing `settings.jsonc`) | `amp.mcpServers` |
+| `openclaw` | OpenClaw | `$OPENCLAW_CONFIG_PATH`, else `openclaw.json` in `$OPENCLAW_STATE_DIR` (default `~/.openclaw`) | JSON5 `mcp.servers` |
+| `hermes` | Hermes Agent (Nous Research) | `$HERMES_HOME/config.yaml` (default `~/.hermes`; Windows `%LOCALAPPDATA%\hermes`) | YAML `mcp_servers.melra` |
+| `copilot` | GitHub Copilot CLI | `$COPILOT_HOME/mcp-config.json` (default `~/.copilot`) | `mcpServers`, `type: "local"`, `tools: ["*"]` |
+| `qwen` | Qwen Code | `~/.qwen/settings.json` | `mcpServers` |
+| `auggie` | Auggie (Augment CLI) | `~/.augment/settings.json` | `mcpServers` |
+| `warp` | Warp | `~/.warp/.mcp.json` | `mcpServers` |
+| `junie` | JetBrains Junie (CLI and IDE plugin) | `~/.junie/mcp/mcp.json` | `mcpServers` |
+| `droid` | Factory Droid | `~/.factory/mcp.json` | `mcpServers`, `type: "stdio"` |
+| `kimi` | Kimi Code CLI | `$KIMI_CODE_HOME/mcp.json` (default `~/.kimi-code`) | `mcpServers` |
+| `kilo` | Kilo Code (CLI and extension) | `~/.config/kilo/kilo.jsonc` (or an existing `kilo.json`) | `mcp`, `type: "local"` |
+| `lmstudio` | LM Studio | `mcp.json` in LM Studio's home: the path in `~/.lmstudio-home-pointer`, else `~/.cache/lm-studio` if it exists, else `~/.lmstudio` | `mcpServers` |
 | `generic` | Anything else | — (printed only) | `mcpServers` |
 
 For JSON files `--write` edits only MELRA's own entry in place, so everything
@@ -810,9 +821,52 @@ client reads is ambiguous); paste the printed block in by hand instead. An
 existing OpenCode `$schema` is never replaced. For Goose it edits
 only MELRA's own entry under `extensions:` and leaves every other line as it
 was, and refuses a `config.yaml` it cannot edit that way (flow-style
-`extensions`, tabs, uneven indentation). Continue's file belongs to MELRA, so it
-is replaced whole. Rerunning it replaces MELRA's own entry, so it is also how
-you repoint a client after an upgrade.
+`extensions`, tabs, uneven indentation); Hermes's `config.yaml` gets the same
+line edit under `mcp_servers:`, with the same refusals. OpenClaw's
+`openclaw.json` is JSON5: the comments and trailing commas OpenClaw writes are
+kept, while JSON5-only syntax such as unquoted keys or single-quoted strings is
+refused rather than rewritten. The OpenClaw gateway reloads the file on its own,
+whereas `openclaw mcp add` refuses to run while the gateway is up. Continue's
+file belongs to MELRA, so it is replaced whole. Rerunning it replaces MELRA's
+own entry, so it is also how you repoint a client after an upgrade.
+
+`--client claude-code` writes the project-scoped `.mcp.json` in the workspace.
+To make MELRA available in every project instead, let Claude Code store it in
+its user scope itself — MELRA does not edit `~/.claude.json`, which Claude
+Code rewrites constantly:
+
+```bash
+claude mcp add-json --scope user melra '{"type":"stdio","command":"melra","args":["serve"],"env":{"MELRA_WORKSPACE":"/absolute/path/to/your/workspace"}}'
+```
+
+Codex, OpenClaw, and Hermes have equivalent commands (`codex mcp add melra
+--env MELRA_WORKSPACE=… -- melra serve`, `openclaw mcp set melra '<json>'`, and
+the interactive `hermes mcp add`); `--write` produces the same entry without
+the client running.
+
+Each path and format above is taken from that client's own documentation or
+source, linked beside its entry in `apps/cli/src/clients.ts`. Warp may ask you
+to approve a change to its MCP file the next time it starts.
+
+Clients with no file `--write` can safely target — add MELRA in the app's own
+MCP settings, pasting the `generic` configuration (`melra setup --client
+generic`):
+
+- **JetBrains AI Assistant**: Settings → Tools → AI Assistant → Model Context
+  Protocol. (Junie, JetBrains' agent, has a file: use `--client junie`.)
+- **Jan**: Settings → MCP Servers. Jan keeps them in an undocumented
+  `mcp_config.json` in its data folder, which MELRA leaves alone.
+- **Trae**: the MCP panel. The project file `.trae/mcp.json` takes the
+  `mcpServers` shape once "Enable Project MCP" is on; the global file's
+  location is not documented.
+- **Crush**: `crushrc`'s `mcp add`, or the deprecated `crush.json`, under `mcp`
+  with `"type": "stdio"` and `command`/`args`/`env`.
+- **Mistral Vibe**: an `[[mcp_servers]]` table in `~/.vibe/config.toml` with
+  `name = "melra"`, `transport = "stdio"`, `command`, `args`, and `env`.
+- **Cursor CLI** (`agent`) reads the same `~/.cursor/mcp.json` as Cursor, so
+  `--client cursor` covers both. **Amazon Q Developer CLI** has become Kiro
+  CLI: use `--client kiro`. **Roo Code** has been discontinued; its successors
+  Kilo Code and Cline are both supported above.
 
 For any other client, use the common `mcpServers` configuration field:
 
@@ -861,6 +915,11 @@ This structure is accepted by Claude Desktop and clients that implement the
 common MCP server configuration format. Clients with their own format use the
 same command, arguments, and environment values under a different key; the
 table above lists them.
+
+Agents built in code rather than run as an app — LangChain/LangGraph, the
+OpenAI Agents SDK, the Vercel AI SDK, or the MCP SDKs directly — spawn the same
+`melra serve`; [examples/frameworks](../examples/frameworks/README.md) has a
+short snippet for each.
 
 The repository’s automated compatibility claim is the official MCP SDK over
 stdio. Named graphical clients remain release-gated until their current

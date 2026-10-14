@@ -819,8 +819,9 @@ Flags:
   --client <name>  Emit the MCP config in this client's own format and say
                    where it goes: claude-code (or claude), claude-desktop,
                    cursor, vscode, windsurf, codex, gemini, zed, cline,
-                   opencode, kiro, goose, continue, amp, or generic
-                   (default).
+                   opencode, kiro, goose, continue, amp, openclaw, hermes,
+                   copilot, qwen, auggie, warp, junie, droid, kimi, kilo,
+                   lmstudio, or generic (default).
   --write          With --client, merge the config into that client's file,
                    keeping everything else and saving the old file as .bak.
   --unsafe-local   Run with no policy and no guardrails. Everything the OS user
