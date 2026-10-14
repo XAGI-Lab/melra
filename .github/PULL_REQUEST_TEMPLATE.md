@@ -8,7 +8,8 @@
 
 ## Validation
 
-- [ ] `pnpm check`
+- [ ] `pnpm check` (includes `pnpm docs:check`: links, the `MELRA_*` table, and the CHANGELOG shape)
+- [ ] `CHANGELOG.md` entry under `## [Unreleased]`, in the existing section, if a user would notice
 - [ ] Documentation updated
 - [ ] Security and compatibility impact considered
 
