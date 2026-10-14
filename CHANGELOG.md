@@ -106,6 +106,12 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- Clicking GitHub's **Update branch** on a pull request no longer fails the DCO
+  check. That button commits a merge as GitHub itself, with no sign-off and
+  nothing the author wrote, and `scripts/check-dco.mjs` treated it like any
+  other commit. Only that mechanical merge is exempt; a merge made by hand can
+  carry conflict-resolution edits and still needs its author's sign-off.
+
 - `MELRA_HARNESS_TOOLS` now has a row in the environment table in
   `docs/INSTALLATION.md`. It was described in prose and shown in a JSON
   snippet, but anyone scanning the table for what can be configured missed it.
