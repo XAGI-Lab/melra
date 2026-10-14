@@ -713,7 +713,9 @@ those two situations you are in.
 MELRA cannot verify that assertion from inside its own process — the isolation
 is the operating system's job, and enforced mode deliberately does not reinvent
 it. Bring a container, a separate OS user, a sandbox profile, or filesystem
-ACLs. What MELRA does is stop being one of the ways the claim could be false, by
+ACLs; [examples/deploy](../examples/deploy/README.md) has a hardened Docker
+run and systemd unit, each checked in CI, and `melra doctor` reports what took
+effect on its `isolation` line. What MELRA does is stop being one of the ways the claim could be false, by
 closing every door it owns:
 
 - **`--unsafe-local` is refused outright.** A mode whose point is that the
