@@ -22,7 +22,8 @@ All notable changes are documented here. The format follows
   `MelraClient.connect({ socketPath, token })` for `melra serve --socket`, with
   every task and workflow method unchanged. The token is passed explicitly and
   never read from the environment; a plain `http:` URL to a non-loopback host
-  is refused rather than sending the token in cleartext; a refused token fails
+  is refused rather than sending the token in cleartext, unless the caller opts
+  in with `allowInsecureHttp: true` for a network it trusts; a refused token fails
   with `melra_unauthorized`; sockets are refused on Windows, as the server
   refuses them. The stdio options are unchanged.
 
