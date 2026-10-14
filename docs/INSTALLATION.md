@@ -167,6 +167,25 @@ pnpm melra doctor
 
 Use `pnpm melra` in place of `melra` in the configurations below.
 
+### Single executable (experimental)
+
+One file with Node inside, for machines that should not need Node installed.
+Built from source for the platform you build on; releases do not ship it yet:
+
+```bash
+pnpm build:sea          # needs Node 25+ to build; the result needs no Node
+./dist-sea/melra doctor
+```
+
+The binary is about 150 MB and carries the Node that built it. `melra setup`
+run from it writes the binary's absolute path into client configs, since a
+client may not launch with it on `PATH`. On macOS the build adds an ad-hoc
+signature, the minimum Apple Silicon will run; a copy downloaded from elsewhere
+would still meet Gatekeeper, which is why signed release binaries are tracked
+separately ([#76](https://github.com/XAGI-Lab/melra/issues/76)). CI builds it
+on Linux, macOS, and Windows and checks `doctor` and conformance L3 against
+it with only the system directories on `PATH`.
+
 ## Local configuration
 
 MELRA uses these environment variables:

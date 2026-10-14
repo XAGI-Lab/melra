@@ -141,6 +141,12 @@ describe("melra CLI", () => {
     ).toEqual({ command: "npx", args: ["-y", "@melra/cli@1.2.3", "serve"] });
     expect(serverLaunch("/usr/local/lib/node_modules/@melra/cli/dist", "1.2.3"))
       .toEqual({ command: "melra", args: ["serve"] });
+    // A single executable names itself by absolute path: it carries Node, and
+    // need not be on the PATH a client launches with.
+    expect(serverLaunch("/anywhere", "1.2.3", true)).toEqual({
+      command: process.execPath,
+      args: ["serve"],
+    });
   });
 
   it("prints the product version", async () => {

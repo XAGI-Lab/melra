@@ -3,6 +3,7 @@
 
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
+import { isSea } from "node:sea";
 import type { DeploymentMode } from "@melra/protocol";
 import { deploymentMode } from "@melra/protocol";
 import { unhingedFromEnvironment } from "@melra/server";
@@ -33,10 +34,16 @@ export interface CliEnvironmentDefaults {
 // so `melra` would fail to start for exactly the users who took the shortest
 // install path. Pin the version that wrote the config, so the client keeps
 // launching the same server until someone changes it.
+//
+// A single-executable build (`melra` with Node inside, #76) is neither: the
+// client must spawn this very binary, by absolute path, since it may well not
+// be on the PATH a client launches with.
 export function serverLaunch(
   moduleDirectory: string,
   version: string,
+  singleExecutable = isSea(),
 ): { command: string; args: string[] } {
+  if (singleExecutable) return { command: process.execPath, args: ["serve"] };
   return /[\\/]_npx[\\/]/.test(moduleDirectory)
     ? { command: "npx", args: ["-y", `@melra/cli@${version}`, "serve"] }
     : { command: "melra", args: ["serve"] };
