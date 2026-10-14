@@ -6,6 +6,7 @@ import {
   canonicalJson,
   createCertificate,
   evidenceStrength,
+  redactArgv,
   redactStructuredValue,
   sha256,
 } from "./index.js";
@@ -67,5 +68,50 @@ describe("receipt and certificate primitives", () => {
     // A predicate added without a decision in the table, or a type from a
     // future version, must not inherit a strength it never earned.
     expect(evidenceStrength("predicate_from_a_later_version")).toBe("execution");
+  });
+
+  it("keeps ordinary terminal arguments and takes out only their credentials", () => {
+    const R = "[REDACTED_SENSITIVE_ARG]";
+    const argv = (args: string[]) => redactArgv(args).value;
+    // What ran stays readable: nothing here is a credential.
+    const plain = ["check", "--version", "src/index.ts", "-p", "22", "mkdir", "-pv", "sort", "-u", "file"];
+    expect(argv(plain)).toEqual(plain);
+    expect(redactArgv(plain).redactions).toEqual([]);
+
+    expect(argv(["--token", "abc", "--verbose"])).toEqual(["--token", R, "--verbose"]);
+    expect(argv(["--token=abc", "--api-key=xyz", "--db-password", "p"])).toEqual([
+      `--token=${R}`,
+      `--api-key=${R}`,
+      "--db-password",
+      R,
+    ]);
+    expect(argv(["-phunter2", "-u", "root"])).toEqual([`-p${R}`, "-u", "root"]);
+    expect(argv(["-u", "admin:hunter2"])).toEqual(["-u", `admin:${R}`]);
+    expect(argv(["GITHUB_TOKEN=abc", "MY_API_KEY=x", "PATH=/bin"])).toEqual([
+      `GITHUB_TOKEN=${R}`,
+      `MY_API_KEY=${R}`,
+      "PATH=/bin",
+    ]);
+    expect(argv(["-H", "Authorization: Bearer abc", "-H", "Accept: text/plain"])).toEqual([
+      "-H",
+      `Authorization: ${R}`,
+      "-H",
+      "Accept: text/plain",
+    ]);
+    expect(argv(["postgres://app:s3cret@db:5432/app", "https://example.com/a"])).toEqual([
+      `postgres://${R}@db:5432/app`,
+      "https://example.com/a",
+    ]);
+    // A secret with a known shape goes wherever it sits.
+    expect(argv(["echo", "ghp_123456789012345678901234"])[1]).not.toContain("ghp_");
+  });
+
+  it("redacts args in a stored request instead of blanking them", () => {
+    const redacted = redactStructuredValue({
+      operation: { command: "pnpm", args: ["check", "--token=abc"] },
+      nested: { args: { not: "a list" } },
+    }).value as { operation: { args: string[] }; nested: { args: Record<string, string> } };
+    expect(redacted.operation.args).toEqual(["check", "--token=[REDACTED_SENSITIVE_ARG]"]);
+    expect(redacted.nested.args.not).toBe("[REDACTED_SENSITIVE_FIELD]");
   });
 });
