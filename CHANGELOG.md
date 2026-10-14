@@ -260,6 +260,12 @@ All notable changes are documented here. The format follows
 
 ### Security
 
+- Development and benchmark dependencies: `source-map-js` is held at 1.2.2 or
+  later (GHSA-68fv-2mgg-jv7q, an event-loop denial of service reached through
+  Vite's source maps), and the browser-agent benchmark overrides the
+  `geopy==2.4.1` pin from `webarena-verified` to 2.5.0 (GHSA-mhvh-fq92-pfmr, a
+  ReDoS in `geopy.Point`). Neither ships in a published package.
+
 - An IPv6 literal in a browser or HTTP destination (`http://[::1]/`,
   `[fd00::1]`, the IPv4-mapped form of `169.254.169.254`) is now checked as the
   address it is. `URL.hostname` keeps the brackets and `isIP("[::1]")` is 0, so

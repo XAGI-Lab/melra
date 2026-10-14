@@ -34,8 +34,12 @@ melra-browser-bench = "melra_browser_bench.cli:main"
 # than left vulnerable. `benchmark:browser:check` passes on 6.1.1; the MiniWoB
 # and WebArena extras are not installed by that check, so if a future browsergym
 # release does break on lxml 6 it will surface in a benchmark run, not in CI.
+# `webarena-verified` pins `geopy==2.4.1`, which carries a ReDoS in
+# `geopy.Point` parsing (GHSA-mhvh-fq92-pfmr, fixed in 2.5.0). 2.5.0 keeps
+# the same API and dependency (`geographiclib<3`); like lxml above, a break would
+# show in a WebArena run rather than in CI, which does not install that extra.
 [tool.uv]
-override-dependencies = ["lxml>=6.1.0"]
+override-dependencies = ["lxml>=6.1.0", "geopy>=2.5.0"]
 
 [tool.uv.sources]
 melra = { path = "../../sdk-py" }
