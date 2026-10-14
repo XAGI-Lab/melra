@@ -169,9 +169,9 @@ To exercise a published build the way an end user gets it, install it and point
 the smoke at the installed binary rather than a source build:
 
 ```bash
-npm install --prefix /tmp/melra-check @melra/cli@0.3.0-alpha.11
+npm install --prefix /tmp/melra-check @melra/cli@0.3.0-alpha.12
 MELRA_COMMAND=/tmp/melra-check/node_modules/.bin/melra \
-  MELRA_EXPECTED_VERSION=0.3.0-alpha.11 \
+  MELRA_EXPECTED_VERSION=0.3.0-alpha.12 \
   pnpm registry:smoke
 ```
 
@@ -329,11 +329,14 @@ digest. It asserts the reported version against the tag, so a cached older build
 cannot pass for the new one. That is evidence about the tarball an end user
 installs, which is a different claim from CI building the source tree.
 
-On `v0.3.0-alpha.11` that job passed on all three runners against the package as
-published: `version 0.3.0-alpha.11`, 11 tools, `verified_success`,
-`VERIFIED_SUCCESS`, digest
-`ac74291990e0c38caaf654668ea831378e9c872b00d909b6d8b2c6442cd78c9f`
-(macos-latest; run 31494782032).
+On `v0.3.0-alpha.12` that job passed on all six runners (ubuntu, macOS, and
+Windows, each on Node 22 and 24) against the package as published:
+`version 0.3.0-alpha.12`, 11 tools, `verified_success`, `VERIFIED_SUCCESS`,
+digest `4ee5db435f8ceaeb14d165134522edaccc0287eca86ddbc3aeb6e973a1683b79`
+(macos-latest, Node 24; run 38618292628). Its first attempt failed on all six
+for a reason outside the package: the CLI was visible on npm a moment before
+`@melra/browser-runtime`, so the install could not resolve it yet; a rerun of
+those jobs passed, and the step now retries the whole install (#147).
 
 Before `1.0`, an independent security review must resolve all critical
 findings.
