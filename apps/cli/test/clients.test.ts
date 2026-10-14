@@ -1,7 +1,7 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -12,6 +12,7 @@ import {
   resolveClient,
   writeClientConfig,
 } from "../src/clients.js";
+import { parseJsonc } from "../src/jsonc.js";
 
 const entry = { command: "melra", args: ["serve"], env: { MELRA_WORKSPACE: 'C:\\w "x"' } };
 const roots: string[] = [];
@@ -98,14 +99,151 @@ describe("client configs", () => {
     expect(JSON.parse(await readFile(path, "utf8"))).toEqual(clientConfig("vscode", entry));
   });
 
-  it("refuses a JSON file it would have to strip comments from", async () => {
-    const path = join(await scratch(), "settings.json");
-    const original = '{\n  // mine\n  "theme": "x"\n}\n';
-    await writeFile(path, original);
-    await expect(writeClientConfig(path, clientConfig("zed", entry), "zed")).rejects.toThrow(
-      /not plain JSON/,
+  it("keeps a plain JSON file's own formatting and is idempotent", async () => {
+    const path = join(await scratch(), "mcp.json");
+    await writeFile(path, '{"mcpServers":{"other":{"command":"x"}},"keep":1}');
+    await writeClientConfig(path, clientConfig("cursor", entry), "cursor");
+    const once = await readFile(path, "utf8");
+    expect(once).toBe(
+      `{"mcpServers":{"other":{"command":"x"}, "melra": ${JSON.stringify(entry)}},"keep":1}`,
     );
+    await writeClientConfig(path, clientConfig("cursor", entry), "cursor");
+    expect(await readFile(path, "utf8")).toBe(once);
+  });
+
+  it("adds MELRA to a commented Zed settings file without touching any other byte", async () => {
+    const path = join(await scratch(), "settings.json");
+    const original = [
+      "// Zed settings",
+      "//",
+      "// see https://zed.dev/docs/configuring-zed",
+      "{",
+      '  "theme": "One Dark", // trailing note',
+      "  /* block",
+      '     comment with "quotes" and { braces } */',
+      '  "terminal": { "font_family": "Fira // Code", "shell": "/* nor this */ \\" // x" },',
+      '  "context_servers": {',
+      "    // my own server",
+      '    "other": {',
+      '      "command": "x",',
+      '      "args": [],',
+      "    },",
+      "  },",
+      '  "vim_mode": true,',
+      "}",
+      "",
+    ].join("\n");
+    await writeFile(path, original);
+    const { backup } = await writeClientConfig(path, clientConfig("zed", entry), "zed");
+    expect(await readFile(backup ?? "", "utf8")).toBe(original);
+    const text = await readFile(path, "utf8");
+    const at = original.indexOf("    },\n  },") + "    },".length;
+    const inserted = `\n    "melra": ${JSON.stringify(entry, null, 2).replaceAll("\n", "\n    ")},`;
+    expect(text).toBe(`${original.slice(0, at)}${inserted}${original.slice(at)}`);
+    expect(parseJsonc(text).value).toMatchObject({
+      terminal: { font_family: "Fira // Code", shell: '/* nor this */ " // x' },
+      context_servers: { other: { command: "x" }, melra: entry },
+    });
+  });
+
+  it("replaces an existing MELRA entry in place, keeping comments around it", async () => {
+    const path = join(await scratch(), "settings.json");
+    const old = '{ "command": "old", /* stale */ }';
+    const original = `{\n  "context_servers": {\n    "melra": ${old}, // keep me\n  },\n}\n`;
+    await writeFile(path, original);
+    await writeClientConfig(path, clientConfig("zed", entry), "zed");
+    const rendered = JSON.stringify(entry, null, 2).replaceAll("\n", "\n    ");
+    expect(await readFile(path, "utf8")).toBe(original.replace(old, rendered));
+  });
+
+  it("creates context_servers when a commented file has none", async () => {
+    const path = join(await scratch(), "settings.json");
+    await writeFile(path, '{\n  // only mine\n  "theme": "x" // why\n}\n');
+    await writeClientConfig(path, clientConfig("zed", entry), "zed");
+    const block = JSON.stringify({ melra: entry }, null, 2).replaceAll("\n", "\n  ");
+    expect(await readFile(path, "utf8")).toBe(
+      `{\n  // only mine\n  "theme": "x", // why\n  "context_servers": ${block}\n}\n`,
+    );
+  });
+
+  it("adds MELRA to a commented VS Code mcp.json", async () => {
+    const path = join(await scratch(), ".vscode", "mcp.json");
+    await mkdir(join(path, ".."), { recursive: true });
+    const github = '"github": { "type": "http", "url": "https://api.githubcopilot.com/mcp/" }';
+    const original = `{\n  // workspace servers\n  "servers": {\n    ${github} // remote\n  },\n  "inputs": []\n}\n`;
+    await writeFile(path, original);
+    await writeClientConfig(path, clientConfig("vscode", entry), "vscode");
+    const melra = JSON.stringify({ type: "stdio", ...entry }, null, 2).replaceAll("\n", "\n    ");
+    expect(await readFile(path, "utf8")).toBe(
+      original.replace(`${github} // remote\n`, `${github}, // remote\n    "melra": ${melra}\n`),
+    );
+  });
+
+  it("keeps CRLF line endings and tab indentation", async () => {
+    const dir = await scratch();
+    const crlf = join(dir, "crlf.json");
+    await writeFile(crlf, '{\r\n  // c\r\n  "context_servers": {},\r\n}\r\n');
+    await writeClientConfig(crlf, clientConfig("zed", entry), "zed");
+    const block = JSON.stringify(entry, null, 2).replaceAll("\n", "\r\n    ");
+    expect(await readFile(crlf, "utf8")).toBe(
+      `{\r\n  // c\r\n  "context_servers": {\r\n    "melra": ${block}\r\n  },\r\n}\r\n`,
+    );
+
+    const tabs = join(dir, "tabs.json");
+    await writeFile(tabs, '{\n\t// c\n\t"context_servers": {\n\t\t"other": {},\n\t},\n}\n');
+    await writeClientConfig(tabs, clientConfig("zed", entry), "zed");
+    const tabbed = JSON.stringify(entry, null, "\t").replaceAll("\n", "\n\t\t");
+    expect(await readFile(tabs, "utf8")).toBe(
+      `{\n\t// c\n\t"context_servers": {\n\t\t"other": {},\n\t\t"melra": ${tabbed},\n\t},\n}\n`,
+    );
+  });
+
+  it("never overwrites OpenCode's $schema, but adds it when absent", async () => {
+    const dir = await scratch();
+    const custom = join(dir, "custom.json");
+    const original = '{\n  // mine\n  "$schema": "https://example.com/s.json",\n  "mcp": {}\n}\n';
+    await writeFile(custom, original);
+    await writeClientConfig(custom, clientConfig("opencode", entry), "opencode");
+    const text = await readFile(custom, "utf8");
+    expect(text.startsWith('{\n  // mine\n  "$schema": "https://example.com/s.json",\n')).toBe(true);
+    expect(parseJsonc(text).value).toMatchObject({
+      $schema: "https://example.com/s.json",
+      mcp: { melra: { type: "local" } },
+    });
+    const bare = join(dir, "bare.json");
+    await writeFile(bare, '{ "mcp": {} } // c\n');
+    await writeClientConfig(bare, clientConfig("opencode", entry), "opencode");
+    expect(parseJsonc(await readFile(bare, "utf8")).value).toEqual(clientConfig("opencode", entry));
+  });
+
+  it.each([
+    ["duplicate keys", '{ "context_servers": {}, "context_servers": {} } // c', /more than once/],
+    ["a duplicate melra", '{ "context_servers": { "melra": 1, "melra": 2 } }', /more than once/],
+    ["invalid JSONC", '{\n  // c\n  "a": 1 "b": 2\n}\n', /not valid JSON or JSONC .*line 3/],
+    ["an unterminated comment", '{ "a": 1 } /* c', /not valid JSON or JSONC/],
+    ["a non-object root", "[1] // c\n", /does not hold a JSON object/],
+    ["a non-object path step", '{ "context_servers": [], }', /"context_servers" is not an object/],
+  ])("refuses a file with %s and leaves it untouched", async (_, original, message) => {
+    const path = join(await scratch(), "settings.json");
+    await writeFile(path, original);
+    const write = writeClientConfig(path, clientConfig("zed", entry), "zed");
+    await expect(write).rejects.toThrow(message);
+    await expect(write).rejects.toThrow(/by hand/);
     expect(await readFile(path, "utf8")).toBe(original);
+  });
+
+  it("parses JSONC: comments, trailing commas, escapes, and source spans", () => {
+    const text = '/* a */ {"k": "a // \\"b\\" /* c */", "n": [1, -2.5e3, true, null,], } // z';
+    const root = parseJsonc(text);
+    expect(root.value).toEqual({ k: 'a // "b" /* c */', n: [1, -2500, true, null] });
+    expect(text.slice(root.start, root.end)).toBe(text.slice(8, -5));
+    const [k, n] = root.members ?? [];
+    expect(text.slice(k?.keyStart, k?.value.end)).toBe('"k": "a // \\"b\\" /* c */"');
+    expect(text.slice(n?.value.start, n?.value.end)).toBe("[1, -2.5e3, true, null,]");
+    expect(root.trailingComma).toBe(text.lastIndexOf(","));
+    for (const bad of ["", "// only", "{,}", "[1,,]", "{'a': 1}", '{"a": 01}', '"\\x"', "{} {}"]) {
+      expect(() => parseJsonc(bad), bad).toThrow();
+    }
   });
 
   it("replaces rather than duplicates the Codex table on a rerun", async () => {

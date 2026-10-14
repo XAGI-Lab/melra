@@ -713,9 +713,15 @@ merges it there for you:
 | `amp` | Amp | `~/.config/amp/settings.json` (or an existing `settings.jsonc`) | `amp.mcpServers` |
 | `generic` | Anything else | — (printed only) | `mcpServers` |
 
-`--write` refuses a file that is not plain JSON — Zed, VS Code, and Amp
-settings often carry comments, which a JSON round-trip would drop — and leaves
-it untouched; paste the printed block in by hand instead. For Goose it edits
+For JSON files `--write` edits only MELRA's own entry in place, so everything
+else stays byte for byte as it was: comments and trailing commas (Zed, VS Code,
+and Amp settings are JSONC), formatting, key order, and CRLF line endings. A
+new entry is indented to match its neighbours, with tabs if the file uses tabs.
+It refuses, and leaves the file untouched, when the file is not valid JSON or
+JSONC, its top level is not an object, the key MELRA goes under is something
+other than an object, or that key appears twice in one object (which copy the
+client reads is ambiguous); paste the printed block in by hand instead. An
+existing OpenCode `$schema` is never replaced. For Goose it edits
 only MELRA's own entry under `extensions:` and leaves every other line as it
 was, and refuses a `config.yaml` it cannot edit that way (flow-style
 `extensions`, tabs, uneven indentation). Continue's file belongs to MELRA, so it
