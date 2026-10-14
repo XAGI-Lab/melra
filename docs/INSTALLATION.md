@@ -42,7 +42,8 @@ melra doctor
 
 The command reports Node, workspace, data-directory, SQLite, browser,
 computer-use adapter, and policy readiness without exposing credentials. Unlike
-`setup`, it writes nothing.
+`setup`, it changes no configuration: the only thing it may create is the data
+directory, if it does not exist yet.
 
 It also reports, under `clients`, every MCP client whose config file exists
 (the same files `setup --client <name> --write` targets): whether MELRA is
