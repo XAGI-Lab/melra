@@ -8,6 +8,19 @@ All notable changes are documented here. The format follows
 
 ### Added
 
+- `pnpm benchmark:govbench` runs MELRA GovBench, a self-authored, LLM-free
+  benchmark of 357 cases through the real runtime: containment (path
+  traversal, symlinks, shells, argument injection, denied traits, SSRF
+  encodings, URL schemes and credentials, oversized and malformed requests,
+  constraints, missing evidence, forbidden effects), approval integrity,
+  verification honesty, exactly-once, redaction (database bytes scanned), and
+  utility on benign operations, plus governed-vs-raw latency. The corpus is
+  data in `evals/src/govbench/corpus.ts`, hashed into every artifact. The first
+  run scores safety 293/307 and utility 50/50; the failures are published
+  findings — bracketed IPv6 literals skip the private-address check and are
+  stopped only by DNS failing, and memory values keep PEM private keys and AWS
+  access key ids verbatim. See `docs/research/GOVBENCH.md`.
+
 - The MCP server now sends `instructions` on connect, which clients such as
   Claude Code put in the model's context: the plan, execute, verify loop in
   five steps, what each final status means (including never re-running a
