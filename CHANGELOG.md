@@ -17,6 +17,15 @@ All notable changes are documented here. The format follows
   `allow_insecure_http=True`, so the token does not cross a network in clear
   text by accident. No new dependencies.
 
+- `@melra/sdk` connects to a server that is already running, not only one it
+  spawns: `MelraClient.connect({ url, token })` for `melra serve --http` and
+  `MelraClient.connect({ socketPath, token })` for `melra serve --socket`, with
+  every task and workflow method unchanged. The token is passed explicitly and
+  never read from the environment; a plain `http:` URL to a non-loopback host
+  is refused rather than sending the token in cleartext; a refused token fails
+  with `melra_unauthorized`; sockets are refused on Windows, as the server
+  refuses them. The stdio options are unchanged.
+
 - The Python SDK is tested on CPython 3.12, 3.13, and 3.14 against a real
   stdio server, not just 3.11, and the wheel now ships a `py.typed` marker so
   mypy and pyright use its annotations; CI type-checks it with pyright to keep

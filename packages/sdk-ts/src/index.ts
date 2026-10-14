@@ -3,6 +3,8 @@
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { httpTransport, socketTransport } from "./remote.js";
 import {
   WorkflowAdvanceInputSchema,
   WorkflowAdvanceResultSchema,
@@ -19,14 +21,44 @@ import {
   type TaskRequestInput,
 } from "@melra/protocol";
 
-export interface MelraClientOptions {
+interface ClientIdentity {
+  clientName?: string;
+  clientVersion?: string;
+}
+
+/** Spawn `melra serve` (or `command`) as a child and speak MCP over stdio. */
+export interface MelraStdioOptions extends ClientIdentity {
   command?: string;
   args?: string[];
   cwd?: string;
   env?: Record<string, string>;
-  clientName?: string;
-  clientVersion?: string;
 }
+
+/**
+ * Connect to a running `melra serve --http`. `url` is the MCP endpoint it
+ * prints (`http://127.0.0.1:7457/mcp`); plain `http:` is accepted only for a
+ * loopback host, since the token would otherwise cross the network in clear.
+ */
+export interface MelraHttpOptions extends ClientIdentity {
+  url: string | URL;
+  token: string;
+}
+
+/** Connect to a running `melra serve --socket <path>`. Not on Windows. */
+export interface MelraSocketOptions extends ClientIdentity {
+  socketPath: string;
+  token: string;
+}
+
+// `never` on the other variants' keys, so `{ url, token, cwd }` is a type
+// error instead of a stdio option silently ignored by an HTTP connection.
+type Without<K extends string> = { [P in K]?: never };
+type StdioKeys = "command" | "args" | "cwd" | "env";
+
+export type MelraClientOptions =
+  | (MelraStdioOptions & Without<"url" | "socketPath" | "token">)
+  | (MelraHttpOptions & Without<StdioKeys | "socketPath">)
+  | (MelraSocketOptions & Without<StdioKeys | "url">);
 
 interface TextContent {
   type: string;
@@ -48,18 +80,36 @@ export class MelraClient {
   private constructor(private readonly client: Client) {}
 
   static async connect(options: MelraClientOptions = {}): Promise<MelraClient> {
-    const transport = new StdioClientTransport({
-      command: options.command ?? "melra",
-      args: options.args ?? ["serve"],
-      ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
-      ...(options.env === undefined ? {} : { env: options.env }),
-      stderr: "pipe",
-    });
+    const transport =
+      options.url !== undefined
+        ? httpTransport(options.url, options.token)
+        : options.socketPath !== undefined
+          ? socketTransport(options.socketPath, options.token)
+          : new StdioClientTransport({
+              command: options.command ?? "melra",
+              args: options.args ?? ["serve"],
+              ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+              ...(options.env === undefined ? {} : { env: options.env }),
+              stderr: "pipe",
+            });
     const client = new Client({
       name: options.clientName ?? "melra-sdk",
       version: options.clientVersion ?? "0.1.0",
     });
-    await client.connect(transport);
+    try {
+      await client.connect(transport);
+    } catch (error) {
+      // `Client.connect` has already closed the transport. Without an OAuth
+      // provider the MCP client reports a refused token as a generic POST
+      // failure; name it, since it is the one failure a caller can fix.
+      if (error instanceof StreamableHTTPError && error.code === 401) {
+        throw new Error(
+          "melra_unauthorized: the server refused the token; use the one `melra serve` printed or MELRA_HTTP_TOKEN",
+          { cause: error },
+        );
+      }
+      throw error;
+    }
     return new MelraClient(client);
   }
 
