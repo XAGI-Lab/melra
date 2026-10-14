@@ -17,7 +17,9 @@
       "default": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "clean": "rm -rf dist",
@@ -26,6 +28,7 @@
   },
   "dependencies": {
     "@melra/protocol": "workspace:*",
+    "@melra/receipt-schema": "workspace:*",
     "@melra/storage-sqlite": "workspace:*"
   }
 }

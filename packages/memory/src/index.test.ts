@@ -29,6 +29,27 @@ describe("LocalMemory", () => {
     expect(result.redactions.length).toBeGreaterThan(0);
   });
 
+  it("redacts private keys and cloud credentials, not only tokens", () => {
+    // GovBench found these stored verbatim: memory had its own pattern list
+    // that knew neither shape.
+    const pem = [
+      "-----BEGIN OPENSSH PRIVATE KEY-----",
+      "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQ",
+      "-----END OPENSSH PRIVATE KEY-----",
+    ].join("\n");
+    const truncated = "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA";
+    const awsKeyId = ["AKIA", "IOSFODNN7EXAMPLE"].join("");
+    const jwt = ["eyJhbGciOiJIUzI1NiJ9", "eyJzdWIiOiIxMjM0NTY3ODkwIn0", "dozjgNryP4J3jVmNHl0w5N"].join(".");
+    for (const secret of [pem, truncated, awsKeyId, jwt]) {
+      const result = redactMemoryValue(`deploy note: ${secret} (keep)`);
+      expect(result.value, secret.slice(0, 20)).not.toContain(secret.slice(12, 40));
+      expect(result.redactions.length).toBeGreaterThan(0);
+    }
+    // Ordinary text around them survives.
+    expect(redactMemoryValue(`key ${awsKeyId} rotated`).value).toBe("key [REDACTED_AWS_KEY_ID] rotated");
+    expect(redactMemoryValue("BEGIN the PRIVATE meeting at 10").value).toBe("BEGIN the PRIVATE meeting at 10");
+  });
+
   it("redacts speaker and episode metadata before persistence", () => {
     store = new SqliteStore(":memory:");
     const memory = new LocalMemory(store);
