@@ -571,12 +571,17 @@ or that unlike benchmarks are comparable.
 |:--:|---|---:|---|
 | ✅ | Safety and execution evals | **51/51** | Deterministic policy, capability-grant, credential-scope, traversal, terminal, memory, computer, HTTP, cancellation and verification scenarios |
 | 🔁 | Durable Core eval | **8/8** | 100% expected recovery, 0 duplicate execution, 0 false success, 100% event consistency |
+| 🛡️ | [GovBench](docs/research/GOVBENCH.md) (self-authored) | **293/307** safety, **50/50** utility | 357 model-free cases through the real runtime: containment, approval integrity, verification honesty, exactly-once, redaction, and false positives on legitimate work. The 14 failures are published findings, with fixes in review |
 | 🧠 | LoCoMo retrieval | **0.7597** coverage@20 | 1,982 evidence-bearing questions with zero model, embedding or network calls; re-run on 2026-10-14 and identical on every metric |
 | 🧠 | Synthetic recall | **100/100** Recall@1 | Planted-fact regression over 1,000 records |
 | 🌐 | Static-page settle | **183.7 ms** p50 vs 301.3 ms | 39% less waiting with identical 10/10 correct reads |
 | 🌐 | Slow-render settle | **10/10** vs 0/10 correct | Condition-based waiting sees the final DOM; a fixed 300 ms wait reads too early |
 | 💻 | Terminal | **30/30** verified | Shell-free process launch, 48.1 ms p50 on the measured machine |
 | 🖥️ | Computer control plane | **30/30** probes | 0.032 ms p50 adapter discovery; this is *not* a desktop task-success score |
+
+Raw artifacts: [core microbenchmarks](docs/research/results/core-microbenchmarks.json),
+[LoCoMo](docs/research/results/locomo-retrieval.json) and
+[GovBench](docs/research/results/govbench-0.3.0-alpha.11-2026-10-14.json).
 
 The repository also contains a pre-registered browser-agent harness (MiniWoB-125 and
 the WebArena-Verified Hard-30 registered subset) whose task IDs, upstream revisions and
@@ -596,6 +601,9 @@ pnpm --filter @melra/evals evaluate:durable-core -- --publishable
 
 # memory, browser, terminal and computer microbenchmarks
 pnpm benchmark:core
+
+# governance benchmark: 357 model-free cases, loopback fixtures only
+pnpm benchmark:govbench
 
 # LoCoMo (dataset not vendored: CC BY-NC 4.0)
 git clone https://github.com/snap-research/locomo.git /tmp/locomo

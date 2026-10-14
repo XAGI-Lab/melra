@@ -44,7 +44,8 @@
     "versions:set": "node scripts/set-version.mjs",
     "check": "pnpm versions:check && pnpm docs:check && pnpm typecheck && node scripts/check-dist.mjs && node scripts/check-readme-examples.mjs && pnpm test && pnpm python:check",
     "pack:check": "pnpm build && pnpm --dir apps/cli pack:check",
-    "readme:check": "pnpm build && node scripts/check-readme-examples.mjs"
+    "readme:check": "pnpm build && node scripts/check-readme-examples.mjs",
+    "benchmark:govbench": "pnpm build && node evals/dist/govbench/harness.js"
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "1.32.1",
