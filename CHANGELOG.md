@@ -10,6 +10,14 @@ All notable changes are documented here. The format follows
 
 ### Added
 
+- `pnpm build:sea` builds `melra` as a single executable with Node inside
+  (experimental), for machines without Node: the built CLI bundled with
+  esbuild, wrapped by Node's own `--build-sea`. It passes `doctor` and
+  conformance L3 with only the system directories on `PATH`, on Linux,
+  macOS, and Windows in CI, and Hermes Agent connects to it. Configs written
+  by `setup` from the binary name its absolute path. Not attached to releases
+  yet; signing is still open. (#76)
+
 - Evidence predicates are pluggable. Each type is checked by a
   `PredicateVerifier` from `@melra/verifier-core`, and all nine built-ins are
   now implemented that way; `Verifier.create(root, { verifiers })` registers

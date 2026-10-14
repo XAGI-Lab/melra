@@ -25,6 +25,7 @@
  */
 
 import { randomBytes } from "node:crypto";
+import { isSea } from "node:sea";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -545,11 +546,12 @@ async function connect(
   const command = options.command ?? process.execPath;
   const args =
     options.args ??
-    (options.command === undefined
+    (options.command === undefined && !isSea()
       ? // Reproduce how this process was started, loaders included, so the same
         // command works from `dist/bin.js` and from `tsx src/index.ts`.
         [...process.execArgv, process.argv[1] ?? "", "serve"]
-      : ["serve"]);
+      : // A single executable is its own entry point: it takes `serve` directly.
+        ["serve"]);
   await client.connect(
     new StdioClientTransport({
       command,
