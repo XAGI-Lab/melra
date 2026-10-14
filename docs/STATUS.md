@@ -8,11 +8,11 @@ Version: `0.3.0-alpha.12`
 
 - ✅ **Test suites green on `main`**: 515 Vitest cases pass (6 platform-skipped) and 6 Python SDK pytest cases on Vitest 4, with every Node job (ubuntu, macOS, Windows × Node 22, 24) green in the CI run for #134, whose tree is `main` at `09e43f5`
 - ✅ **Versions consistent** across the root manifest, every `apps/*` and `packages/*` manifest, the protocol constant, sdk-py, and both uv locks (`pnpm versions:check`)
-- ✅ **Gate green at the `v0.3.0-alpha.11` tag**: `pnpm check`, `pnpm e2e`, `pnpm security:audit` all passed in the release workflow
+- ✅ **Gate green at the `v0.3.0-alpha.12` tag**: `pnpm check`, `pnpm e2e`, `pnpm security:audit`, `pnpm evals`, the publishable durable-core evaluation, and `pnpm pack:check` all passed in the release workflow
 - ✅ **Conformance L3 verified effects**: `melra conformance` reports 14/14 checks against this build's own stdio server, and L1 under `MELRA_UNHINGED=1` — both asserted in CI. Levels and their limits: [CONFORMANCE.md](CONFORMANCE.md)
 - ✅ **Install paths documented**: npm, container, release tarball, source
 - ✅ **Registry install verified end to end**: the `installed` job on ubuntu, macOS and Windows installs the just-published `@melra/cli` from npm, passes `melra doctor`, and drives a real stdio session to `verified_success`; `npx -y @melra/cli@alpha conformance` in an empty directory earns level 3 (14/14)
-- ✅ **Release artifacts published**: GitHub release v0.3.0-alpha.11 with 6 assets, container at `ghcr.io/xagi-lab/melra:alpha` and `:v0.3.0-alpha.11` (linux/amd64 + linux/arm64), all 15 npm packages on the `alpha` and `latest` dist-tags with provenance attestation
+- ✅ **Release artifacts published**: GitHub release v0.3.0-alpha.12 with 6 assets, container at `ghcr.io/xagi-lab/melra:alpha` and `:v0.3.0-alpha.12` (linux/amd64 + linux/arm64), all 15 npm packages on the `alpha` and `latest` dist-tags with provenance attestation
 
 `0.3.0-alpha.7` is the one gap in that history: its container image built, but
 the `artifacts` job failed on a stale `uv.lock` before reaching the registry, so
@@ -33,7 +33,7 @@ leaving it for a tag push to discover.
 
 **Current state:** Automated compatibility claim is the official MCP SDK (TypeScript + Python) over stdio, loopback HTTP, and the Unix socket. `melra setup --client` writes the config for 25 named clients, checked against each client's documentation or source and round-tripped by the CLI tests — a claim about the file, not about the client. Named graphical clients remain release-gated until manually exercised.
 
-**Action:** Install `npx @melra/cli@alpha` or download the `v0.3.0-alpha.11` release artifact, configure each client per docs/INSTALLATION.md, verify discovery/plan/execute/receipt cycle.
+**Action:** Install `npx @melra/cli@alpha` or download the `v0.3.0-alpha.12` release artifact, configure each client per docs/INSTALLATION.md, verify discovery/plan/execute/receipt cycle.
 
 ### Independent Security Review
 
