@@ -90,7 +90,10 @@ exhaust memory on a 16 GiB machine. The script sizes the fan-out against RAM and
 (≈0.4 GiB per test fork, ≈1.5 GiB per `tsc`) and passes it down as `--workspace-concurrency`
 plus `VITEST_MAX_FORKS`/`VITEST_MAX_THREADS`. Run `pnpm test:peak-rss` to measure peak
 resident memory before and after changing anything about how these are spawned. New recursive
-scripts should route through the same runner, not add a second cap.
+scripts should route through the same runner, not add a second cap. A package whose test
+files must not overlap uses `--no-file-parallelism` in its own `test` script (it only ever
+lowers the fork count): `storage-sqlite`, and `browser-runtime`, whose files each launch
+Chrome and hang on macOS CI runners when several run at once.
 
 There is no ESLint/Prettier for TypeScript — `tsc --strict` is the only static gate. Python
 uses ruff (line-length 100, py311).
