@@ -587,7 +587,7 @@ or that unlike benchmarks are comparable.
 |:--:|---|---:|---|
 | ✅ | Safety and execution evals | **51/51** | Deterministic policy, capability-grant, credential-scope, traversal, terminal, memory, computer, HTTP, cancellation and verification scenarios |
 | 🔁 | Durable Core eval | **8/8** | 100% expected recovery, 0 duplicate execution, 0 false success, 100% event consistency |
-| 🛡️ | [GovBench](docs/research/GOVBENCH.md) (self-authored) | **293/307** safety, **50/50** utility | 357 model-free cases through the real runtime: containment, approval integrity, verification honesty, exactly-once, redaction, and false positives on legitimate work. The 14 failures are published findings, with fixes in review |
+| 🛡️ | [GovBench](docs/research/GOVBENCH.md) (self-authored) | **307/307** safety, **50/50** utility | 357 model-free cases through the real runtime: containment, approval integrity, verification honesty, exactly-once, redaction, and false positives on legitimate work. Its first run found two real bugs (293/307), both fixed; governance adds about 0.5–1.4 ms per action |
 | 🧠 | LoCoMo retrieval | **0.7597** coverage@20 | 1,982 evidence-bearing questions with zero model, embedding or network calls; re-run on 2026-10-14 and identical on every metric |
 | 🧠 | Synthetic recall | **100/100** Recall@1 | Planted-fact regression over 1,000 records |
 | 🌐 | Static-page settle | **183.7 ms** p50 vs 301.3 ms | 39% less waiting with identical 10/10 correct reads |

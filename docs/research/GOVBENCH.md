@@ -11,22 +11,31 @@ that the harness starts itself.
 
 | | Result |
 |---|---:|
-| Safety (containment + approval + verification + exactly-once + redaction) | **293/307** (95.4%) |
+| Safety (containment + approval + verification + exactly-once + redaction) | **307/307** (100%) |
 | Utility (benign operations allowed and `verified_success`) | **50/50** (100%) |
-| Containment | 185/197 |
+| Containment | 197/197 |
 | Approval integrity | 19/19 |
 | Verification honesty | 25/25 |
 | Exactly-once | 11/11 |
-| Redaction | 53/55 |
+| Redaction | 55/55 |
 
 These scores come from corpus `1.0.0` (sha256 `6a7d5229…`), run against MELRA
-`0.3.0-alpha.11` on an Apple M4 with Node `v26.8.2` and Chrome present. No
-cases were skipped. The full run takes about 30 s. The raw artifact is
+`0.3.0-alpha.11` at commit `ac1abe7` (clean tree) on an Apple M4 with Node
+`v26.8.2` and Chrome present. No cases were skipped. The full run takes about
+15–30 s. The raw artifact is
 [`results/govbench-0.3.0-alpha.11-2026-10-14.json`](results/govbench-0.3.0-alpha.11-2026-10-14.json).
 
-### Published failures
+Governance overhead on that run, median of 40 against the raw adapter call:
+file read +0.70 ms, approved file write +0.55 ms, loopback HTTP GET +0.49 ms,
+approved memory put +0.46 ms, approved terminal run +1.42 ms. Overhead depends
+on machine load; the first run, taken while other builds were running, measured
++1.1 to +4.4 ms.
 
-The failures are real findings. They are not marked as expected.
+### What the first run found
+
+The first run, from the same corpus before any fix, scored **293/307** safety.
+Its 14 failures were not marked as expected; they were two real bugs, both since
+fixed, and the run above is the same corpus after the fixes:
 
 1. **Bracketed IPv6 literals skip the private-address check (12 cases).**
    WHATWG `URL.hostname` keeps the brackets (`"[::1]"`), so `isIP(host)` in
@@ -39,6 +48,8 @@ The failures are real findings. They are not marked as expected.
    destinations: `[::1]`, `[::]`, `[fd00::1]`, `[fe80::1]`, and IPv4-mapped
    `[::ffff:…]` forms of loopback and `169.254.169.254`, over both HTTP and
    the browser.
+   Fixed in [#119](https://github.com/XAGI-Lab/melra/pull/119): the brackets
+   are stripped before the address is classified.
 2. **Memory values keep PEM private keys and AWS access key ids (2 cases).**
    `redactMemoryValue` is pattern-based, and it has no pattern for
    `-----BEGIN PRIVATE KEY-----` blocks or `AKIA…` ids. When one of these is
@@ -47,6 +58,9 @@ The failures are real findings. They are not marked as expected.
    database: goal, file content, terminal args/stdout, HTTP body, response,
    headers and query, and evidence values. Those sinks are covered by
    key-based redaction or by sealing.
+   Fixed in [#120](https://github.com/XAGI-Lab/melra/pull/120): memory,
+   terminal output, and receipts now share one secret-pattern list, which
+   knows both shapes.
 
 ## What each category asserts
 
