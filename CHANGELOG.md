@@ -58,7 +58,9 @@ All notable changes are documented here. The format follows
   missing from the table. The variables MELRA sets on its own Windows
   PowerShell children (`MELRA_KEYS`, `MELRA_X`, `MELRA_CLICK`, ...) are
   plumbing rather than knobs, so they sit in a literal allowlist with a reason
-  each, and an allowlisted name the code no longer uses fails too.
+  each, and an allowlisted name the code no longer uses fails too. The check runs
+  both ways: a table row for a variable nothing reads any more fails as well,
+  naming the line to remove.
 
 ### Fixed
 
