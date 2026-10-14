@@ -67,6 +67,13 @@ All notable changes are documented here. The format follows
   both ways: a table row for a variable nothing reads any more fails as well,
   naming the line to remove.
 
+### Changed
+
+- The container image and the release artifacts are built on Node 24, the
+  current LTS line, instead of 22. `engines` still says `>=22` and CI still
+  tests both, so the release job now installs the published package and drives
+  it over MCP on Node 22 and 24 on every OS, rather than on 22 alone.
+
 ### Fixed
 
 - `MELRA_HARNESS_TOOLS` now has a row in the environment table in
