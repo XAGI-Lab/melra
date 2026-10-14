@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Every MELRA_* variable the shipped code reads must have a row in an
-// environment table in docs/INSTALLATION.md. A variable the code reads but the
-// docs never mention is a feature nobody can find.
+// environment table in docs/INSTALLATION.md, and every row must name a variable
+// the code still reads. A variable the docs never mention is a feature nobody
+// can find; a row for one nothing reads is a knob that does nothing.
 
 import { glob, readFile } from "node:fs/promises";
 
@@ -44,16 +45,21 @@ for await (const path of glob("{apps,packages}/*/src/**/*.{ts,mts,cts,js,mjs}"))
 }
 
 // A row is a table line whose first cell is a backticked variable name.
-const documented = new Set();
-for (const line of (await readFile(DOC, "utf8")).split(/\r?\n/)) {
+const documented = new Map();
+(await readFile(DOC, "utf8")).split(/\r?\n/).forEach((line, index) => {
   const name = /^\|\s*`(MELRA_[A-Z0-9_]+)`\s*\|/.exec(line)?.[1];
-  if (name) documented.add(name);
-}
+  if (name && !documented.has(name)) documented.set(name, index + 1);
+});
 
 const failures = [];
 for (const [name, where] of [...readBy].sort()) {
   if (!INTERNAL.has(name) && !documented.has(name)) {
     failures.push(`${name} (first seen at ${where}) has no row in the environment table in ${DOC}`);
+  }
+}
+for (const [name, line] of documented) {
+  if (!readBy.has(name)) {
+    failures.push(`${DOC}:${line}: ${name} is documented but nothing in {apps,packages}/*/src reads it; remove the row`);
   }
 }
 for (const name of INTERNAL.keys()) {
