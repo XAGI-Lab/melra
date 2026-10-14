@@ -1,6 +1,7 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
+import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -24,28 +25,29 @@ const childEnvironment = Object.fromEntries(
     (entry) => entry[1] !== undefined,
   ),
 );
+// The hardened recipe from docs/INSTALLATION.md#docker.
+const hardened = [
+  "run",
+  "--rm",
+  ...(platform === undefined ? [] : ["--platform", platform]),
+  ...userArgs,
+  "-i",
+  "--read-only",
+  "--security-opt",
+  "no-new-privileges:true",
+  "--cap-drop",
+  "ALL",
+  "--tmpfs",
+  "/tmp:size=256m,mode=1777",
+  "-v",
+  `${workspace}:/workspace`,
+  "-v",
+  `${data}:/data`,
+  image,
+];
 const transport = new StdioClientTransport({
   command: "docker",
-  args: [
-    "run",
-    "--rm",
-    ...(platform === undefined ? [] : ["--platform", platform]),
-    ...userArgs,
-    "-i",
-    "--read-only",
-    "--security-opt",
-    "no-new-privileges:true",
-    "--cap-drop",
-    "ALL",
-    "--tmpfs",
-    "/tmp:size=256m,mode=1777",
-    "-v",
-    `${workspace}:/workspace`,
-    "-v",
-    `${data}:/data`,
-    image,
-    "serve",
-  ],
+  args: [...hardened, "serve"],
   env: childEnvironment,
   stderr: "pipe",
 });
@@ -105,11 +107,21 @@ try {
   ) {
     throw new Error("container_smoke_verification_failed");
   }
+  // The recipe's restrictions must be what doctor sees from inside, so an
+  // operator reading `isolation` there can trust it (#52).
+  const doctor = spawnSync("docker", [...hardened, "doctor"], { encoding: "utf8" });
+  const isolation = JSON.parse(doctor.stdout).checks.find((check) => check.name === "isolation");
+  for (const expected of ["container", "no capabilities", "no_new_privs", "seccomp filter", "read-only root"]) {
+    if (isolation?.status !== "pass" || !isolation.detail.includes(expected)) {
+      throw new Error(`container_smoke_isolation_missing:${expected}:${JSON.stringify(isolation)}`);
+    }
+  }
   process.stdout.write(
     `${JSON.stringify(
       {
         image,
         tools,
+        isolation: isolation.detail,
         taskStatus: executed.task.status,
         certificate: evidence.certificate.result,
         digest: evidence.certificate.digest,

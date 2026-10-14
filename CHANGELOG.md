@@ -8,6 +8,14 @@ All notable changes are documented here. The format follows
 
 ### Added
 
+- `melra doctor` has an `isolation` line: which OS restrictions the process is
+  actually under, read from `/proc` on Linux: container, an empty capability
+  set, `no_new_privs`, a seccomp filter, a read-only root. In enforced mode
+  with none of them in effect, or on a platform where none can be seen, it
+  warns, so `MELRA_MODE=enforced` is no longer an assertion nothing checks.
+  The container smoke test now requires all five under the documented
+  hardened `docker run` recipe. (#52)
+
 - `pnpm benchmark:govbench` runs MELRA GovBench, a self-authored, LLM-free
   benchmark of 357 cases through the real runtime: containment (path
   traversal, symlinks, shells, argument injection, denied traits, SSRF

@@ -70,6 +70,8 @@ export function nextStep(report: DoctorReport): string | undefined {
         return "fix the policy file's JSON, or unset MELRA_POLICY to use the defaults";
       case "socket":
         return "fix or unset MELRA_SOCKET (see the socket line above)";
+      case "isolation":
+        return "run MELRA in the hardened container (docs/INSTALLATION.md#docker), or another OS sandbox";
       case "guardrails":
         return "unset MELRA_UNHINGED and drop --unsafe-local to turn the guardrails back on";
       case "browser":
