@@ -232,7 +232,9 @@ describe("melra CLI", () => {
       { cwd: root, env: { ...env, MELRA_UNHINGED: "1" } },
     );
     expect(JSON.parse(unhinged.stdout).level).toBe(1);
-  });
+    // Three full suites, each spawning its own server: a Windows runner has
+    // taken just over the file's 20 s default for the lot.
+  }, 60_000);
 
   it("keeps Node's SQLite warning out of every invocation", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-cli-"));
