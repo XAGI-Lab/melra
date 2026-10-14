@@ -171,6 +171,10 @@ export const CLIENTS: Record<string, Client> = {
     // so MELRA gets a file of its own rather than an edit to config.yaml.
     path: (workspace) => join(workspace, ".continue", "mcpServers", "melra.yaml"),
   },
+  // https://ampcode.com/docs/cli/settings: `~/.config/amp/settings.json` or
+  // `.jsonc` on every OS, `%USERPROFILE%` being home on Windows (an older guide
+  // said `%APPDATA%\amp`; the settings page does not), MCP under
+  // `amp.mcpServers`. Which file wins when both exist is not documented.
   amp: {
     label: "Amp",
     shape: "amp",
