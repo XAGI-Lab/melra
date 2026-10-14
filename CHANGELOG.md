@@ -10,6 +10,13 @@ All notable changes are documented here. The format follows
 
 ### Added
 
+- A hardened systemd unit, `examples/deploy/systemd/melra.service`: MELRA on
+  a mode-`0600` socket in enforced mode with no capabilities, `no_new_privs`,
+  a `@system-service` seccomp filter, and a read-only filesystem except the
+  workspace and data directory. CI runs MELRA under the unit's own settings
+  with `systemd-run`: `doctor` must report all four restrictions and
+  conformance must still reach L3 inside them. (#52)
+
 - `pnpm build:sea` builds `melra` as a single executable with Node inside
   (experimental), for machines without Node: the built CLI bundled with
   esbuild, wrapped by Node's own `--build-sea`. It passes `doctor` and

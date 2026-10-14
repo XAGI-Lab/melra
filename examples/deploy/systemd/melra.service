@@ -1,0 +1,61 @@
+# MELRA as a hardened systemd service on a Unix socket (#52).
+#
+# The kernel enforces every restriction below; MELRA only has to run inside
+# them. `melra doctor` under the same settings reports what took effect:
+#   isolation  no capabilities, no_new_privs, seccomp filter, read-only root
+#
+# Install (system service, one per user and workspace):
+#   sudo install -m 0644 melra.service /etc/systemd/system/melra@.service
+#   sudo systemctl enable --now melra@$USER
+# Then point an SDK or a socket-aware client at /run/melra-$USER/melra.sock.
+# `scripts/systemd-smoke.mjs` runs `doctor` under the [Service] settings here,
+# so this file and what CI checks cannot drift apart.
+
+[Unit]
+Description=MELRA autonomy kernel for %i
+After=network-online.target
+
+[Service]
+Type=simple
+User=%i
+# Edit to the project MELRA may act on, and where it keeps its records.
+Environment=MELRA_WORKSPACE=/home/%i/project
+Environment=MELRA_HOME=/home/%i/.melra
+Environment=MELRA_MODE=enforced
+ExecStart=/usr/bin/env melra serve --socket /run/melra-%i/melra.sock
+RuntimeDirectory=melra-%i
+RuntimeDirectoryMode=0700
+Restart=on-failure
+
+# --- hardening ----------------------------------------------------------------
+# No privilege at all, and no way to regain any (setuid, file capabilities).
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+# The whole filesystem read-only except the workspace and MELRA's data.
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/%i/project /home/%i/.melra
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+# Unix sockets for the transport, IP for the HTTP and browser adapters.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+# A seccomp filter: the syscalls an ordinary service needs, nothing more.
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+# Deliberately absent: MemoryDenyWriteExecute=yes. V8's JIT writes and then
+# executes code, so Node exits at startup under it.
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
