@@ -140,7 +140,9 @@ describe("stalled browser calls", () => {
     const step = <T>(what: string, promise: Promise<T>, ms = 15_000) =>
       bounded(promise, ms, `test:${what}`);
     try {
-      await step("navigate", runtime.execute(op({ action: "navigate", url })));
+      // The first navigate also launches Chrome, cold: on a loaded CI runner
+      // that alone has taken over 15 s, so this step gets the most room.
+      await step("launch and navigate", runtime.execute(op({ action: "navigate", url })), 45_000);
       const stalled = stall(runtime);
       const { message, ms } = await step(
         "bounded inspect",
@@ -156,7 +158,7 @@ describe("stalled browser calls", () => {
     } finally {
       await step("close", runtime.close());
     }
-  }, 90_000);
+  }, 120_000);
 
   it("gives up on a stalled call as soon as the task is cancelled", async () => {
     const context = await fixture();
