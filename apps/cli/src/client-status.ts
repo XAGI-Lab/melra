@@ -1,9 +1,9 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
-import { accessSync, constants, statSync } from "node:fs";
+import { accessSync, constants, existsSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { delimiter, extname, join } from "node:path";
+import { delimiter, dirname, extname, join } from "node:path";
 import { PRODUCT_VERSION } from "@melra/protocol";
 import { CLIENTS, isObject } from "./clients.js";
 import { parseJsonc } from "./jsonc.js";
@@ -217,6 +217,42 @@ export async function clientStatuses(workspace: string): Promise<ClientStatus[]>
     statuses.push(inspect(client, shape, path, text));
   }
   return statuses;
+}
+
+export interface ClientChoice {
+  client: string;
+  label: string;
+  path?: string;
+  // Why `setup` thinks this client is installed, or undefined when it does not.
+  detected?: string;
+}
+
+// Which clients look installed: a config file, the directory it would go in,
+// or the client's own executable on PATH. Any one is enough — a fresh install
+// has a directory and no file, and a CLI client may have neither yet. The
+// directory test is skipped where it is the workspace itself, which always
+// exists and so says nothing about Claude Code.
+export function detectClients(workspace: string): ClientChoice[] {
+  return Object.entries(CLIENTS).flatMap(([client, { label, path: pathOf, bin }]) => {
+    if (client === "generic") return [];
+    const path = pathOf?.(workspace);
+    const detected =
+      path !== undefined && existsSync(path)
+        ? "config file found"
+        : path !== undefined && dirname(path) !== workspace && existsSync(dirname(path))
+          ? "config folder found"
+          : bin !== undefined && resolvesOnPath(bin)
+            ? `'${bin}' on PATH`
+            : undefined;
+    return [
+      {
+        client,
+        label,
+        ...(path === undefined ? {} : { path }),
+        ...(detected === undefined ? {} : { detected }),
+      },
+    ];
+  });
 }
 
 // `warn` at worst: a machine with no client configured is how SDK users run,

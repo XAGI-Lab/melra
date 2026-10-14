@@ -19,6 +19,7 @@ import {
 import { classifyOperation, loadPolicy } from "@melra/policy-core";
 import { SqliteStore } from "@melra/storage-sqlite";
 import type { CliEnvironment } from "./environment.js";
+import { isHuman, paint, table } from "./output.js";
 
 const DEFAULT_HTTP_PORT = 7457;
 const POLL_MS = 1_000;
@@ -58,40 +59,34 @@ function withStore<T>(env: CliEnvironment, empty: T, read: (store: SqliteStore) 
 }
 
 // A pipe or a script gets JSON; only a person at a terminal gets the table.
+// The same rule as every other command, from the one place it lives.
 function humanOutput(json: boolean): boolean {
-  return !json && process.stdout.isTTY === true;
+  return isHuman(json ? ["--json"] : []);
 }
 
 function write(line = ""): void {
   process.stdout.write(`${line}\n`);
 }
 
-// https://no-color.org: any non-empty value turns colour off.
-function colour(): boolean {
-  return process.stdout.isTTY === true && (process.env.NO_COLOR ?? "") === "";
-}
-
-const TONE: Partial<Record<string, number>> = {
-  verified_success: 32,
-  verified_complete: 32,
-  failed: 31,
-  policy_blocked: 31,
-  budget_exhausted: 31,
-  recovery_required: 31,
-  partially_complete: 33,
-  partial: 33,
-  awaiting_approval: 33,
-  awaiting_input: 33,
-  waiting_user: 33,
-  running: 36,
-  verifying: 36,
-  planned: 36,
-  cancelled: 2,
+// Status colours share `paint` with doctor and setup, so NO_COLOR, FORCE_COLOR,
+// and TERM=dumb behave the same in every command.
+const TONE: Partial<Record<string, (text: string) => string>> = {
+  verified_success: paint.ok,
+  verified_complete: paint.ok,
+  failed: paint.fail,
+  policy_blocked: paint.fail,
+  budget_exhausted: paint.fail,
+  recovery_required: paint.fail,
+  partially_complete: paint.warn,
+  partial: paint.warn,
+  awaiting_approval: paint.warn,
+  awaiting_input: paint.warn,
+  waiting_user: paint.warn,
+  cancelled: paint.dim,
 };
 
-function paint(text: string, status: string): string {
-  const code = TONE[status];
-  return code === undefined || !colour() ? text : `\u001b[${code}m${text}\u001b[0m`;
+function tone(text: string, status: string): string {
+  return (TONE[status] ?? ((plain: string) => plain))(text);
 }
 
 function ago(iso: string, now = Date.now()): string {
@@ -169,20 +164,15 @@ export function tasksCommand(env: CliEnvironment, options: TasksOptions): number
     `${task.policyDecision.effect}/${task.policyDecision.risk}`,
     ago(task.updatedAt),
   ]);
-  const widths = header.map((title, column) =>
-    Math.max(title.length, ...rows.map((row) => row[column]?.length ?? 0)),
+  // `table` measures visible width, so the status can be painted before it aligns.
+  write(
+    table([
+      header.map((title) => paint.dim(title)),
+      ...rows.map((row, index) =>
+        row.map((cell, column) => (column === 1 ? tone(cell, tasks[index]?.status ?? "") : cell)),
+      ),
+    ]),
   );
-  const line = (cells: string[], status?: string) =>
-    cells
-      .map((cell, column) => {
-        const padded = cell.padEnd(widths[column] ?? 0);
-        // Padded before painting: escape codes have no width but do have length.
-        return column === 1 && status !== undefined ? paint(padded, status) : padded;
-      })
-      .join("  ")
-      .trimEnd();
-  write(line(header));
-  rows.forEach((row, index) => write(line(row, tasks[index]?.status)));
   if (waiting > 0) {
     write();
     write(approvalHint(waiting));
@@ -208,8 +198,8 @@ function describe(event: WatchEvent): string {
   const time = new Date(event.at).toLocaleTimeString();
   const status =
     event.previous === undefined
-      ? paint(event.status, event.status)
-      : `${event.previous} → ${paint(event.status, event.status)}`;
+      ? tone(event.status, event.status)
+      : `${event.previous} → ${tone(event.status, event.status)}`;
   if (event.type === "workflow") {
     return `${time}  workflow ${shortId(event.id)}  ${status}`;
   }
@@ -366,7 +356,7 @@ function summary(counts: Record<string, number>): string {
   if (total === 0) return "none";
   const parts = Object.entries(counts)
     .sort(([, a], [, b]) => b - a)
-    .map(([status, count]) => `${count} ${paint(status, status)}`);
+    .map(([status, count]) => `${count} ${tone(status, status)}`);
   return `${total} total: ${parts.join(", ")}`;
 }
 

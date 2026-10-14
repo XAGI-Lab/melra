@@ -33,6 +33,9 @@ interface Client {
   shape: Shape;
   // Undefined for `generic`: there is no file to point at.
   path?: (workspace: string) => string;
+  // The client's own executable, if it has one, so `setup` can tell a client is
+  // installed before it has ever written a config file.
+  bin?: string;
 }
 
 // The per-OS application-config directory: where Electron apps and Zed keep
@@ -54,6 +57,7 @@ export const CLIENTS: Record<string, Client> = {
   "claude-code": {
     label: "Claude Code",
     shape: "mcpServers",
+    bin: "claude",
     path: (workspace) => join(workspace, ".mcp.json"),
   },
   "claude-desktop": {
@@ -61,14 +65,30 @@ export const CLIENTS: Record<string, Client> = {
     shape: "mcpServers",
     path: () => appConfig("Claude", "claude_desktop_config.json"),
   },
-  cursor: { label: "Cursor", shape: "mcpServers", path: () => home(".cursor", "mcp.json") },
+  cursor: {
+    label: "Cursor",
+    shape: "mcpServers",
+    bin: "cursor",
+    path: () => home(".cursor", "mcp.json"),
+  },
   windsurf: {
     label: "Windsurf",
     shape: "mcpServers",
+    bin: "windsurf",
     path: () => home(".codeium", "windsurf", "mcp_config.json"),
   },
-  gemini: { label: "Gemini CLI", shape: "mcpServers", path: () => home(".gemini", "settings.json") },
-  kiro: { label: "Kiro", shape: "mcpServers", path: () => home(".kiro", "settings", "mcp.json") },
+  gemini: {
+    label: "Gemini CLI",
+    shape: "mcpServers",
+    bin: "gemini",
+    path: () => home(".gemini", "settings.json"),
+  },
+  kiro: {
+    label: "Kiro",
+    shape: "mcpServers",
+    bin: "kiro",
+    path: () => home(".kiro", "settings", "mcp.json"),
+  },
   cline: {
     label: "Cline",
     shape: "mcpServers",
@@ -85,11 +105,13 @@ export const CLIENTS: Record<string, Client> = {
   vscode: {
     label: "VS Code",
     shape: "vscode",
+    bin: "code",
     path: (workspace) => join(workspace, ".vscode", "mcp.json"),
   },
   zed: {
     label: "Zed",
     shape: "zed",
+    bin: "zed",
     path: () =>
       process.platform === "win32"
         ? appConfig("Zed", "settings.json")
@@ -98,16 +120,19 @@ export const CLIENTS: Record<string, Client> = {
   opencode: {
     label: "OpenCode",
     shape: "opencode",
+    bin: "opencode",
     path: () => home(".config", "opencode", "opencode.json"),
   },
   codex: {
     label: "Codex",
     shape: "codex",
+    bin: "codex",
     path: () => join(process.env.CODEX_HOME ?? home(".codex"), "config.toml"),
   },
   goose: {
     label: "Goose",
     shape: "goose",
+    bin: "goose",
     // Goose keeps its Windows config under the old "Block" app directory.
     path: () =>
       process.platform === "win32"
@@ -124,6 +149,7 @@ export const CLIENTS: Record<string, Client> = {
   amp: {
     label: "Amp",
     shape: "amp",
+    bin: "amp",
     // Amp reads settings.json or settings.jsonc; edit the one already there
     // rather than create a second file beside it.
     path: () => {

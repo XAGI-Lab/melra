@@ -13,6 +13,34 @@ names a command your client can actually spawn, and runs every readiness check
 — in one step, with nothing installed beforehand. It exits non-zero if any
 readiness check fails, and it never overwrites an existing policy.
 
+In a terminal it asks which client to set up, listing the ones it finds on
+this machine first, then offers to write the config for you:
+
+```text
+Which MCP client should use MELRA?
+
+  1)   Cursor            detected: config file found
+  2)   Claude Code       detected: 'claude' on PATH
+  ...
+  15)  generic (just print the config)
+
+Choose 1-15 [1]: 1
+Write it into /home/you/.cursor/mcp.json? [Y/n]
+
+  ✓  Policy  /home/you/.melra/policy.json
+  ✓  Cursor  /home/you/.cursor/mcp.json
+             previous file saved as /home/you/.cursor/mcp.json.bak
+
+Next: Restart Cursor, then ask it to use the melra tools.
+
+✓ Ready
+```
+
+Ctrl-C or Ctrl-D at either question exits with status 130 and writes nothing.
+Piped, captured, or run with `--json`, `setup`, `init`, and `doctor` ask
+nothing and print the same JSON they always have, so scripts and CI are
+unaffected; `NO_COLOR` turns the colours off.
+
 Name your client and MELRA writes itself into that client's own config file,
 in that client's own format, keeping everything already there and saving the
 previous file as `<file>.bak`:
@@ -22,8 +50,8 @@ npx @melra/cli@alpha setup --client cursor --write
 ```
 
 Leave out `--write` to print the config and the path it belongs in instead; see
-[MCP clients](#mcp-clients) for every supported client. With no `--client`,
-paste the printed `mcpServers.melra` object into your client's MCP
+[MCP clients](#mcp-clients) for every supported client. With no `--client`
+outside a terminal (or choosing `generic`), paste the printed `mcpServers.melra` object into your client's MCP
 configuration and you are done. The rest of this page covers the other install
 paths, every environment variable, and the hardened Docker invocation.
 
@@ -44,6 +72,22 @@ The command reports Node, workspace, data-directory, SQLite, browser,
 computer-use adapter, and policy readiness without exposing credentials. Unlike
 `setup`, it changes no configuration: the only thing it may create is the data
 directory, if it does not exist yet.
+
+In a terminal it prints one line per check, one line per client under
+`clients`, a verdict, and — when something warns or fails — the one command
+to run next:
+
+```text
+  ✓  browser         /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
+  ✓  policy          /home/you/.melra/policy.json
+  ⚠  clients
+      ⚠  cursor  configured  pinned to @melra/cli@0.2.0, this is 0.3.0-alpha.11; fix: …
+
+⚠ Ready, with 1 warning
+Next: melra setup --client cursor --write
+```
+
+`melra doctor --json`, or any pipe, prints the JSON report instead.
 
 It also reports, under `clients`, every MCP client whose config file exists
 (the same files `setup --client <name> --write` targets): whether MELRA is

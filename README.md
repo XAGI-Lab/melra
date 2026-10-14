@@ -400,8 +400,21 @@ npx @melra/cli@alpha setup
 ```
 
 One command: writes a safe local policy, prints a ready-to-paste MCP client
-config, and runs every readiness check. Name your client to get its own config
-format and file, and add `--write` to have MELRA merge itself in for you:
+config, and runs every readiness check. In a terminal it lists the MCP clients
+it finds on your machine, asks which one, and offers to write the config:
+
+```text
+  1)   Cursor        detected: config file found
+  ...
+Choose 1-15 [1]: 1
+Write it into /home/you/.cursor/mcp.json? [Y/n]
+  ✓  Cursor  /home/you/.cursor/mcp.json
+Next: Restart Cursor, then ask it to use the melra tools.
+✓ Ready
+```
+
+Piped or with `--json` it asks nothing and prints JSON, as before. To skip the
+question, name your client and add `--write`:
 
 ```bash
 npx @melra/cli@alpha setup --client cursor --write

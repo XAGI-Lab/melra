@@ -17,6 +17,18 @@ All notable changes are documented here. The format follows
   fails if the guide names a tool that does not exist or its evidence list
   drifts from the protocol schema.
 
+- `melra doctor`, `setup`, `init`, and `version` print a readable report when
+  stdout is a terminal: one line per check with ✓ ⚠ ✗ (`[ok]`/`[warn]`/`[fail]`
+  on the legacy Windows console), one line per MCP client, a verdict, and the
+  single command to run next when something warns or fails. `setup` and `init`
+  say what was written where, including the `.bak`, and what to do next.
+  Piped or captured output is byte-for-byte the JSON it was, and `--json`
+  forces it in a terminal. Colour honours `NO_COLOR` and `FORCE_COLOR`.
+  `melra setup` with no `--client` in a terminal now lists the clients it finds
+  on the machine (config file, config folder, or executable on `PATH`), asks
+  which one, and offers to write its config exactly as `--client <name>
+  --write` would; Ctrl-C or Ctrl-D cancels with status 130 and writes nothing.
+
 - The Python SDK can attach to a MELRA that is already running instead of
   only spawning one over stdio: `MelraClient.connect_http(url, token=...)` for
   `melra serve --http` and `MelraClient.connect_socket(path, token=...)` for
