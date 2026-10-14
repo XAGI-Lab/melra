@@ -6,6 +6,22 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Releases publish to npm by trusted publishing: the registry accepts the
+  release workflow's GitHub OIDC identity, so no npm token is stored, and npm
+  attaches provenance to every `@melra/*` package. Owners register the trust
+  once with `node scripts/npm-trust.mjs`; see `docs/RELEASES.md`. (#152)
+
+### Fixed
+
+- The docs said the `@melra/*` npm packages carry provenance attestations.
+  None has: every release so far passed `--provenance` to `pnpm publish`,
+  which did not attach it. The README, INSTALLATION, and STATUS now say so;
+  the packages are registry-signed (`npm audit signatures`), and provenance
+  arrives with the first trusted-publishing release. The GitHub release files
+  and container images were attested all along.
+
 ## [0.3.0-alpha.12] - 2026-10-14
 
 ### Added

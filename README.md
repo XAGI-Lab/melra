@@ -173,6 +173,8 @@ show me the system info"*. That's it.
 | Container (no Node needed) | `docker run --rm ghcr.io/xagi-lab/melra:alpha doctor` |
 | Prebuilt release | download from [releases](https://github.com/XAGI-Lab/melra/releases), verify against `SHA256SUMS`, then `node melra/dist/bin.js doctor` |
 | From source | `git clone https://github.com/XAGI-Lab/melra.git && cd melra && corepack enable && pnpm install --frozen-lockfile && pnpm build && pnpm melra setup` |
+| One file, no Node needed *(experimental)* | from a checkout: `pnpm build:sea`, then `./dist-sea/melra setup`; see [single executable](docs/INSTALLATION.md#single-executable-experimental) |
+| Check what you installed | `npm audit signatures` verifies the registry signatures; npm provenance linking each package to its build arrives with the next release (see [npm packages](docs/INSTALLATION.md#npm)) |
 
 Every command prints readable output in a terminal and plain JSON when piped or with
 `--json`, so scripts keep working. MELRA creates `<MELRA_HOME>/payload.key` with
@@ -403,7 +405,10 @@ MELRA cannot verify that assertion from inside its own process, and it does not
 pretend to; the isolation is the operating system's job. What enforced mode does is
 close every door MELRA owns: `--unsafe-local` is refused outright, nothing binds
 outside loopback (a `0600` Unix socket is allowed), no client can register itself, and
-`mode` is stamped on every receipt. See
+`mode` is stamped on every receipt. For the operating-system side,
+[examples/deploy](examples/deploy/README.md) has a hardened Docker run and systemd
+unit, each checked in CI, and `melra doctor` reports which restrictions are actually in
+effect. See
 [deployment modes](docs/INSTALLATION.md#deployment-modes),
 the [threat model](docs/THREAT_MODEL.md) and the [security policy](SECURITY.md).
 
@@ -559,7 +564,7 @@ repeated. They are settled by re-observation, or they park in `recovery_required
 
 <br />
 
-| Shipped in `0.3.0-alpha.11` and since | Evidence |
+| Shipped in `0.3.0-alpha.11` and `0.3.0-alpha.12` | Evidence |
 |---|---|
 | Restart-safe bounded workflows across nine node kinds | A real MCP process is stopped, replaced and resumed in E2E |
 | Encrypted exact task, workflow and result payloads | AES-256-GCM storage plus plaintext-leak checks across SQLite/WAL and public projections |
@@ -571,6 +576,10 @@ repeated. They are settled by re-observation, or they park in `recovery_required
 | Agents receive capabilities, not credentials | The kernel holds the secret and scopes it by host and capability; grants carry a size and an expiry |
 | Evidence says how it is known | `execution` / `state` / `independent` / `semantic` strength on every evidence item |
 | Independent-channel verification | `http_resource_matches` executes through `POST` and verifies through a separate `GET` |
+| Your own evidence types | A registered verifier answers `{ "type": "custom" }` evidence; planning refuses an unregistered one, and custom evidence is always the weakest strength |
+| Setup for 26 agent apps | `melra setup` writes each app's own format; Claude Code, OpenCode, and Hermes Agent connected to a packed release on a real Mac |
+| OS isolation you can check | `melra doctor` reports capabilities, `no_new_privs`, seccomp, and a read-only root; CI runs it under the hardened Docker and systemd recipes |
+| A self-authored governance benchmark | GovBench: 357 cases through the real runtime, safety `307/307`, utility `50/50` |
 
 See the full [CHANGELOG](CHANGELOG.md).
 

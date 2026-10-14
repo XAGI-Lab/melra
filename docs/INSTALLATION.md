@@ -125,8 +125,13 @@ Both forms produce a correct client configuration: run through `npx` and the
 generated config launches the server through `npx` at the exact version that
 wrote it, because an `npx` install leaves no `melra` on your `PATH`.
 
-Packages are published with npm provenance attestation, so the registry links
-each tarball to the exact commit and workflow run that produced it.
+Packages are registry-signed, which `npm audit signatures` checks. They do not
+carry npm provenance yet: releases up to `0.3.0-alpha.12` passed `--provenance`
+to `pnpm publish`, which did not attach it. From the next release they are
+published by trusted publishing, which attaches provenance linking each tarball
+to the exact commit and workflow run that built it. The GitHub release files and
+the container image already carry signed build attestations (see
+[RELEASES](RELEASES.md)).
 
 ### Container
 
