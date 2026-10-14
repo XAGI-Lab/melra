@@ -135,6 +135,14 @@ Actions: `navigate`, `back`, `forward`, `reload`, `inspect`, `wait`, `click`,
   so answering it is part of that action; the report is what keeps it honest,
   because a caller is never told a page changed without also being told what it
   was asked. The field is absent when nothing was raised.
+- Every call to the page is bounded: by the action's `timeoutMs`, the
+  post-action settle by `settleTimeoutMs` plus one second, saving a download
+  (which takes as long as the file does) by nothing else, and all of them by
+  the task's cancel signal and budget. A page that stops answering fails the
+  action with `browser_call_timeout:<call>` rather than hanging. A read that
+  times out is a plain, retryable failure; a mutation that fails after its
+  input was sent is reported as an unknown outcome (`recovery_required`),
+  because the page may already have acted.
 - Resolves and checks the destination and every intercepted request.
 - Blocks private, link-local, multicast, unspecified, and cloud-metadata
   addresses. Localhost is opt-in.

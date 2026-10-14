@@ -5,6 +5,14 @@ import { constants } from "node:fs";
 import { access } from "node:fs/promises";
 import type { Browser, BrowserContext } from "playwright-core";
 import { chromium } from "playwright-core";
+import { bounded } from "./bounded.js";
+
+/**
+ * Bound on creating the first context in a browser MELRA just launched. Matches
+ * Playwright's default action timeout; a fresh browser that cannot open a
+ * context in that long is not going to.
+ */
+const NEW_CONTEXT_TIMEOUT_MS = 30_000;
 
 const CHROME_PATHS: Partial<Record<NodeJS.Platform, string[]>> = {
   darwin: [
@@ -137,12 +145,25 @@ export async function connectBrowser(
     if (browser === null) throw new Error("browser_persistent_profile_unavailable");
     return { browser, context, ownsBrowser: true, ownsContext: true };
   }
+  // `launch` carries Playwright's own 180s timeout; `newContext` carries none.
   const browser = await chromium.launch(launchOptions);
-  const context = await browser.newContext(contextOptions);
-  return {
-    browser,
-    context,
-    ownsBrowser: true,
-    ownsContext: true,
-  };
+  try {
+    const context = await bounded(
+      browser.newContext(contextOptions),
+      NEW_CONTEXT_TIMEOUT_MS,
+      "new_context",
+    );
+    return {
+      browser,
+      context,
+      ownsBrowser: true,
+      ownsContext: true,
+    };
+  } catch (error) {
+    // Nobody else holds this browser yet, so a failure here would leak it.
+    await bounded(browser.close(), NEW_CONTEXT_TIMEOUT_MS, "close_browser").catch(
+      () => undefined,
+    );
+    throw error;
+  }
 }
