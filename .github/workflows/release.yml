@@ -165,13 +165,17 @@ jobs:
         shell: bash
         run: |
           version="${GITHUB_REF_NAME#v}"
-          # The publish above returns before the package is readable everywhere.
-          for attempt in 1 2 3 4 5 6; do
-            npm view "@melra/cli@${version}" version && break
-            echo "not visible yet (attempt ${attempt})"
-            sleep 15
+          # The publish above returns before every package is readable
+          # everywhere, and the CLI becoming visible says nothing about its
+          # @melra/* dependencies: 0.3.0-alpha.12 failed on all six runners with
+          # the CLI found and `@melra/browser-runtime@0.3.0-alpha.12` not yet.
+          # So the install itself, which resolves all of them, is what retries.
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            npm install -g "@melra/cli@${version}" && break
+            if [ "${attempt}" = 10 ]; then exit 1; fi
+            echo "not installable yet (attempt ${attempt})"
+            sleep 20
           done
-          npm install -g "@melra/cli@${version}"
           # The MCP client for the smoke, unpinned: an end user's client is
           # whatever is current, so that is what the artifact should answer.
           npm install --no-save @modelcontextprotocol/sdk
