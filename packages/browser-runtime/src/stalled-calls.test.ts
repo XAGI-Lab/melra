@@ -195,13 +195,17 @@ describe("stalled browser calls", () => {
     if (context === undefined) return;
     const { runtime, url } = context;
     try {
-      await runtime.execute(op({ action: "navigate", url }));
+      // A longer stall and a roomier bound than the other cases: the bound
+      // also covers resolving and reaching the button, which a slow Windows
+      // runner has taken over 500 ms to do, failing the click before it was
+      // sent. That is the right answer for an unsent click, but not this case.
+      await runtime.execute(op({ action: "navigate", url: `${url}?ms=6000` }));
       const { message, ms } = await failure(
         runtime.execute(
           op({
             action: "click",
             target: { selector: "#go" },
-            timeoutMs: BOUND_MS,
+            timeoutMs: 2_000,
             settleQuietMs: 25,
             settleTimeoutMs: 25,
           }),
@@ -210,8 +214,8 @@ describe("stalled browser calls", () => {
       // The page stalls the moment the click lands. Whether Playwright's own
       // post-click check or the settle after it is what runs out first, the
       // click was delivered, so `failed` would be the false claim.
-      expect(isOutcomeUnknown(message)).toBe(true);
-      expect(ms).toBeLessThan(STALL_MS - 500);
+      expect(isOutcomeUnknown(message), message).toBe(true);
+      expect(ms).toBeLessThan(5_000);
       expect(await status(runtime)).toBe("clicked");
     } finally {
       await runtime.close();
