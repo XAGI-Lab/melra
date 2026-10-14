@@ -237,6 +237,13 @@ All notable changes are documented here. The format follows
   escaped, but the guard was not what stopped them. Public IPv6 literals, which
   could not be used at all for the same reason, now work. Found by GovBench.
 
+- Memory values no longer store PEM private keys or AWS access key ids
+  verbatim. Memory, terminal output, and receipts each kept a private copy of
+  the secret patterns, and the copies had drifted; none knew either shape.
+  There is now one list, exported from `@melra/receipt-schema` as
+  `SECRET_PATTERNS` / `redactSecrets`, and it also recognises truncated PEM
+  blocks, JWTs, and Slack tokens. Found by GovBench.
+
 - The Unix-socket transport is created mode `0600` under a narrowed umask, so
   it never exists wider even for an instant, and its mode is read back before
   anything is served; a wider socket fails startup. That makes the kernel, not

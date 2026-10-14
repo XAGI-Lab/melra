@@ -3,17 +3,12 @@
 
 import { randomUUID } from "node:crypto";
 import type { MemoryOperation } from "@melra/protocol";
+import { redactSecrets } from "@melra/receipt-schema";
 import {
   SqliteStore,
   type MemoryRecord,
 } from "@melra/storage-sqlite";
 
-const SECRET_PATTERNS: Array<[RegExp, string]> = [
-  [/\b(?:sk|pk|api)[-_][a-z0-9_-]{16,}\b/gi, "[REDACTED_API_KEY]"],
-  [/\bBearer\s+[A-Za-z0-9._~+/-]+=*\b/gi, "Bearer [REDACTED_TOKEN]"],
-  [/\b(password|passwd|secret)\s*[:=]\s*\S+/gi, "$1=[REDACTED]"],
-  [/\bgh[opurs]_[A-Za-z0-9]{20,}\b/g, "[REDACTED_GITHUB_TOKEN]"],
-];
 
 /**
  * How long an unreachable memory row survives before compaction reclaims it,
@@ -35,18 +30,13 @@ export const DEFAULT_MEMORY_RETENTION: MemoryRetention = {
 };
 
 
+// The one list receipts and terminal output use too, so a secret shape added
+// there protects memory without anyone remembering a second copy.
 export function redactMemoryValue(value: string): {
   value: string;
   redactions: string[];
 } {
-  let redacted = value;
-  const redactions: string[] = [];
-  for (const [pattern, replacement] of SECRET_PATTERNS) {
-    const before = redacted;
-    redacted = redacted.replace(pattern, replacement);
-    if (redacted !== before) redactions.push(replacement);
-  }
-  return { value: redacted, redactions };
+  return redactSecrets(value);
 }
 
 export interface RankedMemory extends MemoryRecord {

@@ -115,6 +115,9 @@ importers:
       '@melra/protocol':
         specifier: workspace:*
         version: link:../protocol
+      '@melra/receipt-schema':
+        specifier: workspace:*
+        version: link:../receipt-schema
       '@melra/storage-sqlite':
         specifier: workspace:*
         version: link:../storage-sqlite
@@ -223,6 +226,9 @@ importers:
       '@melra/protocol':
         specifier: workspace:*
         version: link:../protocol
+      '@melra/receipt-schema':
+        specifier: workspace:*
+        version: link:../receipt-schema
 
   packages/verifier-core:
     dependencies:

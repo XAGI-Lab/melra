@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { TerminalOperation } from "@melra/protocol";
+import { redactSecrets } from "@melra/receipt-schema";
 import { resolveCommand } from "./resolve-command.js";
 
 export { quoteForCmd, resolveCommand } from "./resolve-command.js";
@@ -17,23 +18,16 @@ export interface TerminalRuntimeOptions {
   baseEnvironment?: NodeJS.ProcessEnv;
 }
 
-const SECRET_PATTERNS: RegExp[] = [
-  /\bgh[opurs]_[A-Za-z0-9]{20,}\b/g,
-  /\b(?:sk|pk|api)[-_][a-z0-9_-]{16,}\b/gi,
-  /\bBearer\s+[A-Za-z0-9._~+/-]+=*\b/gi,
-  /\b(password|passwd|secret)\s*[:=]\s*\S+/gi,
-];
 
 function inside(root: string, candidate: string): boolean {
   const rel = relative(root, candidate);
   return rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel));
 }
 
+// The shared list, so terminal output is redacted for exactly the shapes a
+// receipt or a memory value would be.
 export function redactTerminalOutput(value: string): string {
-  return SECRET_PATTERNS.reduce(
-    (current, pattern) => current.replace(pattern, "[REDACTED]"),
-    value,
-  );
+  return redactSecrets(value).value;
 }
 
 interface PreparedCommand {

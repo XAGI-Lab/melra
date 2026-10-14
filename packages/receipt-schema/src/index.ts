@@ -5,12 +5,43 @@ import { createHash, randomUUID } from "node:crypto";
 
 const SENSITIVE_KEY =
   /^(?:args?|authorization|constraints|content|cookie|env|goal|headers?|pass(?:word|wd)?|secret|std(?:out|err)|text|token|api[_-]?key|values?)$/i;
-const SECRET_PATTERNS: Array<[RegExp, string]> = [
+/**
+ * Secret shapes redacted wherever MELRA persists free text: receipts and task
+ * records here, memory values, and terminal output. One list, exported, because
+ * three private copies had drifted apart and none of them knew a PEM private
+ * key or an AWS access key id; GovBench found memory storing both verbatim.
+ *
+ * Only high-confidence shapes belong here. A pattern that fires on ordinary
+ * text corrupts the record it was meant to protect, so a secret without a
+ * recognisable shape is left to the field-name rule in redactStructuredValue.
+ */
+export const SECRET_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
+  // A whole PEM private key block, and a truncated one (output cut mid-key).
+  [
+    /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----[\s\S]*?-----END (?:[A-Z0-9]+ )*PRIVATE KEY-----/g,
+    "[REDACTED_PRIVATE_KEY]",
+  ],
+  [/-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----[\s\S]*/g, "[REDACTED_PRIVATE_KEY]"],
+  [/\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g, "[REDACTED_AWS_KEY_ID]"],
+  [/\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, "[REDACTED_JWT]"],
+  [/\bxox[abposr]-[A-Za-z0-9-]{10,}\b/g, "[REDACTED_SLACK_TOKEN]"],
   [/\bgh[opurs]_[A-Za-z0-9]{20,}\b/g, "[REDACTED_GITHUB_TOKEN]"],
   [/\b(?:sk|pk|api)[-_][a-z0-9_-]{16,}\b/gi, "[REDACTED_API_KEY]"],
   [/\bBearer\s+[A-Za-z0-9._~+/-]+=*\b/gi, "Bearer [REDACTED_TOKEN]"],
   [/\b(password|passwd|secret)\s*[:=]\s*\S+/gi, "$1=[REDACTED]"],
 ];
+
+/** Every SECRET_PATTERNS match in `text` replaced, and which kinds were found. */
+export function redactSecrets(text: string): { value: string; redactions: string[] } {
+  let value = text;
+  const redactions: string[] = [];
+  for (const [pattern, replacement] of SECRET_PATTERNS) {
+    const before = value;
+    value = value.replace(pattern, replacement);
+    if (value !== before && !redactions.includes(replacement)) redactions.push(replacement);
+  }
+  return { value, redactions };
+}
 
 export type CertificateResult =
   | "VERIFIED_SUCCESS"
@@ -183,13 +214,9 @@ export function redactStructuredValue(value: unknown): {
       }
     }
     if (typeof current === "string") {
-      let redacted = current;
-      for (const [pattern, replacement] of SECRET_PATTERNS) {
-        const before = redacted;
-        redacted = redacted.replace(pattern, replacement);
-        if (redacted !== before) redactions.add(replacement);
-      }
-      return redacted;
+      const redacted = redactSecrets(current);
+      for (const kind of redacted.redactions) redactions.add(kind);
+      return redacted.value;
     }
     if (Array.isArray(current)) {
       return current.map((item) => visit(item));
