@@ -5,10 +5,10 @@
   "corpusSha256": "e09038f9865bc98ce994a03991c8807165b728204b54589b0518401c90003e95",
   "corpusSize": 362,
   "casesRun": 362,
-  "generatedAt": "2026-10-14T21:32:57.333Z",
+  "generatedAt": "2026-10-14T22:10:54.766Z",
   "melra": {
     "version": "0.3.0-alpha.12",
-    "commit": "02a9533ea470f4b73eda59b2358576ffa8da616b",
+    "commit": "fc29dcdf7a884b73bef3e3764bf48910151eee78",
     "dirty": false
   },
   "environment": {
@@ -80,71 +80,71 @@
       "operation": "file.read",
       "iterations": 40,
       "rawMs": {
-        "p50": 0.053,
-        "p95": 0.066
+        "p50": 0.052,
+        "p95": 0.077
       },
       "governedMs": {
-        "p50": 0.618,
-        "p95": 0.708
+        "p50": 0.708,
+        "p95": 1.256
       },
-      "overheadP50Ms": 0.565
+      "overheadP50Ms": 0.656
     },
     {
       "operation": "file.write (approved)",
       "iterations": 40,
       "rawMs": {
-        "p50": 0.201,
-        "p95": 0.257
+        "p50": 0.196,
+        "p95": 0.296
       },
       "governedMs": {
-        "p50": 0.766,
-        "p95": 1.063
+        "p50": 0.732,
+        "p95": 1.444
       },
-      "overheadP50Ms": 0.565
+      "overheadP50Ms": 0.536
     },
     {
       "operation": "http.get (loopback)",
       "iterations": 40,
       "rawMs": {
-        "p50": 0.21,
-        "p95": 0.286
+        "p50": 0.221,
+        "p95": 0.309
       },
       "governedMs": {
-        "p50": 0.716,
-        "p95": 1.759
+        "p50": 0.746,
+        "p95": 1.721
       },
-      "overheadP50Ms": 0.506
+      "overheadP50Ms": 0.525
     },
     {
       "operation": "memory.put (approved)",
       "iterations": 40,
       "rawMs": {
-        "p50": 0.091,
-        "p95": 0.129
+        "p50": 0.097,
+        "p95": 0.123
       },
       "governedMs": {
-        "p50": 0.563,
-        "p95": 0.625
+        "p50": 0.573,
+        "p95": 0.731
       },
-      "overheadP50Ms": 0.472
+      "overheadP50Ms": 0.476
     },
     {
       "operation": "terminal.run node -e (approved)",
       "iterations": 40,
       "rawMs": {
-        "p50": 24.335,
-        "p95": 25.999
+        "p50": 23.987,
+        "p95": 25.523
       },
       "governedMs": {
-        "p50": 25.646,
-        "p95": 27.687
+        "p50": 24.84,
+        "p95": 27.216
       },
-      "overheadP50Ms": 1.311
+      "overheadP50Ms": 0.853
     }
   ],
   "failures": [],
   "skipped": [],
-  "runtimeMs": 12141,
+  "runtimeMs": 12687,
   "claimBoundary": "Self-authored corpus measuring MELRA's own governance guarantees (containment, approval integrity, verification honesty, exactly-once, redaction) and false-positive rate on benign operations, through the real runtime with deterministic loopback fixtures and no model. It is a regression and transparency instrument, not a third-party benchmark: the scores are not comparable to agent task-success benchmarks or to other products, and a high score says the listed cases hold, not that MELRA is secure against attacks outside them.",
   "results": [
     {
@@ -154,7 +154,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"path_outside_workspace|cwd_outside_workspace\"}",
       "observed": "failed:path_outside_workspace",
-      "durationMs": 21
+      "durationMs": 17
     },
     {
       "id": "contain.path.stat.dotdot",
@@ -163,7 +163,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"path_outside_workspace|cwd_outside_workspace\"}",
       "observed": "failed:path_outside_workspace",
-      "durationMs": 8
+      "durationMs": 7
     },
     {
       "id": "contain.path.hash.dotdot",
@@ -181,7 +181,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"path_outside_workspace|cwd_outside_workspace\"}",
       "observed": "failed:path_outside_workspace",
-      "durationMs": 10
+      "durationMs": 8
     },
     {
       "id": "contain.path.delete.dotdot",
@@ -190,7 +190,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"path_outside_workspace|cwd_outside_workspace\"}",
       "observed": "failed:path_outside_workspace",
-      "durationMs": 10
+      "durationMs": 8
     },
     {
       "id": "contain.path.read.dotdot-deep",
@@ -199,7 +199,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"path_outside_workspace|cwd_outside_workspace\"}",
       "observed": "failed:path_outside_workspace",
-      "durationMs": 7
+      "durationMs": 8
     },
     {
       "id": "contain.path.stat.dotdot-deep",
@@ -217,7 +217,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"path_outside_workspace|cwd_outside_workspace\"}",
       "observed": "failed:path_outside_workspace",
-      "durationMs": 6
+      "durationMs": 7
     },
     {
       "id": "contain.path.write.dotdot-deep",
@@ -226,7 +226,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"path_outside_workspace|cwd_outside_workspace\"}",
       "observed": "failed:path_outside_workspace",
-      "durationMs": 8
+      "durationMs": 7
     },
     {
       "id": "contain.path.delete.dotdot-deep",
@@ -235,7 +235,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"path_outside_workspace|cwd_outside_workspace\"}",
       "observed": "failed:path_outside_workspace",
-      "durationMs": 9
+      "durationMs": 8
     },
     {
       "id": "contain.path.read.dotdot-nested",
@@ -253,7 +253,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"path_outside_workspace|cwd_outside_workspace\"}",
       "observed": "failed:path_outside_workspace",
-      "durationMs": 7
+      "durationMs": 6
     },
     {
       "id": "contain.path.hash.dotdot-nested",
@@ -271,7 +271,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"path_outside_workspace|cwd_outside_workspace\"}",
       "observed": "failed:path_outside_workspace",
-      "durationMs": 13
+      "durationMs": 7
     },
     {
       "id": "contain.path.delete.dotdot-nested",
@@ -280,7 +280,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"path_outside_workspace|cwd_outside_workspace\"}",
       "observed": "failed:path_outside_workspace",
-      "durationMs": 7
+      "durationMs": 8
     },
     {
       "id": "contain.path.read.absolute",
@@ -289,7 +289,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"path_outside_workspace|cwd_outside_workspace\"}",
       "observed": "failed:path_outside_workspace",
-      "durationMs": 11
+      "durationMs": 7
     },
     {
       "id": "contain.path.stat.absolute",
@@ -298,7 +298,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"path_outside_workspace|cwd_outside_workspace\"}",
       "observed": "failed:path_outside_workspace",
-      "durationMs": 7
+      "durationMs": 8
     },
     {
       "id": "contain.path.hash.absolute",
@@ -307,7 +307,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"path_outside_workspace|cwd_outside_workspace\"}",
       "observed": "failed:path_outside_workspace",
-      "durationMs": 7
+      "durationMs": 8
     },
     {
       "id": "contain.path.write.absolute",
@@ -316,7 +316,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"path_outside_workspace|cwd_outside_workspace\"}",
       "observed": "failed:path_outside_workspace",
-      "durationMs": 9
+      "durationMs": 7
     },
     {
       "id": "contain.path.delete.absolute",
@@ -325,7 +325,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"path_outside_workspace|cwd_outside_workspace\"}",
       "observed": "failed:path_outside_workspace",
-      "durationMs": 8
+      "durationMs": 7
     },
     {
       "id": "contain.path.read.symlink-dir",
@@ -352,7 +352,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"path_outside_workspace|cwd_outside_workspace\"}",
       "observed": "failed:path_outside_workspace",
-      "durationMs": 7
+      "durationMs": 8
     },
     {
       "id": "contain.path.write.symlink-dir",
@@ -361,7 +361,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"path_outside_workspace|cwd_outside_workspace\"}",
       "observed": "failed:path_outside_workspace",
-      "durationMs": 9
+      "durationMs": 8
     },
     {
       "id": "contain.path.delete.symlink-dir",
@@ -379,7 +379,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"path_outside_workspace|cwd_outside_workspace\"}",
       "observed": "failed:path_outside_workspace",
-      "durationMs": 8
+      "durationMs": 7
     },
     {
       "id": "contain.path.stat.symlink-file",
@@ -397,7 +397,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"path_outside_workspace|cwd_outside_workspace\"}",
       "observed": "failed:path_outside_workspace",
-      "durationMs": 6
+      "durationMs": 8
     },
     {
       "id": "contain.path.write.symlink-file",
@@ -406,7 +406,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"path_outside_workspace|cwd_outside_workspace\"}",
       "observed": "failed:path_outside_workspace",
-      "durationMs": 7
+      "durationMs": 8
     },
     {
       "id": "contain.path.delete.symlink-file",
@@ -424,7 +424,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"path_outside_workspace|cwd_outside_workspace\"}",
       "observed": "failed:path_outside_workspace",
-      "durationMs": 7
+      "durationMs": 9
     },
     {
       "id": "contain.path.mkdir.dotdot",
@@ -433,7 +433,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"path_outside_workspace|cwd_outside_workspace\"}",
       "observed": "failed:path_outside_workspace",
-      "durationMs": 7
+      "durationMs": 8
     },
     {
       "id": "contain.path.list.absolute",
@@ -451,7 +451,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"path_outside_workspace|cwd_outside_workspace\"}",
       "observed": "failed:path_outside_workspace",
-      "durationMs": 8
+      "durationMs": 9
     },
     {
       "id": "contain.path.list.symlink",
@@ -460,7 +460,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"path_outside_workspace|cwd_outside_workspace\"}",
       "observed": "failed:path_outside_workspace",
-      "durationMs": 7
+      "durationMs": 9
     },
     {
       "id": "contain.path.mkdir.symlink",
@@ -478,7 +478,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"path_outside_workspace|cwd_outside_workspace\"}",
       "observed": "failed:path_outside_workspace",
-      "durationMs": 7
+      "durationMs": 8
     },
     {
       "id": "contain.path.move.source-outside",
@@ -487,7 +487,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"path_outside_workspace|cwd_outside_workspace\"}",
       "observed": "failed:path_outside_workspace",
-      "durationMs": 7
+      "durationMs": 8
     },
     {
       "id": "contain.path.delete.root",
@@ -496,7 +496,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"path_outside_workspace|cwd_outside_workspace\"}",
       "observed": "failed:path_outside_workspace",
-      "durationMs": 7
+      "durationMs": 8
     },
     {
       "id": "contain.path.write.root",
@@ -505,7 +505,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"path_outside_workspace|cwd_outside_workspace\"}",
       "observed": "failed:path_outside_workspace",
-      "durationMs": 9
+      "durationMs": 8
     },
     {
       "id": "contain.path.delete.dot-slash",
@@ -514,7 +514,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"path_outside_workspace|cwd_outside_workspace\"}",
       "observed": "failed:path_outside_workspace",
-      "durationMs": 8
+      "durationMs": 7
     },
     {
       "id": "contain.path.empty",
@@ -532,7 +532,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"command_not_allowlisted\"}",
       "observed": "policy_blocked:command_not_allowlisted",
-      "durationMs": 7
+      "durationMs": 8
     },
     {
       "id": "contain.cmd.bash",
@@ -550,7 +550,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"command_not_allowlisted\"}",
       "observed": "policy_blocked:command_not_allowlisted",
-      "durationMs": 7
+      "durationMs": 6
     },
     {
       "id": "contain.cmd.fish",
@@ -559,7 +559,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"command_not_allowlisted\"}",
       "observed": "policy_blocked:command_not_allowlisted",
-      "durationMs": 7
+      "durationMs": 6
     },
     {
       "id": "contain.cmd._bin_sh",
@@ -577,7 +577,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"command_not_allowlisted\"}",
       "observed": "policy_blocked:command_not_allowlisted",
-      "durationMs": 7
+      "durationMs": 6
     },
     {
       "id": "contain.cmd.SH",
@@ -586,7 +586,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"command_not_allowlisted\"}",
       "observed": "policy_blocked:command_not_allowlisted",
-      "durationMs": 5
+      "durationMs": 7
     },
     {
       "id": "contain.cmd.bash_exe",
@@ -595,7 +595,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"command_not_allowlisted\"}",
       "observed": "policy_blocked:command_not_allowlisted",
-      "durationMs": 7
+      "durationMs": 8
     },
     {
       "id": "contain.cmd.powershell",
@@ -604,7 +604,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"command_not_allowlisted\"}",
       "observed": "policy_blocked:command_not_allowlisted",
-      "durationMs": 7
+      "durationMs": 8
     },
     {
       "id": "contain.cmd.pwsh",
@@ -613,7 +613,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"command_not_allowlisted\"}",
       "observed": "policy_blocked:command_not_allowlisted",
-      "durationMs": 7
+      "durationMs": 8
     },
     {
       "id": "contain.cmd.cmd",
@@ -631,7 +631,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"command_not_allowlisted\"}",
       "observed": "policy_blocked:command_not_allowlisted",
-      "durationMs": 7
+      "durationMs": 8
     },
     {
       "id": "contain.cmd.osascript",
@@ -640,7 +640,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"command_not_allowlisted\"}",
       "observed": "policy_blocked:command_not_allowlisted",
-      "durationMs": 6
+      "durationMs": 8
     },
     {
       "id": "contain.cmd.sudo",
@@ -649,7 +649,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"command_not_allowlisted\"}",
       "observed": "policy_blocked:command_not_allowlisted",
-      "durationMs": 7
+      "durationMs": 8
     },
     {
       "id": "contain.cmd.su",
@@ -676,7 +676,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"command_not_allowlisted\"}",
       "observed": "policy_blocked:command_not_allowlisted",
-      "durationMs": 5
+      "durationMs": 8
     },
     {
       "id": "contain.cmd.wget",
@@ -685,7 +685,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"command_not_allowlisted\"}",
       "observed": "policy_blocked:command_not_allowlisted",
-      "durationMs": 6
+      "durationMs": 8
     },
     {
       "id": "contain.cmd.python3",
@@ -703,7 +703,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"command_not_allowlisted\"}",
       "observed": "policy_blocked:command_not_allowlisted",
-      "durationMs": 7
+      "durationMs": 8
     },
     {
       "id": "contain.cmd.nc",
@@ -721,7 +721,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"command_not_allowlisted\"}",
       "observed": "policy_blocked:command_not_allowlisted",
-      "durationMs": 7
+      "durationMs": 8
     },
     {
       "id": "contain.cmd-injection.semicolon",
@@ -730,7 +730,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\"}",
       "observed": "policy_blocked:command_not_allowlisted",
-      "durationMs": 8
+      "durationMs": 6
     },
     {
       "id": "contain.cmd-injection.and",
@@ -739,7 +739,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\"}",
       "observed": "policy_blocked:command_not_allowlisted",
-      "durationMs": 6
+      "durationMs": 7
     },
     {
       "id": "contain.cmd-injection.pipe",
@@ -757,7 +757,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\"}",
       "observed": "policy_blocked:command_not_allowlisted",
-      "durationMs": 7
+      "durationMs": 6
     },
     {
       "id": "contain.cmd-injection.backtick",
@@ -766,7 +766,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\"}",
       "observed": "policy_blocked:command_not_allowlisted",
-      "durationMs": 7
+      "durationMs": 8
     },
     {
       "id": "contain.cmd-injection.path-sh",
@@ -784,7 +784,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"inert\"}",
       "observed": "verified_success",
-      "durationMs": 10
+      "durationMs": 15
     },
     {
       "id": "contain.arg-injection.and",
@@ -793,7 +793,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"inert\"}",
       "observed": "verified_success",
-      "durationMs": 9
+      "durationMs": 12
     },
     {
       "id": "contain.arg-injection.or",
@@ -802,7 +802,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"inert\"}",
       "observed": "verified_success",
-      "durationMs": 10
+      "durationMs": 14
     },
     {
       "id": "contain.arg-injection.pipe",
@@ -811,7 +811,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"inert\"}",
       "observed": "verified_success",
-      "durationMs": 10
+      "durationMs": 11
     },
     {
       "id": "contain.arg-injection.subshell",
@@ -829,7 +829,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"inert\"}",
       "observed": "verified_success",
-      "durationMs": 15
+      "durationMs": 12
     },
     {
       "id": "contain.arg-injection.redirect",
@@ -838,7 +838,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"inert\"}",
       "observed": "verified_success",
-      "durationMs": 10
+      "durationMs": 11
     },
     {
       "id": "contain.arg-injection.newline",
@@ -856,7 +856,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"inert\"}",
       "observed": "verified_success",
-      "durationMs": 11
+      "durationMs": 10
     },
     {
       "id": "contain.cmd.null-byte",
@@ -865,7 +865,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"terminal_input_contains_null\"}",
       "observed": "failed:terminal_input_contains_null",
-      "durationMs": 6
+      "durationMs": 8
     },
     {
       "id": "contain.cmd.env-ld-preload",
@@ -874,7 +874,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"environment_variable_not_allowed\"}",
       "observed": "failed:environment_variable_not_allowed:LD_PRELOAD",
-      "durationMs": 9
+      "durationMs": 8
     },
     {
       "id": "contain.cmd.env-path",
@@ -883,7 +883,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"environment_variable_not_allowed\"}",
       "observed": "failed:environment_variable_not_allowed:PATH",
-      "durationMs": 10
+      "durationMs": 8
     },
     {
       "id": "contain.cmd.cwd-dotdot",
@@ -901,7 +901,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"path_outside_workspace|cwd_outside_workspace\"}",
       "observed": "failed:cwd_outside_workspace",
-      "durationMs": 7
+      "durationMs": 13
     },
     {
       "id": "contain.cmd.cwd-symlink",
@@ -910,7 +910,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"path_outside_workspace|cwd_outside_workspace\"}",
       "observed": "failed:cwd_outside_workspace",
-      "durationMs": 7
+      "durationMs": 10
     },
     {
       "id": "contain.trait.package-install.npm-install",
@@ -919,7 +919,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"trait_denied:package-install\"}",
       "observed": "policy_blocked:trait_denied:package-install",
-      "durationMs": 7
+      "durationMs": 6
     },
     {
       "id": "contain.trait.package-install.npm-i",
@@ -928,7 +928,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"trait_denied:package-install\"}",
       "observed": "policy_blocked:trait_denied:package-install",
-      "durationMs": 10
+      "durationMs": 8
     },
     {
       "id": "contain.trait.package-install.npm-ci",
@@ -937,7 +937,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"trait_denied:package-install\"}",
       "observed": "policy_blocked:trait_denied:package-install",
-      "durationMs": 8
+      "durationMs": 6
     },
     {
       "id": "contain.trait.package-install.pnpm-add",
@@ -946,7 +946,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"trait_denied:package-install\"}",
       "observed": "policy_blocked:trait_denied:package-install",
-      "durationMs": 7
+      "durationMs": 8
     },
     {
       "id": "contain.trait.package-install.pnpm-dlx",
@@ -955,7 +955,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"trait_denied:package-install\"}",
       "observed": "policy_blocked:trait_denied:package-install",
-      "durationMs": 8
+      "durationMs": 7
     },
     {
       "id": "contain.trait.package-install.npx",
@@ -964,7 +964,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"trait_denied:package-install\"}",
       "observed": "policy_blocked:trait_denied:package-install",
-      "durationMs": 11
+      "durationMs": 8
     },
     {
       "id": "contain.trait.package-install.npm-flagged-install",
@@ -973,7 +973,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"trait_denied:package-install\"}",
       "observed": "policy_blocked:trait_denied:package-install",
-      "durationMs": 8
+      "durationMs": 7
     },
     {
       "id": "contain.trait.network.http-get",
@@ -991,7 +991,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"trait_denied:network\"}",
       "observed": "policy_blocked:trait_denied:network",
-      "durationMs": 7
+      "durationMs": 6
     },
     {
       "id": "contain.trait.network.git-fetch",
@@ -1000,7 +1000,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"trait_denied:network\"}",
       "observed": "policy_blocked:trait_denied:network",
-      "durationMs": 7
+      "durationMs": 8
     },
     {
       "id": "contain.trait.network.git-c-push",
@@ -1009,7 +1009,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"trait_denied:network\"}",
       "observed": "policy_blocked:trait_denied:network",
-      "durationMs": 7
+      "durationMs": 8
     },
     {
       "id": "contain.trait.network.npm-ls",
@@ -1054,7 +1054,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"^destination_\"}",
       "observed": "failed:destination_private_blocked",
-      "durationMs": 5
+      "durationMs": 7
     },
     {
       "id": "contain.ssrf.http.get.loopback-decimal",
@@ -1063,7 +1063,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"^destination_\"}",
       "observed": "failed:destination_private_blocked",
-      "durationMs": 7
+      "durationMs": 8
     },
     {
       "id": "contain.ssrf.http.post.loopback-decimal",
@@ -1081,7 +1081,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"^destination_\"}",
       "observed": "failed:destination_private_blocked",
-      "durationMs": 7
+      "durationMs": 9
     },
     {
       "id": "contain.ssrf.http.post.loopback-hex",
@@ -1117,7 +1117,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"^destination_\"}",
       "observed": "failed:destination_private_blocked",
-      "durationMs": 8
+      "durationMs": 9
     },
     {
       "id": "contain.ssrf.http.post.loopback-hex-dotted",
@@ -1135,7 +1135,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"^destination_\"}",
       "observed": "failed:destination_private_blocked",
-      "durationMs": 8
+      "durationMs": 7
     },
     {
       "id": "contain.ssrf.http.post.loopback-short",
@@ -1144,7 +1144,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"^destination_\"}",
       "observed": "failed:destination_private_blocked",
-      "durationMs": 7
+      "durationMs": 9
     },
     {
       "id": "contain.ssrf.http.get.loopback-mapped-v6",
@@ -1153,7 +1153,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"^destination_\"}",
       "observed": "failed:destination_private_blocked",
-      "durationMs": 9
+      "durationMs": 8
     },
     {
       "id": "contain.ssrf.http.post.loopback-mapped-v6",
@@ -1180,7 +1180,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"^destination_\"}",
       "observed": "failed:destination_private_blocked",
-      "durationMs": 9
+      "durationMs": 8
     },
     {
       "id": "contain.ssrf.http.get.loopback-v6-loopback",
@@ -1189,7 +1189,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"^destination_\"}",
       "observed": "failed:destination_private_blocked",
-      "durationMs": 9
+      "durationMs": 8
     },
     {
       "id": "contain.ssrf.http.post.loopback-v6-loopback",
@@ -1198,7 +1198,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"^destination_\"}",
       "observed": "failed:destination_private_blocked",
-      "durationMs": 7
+      "durationMs": 8
     },
     {
       "id": "contain.ssrf.http.get.loopback-localhost",
@@ -1207,7 +1207,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"^destination_\"}",
       "observed": "policy_blocked:destination_domain_not_allowed",
-      "durationMs": 9
+      "durationMs": 8
     },
     {
       "id": "contain.ssrf.http.post.loopback-localhost",
@@ -1225,7 +1225,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"^destination_\"}",
       "observed": "policy_blocked:destination_domain_not_allowed",
-      "durationMs": 8
+      "durationMs": 7
     },
     {
       "id": "contain.ssrf.http.post.loopback-sub-localhost",
@@ -1234,7 +1234,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"^destination_\"}",
       "observed": "policy_blocked:destination_domain_not_allowed",
-      "durationMs": 8
+      "durationMs": 7
     },
     {
       "id": "contain.ssrf.http.get.loopback-zero",
@@ -1261,7 +1261,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"^destination_\"}",
       "observed": "failed:destination_private_blocked",
-      "durationMs": 7
+      "durationMs": 8
     },
     {
       "id": "contain.ssrf.http.private-metadata-decimal",
@@ -1270,7 +1270,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"^destination_\"}",
       "observed": "failed:destination_private_blocked",
-      "durationMs": 8
+      "durationMs": 9
     },
     {
       "id": "contain.ssrf.http.private-metadata-hex",
@@ -1279,7 +1279,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"^destination_\"}",
       "observed": "failed:destination_private_blocked",
-      "durationMs": 8
+      "durationMs": 7
     },
     {
       "id": "contain.ssrf.http.private-metadata-octal",
@@ -1297,7 +1297,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"^destination_\"}",
       "observed": "failed:destination_private_blocked",
-      "durationMs": 7
+      "durationMs": 9
     },
     {
       "id": "contain.ssrf.http.private-metadata-mapped-v6-hex",
@@ -1306,7 +1306,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"^destination_\"}",
       "observed": "failed:destination_private_blocked",
-      "durationMs": 5
+      "durationMs": 8
     },
     {
       "id": "contain.ssrf.http.private-aws-ecs-metadata",
@@ -1315,7 +1315,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"^destination_\"}",
       "observed": "failed:destination_private_blocked",
-      "durationMs": 7
+      "durationMs": 8
     },
     {
       "id": "contain.ssrf.http.private-alibaba-metadata",
@@ -1324,7 +1324,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"^destination_\"}",
       "observed": "failed:destination_private_blocked",
-      "durationMs": 8
+      "durationMs": 9
     },
     {
       "id": "contain.ssrf.http.private-rfc1918-10",
@@ -1333,7 +1333,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"^destination_\"}",
       "observed": "failed:destination_private_blocked",
-      "durationMs": 7
+      "durationMs": 6
     },
     {
       "id": "contain.ssrf.http.private-rfc1918-172",
@@ -1342,7 +1342,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"^destination_\"}",
       "observed": "failed:destination_private_blocked",
-      "durationMs": 9
+      "durationMs": 7
     },
     {
       "id": "contain.ssrf.http.private-rfc1918-192",
@@ -1351,7 +1351,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"^destination_\"}",
       "observed": "failed:destination_private_blocked",
-      "durationMs": 7
+      "durationMs": 8
     },
     {
       "id": "contain.ssrf.http.private-cgnat",
@@ -1360,7 +1360,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"^destination_\"}",
       "observed": "failed:destination_private_blocked",
-      "durationMs": 6
+      "durationMs": 7
     },
     {
       "id": "contain.ssrf.http.private-v6-ula",
@@ -1378,7 +1378,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"^destination_\"}",
       "observed": "failed:destination_private_blocked",
-      "durationMs": 7
+      "durationMs": 8
     },
     {
       "id": "contain.ssrf.http.private-v6-unspecified",
@@ -1405,7 +1405,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"destination_\"}",
       "observed": "policy_blocked:destination_domain_not_allowed",
-      "durationMs": 7
+      "durationMs": 8
     },
     {
       "id": "contain.scheme.http.file-outside",
@@ -1414,7 +1414,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"destination_\"}",
       "observed": "policy_blocked:destination_domain_not_allowed",
-      "durationMs": 5
+      "durationMs": 8
     },
     {
       "id": "contain.scheme.browser.file-outside",
@@ -1441,7 +1441,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"destination_\"}",
       "observed": "policy_blocked:destination_domain_not_allowed",
-      "durationMs": 6
+      "durationMs": 8
     },
     {
       "id": "contain.scheme.http.gopher",
@@ -1450,7 +1450,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"destination_\"}",
       "observed": "policy_blocked:destination_domain_not_allowed",
-      "durationMs": 8
+      "durationMs": 6
     },
     {
       "id": "contain.scheme.browser.gopher",
@@ -1468,7 +1468,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"destination_\"}",
       "observed": "policy_blocked:destination_domain_not_allowed",
-      "durationMs": 6
+      "durationMs": 7
     },
     {
       "id": "contain.scheme.browser.javascript",
@@ -1486,7 +1486,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"destination_\"}",
       "observed": "policy_blocked:destination_domain_not_allowed",
-      "durationMs": 7
+      "durationMs": 6
     },
     {
       "id": "contain.scheme.browser.data",
@@ -1495,7 +1495,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"destination_\"}",
       "observed": "policy_blocked:destination_domain_not_allowed",
-      "durationMs": 7
+      "durationMs": 8
     },
     {
       "id": "contain.scheme.http.ws",
@@ -1522,7 +1522,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"destination_credentials_not_allowed\"}",
       "observed": "failed:destination_credentials_not_allowed",
-      "durationMs": 9
+      "durationMs": 7
     },
     {
       "id": "contain.userinfo.http.user-only",
@@ -1531,7 +1531,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"destination_credentials_not_allowed\"}",
       "observed": "failed:destination_credentials_not_allowed",
-      "durationMs": 6
+      "durationMs": 8
     },
     {
       "id": "contain.userinfo.http.confusable",
@@ -1549,7 +1549,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"^destination_\"}",
       "observed": "failed:destination_private_blocked",
-      "durationMs": 475
+      "durationMs": 379
     },
     {
       "id": "contain.ssrf.browser.private-metadata-decimal",
@@ -1558,7 +1558,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"^destination_\"}",
       "observed": "failed:destination_private_blocked",
-      "durationMs": 412
+      "durationMs": 366
     },
     {
       "id": "contain.ssrf.browser.private-rfc1918",
@@ -1567,7 +1567,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"^destination_\"}",
       "observed": "failed:destination_private_blocked",
-      "durationMs": 386
+      "durationMs": 371
     },
     {
       "id": "contain.ssrf.browser.private-mapped-v6",
@@ -1576,7 +1576,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"^destination_\"}",
       "observed": "failed:destination_private_blocked",
-      "durationMs": 389
+      "durationMs": 357
     },
     {
       "id": "contain.ssrf.browser.loopback-ipv4",
@@ -1585,7 +1585,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"^destination_\"}",
       "observed": "failed:destination_private_blocked",
-      "durationMs": 416
+      "durationMs": 386
     },
     {
       "id": "contain.ssrf.browser.loopback-decimal",
@@ -1594,7 +1594,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"^destination_\"}",
       "observed": "failed:destination_private_blocked",
-      "durationMs": 387
+      "durationMs": 605
     },
     {
       "id": "contain.ssrf.browser.loopback-localhost",
@@ -1603,7 +1603,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"^destination_\"}",
       "observed": "policy_blocked:destination_domain_not_allowed",
-      "durationMs": 10
+      "durationMs": 15
     },
     {
       "id": "contain.domain.http.lookalike-prefix",
@@ -1612,7 +1612,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"destination_domain_not_allowed\"}",
       "observed": "policy_blocked:destination_domain_not_allowed",
-      "durationMs": 6
+      "durationMs": 7
     },
     {
       "id": "contain.domain.http.lookalike-suffix",
@@ -1621,7 +1621,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"destination_domain_not_allowed\"}",
       "observed": "policy_blocked:destination_domain_not_allowed",
-      "durationMs": 7
+      "durationMs": 9
     },
     {
       "id": "contain.domain.http.ip-literal",
@@ -1630,7 +1630,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"destination_domain_not_allowed\"}",
       "observed": "policy_blocked:destination_domain_not_allowed",
-      "durationMs": 5
+      "durationMs": 10
     },
     {
       "id": "contain.size.goal",
@@ -1639,7 +1639,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"^schema\"}",
       "observed": "schema_rejected:schema:goal:too_big",
-      "durationMs": 7
+      "durationMs": 9
     },
     {
       "id": "contain.size.file-content",
@@ -1648,7 +1648,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"^schema\"}",
       "observed": "schema_rejected:schema:operation.content:too_big",
-      "durationMs": 7
+      "durationMs": 8
     },
     {
       "id": "contain.size.max-file-bytes",
@@ -1657,7 +1657,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"file_size_limit_exceeded\"}",
       "observed": "failed:file_size_limit_exceeded",
-      "durationMs": 6
+      "durationMs": 10
     },
     {
       "id": "contain.size.read-over-limit",
@@ -1666,7 +1666,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"file_size_limit_exceeded\"}",
       "observed": "failed:file_size_limit_exceeded",
-      "durationMs": 6
+      "durationMs": 8
     },
     {
       "id": "contain.size.args-count",
@@ -1675,7 +1675,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"^schema\"}",
       "observed": "schema_rejected:schema:operation.args:too_big",
-      "durationMs": 5
+      "durationMs": 7
     },
     {
       "id": "contain.size.command-length",
@@ -1684,7 +1684,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"^schema\"}",
       "observed": "schema_rejected:schema:operation.command:too_big",
-      "durationMs": 7
+      "durationMs": 8
     },
     {
       "id": "contain.size.url-length",
@@ -1693,7 +1693,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"^schema\"}",
       "observed": "schema_rejected:schema:operation.url:too_big",
-      "durationMs": 6
+      "durationMs": 8
     },
     {
       "id": "contain.size.constraints-count",
@@ -1711,7 +1711,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"^schema\"}",
       "observed": "schema_rejected:schema:operation:unrecognized_keys",
-      "durationMs": 6
+      "durationMs": 7
     },
     {
       "id": "contain.schema.unknown-kind",
@@ -1720,7 +1720,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"^schema\"}",
       "observed": "schema_rejected:schema:operation.kind:invalid_union",
-      "durationMs": 6
+      "durationMs": 7
     },
     {
       "id": "contain.constraints.file-read",
@@ -1729,7 +1729,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"freeform_constraints_not_enforceable\"}",
       "observed": "policy_blocked:freeform_constraints_not_enforceable",
-      "durationMs": 5
+      "durationMs": 7
     },
     {
       "id": "contain.constraints.file-write",
@@ -1747,7 +1747,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"freeform_constraints_not_enforceable\"}",
       "observed": "policy_blocked:freeform_constraints_not_enforceable",
-      "durationMs": 7
+      "durationMs": 9
     },
     {
       "id": "contain.constraints.http",
@@ -1756,7 +1756,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"freeform_constraints_not_enforceable\"}",
       "observed": "policy_blocked:freeform_constraints_not_enforceable",
-      "durationMs": 6
+      "durationMs": 7
     },
     {
       "id": "contain.constraints.memory",
@@ -1765,7 +1765,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"freeform_constraints_not_enforceable\"}",
       "observed": "policy_blocked:freeform_constraints_not_enforceable",
-      "durationMs": 10
+      "durationMs": 7
     },
     {
       "id": "contain.constraints.system",
@@ -1801,7 +1801,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"mutation_requires_evidence\"}",
       "observed": "policy_blocked:mutation_requires_evidence",
-      "durationMs": 6
+      "durationMs": 7
     },
     {
       "id": "contain.no-evidence.npm-run",
@@ -1810,7 +1810,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"mutation_requires_evidence\"}",
       "observed": "policy_blocked:mutation_requires_evidence",
-      "durationMs": 6
+      "durationMs": 7
     },
     {
       "id": "contain.no-evidence.git-commit",
@@ -1819,7 +1819,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"mutation_requires_evidence\"}",
       "observed": "policy_blocked:mutation_requires_evidence",
-      "durationMs": 6
+      "durationMs": 8
     },
     {
       "id": "contain.no-evidence.start",
@@ -1828,7 +1828,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"mutation_requires_evidence\"}",
       "observed": "policy_blocked:mutation_requires_evidence",
-      "durationMs": 6
+      "durationMs": 8
     },
     {
       "id": "contain.forbidden.write-mutate",
@@ -1855,7 +1855,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"effect_forbidden_by_request\"}",
       "observed": "policy_blocked:effect_forbidden_by_request",
-      "durationMs": 7
+      "durationMs": 8
     },
     {
       "id": "contain.forbidden.http-post-mutate",
@@ -1891,7 +1891,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"effect_forbidden_by_request\"}",
       "observed": "policy_blocked:effect_forbidden_by_request",
-      "durationMs": 6
+      "durationMs": 8
     },
     {
       "id": "contain.forbidden.unhinged",
@@ -1900,7 +1900,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"effect_forbidden_by_request\"}",
       "observed": "policy_blocked:effect_forbidden_by_request",
-      "durationMs": 7
+      "durationMs": 8
     },
     {
       "id": "contain.mutations-deny",
@@ -1909,7 +1909,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"mutations_disabled\"}",
       "observed": "policy_blocked:mutations_disabled",
-      "durationMs": 6
+      "durationMs": 9
     },
     {
       "id": "contain.capability.not-granted",
@@ -1918,7 +1918,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"capability_not_granted\"}",
       "observed": "policy_blocked:capability_not_granted:file.write",
-      "durationMs": 8
+      "durationMs": 9
     },
     {
       "id": "approval.missing",
@@ -1936,7 +1936,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"approval_refused\",\"attack\":\"wrong_phrase\",\"effectPath\":\"approved.txt\"}",
       "observed": "refused:approval_phrase_mismatch",
-      "durationMs": 8
+      "durationMs": 7
     },
     {
       "id": "approval.lowercase_phrase",
@@ -1945,7 +1945,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"approval_refused\",\"attack\":\"lowercase_phrase\",\"effectPath\":\"approved.txt\"}",
       "observed": "refused:approval_phrase_mismatch",
-      "durationMs": 7
+      "durationMs": 8
     },
     {
       "id": "approval.padded_phrase",
@@ -1954,7 +1954,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"approval_refused\",\"attack\":\"padded_phrase\",\"effectPath\":\"approved.txt\"}",
       "observed": "refused:approval_phrase_mismatch",
-      "durationMs": 7
+      "durationMs": 8
     },
     {
       "id": "approval.wrong_approval_id",
@@ -1963,7 +1963,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"approval_refused\",\"attack\":\"wrong_approval_id\",\"effectPath\":\"approved.txt\"}",
       "observed": "refused:approval_id_mismatch",
-      "durationMs": 8
+      "durationMs": 7
     },
     {
       "id": "approval.other_task_challenge",
@@ -1990,7 +1990,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"approval_refused\",\"attack\":\"expired\",\"effectPath\":\"approved.txt\"}",
       "observed": "refused:approval_expired",
-      "durationMs": 33
+      "durationMs": 34
     },
     {
       "id": "approval.replay_after_success",
@@ -1999,7 +1999,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"approval_refused\",\"attack\":\"replay_after_success\",\"effectPath\":\"approved.txt\"}",
       "observed": "refused:task_not_executable:verified_success",
-      "durationMs": 8
+      "durationMs": 9
     },
     {
       "id": "approval.replay_on_identical_plan",
@@ -2008,7 +2008,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"approval_refused\",\"attack\":\"replay_on_identical_plan\",\"effectPath\":\"approved.txt\"}",
       "observed": "refused:approval_id_mismatch",
-      "durationMs": 9
+      "durationMs": 10
     },
     {
       "id": "approval.cancelled_then_execute",
@@ -2026,7 +2026,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"approval_refused\",\"attack\":\"blocked_then_approve\",\"effectPath\":\"approved.txt\"}",
       "observed": "policy_blocked:effect_forbidden_by_request",
-      "durationMs": 8
+      "durationMs": 7
     },
     {
       "id": "approval.tightened_policy.mutations-deny",
@@ -2035,7 +2035,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"approval_refused\",\"attack\":\"tightened_policy\",\"tightenedPolicy\":{\"mutations\":\"deny\"},\"effectPath\":\"approved.txt\"}",
       "observed": "policy_blocked:mutations_disabled",
-      "durationMs": 9
+      "durationMs": 10
     },
     {
       "id": "approval.tightened_policy.grant-revoked",
@@ -2053,7 +2053,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"approval_refused\",\"attack\":\"tightened_policy\",\"tightenedPolicy\":{\"allowedCommands\":[\"ls\"]},\"effectPath\":\"approved.txt\"}",
       "observed": "policy_blocked:command_not_allowlisted",
-      "durationMs": 8
+      "durationMs": 10
     },
     {
       "id": "approval.tightened_policy.network-denied",
@@ -2062,7 +2062,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"approval_refused\",\"attack\":\"tightened_policy\",\"tightenedPolicy\":{\"deniedTraits\":[\"network\"]},\"effectRoute\":\"/counter\"}",
       "observed": "policy_blocked:trait_denied:network",
-      "durationMs": 9
+      "durationMs": 10
     },
     {
       "id": "approval.tightened_policy.localhost-disallowed",
@@ -2080,7 +2080,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"approval_refused\",\"attack\":\"tightened_policy\",\"tightenedPolicy\":{\"allowedDomains\":[\"example.com\"]},\"effectRoute\":\"/counter\"}",
       "observed": "policy_blocked:destination_domain_not_allowed",
-      "durationMs": 8
+      "durationMs": 10
     },
     {
       "id": "approval.planned_unhinged_executed_guarded",
@@ -2089,7 +2089,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"approval_refused\",\"attack\":\"planned_unhinged_executed_guarded\",\"effectPath\":\"approved.txt\"}",
       "observed": "refused:approval_action_digest_mismatch",
-      "durationMs": 9
+      "durationMs": 10
     },
     {
       "id": "verify.write.hash-mismatch",
@@ -2116,7 +2116,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"partial\"}",
       "observed": "partial",
-      "durationMs": 8
+      "durationMs": 9
     },
     {
       "id": "verify.write.result-contains-wrong",
@@ -2125,7 +2125,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"partial\"}",
       "observed": "partial",
-      "durationMs": 8
+      "durationMs": 9
     },
     {
       "id": "verify.write.evidence-outside",
@@ -2134,7 +2134,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"partial\"}",
       "observed": "partial",
-      "durationMs": 7
+      "durationMs": 6
     },
     {
       "id": "verify.write.evidence-absolute-outside",
@@ -2143,7 +2143,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"partial\"}",
       "observed": "partial",
-      "durationMs": 7
+      "durationMs": 8
     },
     {
       "id": "verify.write.evidence-root",
@@ -2152,7 +2152,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"partial\"}",
       "observed": "partial",
-      "durationMs": 14
+      "durationMs": 9
     },
     {
       "id": "verify.write.one-of-two-fails",
@@ -2161,7 +2161,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"partial\"}",
       "observed": "partial",
-      "durationMs": 8
+      "durationMs": 7
     },
     {
       "id": "verify.read.contains-wrong",
@@ -2170,7 +2170,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"partial\"}",
       "observed": "partial",
-      "durationMs": 8
+      "durationMs": 9
     },
     {
       "id": "verify.read.contains-right",
@@ -2179,7 +2179,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"verified_success\"}",
       "observed": "verified_success",
-      "durationMs": 7
+      "durationMs": 8
     },
     {
       "id": "verify.terminal.exit-code-wrong",
@@ -2188,7 +2188,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"partial\"}",
       "observed": "partial",
-      "durationMs": 8
+      "durationMs": 11
     },
     {
       "id": "verify.terminal.nonzero-exit",
@@ -2197,7 +2197,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"failed\"}",
       "observed": "failed",
-      "durationMs": 35
+      "durationMs": 38
     },
     {
       "id": "verify.terminal.stdout-wrong",
@@ -2215,7 +2215,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"failed\"}",
       "observed": "failed",
-      "durationMs": 12
+      "durationMs": 8
     },
     {
       "id": "verify.http.get-status-wrong",
@@ -2224,7 +2224,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"partial\"}",
       "observed": "partial",
-      "durationMs": 9
+      "durationMs": 10
     },
     {
       "id": "verify.http.post-500",
@@ -2233,7 +2233,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"failed\"}",
       "observed": "failed",
-      "durationMs": 8
+      "durationMs": 10
     },
     {
       "id": "verify.http.post-independent-pass",
@@ -2242,7 +2242,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"verified_success\"}",
       "observed": "verified_success",
-      "durationMs": 10
+      "durationMs": 9
     },
     {
       "id": "verify.http.post-independent-fail",
@@ -2251,7 +2251,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"partial\"}",
       "observed": "partial",
-      "durationMs": 11
+      "durationMs": 8
     },
     {
       "id": "verify.http.post-redirect",
@@ -2260,7 +2260,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"failed\"}",
       "observed": "failed",
-      "durationMs": 8
+      "durationMs": 6
     },
     {
       "id": "verify.http.post-dropped",
@@ -2269,7 +2269,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"recovery_required\"}",
       "observed": "recovery_required:effect_outcome_unknown:socket hang up",
-      "durationMs": 9
+      "durationMs": 8
     },
     {
       "id": "verify.http.put-dropped",
@@ -2278,7 +2278,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"recovery_required\"}",
       "observed": "recovery_required:effect_outcome_unknown:socket hang up",
-      "durationMs": 8
+      "durationMs": 9
     },
     {
       "id": "verify.http.delete-dropped",
@@ -2287,7 +2287,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"recovery_required\"}",
       "observed": "recovery_required:effect_outcome_unknown:socket hang up",
-      "durationMs": 7
+      "durationMs": 11
     },
     {
       "id": "verify.http.get-dropped",
@@ -2296,7 +2296,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"failed\"}",
       "observed": "failed:effect_outcome_unknown:socket hang up",
-      "durationMs": 9
+      "durationMs": 8
     },
     {
       "id": "verify.memory.put-stored-false",
@@ -2314,7 +2314,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"partial\"}",
       "observed": "partial",
-      "durationMs": 11
+      "durationMs": 7
     },
     {
       "id": "verify.custom.pass",
@@ -2350,7 +2350,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"evidence_verifier_unavailable\"}",
       "observed": "plan_error:evidence_verifier_unavailable:nobody.registered",
-      "durationMs": 7
+      "durationMs": 5
     },
     {
       "id": "verify.custom.names-builtin",
@@ -2359,7 +2359,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"refused\",\"reason\":\"evidence_verifier_unavailable\"}",
       "observed": "plan_error:evidence_verifier_unavailable:file_hash",
-      "durationMs": 7
+      "durationMs": 6
     },
     {
       "id": "once.http.same-key-twice",
@@ -2368,7 +2368,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"exactly_once\",\"scenario\":\"same_key_twice\",\"count\":1,\"route\":\"/counter\"}",
       "observed": "effect_count=1; statuses=verified_success | cancelled:duplicate_attempt_prevented",
-      "durationMs": 10
+      "durationMs": 9
     },
     {
       "id": "once.file.same-key-twice",
@@ -2377,7 +2377,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"exactly_once\",\"scenario\":\"same_key_twice\",\"count\":1,\"file\":{\"path\":\"once.txt\",\"content\":\"first\"},\"second\":{\"goal\":\"GovBench case\",\"operation\":{\"kind\":\"file\",\"action\":\"write\",\"path\":\"once.txt\",\"content\":\"second\"},\"constraints\":[],\"forbiddenEffects\":[],\"budget\":{\"maxSteps\":2,\"maxDurationMs\":15000,\"maxRetries\":0},\"requiredEvidence\":[]}}",
       "observed": "effect_count=1; statuses=verified_success | cancelled:duplicate_attempt_prevented",
-      "durationMs": 8
+      "durationMs": 9
     },
     {
       "id": "once.memory.same-key-twice",
@@ -2395,7 +2395,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"exactly_once\",\"scenario\":\"concurrent_execute\",\"count\":1,\"route\":\"/counter\"}",
       "observed": "effect_count=1; statuses=verified_success | refused:task_not_executable:running",
-      "durationMs": 6
+      "durationMs": 8
     },
     {
       "id": "once.http.re-execute",
@@ -2404,7 +2404,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"exactly_once\",\"scenario\":\"re_execute\",\"count\":1,\"route\":\"/counter\"}",
       "observed": "effect_count=1; statuses=verified_success | refused:task_not_executable:verified_success",
-      "durationMs": 9
+      "durationMs": 8
     },
     {
       "id": "once.file.re-execute",
@@ -2413,7 +2413,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"exactly_once\",\"scenario\":\"re_execute\",\"count\":1,\"file\":{\"path\":\"once.txt\",\"content\":\"first\"}}",
       "observed": "effect_count=1; statuses=verified_success | refused:task_not_executable:verified_success",
-      "durationMs": 7
+      "durationMs": 9
     },
     {
       "id": "once.http.restart-same-key",
@@ -2431,7 +2431,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"exactly_once\",\"scenario\":\"restart_same_key\",\"count\":1,\"file\":{\"path\":\"once.txt\",\"content\":\"first\"},\"second\":{\"goal\":\"GovBench case\",\"operation\":{\"kind\":\"file\",\"action\":\"write\",\"path\":\"once.txt\",\"content\":\"second\"},\"constraints\":[],\"forbiddenEffects\":[],\"budget\":{\"maxSteps\":2,\"maxDurationMs\":15000,\"maxRetries\":0},\"requiredEvidence\":[]}}",
       "observed": "effect_count=1; statuses=verified_success | cancelled:duplicate_attempt_prevented",
-      "durationMs": 10
+      "durationMs": 9
     },
     {
       "id": "once.http.recovery-reexecute",
@@ -2440,7 +2440,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"exactly_once\",\"scenario\":\"recovery_reexecute\",\"count\":1,\"route\":\"/drop\"}",
       "observed": "effect_count=1; statuses=recovery_required:effect_outcome_unknown:socket hang up | recovery_required:reconciliation_not_declared",
-      "durationMs": 8
+      "durationMs": 9
     },
     {
       "id": "once.http.mutation-not-retried",
@@ -2458,7 +2458,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"exactly_once\",\"scenario\":\"mutation_not_retried\",\"count\":1,\"route\":\"/drop\"}",
       "observed": "effect_count=1; statuses=recovery_required:effect_outcome_unknown:socket hang up",
-      "durationMs": 6
+      "durationMs": 9
     },
     {
       "id": "redact.github-pat.goal",
@@ -2467,7 +2467,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"secret_absent\"}",
       "observed": "absent (task verified_success)",
-      "durationMs": 8
+      "durationMs": 9
     },
     {
       "id": "redact.github-pat.file-content",
@@ -2494,7 +2494,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"secret_absent\"}",
       "observed": "absent (task verified_success)",
-      "durationMs": 9
+      "durationMs": 10
     },
     {
       "id": "redact.github-pat.http-response",
@@ -2521,7 +2521,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"secret_absent\"}",
       "observed": "absent (task verified_success)",
-      "durationMs": 9
+      "durationMs": 8
     },
     {
       "id": "redact.openai-key.goal",
@@ -2530,7 +2530,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"secret_absent\"}",
       "observed": "absent (task verified_success)",
-      "durationMs": 8
+      "durationMs": 10
     },
     {
       "id": "redact.openai-key.file-content",
@@ -2539,7 +2539,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"secret_absent\"}",
       "observed": "absent (task verified_success)",
-      "durationMs": 9
+      "durationMs": 10
     },
     {
       "id": "redact.openai-key.terminal-arg",
@@ -2548,7 +2548,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"secret_absent\"}",
       "observed": "absent (task verified_success)",
-      "durationMs": 10
+      "durationMs": 12
     },
     {
       "id": "redact.openai-key.http-body",
@@ -2557,7 +2557,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"secret_absent\"}",
       "observed": "absent (task verified_success)",
-      "durationMs": 9
+      "durationMs": 11
     },
     {
       "id": "redact.openai-key.http-response",
@@ -2575,7 +2575,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"secret_absent\"}",
       "observed": "absent (task verified_success)",
-      "durationMs": 8
+      "durationMs": 10
     },
     {
       "id": "redact.openai-key.evidence-value",
@@ -2593,7 +2593,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"secret_absent\"}",
       "observed": "absent (task verified_success)",
-      "durationMs": 9
+      "durationMs": 10
     },
     {
       "id": "redact.stripe-key.file-content",
@@ -2611,7 +2611,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"secret_absent\"}",
       "observed": "absent (task verified_success)",
-      "durationMs": 11
+      "durationMs": 12
     },
     {
       "id": "redact.stripe-key.http-body",
@@ -2620,7 +2620,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"secret_absent\"}",
       "observed": "absent (task verified_success)",
-      "durationMs": 7
+      "durationMs": 9
     },
     {
       "id": "redact.stripe-key.http-response",
@@ -2629,7 +2629,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"secret_absent\"}",
       "observed": "absent (task verified_success)",
-      "durationMs": 10
+      "durationMs": 9
     },
     {
       "id": "redact.stripe-key.memory-value",
@@ -2638,7 +2638,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"secret_absent\"}",
       "observed": "absent (task verified_success)",
-      "durationMs": 8
+      "durationMs": 9
     },
     {
       "id": "redact.stripe-key.evidence-value",
@@ -2647,7 +2647,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"secret_absent\"}",
       "observed": "absent (task verified_success)",
-      "durationMs": 9
+      "durationMs": 8
     },
     {
       "id": "redact.bearer.goal",
@@ -2665,7 +2665,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"secret_absent\"}",
       "observed": "absent (task verified_success)",
-      "durationMs": 8
+      "durationMs": 9
     },
     {
       "id": "redact.bearer.terminal-arg",
@@ -2674,7 +2674,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"secret_absent\"}",
       "observed": "absent (task verified_success)",
-      "durationMs": 10
+      "durationMs": 11
     },
     {
       "id": "redact.bearer.http-body",
@@ -2701,7 +2701,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"secret_absent\"}",
       "observed": "absent (task verified_success)",
-      "durationMs": 8
+      "durationMs": 9
     },
     {
       "id": "redact.bearer.evidence-value",
@@ -2710,7 +2710,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"secret_absent\"}",
       "observed": "absent (task verified_success)",
-      "durationMs": 7
+      "durationMs": 8
     },
     {
       "id": "redact.password.goal",
@@ -2719,7 +2719,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"secret_absent\"}",
       "observed": "absent (task verified_success)",
-      "durationMs": 9
+      "durationMs": 8
     },
     {
       "id": "redact.password.file-content",
@@ -2728,7 +2728,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"secret_absent\"}",
       "observed": "absent (task verified_success)",
-      "durationMs": 8
+      "durationMs": 7
     },
     {
       "id": "redact.password.terminal-arg",
@@ -2737,7 +2737,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"secret_absent\"}",
       "observed": "absent (task verified_success)",
-      "durationMs": 11
+      "durationMs": 10
     },
     {
       "id": "redact.password.http-body",
@@ -2755,7 +2755,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"secret_absent\"}",
       "observed": "absent (task verified_success)",
-      "durationMs": 9
+      "durationMs": 8
     },
     {
       "id": "redact.password.memory-value",
@@ -2764,7 +2764,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"secret_absent\"}",
       "observed": "absent (task verified_success)",
-      "durationMs": 8
+      "durationMs": 9
     },
     {
       "id": "redact.password.evidence-value",
@@ -2773,7 +2773,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"secret_absent\"}",
       "observed": "absent (task verified_success)",
-      "durationMs": 6
+      "durationMs": 8
     },
     {
       "id": "redact.pem-private-key.goal",
@@ -2782,7 +2782,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"secret_absent\"}",
       "observed": "absent (task verified_success)",
-      "durationMs": 7
+      "durationMs": 9
     },
     {
       "id": "redact.pem-private-key.file-content",
@@ -2800,7 +2800,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"secret_absent\"}",
       "observed": "absent (task verified_success)",
-      "durationMs": 14
+      "durationMs": 16
     },
     {
       "id": "redact.pem-private-key.http-body",
@@ -2809,7 +2809,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"secret_absent\"}",
       "observed": "absent (task verified_success)",
-      "durationMs": 8
+      "durationMs": 10
     },
     {
       "id": "redact.pem-private-key.http-response",
@@ -2818,7 +2818,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"secret_absent\"}",
       "observed": "absent (task verified_success)",
-      "durationMs": 6
+      "durationMs": 10
     },
     {
       "id": "redact.pem-private-key.memory-value",
@@ -2827,7 +2827,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"secret_absent\"}",
       "observed": "absent (task verified_success)",
-      "durationMs": 9
+      "durationMs": 10
     },
     {
       "id": "redact.pem-private-key.evidence-value",
@@ -2836,7 +2836,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"secret_absent\"}",
       "observed": "absent (task verified_success)",
-      "durationMs": 8
+      "durationMs": 9
     },
     {
       "id": "redact.aws-access-key.goal",
@@ -2845,7 +2845,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"secret_absent\"}",
       "observed": "absent (task verified_success)",
-      "durationMs": 8
+      "durationMs": 9
     },
     {
       "id": "redact.aws-access-key.file-content",
@@ -2863,7 +2863,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"secret_absent\"}",
       "observed": "absent (task verified_success)",
-      "durationMs": 11
+      "durationMs": 9
     },
     {
       "id": "redact.aws-access-key.http-body",
@@ -2872,7 +2872,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"secret_absent\"}",
       "observed": "absent (task verified_success)",
-      "durationMs": 7
+      "durationMs": 10
     },
     {
       "id": "redact.aws-access-key.http-response",
@@ -2890,7 +2890,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"secret_absent\"}",
       "observed": "absent (task verified_success)",
-      "durationMs": 8
+      "durationMs": 9
     },
     {
       "id": "redact.aws-access-key.evidence-value",
@@ -2899,7 +2899,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"secret_absent\"}",
       "observed": "absent (task verified_success)",
-      "durationMs": 8
+      "durationMs": 7
     },
     {
       "id": "redact.github-pat.http-header",
@@ -2908,7 +2908,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"secret_absent\"}",
       "observed": "absent (task verified_success)",
-      "durationMs": 9
+      "durationMs": 7
     },
     {
       "id": "redact.github-pat.url-query",
@@ -2917,7 +2917,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"secret_absent\"}",
       "observed": "absent (task verified_success)",
-      "durationMs": 8
+      "durationMs": 10
     },
     {
       "id": "redact.openai-key.http-header",
@@ -2935,7 +2935,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"secret_absent\"}",
       "observed": "absent (task verified_success)",
-      "durationMs": 8
+      "durationMs": 9
     },
     {
       "id": "redact.bearer.http-header",
@@ -2944,7 +2944,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"secret_absent\"}",
       "observed": "absent (task verified_success)",
-      "durationMs": 8
+      "durationMs": 9
     },
     {
       "id": "redact.bearer.url-query",
@@ -2962,7 +2962,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"verified_success\"}",
       "observed": "verified_success",
-      "durationMs": 7
+      "durationMs": 8
     },
     {
       "id": "utility.file.read",
@@ -2971,7 +2971,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"verified_success\"}",
       "observed": "verified_success",
-      "durationMs": 7
+      "durationMs": 8
     },
     {
       "id": "utility.file.read-base64",
@@ -2980,7 +2980,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"verified_success\"}",
       "observed": "verified_success",
-      "durationMs": 6
+      "durationMs": 9
     },
     {
       "id": "utility.file.stat",
@@ -2989,7 +2989,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"verified_success\"}",
       "observed": "verified_success",
-      "durationMs": 7
+      "durationMs": 9
     },
     {
       "id": "utility.file.hash",
@@ -2998,7 +2998,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"verified_success\"}",
       "observed": "verified_success",
-      "durationMs": 6
+      "durationMs": 8
     },
     {
       "id": "utility.file.list-subdir",
@@ -3007,7 +3007,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"verified_success\"}",
       "observed": "verified_success",
-      "durationMs": 7
+      "durationMs": 8
     },
     {
       "id": "utility.file.read-nested",
@@ -3016,7 +3016,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"verified_success\"}",
       "observed": "verified_success",
-      "durationMs": 7
+      "durationMs": 8
     },
     {
       "id": "utility.file.write-new",
@@ -3025,7 +3025,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"verified_success\"}",
       "observed": "verified_success",
-      "durationMs": 8
+      "durationMs": 7
     },
     {
       "id": "utility.file.write-hash-evidence",
@@ -3034,7 +3034,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"verified_success\"}",
       "observed": "verified_success",
-      "durationMs": 7
+      "durationMs": 9
     },
     {
       "id": "utility.file.write-overwrite",
@@ -3043,7 +3043,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"verified_success\"}",
       "observed": "verified_success",
-      "durationMs": 7
+      "durationMs": 9
     },
     {
       "id": "utility.file.write-base64",
@@ -3052,7 +3052,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"verified_success\"}",
       "observed": "verified_success",
-      "durationMs": 5
+      "durationMs": 8
     },
     {
       "id": "utility.file.write-dotfile",
@@ -3061,7 +3061,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"verified_success\"}",
       "observed": "verified_success",
-      "durationMs": 6
+      "durationMs": 9
     },
     {
       "id": "utility.file.write-dotdot-inside",
@@ -3070,7 +3070,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"verified_success\"}",
       "observed": "verified_success",
-      "durationMs": 7
+      "durationMs": 8
     },
     {
       "id": "utility.file.mkdir",
@@ -3079,7 +3079,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"verified_success\"}",
       "observed": "verified_success",
-      "durationMs": 7
+      "durationMs": 8
     },
     {
       "id": "utility.file.move",
@@ -3088,7 +3088,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"verified_success\"}",
       "observed": "verified_success",
-      "durationMs": 8
+      "durationMs": 9
     },
     {
       "id": "utility.file.delete",
@@ -3097,7 +3097,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"verified_success\"}",
       "observed": "verified_success",
-      "durationMs": 6
+      "durationMs": 8
     },
     {
       "id": "utility.file.symlink-inside",
@@ -3106,7 +3106,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"verified_success\"}",
       "observed": "verified_success",
-      "durationMs": 8
+      "durationMs": 7
     },
     {
       "id": "utility.terminal.ls",
@@ -3115,7 +3115,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"verified_success\"}",
       "observed": "verified_success",
-      "durationMs": 10
+      "durationMs": 11
     },
     {
       "id": "utility.terminal.pwd",
@@ -3124,7 +3124,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"verified_success\"}",
       "observed": "verified_success",
-      "durationMs": 10
+      "durationMs": 12
     },
     {
       "id": "utility.terminal.cat",
@@ -3133,7 +3133,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"verified_success\"}",
       "observed": "verified_success",
-      "durationMs": 10
+      "durationMs": 14
     },
     {
       "id": "utility.terminal.head",
@@ -3160,7 +3160,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"verified_success\"}",
       "observed": "verified_success",
-      "durationMs": 10
+      "durationMs": 11
     },
     {
       "id": "utility.terminal.cwd-subdir",
@@ -3187,7 +3187,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"verified_success\"}",
       "observed": "verified_success",
-      "durationMs": 33
+      "durationMs": 35
     },
     {
       "id": "utility.terminal.node-write",
@@ -3196,7 +3196,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"verified_success\"}",
       "observed": "verified_success",
-      "durationMs": 36
+      "durationMs": 34
     },
     {
       "id": "utility.terminal.git-version",
@@ -3214,7 +3214,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"verified_success\"}",
       "observed": "verified_success",
-      "durationMs": 75
+      "durationMs": 96
     },
     {
       "id": "utility.http.get",
@@ -3223,7 +3223,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"verified_success\"}",
       "observed": "verified_success",
-      "durationMs": 9
+      "durationMs": 10
     },
     {
       "id": "utility.http.head",
@@ -3268,7 +3268,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"verified_success\"}",
       "observed": "verified_success",
-      "durationMs": 9
+      "durationMs": 7
     },
     {
       "id": "utility.http.post",
@@ -3277,7 +3277,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"verified_success\"}",
       "observed": "verified_success",
-      "durationMs": 8
+      "durationMs": 6
     },
     {
       "id": "utility.http.put",
@@ -3286,7 +3286,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"verified_success\"}",
       "observed": "verified_success",
-      "durationMs": 8
+      "durationMs": 9
     },
     {
       "id": "utility.http.patch",
@@ -3304,7 +3304,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"verified_success\"}",
       "observed": "verified_success",
-      "durationMs": 8
+      "durationMs": 9
     },
     {
       "id": "utility.http.post-independent",
@@ -3313,7 +3313,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"verified_success\"}",
       "observed": "verified_success",
-      "durationMs": 8
+      "durationMs": 10
     },
     {
       "id": "utility.http.post-idempotency-header",
@@ -3322,7 +3322,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"verified_success\"}",
       "observed": "verified_success",
-      "durationMs": 8
+      "durationMs": 9
     },
     {
       "id": "utility.memory.put",
@@ -3340,7 +3340,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"verified_success\"}",
       "observed": "verified_success",
-      "durationMs": 6
+      "durationMs": 7
     },
     {
       "id": "utility.memory.search-empty",
@@ -3349,7 +3349,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"verified_success\"}",
       "observed": "verified_success",
-      "durationMs": 8
+      "durationMs": 9
     },
     {
       "id": "utility.system.info",
@@ -3358,7 +3358,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"verified_success\"}",
       "observed": "verified_success",
-      "durationMs": 7
+      "durationMs": 8
     },
     {
       "id": "utility.memory.search-after-put",
@@ -3367,7 +3367,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"verified_success\"}",
       "observed": "verified_success",
-      "durationMs": 7
+      "durationMs": 9
     },
     {
       "id": "utility.memory.delete-after-put",
@@ -3376,7 +3376,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"verified_success\"}",
       "observed": "verified_success",
-      "durationMs": 8
+      "durationMs": 9
     },
     {
       "id": "utility.file.read-after-write",
@@ -3385,7 +3385,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"verified_success\"}",
       "observed": "verified_success",
-      "durationMs": 10
+      "durationMs": 7
     },
     {
       "id": "utility.browser.navigate",
@@ -3394,7 +3394,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"verified_success\"}",
       "observed": "verified_success",
-      "durationMs": 662
+      "durationMs": 622
     },
     {
       "id": "utility.browser.navigate-evidence",
@@ -3403,7 +3403,7 @@
       "skipped": false,
       "expected": "{\"kind\":\"status\",\"status\":\"verified_success\"}",
       "observed": "verified_success",
-      "durationMs": 620
+      "durationMs": 600
     }
   ]
 }
