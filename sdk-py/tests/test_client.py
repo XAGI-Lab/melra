@@ -5,6 +5,13 @@ from __future__ import annotations
 
 import os
 import shutil
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import AsyncMock, call
 
@@ -114,3 +121,115 @@ async def test_python_sdk_calls_workflow_tools_with_validated_inputs() -> None:
         await client.workflow_status("not-a-uuid")
     with pytest.raises(ValueError, match="action must be"):
         await client.control_workflow(workflow_id, "destroy")
+
+
+TOKEN = "python-sdk-test-token"
+
+
+@contextmanager
+def _served(tmp_path: Path, args: list[str], ready: Callable[[], bool]) -> Iterator[None]:
+    """Run `melra serve <args>` until the block exits, however it exits."""
+    repository = Path(__file__).resolve().parents[2]
+    cli = repository / "apps" / "cli" / "dist" / "index.js"
+    assert cli.exists(), "run pnpm build before the Python SDK test"
+    node = shutil.which("node")
+    assert node is not None
+    log = tmp_path / "server.log"
+    with log.open("wb") as stderr:
+        server = subprocess.Popen(
+            [node, str(cli), "serve", *args],
+            # The caller's environment (Windows needs SYSTEMROOT and friends),
+            # minus any MELRA_* setting that would change what is served.
+            env={
+                **{k: v for k, v in os.environ.items() if not k.startswith("MELRA_")},
+                "MELRA_WORKSPACE": str(tmp_path),
+                "MELRA_HOME": str(tmp_path / ".melra"),
+                "MELRA_HTTP_TOKEN": TOKEN,
+            },
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=stderr,
+        )
+        try:
+            deadline = time.monotonic() + 30
+            while not ready():
+                assert server.poll() is None, f"server exited: {log.read_text()}"
+                assert time.monotonic() < deadline, f"server not ready: {log.read_text()}"
+                time.sleep(0.1)
+            yield
+        finally:
+            server.terminate()
+            try:
+                server.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                server.kill()
+                server.wait()
+
+
+async def _plan_execute_receipt(melra: MelraClient) -> None:
+    capabilities = await melra.capabilities()
+    assert capabilities["product"] == "MELRA"
+    task = await melra.plan(
+        {
+            "goal": "Inspect the system over a remote transport",
+            "operation": {"kind": "system", "action": "info"},
+        }
+    )
+    execution = await melra.execute(task["id"])
+    assert execution["task"]["status"] == "verified_success"
+    evidence = await melra.receipt(task_id=task["id"])
+    assert len(evidence["receipts"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_python_sdk_connects_to_a_running_http_server(tmp_path: Path) -> None:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+
+    def listening() -> bool:
+        try:
+            socket.create_connection(("127.0.0.1", port), timeout=1).close()
+        except OSError:
+            return False
+        return True
+
+    with _served(tmp_path, ["--http", "--port", str(port)], listening):
+        # The console URL's base is accepted too; `/mcp` is appended.
+        async with MelraClient.connect_http(f"http://127.0.0.1:{port}", token=TOKEN) as melra:
+            await _plan_execute_receipt(melra)
+        with pytest.raises(PermissionError, match="401"):
+            async with MelraClient.connect_http(
+                f"http://127.0.0.1:{port}/mcp", token="wrong-token"
+            ):
+                pass
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix sockets are POSIX-only")
+@pytest.mark.asyncio
+async def test_python_sdk_connects_to_a_running_socket_server(tmp_path: Path) -> None:
+    # A short directory: macOS caps a socket path at 104 bytes and tmp_path is longer.
+    with tempfile.TemporaryDirectory(dir="/tmp") as directory:
+        path = Path(directory) / "melra.sock"
+        with _served(tmp_path, ["--socket", str(path)], path.is_socket):
+            async with MelraClient.connect_socket(path, token=TOKEN) as melra:
+                await _plan_execute_receipt(melra)
+
+
+def test_python_sdk_refuses_to_send_the_token_where_it_should_not(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with pytest.raises(ValueError, match="plain http"):
+        MelraClient.connect_http("http://melra.example.com:7457/mcp", token=TOKEN)
+    MelraClient.connect_http("https://melra.example.com/mcp", token=TOKEN)
+    MelraClient.connect_http("http://[::1]:7457/mcp", token=TOKEN)
+    MelraClient.connect_http("http://melra.internal/mcp", token=TOKEN, allow_insecure_http=True)
+    with pytest.raises(ValueError, match="http:// or https://"):
+        MelraClient.connect_http("ftp://127.0.0.1/mcp", token=TOKEN)
+    # Required, and never taken from the environment even when it is set there.
+    monkeypatch.setenv("MELRA_HTTP_TOKEN", TOKEN)
+    with pytest.raises(ValueError, match="token is required"):
+        MelraClient.connect_http("http://127.0.0.1:7457/mcp", token="  ")
+    monkeypatch.setattr(sys, "platform", "win32")
+    with pytest.raises(OSError, match="unsupported_on_windows"):
+        MelraClient.connect_socket("/tmp/melra.sock", token=TOKEN)
