@@ -18,8 +18,9 @@ against a remote endpoint: the probe effect is verified by reading it back
 *through the kernel*.
 
 Exit code is `0` when the endpoint reaches the claimed level and `1` when it
-falls short. `--level` defaults to `3`. The report is JSON on stdout; publish it
-verbatim to claim a level.
+falls short. `--level` defaults to `3`. In a terminal it prints each check, the
+level reached, and what the suite does not prove; with `--json` or through a
+pipe the report is JSON on stdout. Publish the JSON verbatim to claim a level.
 
 ## The levels
 

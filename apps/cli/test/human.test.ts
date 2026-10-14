@@ -10,8 +10,15 @@ import { PassThrough } from "node:stream";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { detectClients, type ClientChoice } from "../src/client-status.js";
-import { nextStep, renderDoctor, setupWizard, type DoctorReport } from "../src/human.js";
-import { isHuman, paint, table } from "../src/output.js";
+import {
+  nextStep,
+  renderConformance,
+  renderDoctor,
+  renderInit,
+  setupWizard,
+  type DoctorReport,
+} from "../src/human.js";
+import { isHuman, mark, paint, table } from "../src/output.js";
 
 const execute = promisify(execFile);
 const entry = resolve(import.meta.dirname, "../dist/bin.js");
@@ -191,5 +198,50 @@ describe("output helpers", () => {
     expect(JSON.parse(setup.stdout).client).toBe("generic");
     // Non-interactive setup never wrote a client file.
     expect(existsSync(join(root, ".mcp.json"))).toBe(false);
+  });
+});
+
+describe("conformance and setup output", () => {
+  it("renders conformance as checks, a verdict, and what it does not prove", () => {
+    process.env.NO_COLOR = "1";
+    const check = (level: number, name: string, passed: boolean) => ({ level, name, passed, detail: "d" });
+    const base = { suite: "melra-conformance/1", claimed: 3, mode: "developer", notProven: ["not this"] };
+    const passed = renderConformance({
+      ...base,
+      level: 3,
+      claim: "L3 verified effects",
+      passed: 2,
+      of: 2,
+      checks: [check(1, "kernel-tools-present", true), check(3, "approved-mutation-verifies", true)],
+    });
+    expect(passed).toContain("L1  kernel-tools-present");
+    expect(passed).toContain(`${mark("pass")} L3 verified effects (2 of 2 checks)`);
+    expect(passed).toContain("Not proven by this suite:\n  - not this");
+    const failed = renderConformance({
+      ...base,
+      level: 0,
+      claim: "none",
+      passed: 0,
+      of: 1,
+      checks: [check(1, "kernel-tools-present", false)],
+    });
+    // The legacy Windows console gets [ok]/[fail] instead of the symbols.
+    expect(failed).toContain(`${mark("fail")} no level reached, short of the L3 claimed`);
+  });
+
+  it("tells Claude Code users to approve the project server, and says when nothing changed", () => {
+    process.env.NO_COLOR = "1";
+    const result = {
+      initialized: true as const,
+      client: "claude-code",
+      policyPath: "/p",
+      configPath: "/w/.mcp.json",
+      written: true as const,
+      config: {},
+      note: "",
+    };
+    expect(renderInit(result)).toContain("approve the 'melra' server");
+    expect(renderInit({ ...result, client: "codex" })).toContain("Next: Restart Codex");
+    expect(renderInit({ ...result, unchanged: true })).toContain("already set up; nothing changed");
   });
 });

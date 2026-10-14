@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { accessSync, constants, existsSync, statSync } from "node:fs";
+import { homedir } from "node:os";
 import { readFile } from "node:fs/promises";
 import { delimiter, dirname, extname, join } from "node:path";
 import { PRODUCT_VERSION } from "@melra/protocol";
@@ -241,8 +242,16 @@ export interface ClientChoice {
 // has a directory and no file, and a CLI client may have neither yet. The
 // directory test is skipped where it is the workspace itself, which always
 // exists and so says nothing about Claude Code.
+// `/Applications` or `~/Applications`, where drag-installed apps go.
+function macAppInstalled(app: string): boolean {
+  return (
+    process.platform === "darwin" &&
+    [join("/Applications", app), join(homedir(), "Applications", app)].some((path) => existsSync(path))
+  );
+}
+
 export function detectClients(workspace: string): ClientChoice[] {
-  return Object.entries(CLIENTS).flatMap(([client, { label, path: pathOf, bin }]) => {
+  return Object.entries(CLIENTS).flatMap(([client, { label, path: pathOf, bin, app }]) => {
     if (client === "generic") return [];
     const path = pathOf?.(workspace);
     const detected =
@@ -252,7 +261,9 @@ export function detectClients(workspace: string): ClientChoice[] {
           ? "config folder found"
           : bin !== undefined && resolvesOnPath(bin)
             ? `'${bin}' on PATH`
-            : undefined;
+            : app !== undefined && macAppInstalled(app)
+              ? `${app} installed`
+              : undefined;
     return [
       {
         client,

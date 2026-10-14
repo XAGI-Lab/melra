@@ -8,6 +8,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+import type { TaskRecord } from "@melra/protocol";
+import { taskTarget } from "../src/activity.js";
 
 const execute = promisify(execFile);
 const entry = resolve(import.meta.dirname, "../dist/bin.js");
@@ -173,5 +175,17 @@ describe("melra tasks, status, and watch", () => {
     const code = await exited;
     // Windows has no SIGINT to deliver; kill() there terminates outright.
     if (process.platform !== "win32") expect(code).toBe(130);
+  });
+});
+
+describe("task targets", () => {
+  it("shows a command as what ran, arguments included", () => {
+    const task = (operation: Record<string, unknown>) =>
+      ({ request: { operation } }) as unknown as TaskRecord;
+    // Not the classifier's `command:pnpm`; the stored arguments are redacted already.
+    expect(
+      taskTarget(task({ kind: "terminal", action: "run", command: "pnpm", args: ["check", "--token=[REDACTED_SENSITIVE_ARG]"] })),
+    ).toBe("pnpm check --token=[REDACTED_SENSITIVE_ARG]");
+    expect(taskTarget(task({ kind: "file", action: "list", path: "." }))).toBe(".");
   });
 });

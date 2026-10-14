@@ -54,10 +54,12 @@ import { clientStatuses, clientsCheck, detectClients } from "./client-status.js"
 import { RESTART_SAFE_WORKFLOW } from "./demo-workflow.js";
 import { detectIsolation, isolationCheck } from "./isolation.js";
 import {
+  renderConformance,
   renderDoctor,
   renderInit,
   renderSetup,
   setupWizard,
+  type ConformanceReport,
   type DoctorCheck,
   type DoctorReport,
   type InitResult,
@@ -593,7 +595,8 @@ async function init(args: string[], env: CliEnvironment): Promise<InitResult> {
     if (configPath === undefined) {
       throw new Error("--write needs a named --client; see 'melra help' for the list");
     }
-    const { backup } = await writeClientConfig(configPath, config, client);
+    const { backup, unchanged } = await writeClientConfig(configPath, config, client);
+    const next = CLIENTS[client]?.next ?? `Restart ${label} to load it.`;
     return {
       initialized: true,
       client,
@@ -601,8 +604,11 @@ async function init(args: string[], env: CliEnvironment): Promise<InitResult> {
       configPath,
       written: true,
       ...(backup === undefined ? {} : { backup }),
+      ...(unchanged === undefined ? {} : { unchanged }),
       config,
-      note: `Added melra to ${configPath}. Restart ${label} to load it.`,
+      note: unchanged
+        ? `${configPath} already has this melra entry; nothing changed. ${next}`
+        : `Added melra to ${configPath}. ${next}`,
     };
   }
   return {
@@ -906,7 +912,7 @@ async function main(): Promise<void> {
       return;
     }
     case "conformance": {
-      rejectUnknownFlags(args, ["--url", "--token", "--level"]);
+      rejectUnknownFlags(args, ["--url", "--token", "--level", "--json"]);
       const level = argument("--level", args);
       if (level !== undefined && !["1", "2", "3"].includes(level)) {
         throw new Error("--level must be 1, 2, or 3");
@@ -918,7 +924,7 @@ async function main(): Promise<void> {
         ...(token === undefined ? {} : { token }),
         ...(level === undefined ? {} : { claim: Number(level) }),
       });
-      output(report);
+      printJsonOrHuman(report as unknown as ConformanceReport, renderConformance, args);
       process.exitCode = failed ? 1 : 0;
       return;
     }

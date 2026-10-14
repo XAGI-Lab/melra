@@ -153,10 +153,11 @@ Write it into ~/project/.mcp.json? [Y/n]
   ✓  Policy       ~/.melra/policy.json
   ✓  Claude Code  ~/project/.mcp.json
 
-Next: Restart Claude Code, then ask it to use the melra tools.
+Next: Start claude in this workspace and approve the 'melra' server when it asks; 'claude mcp list' then shows it connected.
 ```
 
-Then restart your agent app and ask it to do something, for example *"use melra to
+Then restart your agent app (Claude Code asks you to approve a project's server
+once) and ask it to do something, for example *"use melra to
 show me the system info"*. That's it.
 
 <details>

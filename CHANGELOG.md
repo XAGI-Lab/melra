@@ -6,6 +6,30 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+Found by installing the packed release into a clean project on macOS and
+setting up the harnesses installed there:
+
+- `melra setup --client claude-code` says what Claude Code actually needs next:
+  approve the project's `melra` server when `claude` asks. Until then
+  `claude mcp list` shows it as *Pending approval*, which "restart Claude
+  Code" did not explain.
+- `setup --write` on a config that already holds exactly this entry leaves the
+  file alone and says so ("already set up; nothing changed"). It used to
+  rewrite the file and replace a useful `.bak` with a copy of the result.
+- The setup wizard detects Claude Desktop, Cursor, Windsurf, Kiro, VS Code,
+  Zed, Warp, and LM Studio from their macOS app bundles, so a freshly
+  installed app is offered first even before it has a config file.
+- `melra conformance` prints a readable report in a terminal: each check by
+  level, the level reached, and what the suite does not prove. `--json`, or
+  any pipe, still gives the JSON report.
+- `melra tasks` and `melra watch` show a command as what ran (`pnpm check`,
+  with its already-redacted arguments) rather than `command:pnpm`.
+- Hints no longer point at repository paths an npm install does not have: the
+  empty `melra tasks` suggests `melra demo durable-core`, and the doctor
+  isolation hint links the Docker recipe on GitHub.
+
 ### Fixed
 
 - `melra demo durable-core` works from an npm install. It read its workflow
