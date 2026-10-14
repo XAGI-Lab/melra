@@ -51,6 +51,7 @@ import {
 import { runConformance } from "./conformance.js";
 import { statusCommand, tasksCommand, watchCommand } from "./activity.js";
 import { clientStatuses, clientsCheck, detectClients } from "./client-status.js";
+import { RESTART_SAFE_WORKFLOW } from "./demo-workflow.js";
 import { detectIsolation, isolationCheck } from "./isolation.js";
 import {
   renderDoctor,
@@ -365,19 +366,13 @@ async function workflowCommand(
 }
 
 async function durableCoreDemo(env: CliEnvironment): Promise<number> {
-  const examplePath = resolve(
-    import.meta.dirname,
-    "../../../examples/workflows/restart-safe.json",
-  );
   const melra = await runtime(env);
   try {
-    const definition = WorkflowDefinitionSchema.parse(
-      JSON.parse(await readFile(examplePath, "utf8")),
-    );
+    const definition = WorkflowDefinitionSchema.parse(RESTART_SAFE_WORKFLOW);
     const planned = melra.workflows.plan(definition);
     const advanced = await melra.workflows.advance(planned.id);
     output({
-      examplePath,
+      example: definition.name,
       workflow: advanced.run,
       next:
         advanced.run.status === "verified_complete"
@@ -1060,7 +1055,8 @@ async function main(): Promise<void> {
       return;
     case "demo":
       rejectUnknownFlags(args, []);
-      if (args[0] !== "durable-core") {
+      // One demo today, so naming it is optional.
+      if ((args[0] ?? "durable-core") !== "durable-core") {
         throw new Error("demo supports only 'durable-core'");
       }
       process.exitCode = await durableCoreDemo(env);

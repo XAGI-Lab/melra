@@ -143,6 +143,24 @@ describe("WorkflowController planning", () => {
     );
   });
 
+  it("plans the same definition again as a new run, and refuses a different one under its id", async () => {
+    const { controller, store } = await setup();
+    const first = controller.plan(definition());
+    // `melra demo` twice, or `workflow plan --definition` on the same file:
+    // this used to fail with a raw SQLite UNIQUE constraint.
+    const second = controller.plan(definition());
+    expect(second.id).not.toBe(first.id);
+    expect(second.status).toBe("planned");
+    expect(store.listWorkflowEvents(second.id)).toHaveLength(2);
+
+    // The goal is redacted before storage, so the stored copies of these two
+    // look identical. The comparison is against the sealed exact definition,
+    // so a change only a secret carried is still caught.
+    expect(() => controller.plan(definition("a-different-secret"))).toThrow(
+      /^workflow_definition_conflict:/,
+    );
+  });
+
   it("rejects a denied nested request before writing anything", async () => {
     const { controller, store } = await setup();
     const denied = WorkflowDefinitionSchema.parse({
