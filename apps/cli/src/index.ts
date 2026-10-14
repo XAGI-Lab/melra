@@ -50,7 +50,17 @@ import {
 } from "./environment.js";
 import { runConformance } from "./conformance.js";
 import { statusCommand, tasksCommand, watchCommand } from "./activity.js";
-import { clientStatuses, clientsCheck } from "./client-status.js";
+import { clientStatuses, clientsCheck, detectClients } from "./client-status.js";
+import {
+  renderDoctor,
+  renderInit,
+  renderSetup,
+  setupWizard,
+  type DoctorCheck,
+  type DoctorReport,
+  type InitResult,
+} from "./human.js";
+import { isHuman, paint, printJsonOrHuman } from "./output.js";
 import {
   CLIENTS,
   clientConfig,
@@ -430,14 +440,10 @@ async function socketCheck(path: string): Promise<{
 }
 
 async function doctor(env: CliEnvironment): Promise<{
-  report: Record<string, unknown>;
+  report: DoctorReport;
   failed: boolean;
 }> {
-  const checks: Array<{
-    name: string;
-    status: "pass" | "warn" | "fail";
-    detail: string;
-  }> = [];
+  const checks: DoctorCheck[] = [];
   const major = Number(process.versions.node.split(".")[0]);
   checks.push({
     name: "node",
@@ -563,10 +569,7 @@ async function doctor(env: CliEnvironment): Promise<{
   };
 }
 
-async function init(
-  args: string[],
-  env: CliEnvironment,
-): Promise<Record<string, unknown>> {
+async function init(args: string[], env: CliEnvironment): Promise<InitResult> {
   await mkdir(env.dataDirectory, { recursive: true });
   const policyPath = join(env.dataDirectory, "policy.json");
   try {
@@ -622,9 +625,26 @@ async function init(
 // One command for the whole local setup: write the policy, emit a working
 // client config, and verify the machine can actually run it.
 async function setup(args: string[], env: CliEnvironment): Promise<number> {
-  const initialized = await init(args, env);
+  let chosen = args;
+  // Only a person at a terminal on both ends is asked. Anything else — a pipe,
+  // a test, `--json` — gets today's non-interactive generic setup unchanged.
+  if (argument("--client", args) === undefined && isHuman(args) && process.stdin.isTTY) {
+    const answer = await setupWizard(
+      { input: process.stdin, output: process.stdout },
+      detectClients(env.workspaceRoot),
+    );
+    if (answer === undefined) {
+      process.stdout.write("\nCancelled; nothing was written.\n");
+      return 130;
+    }
+    process.stdout.write("\n");
+    // The same arguments the person could have typed, so the wizard cannot
+    // drift from what `--client X --write` does.
+    chosen = ["--client", answer.client, ...(answer.write ? ["--write"] : [])];
+  }
+  const initialized = await init(chosen, env);
   const { report, failed } = await doctor(env);
-  output({ ...initialized, ...report });
+  printJsonOrHuman({ ...initialized, ...report }, () => renderSetup(initialized, report), args);
   return failed ? 1 : 0;
 }
 
@@ -768,10 +788,10 @@ function help(): void {
   process.stdout.write(`MELRA ${PRODUCT_VERSION}
 
 Usage:
-  melra setup [--client <name>] [--write]
-  melra doctor
+  melra setup [--client <name>] [--write] [--json]
+  melra doctor [--json]
   melra conformance [--url <mcp-url> --token <token>] [--level <1|2|3>]
-  melra init [--client <name>] [--write]
+  melra init [--client <name>] [--write] [--json]
   melra serve [--http] [--port <port>] [--open]
   melra serve --socket <path>
   melra run --request <task.json>
@@ -788,9 +808,14 @@ Usage:
   melra demo durable-core
   melra clients [--revoke <client-id|all>]
   melra policy test --request <task.json>
-  melra version
+  melra version [--json]
+
+In a terminal, doctor, setup, init, and version print a readable report, and
+'melra setup' with no --client asks which detected client to set up. Piped or
+captured, they print JSON (version: the bare number), exactly as before.
 
 Flags:
+  --json           Print JSON even in a terminal, and never ask a question.
   --client <name>  Emit the MCP config in this client's own format and say
                    where it goes: claude-code (or claude), claude-desktop,
                    cursor, vscode, windsurf, codex, gemini, zed, cline,
@@ -876,9 +901,9 @@ async function main(): Promise<void> {
   }
   switch (command) {
     case "doctor": {
-      rejectUnknownFlags(args, []);
+      rejectUnknownFlags(args, ["--json"]);
       const { report, failed } = await doctor(env);
-      output(report);
+      printJsonOrHuman(report, renderDoctor, args);
       process.exitCode = failed ? 1 : 0;
       return;
     }
@@ -900,11 +925,11 @@ async function main(): Promise<void> {
       return;
     }
     case "init":
-      rejectUnknownFlags(args, ["--client", "--write"]);
-      output(await init(args, env));
+      rejectUnknownFlags(args, ["--client", "--write", "--json"]);
+      printJsonOrHuman(await init(args, env), renderInit, args);
       return;
     case "setup":
-      rejectUnknownFlags(args, ["--client", "--write"]);
+      rejectUnknownFlags(args, ["--client", "--write", "--json"]);
       process.exitCode = await setup(args, env);
       return;
     case "serve": {
@@ -1039,7 +1064,13 @@ async function main(): Promise<void> {
     case "version":
     case "--version":
     case "-v":
-      process.stdout.write(`${PRODUCT_VERSION}\n`);
+      // `--json` keeps the bare version scripts already parse; a JSON object
+      // here would break every `$(melra version)` in the wild.
+      process.stdout.write(
+        isHuman(args)
+          ? `MELRA ${paint.bold(PRODUCT_VERSION)} ${paint.dim(`(Node ${process.version}, ${process.platform}-${process.arch})`)}\n`
+          : `${PRODUCT_VERSION}\n`,
+      );
       return;
     case "help":
     case "--help":
