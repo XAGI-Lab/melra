@@ -44,6 +44,15 @@ The command reports Node, workspace, data-directory, SQLite, browser,
 computer-use adapter, and policy readiness without exposing credentials. Unlike
 `setup`, it writes nothing.
 
+It also reports, under `clients`, every MCP client whose config file exists
+(the same files `setup --client <name> --write` targets): whether MELRA is
+configured there, whether the configured command is on `PATH`, and whether an
+`npx` launch is pinned to an older `@melra/cli` than the one running, with the
+`melra setup --client <name> --write` command that repoints it. A file with
+comments, such as Zed's, is searched as text and says so. Client findings are a
+`warn` at most, never a `fail`: no client configured is a normal state when you
+use MELRA through an SDK. The check reads those files and never edits them.
+
 ## Install
 
 Pick one. npm is the shortest path if you already have Node; the container
