@@ -9,8 +9,8 @@ All notable changes are documented here. The format follows
 ### Added
 
 - `pnpm docs:check` now also checks `CHANGELOG.md`: Keep a Changelog section
-  names only, one of each per release, no empty sections or leftover conflict
-  markers, canonical order under `[Unreleased]`, releases dated newest first,
+  names only, one of each per release, no entry twice, no empty sections or
+  leftover conflict markers, canonical order under `[Unreleased]`, releases dated newest first,
   a link reference for every release, and a section for the current
   `package.json` version so a bump cannot ship without notes. It found and
   merged a duplicate `Added` and `Fixed` in `0.3.0-alpha.6`. `CHANGELOG.md`

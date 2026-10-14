@@ -3,7 +3,7 @@
 
 // CHANGELOG.md is edited by every pull request at the same spot, so parallel
 // branches collide there and a hand-resolved conflict can leave a duplicate
-// `### Added`, a stray marker, or a release with no notes. This keeps it in
+// `### Added`, a doubled entry, a stray marker, or a release with no notes. This keeps it in
 // Keep a Changelog shape (https://keepachangelog.com/en/1.1.0/).
 
 import { readFileSync } from "node:fs";
@@ -17,6 +17,7 @@ const fail = (line, message) => failures.push(`CHANGELOG.md:${line}: ${message}`
 const releases = [];
 let release;
 let section;
+let entry;
 let fence = false;
 lines.forEach((text, index) => {
   const line = index + 1;
@@ -26,7 +27,8 @@ lines.forEach((text, index) => {
   const heading = /^## \[([^\]]+)\](.*)$/.exec(text);
   if (heading) {
     const [, name, rest] = heading;
-    release = { name, line, sections: new Map(), date: undefined };
+    release = { name, line, sections: new Map(), date: undefined, entries: new Map() };
+    entry = undefined;
     releases.push(release);
     section = undefined;
     if (name === "Unreleased") {
@@ -48,10 +50,29 @@ lines.forEach((text, index) => {
     }
     section = { line, entries: 0 };
     release.sections.set(kind[1], section);
+    entry = undefined;
     return;
   }
-  if (section !== undefined && /^\s*[-*] /.test(text)) section.entries += 1;
+  if (section !== undefined && /^[-*] /.test(text)) {
+    section.entries += 1;
+    entry = { line, text };
+    release.entries.set(entry, true);
+  } else if (entry !== undefined && text.trim() !== "") {
+    entry.text += `\n${text}`;
+  } else {
+    entry = undefined;
+  }
 });
+
+// A union merge keeps both copies of an entry when one branch moved the
+// section it sits in, so the same text can land twice in one release.
+for (const { name, entries } of releases) {
+  const seen = new Map();
+  for (const { line, text } of entries.keys()) {
+    if (seen.has(text)) fail(line, `entry repeated in [${name}] (first at line ${seen.get(text)}); keep one`);
+    else seen.set(text, line);
+  }
+}
 
 for (const { name, sections } of releases) {
   for (const [kind, { line, entries }] of sections) {
