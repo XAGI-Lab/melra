@@ -41,6 +41,41 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
 
+  # The main matrix runs the Python SDK on 3.11 only, the floor `requires-python`
+  # promises. This covers every newer CPython against a real stdio server, once,
+  # on Linux: what varies here is the interpreter, not the OS.
+  python-sdk:
+    name: Python ${{ matrix.python }} SDK
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python:
+          - "3.12"
+          - "3.13"
+          - "3.14"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 9.5.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          python-version: ${{ matrix.python }}
+          enable-cache: true
+      - run: pnpm install --frozen-lockfile
+      # The SDK test drives the built CLI over stdio.
+      - run: pnpm build
+      - run: uv run --project sdk-py --group dev pytest sdk-py
+      # The wheel ships py.typed, which promises type-checkers a clean API.
+      - run: uv run --project sdk-py --group dev --with pyright==1.1.414 pyright sdk-py/src
+
   durable-release-gates:
     name: Durable recovery and package gates
     runs-on: ubuntu-latest

@@ -8,6 +8,11 @@ All notable changes are documented here. The format follows
 
 ### Added
 
+- The Python SDK is tested on CPython 3.12, 3.13, and 3.14 against a real
+  stdio server, not just 3.11, and the wheel now ships a `py.typed` marker so
+  mypy and pyright use its annotations; CI type-checks it with pyright to keep
+  that promise. Its metadata lists the supported Python versions.
+
 - `pnpm docs:check` now also checks `CHANGELOG.md`: Keep a Changelog section
   names only, one of each per release, no entry twice, no empty sections or
   leftover conflict markers, canonical order under `[Unreleased]`, releases dated newest first,
