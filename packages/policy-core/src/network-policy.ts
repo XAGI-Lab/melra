@@ -113,6 +113,11 @@ export interface SafeDestination {
   address: string;
 }
 
+/** The URL's host, lowercased, with an IPv6 literal's brackets removed. */
+export function hostOf(url: URL): string {
+  return url.hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1");
+}
+
 export async function assertSafeDestination(
   rawUrl: string,
   policy: NetworkPolicy,
@@ -127,7 +132,12 @@ export async function assertSafeDestination(
   if (url.username !== "" || url.password !== "") {
     throw new Error("destination_credentials_not_allowed");
   }
-  const host = url.hostname.toLowerCase();
+  // WHATWG URL keeps an IPv6 literal's brackets in `hostname` ("[::1]"), and
+  // `isIP("[::1]")` is 0, so without this an IPv6 address was treated as a name:
+  // the private-range check below never ran, and the request only failed because
+  // DNS cannot resolve a bracketed string. Strip them so it is checked as the
+  // address it is.
+  const host = hostOf(url);
   const localName = host === "localhost" || host.endsWith(".localhost");
   if (localName && !policy.allowLocalhost) {
     throw new Error("destination_private_blocked");

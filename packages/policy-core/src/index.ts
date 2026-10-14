@@ -4,6 +4,7 @@
 import { readFile } from "node:fs/promises";
 import { basename, resolve } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
+import { hostOf } from "./network-policy.js";
 import type {
   ApprovalChallenge,
   ApprovalResponse,
@@ -758,7 +759,7 @@ function domainAllowed(operation: Operation, policy: LocalPolicy): boolean {
   if (raw === undefined) return true;
   const url = new URL(raw);
   if (!["http:", "https:"].includes(url.protocol)) return false;
-  const host = url.hostname.toLowerCase();
+  const host = hostOf(url);
   if (host === "localhost" || host.endsWith(".localhost")) return policy.allowLocalhost;
   return policy.allowedDomains.some(
     (domain) =>

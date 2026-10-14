@@ -229,6 +229,14 @@ All notable changes are documented here. The format follows
 
 ### Security
 
+- An IPv6 literal in a browser or HTTP destination (`http://[::1]/`,
+  `[fd00::1]`, the IPv4-mapped form of `169.254.169.254`) is now checked as the
+  address it is. `URL.hostname` keeps the brackets and `isIP("[::1]")` is 0, so
+  such a URL was treated as a hostname and the private-range check never ran;
+  requests failed only because DNS cannot resolve a bracketed name, so nothing
+  escaped, but the guard was not what stopped them. Public IPv6 literals, which
+  could not be used at all for the same reason, now work. Found by GovBench.
+
 - The Unix-socket transport is created mode `0600` under a narrowed umask, so
   it never exists wider even for an instant, and its mode is read back before
   anything is served; a wider socket fails startup. That makes the kernel, not

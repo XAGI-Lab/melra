@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, expect, it } from "vitest";
-import { assertSafeUrl, isPrivateAddress } from "./network-policy.js";
+import { assertSafeDestination, assertSafeUrl, isPrivateAddress } from "./network-policy.js";
 
 describe("browser network policy", () => {
   it("classifies private IPv4 and IPv6 destinations", () => {
@@ -23,6 +23,33 @@ describe("browser network policy", () => {
     await expect(
       assertSafeUrl("https://user:pass@example.com", policy),
     ).rejects.toThrow("destination_credentials_not_allowed");
+  });
+
+  it("checks an IPv6 literal as an address, not a hostname", async () => {
+    // `URL.hostname` keeps the brackets; these used to skip the private-range
+    // check entirely and fail only at DNS.
+    const policy = { allowedDomains: ["*"], allowLocalhost: false };
+    for (const url of [
+      "http://[::1]:8080/",
+      "http://[::]/",
+      "http://[fd00::1]/",
+      "http://[fe80::1]/",
+      "http://[::ffff:127.0.0.1]/",
+      "http://[::ffff:169.254.169.254]/latest/meta-data/",
+    ]) {
+      await expect(assertSafeDestination(url, policy), url).rejects.toThrow(
+        "destination_private_blocked",
+      );
+    }
+    // Loopback stays reachable when the policy allows localhost, as for IPv4.
+    await expect(
+      assertSafeDestination("http://[::1]:8080/", { ...policy, allowLocalhost: true }),
+    ).resolves.toMatchObject({ address: "::1" });
+    // A public IPv6 literal is allowed, and pinned without brackets so a socket
+    // can open it. No DNS lookup is involved.
+    await expect(
+      assertSafeDestination("https://[2606:4700:4700::1111]/", policy),
+    ).resolves.toMatchObject({ address: "2606:4700:4700::1111" });
   });
 
   it("asserts nothing about the destination when unhinged", async () => {
