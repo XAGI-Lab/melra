@@ -109,7 +109,9 @@ All notable changes are documented here. The format follows
   serves — Streamable HTTP MCP, the read-only JSON API, the event stream, and
   the console — on a Unix-domain socket instead of a TCP port, through the same
   request handler (`serveHttp({ socketPath })`). It is allowed in enforced
-  mode, serves no OAuth registration, and is refused on Windows. A socket left
+  mode, serves no OAuth registration, and is refused on Windows and from a
+  worker thread (where the umask that keeps it `0600` cannot be set), each
+  with an error that says why. A socket left
   by a crashed run is replaced; a live server's socket, a regular file, or
   another user's socket at the path is refused and left alone, and a clean
   shutdown removes it. `melra doctor` reports, when `MELRA_SOCKET` is set,

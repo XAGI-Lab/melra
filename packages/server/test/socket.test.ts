@@ -13,7 +13,9 @@ import {
 import { request as httpRequest } from "node:http";
 import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import { Worker } from "node:worker_threads";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -256,6 +258,26 @@ describe.skipIf(process.platform === "win32")("melra over a Unix socket", () => 
     served = endpoint;
     expect(endpoint.oauth).toBe(false);
     expect(lstatSync(socketPath).mode & 0o777).toBe(0o600);
+  });
+});
+
+describe.skipIf(process.platform === "win32")("a socket from a worker thread", () => {
+  it("is refused with an error that says why", async () => {
+    // The built package, because a worker cannot load the TypeScript source.
+    const entry = pathToFileURL(resolve(import.meta.dirname, "../dist/index.js")).href;
+    const worker = new Worker(
+      `const { parentPort, workerData } = require("node:worker_threads");
+       import(workerData.entry)
+         .then(({ serveHttp }) => serveHttp({
+           runtime: { policy: { mode: "developer" } },
+           socketPath: workerData.socketPath,
+         }))
+         .then(() => parentPort.postMessage("served"), (error) => parentPort.postMessage(String(error.message)));`,
+      { eval: true, workerData: { entry, socketPath: join(tmpdir(), `melra-worker-${process.pid}.sock`) } },
+    );
+    const message = await new Promise<string>((resolveMessage) => worker.once("message", resolveMessage));
+    await worker.terminate();
+    expect(message).toMatch(/^socket_transport_requires_main_thread/);
   });
 });
 

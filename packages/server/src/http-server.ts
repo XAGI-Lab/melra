@@ -11,6 +11,7 @@ import {
 } from "node:http";
 import { connect } from "node:net";
 import { resolve } from "node:path";
+import { isMainThread } from "node:worker_threads";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
@@ -278,6 +279,14 @@ export async function serveHttp(
   if (socketPath !== undefined && process.platform === "win32") {
     throw new Error(
       "socket_transport_unsupported_on_windows: use stdio or loopback HTTP",
+    );
+  }
+  // The socket is kept at 0600 by narrowing the umask around `listen`, and
+  // `process.umask(mask)` throws in a worker thread. Say so up front rather
+  // than fail later with an error that names neither MELRA nor the socket.
+  if (socketPath !== undefined && !isMainThread) {
+    throw new Error(
+      "socket_transport_requires_main_thread: serve a socket from the main thread, or use loopback HTTP",
     );
   }
   // A sandbox talks to its kernel over IPC. A listener on a routable interface
