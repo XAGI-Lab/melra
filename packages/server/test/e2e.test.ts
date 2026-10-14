@@ -9,7 +9,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { detectBrowserExecutable } from "@melra/browser-runtime";
-import type { WorkflowAdvanceResult } from "@melra/protocol";
+import { EvidencePredicateSchema, type WorkflowAdvanceResult } from "@melra/protocol";
 import { SqliteStore } from "@melra/storage-sqlite";
 import { createMelraRuntime } from "../src/runtime.js";
 
@@ -198,6 +198,20 @@ describe("MELRA over real stdio transport", () => {
       "key",
       "scroll",
     ]);
+  });
+
+  it("tells the model how to use it, naming only things that exist", async () => {
+    const instructions = client.getInstructions() ?? "";
+    expect(instructions).toContain("melra_plan");
+    // A renamed tool or a new evidence type must fail here, not leave agents
+    // following a guide that no longer matches the server.
+    const tools = new Set((await client.listTools()).tools.map((tool) => tool.name));
+    for (const [name] of instructions.matchAll(/melra_[a-z_]+/g)) {
+      expect(tools, name).toContain(name);
+    }
+    const evidence = EvidencePredicateSchema.options.map((option) => option.shape.type.value);
+    const listed = /requiredEvidence describing how to confirm it \(([^)]+)\)/.exec(instructions)?.[1];
+    expect(listed?.split(", ").sort()).toEqual([...evidence].sort());
   });
 
   it("plans and advances a verified workflow over MCP", async () => {

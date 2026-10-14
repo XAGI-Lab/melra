@@ -8,6 +8,15 @@ All notable changes are documented here. The format follows
 
 ### Added
 
+- The MCP server now sends `instructions` on connect, which clients such as
+  Claude Code put in the model's context: the plan, execute, verify loop in
+  five steps, what each final status means (including never re-running a
+  `recovery_required` mutation blindly), the evidence types a mutation must
+  declare, and when to use workflows. Agents no longer have to piece this
+  together from eleven tool descriptions after a failed first call. A test
+  fails if the guide names a tool that does not exist or its evidence list
+  drifts from the protocol schema.
+
 - The Python SDK can attach to a MELRA that is already running instead of
   only spawning one over stdio: `MelraClient.connect_http(url, token=...)` for
   `melra serve --http` and `MelraClient.connect_socket(path, token=...)` for
