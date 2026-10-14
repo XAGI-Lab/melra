@@ -289,9 +289,18 @@ Action: `info`. Returns local runtime capability information without mutation.
 | `url_matches` | anchored URL glob (`*` wildcard) |
 | `page_contains` | inspected page text |
 | `http_resource_matches` | a second `GET`/`HEAD` against the provider's own state |
+| `custom` | a verifier the operator registered with the runtime, by name, with flat scalar `params`; strength is always `execution` |
 
 URL globs are anchored and schema-bounded. A completed action with unmet
 required evidence returns `partial`, never `verified_success`.
+
+`custom` is for effects no built-in can confirm, such as a database row or a
+ticket in some SaaS. The verifier is code passed to `createMelraRuntime` as
+`evidenceVerifiers`, never configuration; `melra_capabilities` lists the
+registered names under `customEvidence`, and planning refuses any other name
+(`evidence_verifier_unavailable`) before anything can be approved. A `custom`
+predicate cannot name a built-in, and its evidence is stamped
+`custom:<name>` at the weakest strength, whatever the verifier returns.
 
 `http_resource_matches` is the only predicate whose answer does not come from
 the channel that acted. `POST /refunds` returning `201` is the client that made

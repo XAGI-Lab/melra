@@ -406,6 +406,28 @@ export const EvidencePredicateSchema = z.discriminatedUnion("type", [
       timeoutMs: z.number().int().min(100).max(60_000).default(15_000),
     })
     .strict(),
+  /**
+   * Evidence checked by a verifier the operator registered with the runtime,
+   * for an effect no built-in predicate can confirm (a database row, a ticket
+   * in some SaaS). Named, not described: `verifier` must be registered, which
+   * planning checks, and `params` are flat scalars the verifier interprets.
+   *
+   * Its strength is always the weakest, `execution`, whatever the verifier
+   * does: the kernel cannot tell how a third-party check knows what it knows.
+   */
+  z
+    .object({
+      type: z.literal("custom"),
+      verifier: z.string().regex(/^[a-z][a-z0-9_.-]{0,63}$/),
+      params: z
+        .record(
+          z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,63}$/),
+          z.union([z.string().max(4_096), z.number(), z.boolean(), z.null()]),
+        )
+        .refine((value) => Object.keys(value).length <= 32, "at most 32 params")
+        .default({}),
+    })
+    .strict(),
 ]);
 
 export type EvidencePredicate = z.infer<typeof EvidencePredicateSchema>;

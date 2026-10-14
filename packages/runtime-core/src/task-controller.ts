@@ -259,6 +259,15 @@ export class TaskController {
         `operation_capability_unavailable:${parsed.operation.kind}`,
       );
     }
+    // Refused before anything is approved: a mutation run against evidence no
+    // registered verifier can check would end `partial` after the effect.
+    for (const predicate of parsed.requiredEvidence) {
+      if (!this.verifier.supports(predicate)) {
+        throw new Error(
+          `evidence_verifier_unavailable:${predicate.type === "custom" ? predicate.verifier : predicate.type}`,
+        );
+      }
+    }
     return evaluatePolicy(
       "00000000-0000-4000-8000-000000000000",
       parsed,

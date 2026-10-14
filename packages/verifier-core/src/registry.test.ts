@@ -97,4 +97,34 @@ describe("pluggable verifiers", () => {
       [false, "verification_path_outside_workspace"],
     ]);
   });
+
+  it("reaches a registered verifier through a request's `custom` predicate, and only that", async () => {
+    const verifier = await Verifier.create(await workspace(), { verifiers: [rowExists] });
+    expect(verifier.customVerifiers()).toEqual(["row_exists"]);
+    expect(verifier.supports({ type: "custom", verifier: "row_exists", params: {} })).toBe(true);
+    expect(verifier.supports({ type: "custom", verifier: "file_hash", params: {} })).toBe(false);
+    expect(verifier.supports({ type: "custom", verifier: "nope", params: {} })).toBe(false);
+    const { evidence } = await verifier.verify(
+      [
+        // `params` cannot overwrite the name the verifier is called with.
+        { type: "custom", verifier: "row_exists", params: { id: "r1", type: "file_hash" } },
+        { type: "custom", verifier: "file_hash", params: { path: "x", sha256: "0".repeat(64) } },
+      ],
+      { rows: ["r1"] },
+    );
+    expect(evidence.map((item) => [item.type, item.passed, item.strength])).toEqual([
+      ["custom:row_exists", true, "execution"],
+      ["custom:file_hash", false, "execution"],
+    ]);
+  });
+
+  it("refuses names a request could not carry, and the wrapper name itself", async () => {
+    const named = (type: string) => ({ type, check: rowExists.check });
+    await expect(Verifier.create(await workspace(), { verifiers: [named("Row Exists")] })).rejects.toThrow(
+      "verifier_name_invalid:Row Exists",
+    );
+    await expect(Verifier.create(await workspace(), { verifiers: [named("custom")] })).rejects.toThrow(
+      "verifier_type_taken:custom",
+    );
+  });
 });
