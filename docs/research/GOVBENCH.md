@@ -20,7 +20,7 @@ that the harness starts itself.
 | Redaction | 55/55 |
 
 These scores come from the 362-case corpus (sha256 `e09038f9…`), run against
-MELRA `0.3.0-alpha.12` at commit `02a9533` (clean tree) on an Apple M4 with Node
+MELRA `0.3.0-alpha.12` at commit `fc29dcd` on `main` (clean tree) on an Apple M4 with Node
 `v26.8.2` and Chrome present. No cases were skipped. The full run takes about
 15–30 s. The raw artifact is
 [`results/govbench-0.3.0-alpha.12-2026-10-14.json`](results/govbench-0.3.0-alpha.12-2026-10-14.json).
@@ -33,8 +33,8 @@ safety `307/307`, is kept as
 [`results/govbench-0.3.0-alpha.11-2026-10-14.json`](results/govbench-0.3.0-alpha.11-2026-10-14.json).
 
 Governance overhead on that run, median of 40 against the raw adapter call:
-file read +0.57 ms, approved file write +0.57 ms, loopback HTTP GET +0.51 ms,
-approved memory put +0.47 ms, approved terminal run +1.31 ms. Overhead depends
+file read +0.66 ms, approved file write +0.54 ms, loopback HTTP GET +0.53 ms,
+approved memory put +0.48 ms, approved terminal run +0.85 ms. Overhead depends
 on machine load; the first run, taken while other builds were running, measured
 +1.1 to +4.4 ms.
 
