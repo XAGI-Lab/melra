@@ -1,8 +1,10 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -396,6 +398,80 @@ describe("melra CLI", () => {
     );
     expect(deprecated.stderr).toContain("--unhinged is deprecated");
     expect(JSON.parse(deprecated.stdout).unhinged).toBe(true);
+  });
+
+  it("serves on MELRA_SOCKET, and doctor reports the socket's mode", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-cli-"));
+    roots.push(root);
+    // Short: a socket path has a ~104-byte ceiling on macOS.
+    const socketDirectory = await mkdtemp(join(tmpdir(), "mc-"));
+    roots.push(socketDirectory);
+    const socketPath = join(socketDirectory, "melra.sock");
+    const env = {
+      ...process.env,
+      MELRA_HOME: join(root, ".melra"),
+      MELRA_WORKSPACE: root,
+      MELRA_SOCKET: socketPath,
+      MELRA_HTTP_TOKEN: "cli-socket-token",
+    };
+    const socketReport = async (environment: NodeJS.ProcessEnv) => {
+      const result = await execute(process.execPath, [entry, "doctor"], {
+        cwd: root,
+        env: environment,
+      }).catch((error: { stdout: string }) => error);
+      return (
+        JSON.parse(result.stdout) as {
+          checks: Array<{ name: string; status: string; detail: string }>;
+        }
+      ).checks.find((check) => check.name === "socket");
+    };
+
+    // One transport per process: a socket and a port together is a mistake to
+    // name, not one to resolve quietly.
+    await expect(
+      execute(process.execPath, [entry, "serve", "--http"], { cwd: root, env }),
+    ).rejects.toThrow(/replaces --http/);
+
+    if (process.platform === "win32") {
+      expect((await socketReport(env))?.status).toBe("fail");
+      return;
+    }
+    expect(await socketReport({ ...env, MELRA_SOCKET: join(root, "nope", "m.sock") }))
+      .toMatchObject({ status: "fail", detail: expect.stringContaining("parent directory missing") });
+    expect((await socketReport(env))?.detail).toContain("not listening");
+
+    const server = spawn(process.execPath, [entry, "serve"], { cwd: root, env, stdio: "ignore" });
+    try {
+      for (let attempt = 0; attempt < 100 && !existsSync(socketPath); attempt += 1) {
+        await new Promise((resolveWait) => setTimeout(resolveWait, 100));
+      }
+      expect(await socketReport(env)).toMatchObject({
+        status: "pass",
+        detail: expect.stringContaining("mode 0600"),
+      });
+      const status = await new Promise<number | undefined>((resolveStatus, rejectStatus) => {
+        httpRequest(
+          {
+            socketPath,
+            path: "/api/capabilities",
+            headers: { authorization: "Bearer cli-socket-token" },
+          },
+          (response) => {
+            response.resume();
+            resolveStatus(response.statusCode);
+          },
+        )
+          .on("error", rejectStatus)
+          .end();
+      });
+      expect(status).toBe(200);
+    } finally {
+      const exited = new Promise((resolveExit) => server.once("exit", resolveExit));
+      server.kill("SIGTERM");
+      await exited;
+    }
+    // A clean shutdown takes the socket with it.
+    expect(existsSync(socketPath)).toBe(false);
   });
 
   it("refuses to start in enforced mode with the local bypass", async () => {

@@ -136,7 +136,8 @@ by `deploymentMode` from `--mode`, `MELRA_MODE`, or `"mode"` in the policy JSON,
 strictest of the three winning. Enforced mode is the operator asserting the
 harness has no second path; MELRA cannot verify that, so it closes the doors it
 owns — `assertEnforceable` refuses `--unsafe-local`, `serveHttp` refuses a
-non-loopback bind and serves no OAuth registration, and `mode` is stamped on
+non-loopback bind (a mode-`0600` Unix socket via `socketPath` / `--socket` is
+allowed) and serves no OAuth registration, and `mode` is stamped on
 every receipt. It never grants anything, so a new feature only needs to ask
 whether enforced mode should *refuse* it.
 

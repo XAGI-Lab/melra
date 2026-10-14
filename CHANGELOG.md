@@ -82,6 +82,17 @@ All notable changes are documented here. The format follows
   both ways: a table row for a variable nothing reads any more fails as well,
   naming the line to remove.
 
+- `melra serve --socket <path>` (or `MELRA_SOCKET`) serves what `--http`
+  serves — Streamable HTTP MCP, the read-only JSON API, the event stream, and
+  the console — on a Unix-domain socket instead of a TCP port, through the same
+  request handler (`serveHttp({ socketPath })`). It is allowed in enforced
+  mode, serves no OAuth registration, and is refused on Windows. A socket left
+  by a crashed run is replaced; a live server's socket, a regular file, or
+  another user's socket at the path is refused and left alone, and a clean
+  shutdown removes it. `melra doctor` reports, when `MELRA_SOCKET` is set,
+  whether its parent directory exists and whether a socket there is
+  owner-only. ([#52](https://github.com/XAGI-Lab/melra/issues/52))
+
 ### Changed
 
 - The container image and the release artifacts are built on Node 24, the
@@ -120,6 +131,13 @@ All notable changes are documented here. The format follows
   means the far end really may have acted.
 
 ### Security
+
+- The Unix-socket transport is created mode `0600` under a narrowed umask, so
+  it never exists wider even for an instant, and its mode is read back before
+  anything is served; a wider socket fails startup. That makes the kernel, not
+  the bearer token, the first thing refusing other OS users — a loopback port
+  admits every local process up to the token. The token is still required on
+  every request over the socket.
 
 - The console page is served with a Content-Security-Policy that admits only
   its own inline script and style, by SHA-256 hash, and only this server as a

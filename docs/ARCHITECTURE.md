@@ -306,6 +306,7 @@ same durable record; none of them is a shortcut past a stage of the lifecycle.
 |---|---|---|
 | MCP | stdio | An MCP client spawning the server as a subprocess |
 | MCP | Streamable HTTP on loopback | A client that cannot spawn processes |
+| MCP and JSON API | Streamable HTTP on a mode-`0600` Unix socket | A sandboxed harness on the same host, as its only door |
 | CLI | argv | Humans, scripts, CI |
 | TypeScript SDK | stdio subprocess | Node applications and custom harnesses |
 | Python SDK | stdio subprocess | Python applications and custom harnesses |

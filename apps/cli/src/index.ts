@@ -2,10 +2,10 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import { spawn } from "node:child_process";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { DatabaseSync } from "node:sqlite";
 import {
@@ -377,6 +377,56 @@ async function durableCoreDemo(env: CliEnvironment): Promise<number> {
   }
 }
 
+/**
+ * Whether `MELRA_SOCKET` names somewhere `serve` can listen, and whether a
+ * socket already there is one only this user can open. The mode is the whole
+ * point of the transport, so a wider one is a `fail`, not a `warn`.
+ */
+async function socketCheck(path: string): Promise<{
+  name: string;
+  status: "pass" | "fail";
+  detail: string;
+}> {
+  const name = "socket";
+  if (process.platform === "win32") {
+    return {
+      name,
+      status: "fail",
+      detail: "MELRA_SOCKET is not supported on Windows; use stdio or loopback HTTP",
+    };
+  }
+  try {
+    if (!(await stat(dirname(path))).isDirectory()) throw new Error("not a directory");
+  } catch {
+    return { name, status: "fail", detail: `parent directory missing: ${dirname(path)}` };
+  }
+  let stats;
+  try {
+    stats = await lstat(path);
+  } catch {
+    return {
+      name,
+      status: "pass",
+      detail: `${path}: not listening; 'melra serve' creates it mode 0600`,
+    };
+  }
+  if (!stats.isSocket()) {
+    return {
+      name,
+      status: "fail",
+      detail: `${path} exists and is not a socket; 'melra serve' will refuse it`,
+    };
+  }
+  const mode = stats.mode & 0o777;
+  return (mode & 0o077) === 0
+    ? { name, status: "pass", detail: `${path}: socket, mode 0${mode.toString(8)}` }
+    : {
+        name,
+        status: "fail",
+        detail: `${path}: socket, mode 0${mode.toString(8)}; other users can connect`,
+      };
+}
+
 async function doctor(env: CliEnvironment): Promise<{
   report: Record<string, unknown>;
   failed: boolean;
@@ -415,7 +465,7 @@ async function doctor(env: CliEnvironment): Promise<{
     status: "pass",
     detail:
       env.mode === "enforced"
-        ? "enforced: no unsafe-local, loopback only, no client self-registration"
+        ? "enforced: no unsafe-local, loopback or Unix socket only, no client self-registration"
         : "developer: MELRA governs what it is asked for; the harness may have another path",
   });
   try {
@@ -490,6 +540,7 @@ async function doctor(env: CliEnvironment): Promise<{
       detail: error instanceof Error ? error.message : String(error),
     });
   }
+  if (env.socketPath !== undefined) checks.push(await socketCheck(env.socketPath));
   const clients = await clientStatuses(env.workspaceRoot);
   checks.push(clientsCheck(clients));
   const failed = checks.some((check) => check.status === "fail");
@@ -720,6 +771,7 @@ Usage:
   melra conformance [--url <mcp-url> --token <token>] [--level <1|2|3>]
   melra init [--client <name>] [--write]
   melra serve [--http] [--port <port>] [--open]
+  melra serve --socket <path>
   melra run --request <task.json>
   melra inspect <task-id>
   melra workflow plan --definition <workflow.json>
@@ -753,6 +805,9 @@ Flags:
                    read-only REST API, a workflow event stream, and the console.
                    Prints a bearer token; every request must carry it.
   --port <port>    HTTP port (default: 7457, or MELRA_HTTP_PORT).
+  --socket <path>  Serve what --http serves on a Unix socket created mode 0600,
+                   so only this OS user can connect; the token is still
+                   required. Not on Windows. Same as MELRA_SOCKET.
   --open           Open the console in your browser once it is listening.
   --url <mcp-url>  Endpoint for 'conformance'. Default: spawn 'melra serve'.
   --level <1|2|3>  Conformance level being claimed (default: 3). The run exits
@@ -767,6 +822,7 @@ Environment:
   MELRA_HTTP_PORT  Port for 'serve --http' (default: 7457)
   MELRA_HTTP_TOKEN Fixed bearer token for 'serve --http' (default: random)
   MELRA_HTTP_OAUTH Set to 0 so only that token gets in; no client can register
+  MELRA_SOCKET     Unix socket path for 'serve' instead of stdio (see --socket)
   MELRA_BROWSER    Optional Chrome/Chromium/Edge executable
   MELRA_BROWSER_CDP_ENDPOINT       Optional HTTP(S) CDP endpoint
   MELRA_BROWSER_CDP_CONTEXT_INDEX  External context index (-1 is last)
@@ -843,20 +899,49 @@ async function main(): Promise<void> {
       process.exitCode = await setup(args, env);
       return;
     case "serve": {
-      rejectUnknownFlags(args, ["--http", "--port", "--open"]);
-      const melra = await runtime(env);
+      rejectUnknownFlags(args, ["--http", "--port", "--open", "--socket"]);
+      if (args.includes("--socket") && argument("--socket", args) === undefined) {
+        throw new Error("--socket requires a path");
+      }
+      const socketPath = argument("--socket", args) ?? env.socketPath;
       const http = args.includes("--http");
       const port = argument("--port", args);
-      const server = http
-        ? undefined
-        : await serveStdio(melra);
-      const endpoint = http
-        ? await serveHttp({
-            runtime: melra,
-            ...(port === undefined ? {} : { port: Number(port) }),
-          })
-        : undefined;
-      if (endpoint !== undefined) {
+      // One transport per process. Quietly preferring one would leave an
+      // operator believing they had the other — and the difference between a
+      // socket only they can open and a port anyone local can is the point.
+      if (
+        socketPath !== undefined &&
+        (http || port !== undefined || args.includes("--open"))
+      ) {
+        throw new Error(
+          "--socket (or MELRA_SOCKET) replaces --http, --port, and --open; pass one transport",
+        );
+      }
+      const melra = await runtime(env);
+      const server =
+        http || socketPath !== undefined ? undefined : await serveStdio(melra);
+      const endpoint =
+        socketPath !== undefined
+          ? await serveHttp({ runtime: melra, socketPath })
+          : http
+            ? await serveHttp({
+                runtime: melra,
+                ...(port === undefined ? {} : { port: Number(port) }),
+              })
+            : undefined;
+      if (endpoint?.socketPath !== undefined) {
+        process.stderr.write(
+          `MELRA server listening on Unix socket ${endpoint.socketPath} (mode 0600)\n` +
+            `  MCP:      ${endpoint.mcpUrl}, connecting to that socket\n` +
+            `  Token:    ${endpoint.token}\n` +
+            `  Try:      curl --unix-socket ${endpoint.socketPath} -H 'Authorization: Bearer <token>' http://localhost/api/capabilities\n` +
+            `Only this OS user can connect; the token is still required on every\n` +
+            `request. OAuth is off: no browser can reach a socket to approve a client.\n` +
+            (env.mode === "enforced"
+              ? `Enforced mode: --unsafe-local is refused. Every receipt says 'enforced'.\n`
+              : ""),
+        );
+      } else if (endpoint !== undefined) {
         // stdout stays clean for the stdio transport's sake even here, so the
         // one command an operator has to copy goes where they can read it.
         process.stderr.write(

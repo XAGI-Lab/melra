@@ -2,11 +2,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { randomUUID, timingSafeEqual } from "node:crypto";
+import { lstatSync, unlinkSync } from "node:fs";
 import {
   createServer,
   type IncomingMessage,
+  type Server,
   type ServerResponse,
 } from "node:http";
+import { connect } from "node:net";
+import { resolve } from "node:path";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
@@ -24,6 +28,12 @@ export interface MelraHttpOptions {
   /** Loopback by default. Anything else exposes a machine-control API. */
   host?: string;
   port?: number;
+  /**
+   * Listen on this Unix-domain socket instead of a TCP port; `host` and `port`
+   * are then ignored. The socket is created mode `0600`, so the kernel admits
+   * only this OS user. Refused on Windows.
+   */
+  socketPath?: string;
   /** Falls back to `MELRA_HTTP_TOKEN`, then to a fresh random token. */
   token?: string;
   environment?: NodeJS.ProcessEnv;
@@ -37,6 +47,12 @@ export interface MelraHttpServer {
   token: string;
   host: string;
   port: number;
+  /**
+   * The Unix socket being served, when there is one. `url`, `mcpUrl`, `host`
+   * and `port` then only name the origin a client puts in its requests
+   * (`http://localhost`); the connection itself goes to this path.
+   */
+  socketPath?: string;
   /**
    * Whether a client can authenticate itself instead of being handed the
    * token. Off when the server is bound somewhere a browser approval would not
@@ -130,6 +146,107 @@ function isLoopback(host: string): boolean {
   );
 }
 
+/** The `code` Node puts on a system error, if it is one. */
+function errorCode(error: unknown): string | undefined {
+  return typeof error === "object" && error !== null && "code" in error
+    ? String(error.code)
+    : undefined;
+}
+
+/**
+ * Makes `path` free for a new socket, or refuses.
+ *
+ * Only a socket this user owns that nobody answers on is removed — the leftover
+ * of a run that crashed before it could clean up. Anything else at the path is
+ * someone's data or someone's live server, and neither is ours to delete.
+ */
+async function clearStaleSocket(path: string): Promise<void> {
+  let stats;
+  try {
+    // `lstat`, so a symlink planted at the path is judged as a symlink rather
+    // than as whatever it points at.
+    stats = lstatSync(path);
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") return;
+    throw error;
+  }
+  if (!stats.isSocket()) {
+    throw new Error(
+      `socket_path_exists: ${path} exists and is not a socket; refusing to remove it`,
+    );
+  }
+  const uid = process.getuid?.();
+  if (uid !== undefined && stats.uid !== uid) {
+    throw new Error(`socket_path_exists: ${path} belongs to another user`);
+  }
+  const refused = await new Promise<string | undefined>((resolveProbe) => {
+    const probe = connect(path);
+    probe.once("connect", () => {
+      probe.destroy();
+      resolveProbe(undefined);
+    });
+    probe.once("error", (error) => resolveProbe(errorCode(error) ?? "error"));
+  });
+  // Only a refusal proves nobody is listening. A permission error or anything
+  // else leaves that open, and taking over a live server's path strands it.
+  if (refused === undefined) {
+    throw new Error(`socket_in_use: another process is serving on ${path}`);
+  }
+  if (refused !== "ECONNREFUSED" && refused !== "ENOENT") {
+    throw new Error(`socket_path_unusable: ${path}: ${refused}`);
+  }
+  try {
+    unlinkSync(path);
+  } catch (error) {
+    if (errorCode(error) !== "ENOENT") throw error;
+  }
+}
+
+/**
+ * Binds `server` to a Unix socket only this OS user can connect to.
+ *
+ * The file mode is the boundary on a socket — the token stays, but it is the
+ * kernel refusing other users' `connect` that keeps them out — so the socket
+ * must never exist wider than `0600`, not even between bind and a `chmod`. The
+ * umask is narrowed around `listen` for that. Node binds a path synchronously
+ * inside `listen`, so the umask is restored before any other code in this
+ * process can create a file under it. The result is then checked rather than
+ * trusted: a cluster worker, for one, has its socket bound by the primary
+ * under the primary's umask, and an over-long path can be truncated.
+ */
+async function listenOnSocket(server: Server, path: string): Promise<void> {
+  await clearStaleSocket(path);
+  await new Promise<void>((resolveListen, rejectListen) => {
+    server.once("error", rejectListen);
+    const previous = process.umask(0o177);
+    try {
+      server.listen(path, () => {
+        server.removeListener("error", rejectListen);
+        resolveListen();
+      });
+    } finally {
+      process.umask(previous);
+    }
+  });
+  let mode: number | undefined;
+  try {
+    const stats = lstatSync(path);
+    const uid = process.getuid?.();
+    if (stats.isSocket() && (uid === undefined || stats.uid === uid)) {
+      mode = stats.mode & 0o777;
+    }
+  } catch {
+    // Nothing at the path we asked for is the same failure as a wrong mode.
+  }
+  if (mode === undefined || (mode & 0o077) !== 0) {
+    await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
+    throw new Error(
+      `socket_mode_too_wide: ${path} is ${mode === undefined ? "not a socket this user owns" : `mode 0${mode.toString(8)}`}; ` +
+        "refusing to serve on a socket other users could open",
+    );
+  }
+}
+
 export async function serveHttp(
   options: MelraHttpOptions,
 ): Promise<MelraHttpServer> {
@@ -153,10 +270,21 @@ export async function serveHttp(
   >();
   const runtime = options.runtime;
   const enforced = runtime.policy.mode === "enforced";
+  const socketPath =
+    options.socketPath === undefined ? undefined : resolve(options.socketPath);
+  // Windows has named pipes instead, and their default ACL is not a mode this
+  // process can set or read back from Node. A transport sold as "only you can
+  // connect" that cannot check that claim is worse than none, so refuse it.
+  if (socketPath !== undefined && process.platform === "win32") {
+    throw new Error(
+      "socket_transport_unsupported_on_windows: use stdio or loopback HTTP",
+    );
+  }
   // A sandbox talks to its kernel over IPC. A listener on a routable interface
   // is not that, whatever the token guarding it, so enforced mode refuses to
   // start rather than start something it would have to describe as a second door.
-  if (enforced && !isLoopback(host)) {
+  // A Unix socket is that IPC, and narrower than loopback, so it is allowed.
+  if (enforced && socketPath === undefined && !isLoopback(host)) {
     throw new Error("enforced_mode_refuses_public_bind");
   }
   // A browser approval is only a boundary on the machine the browser is on. A
@@ -166,8 +294,12 @@ export async function serveHttp(
   // Enforced mode drops it on loopback too: self-registration is a stranger
   // asking a human to let it in, and the whole claim of enforced mode is that
   // only identities the operator issued can reach the kernel at all.
+  //
+  // A socket drops it for the first reason: no browser can reach a Unix socket,
+  // so there is nobody to show a consent page to.
   const oauthEnabled =
     !enforced &&
+    socketPath === undefined &&
     isLoopback(host) &&
     environment.MELRA_HTTP_OAUTH?.trim() !== "0";
   const oauth = oauthEnabled
@@ -175,7 +307,9 @@ export async function serveHttp(
     : undefined;
   // The bound port is only known after `listen`, and metadata that names the
   // wrong port sends a client to a door that is not there.
-  let origin = `http://${host}:${port}`;
+  // A socket has no host or port, so its requests name plain `localhost`.
+  let origin =
+    socketPath === undefined ? `http://${host}:${port}` : "http://localhost";
 
   const server = createServer((request, response) => {
     void handle(request, response).catch((error: unknown) => {
@@ -481,6 +615,19 @@ export async function serveHttp(
     });
   }
 
+  if (socketPath !== undefined) {
+    await listenOnSocket(server, socketPath);
+    return {
+      url: `${origin}/?token=${token}`,
+      mcpUrl: `${origin}/mcp`,
+      token,
+      host: "localhost",
+      port: 0,
+      socketPath,
+      oauth: false,
+      close,
+    };
+  }
   await new Promise<void>((resolveListen, rejectListen) => {
     server.once("error", rejectListen);
     server.listen(port, host, () => {
@@ -500,15 +647,19 @@ export async function serveHttp(
     host,
     port: boundPort,
     oauth: oauthEnabled,
-    async close() {
-      for (const session of sessions.values()) await session.transport.close();
-      sessions.clear();
-      await new Promise<void>((resolveClose, rejectClose) => {
-        server.close((error) => (error ? rejectClose(error) : resolveClose()));
-        // An open event stream is a live socket, and `close` waits on live
-        // sockets. Without this a console left open holds the process forever.
-        server.closeAllConnections();
-      });
-    },
+    close,
   };
+
+  // Node unlinks a Unix socket's file when its server closes, so a clean
+  // shutdown leaves nothing for the next start to have to judge stale.
+  async function close(): Promise<void> {
+    for (const session of sessions.values()) await session.transport.close();
+    sessions.clear();
+    await new Promise<void>((resolveClose, rejectClose) => {
+      server.close((error) => (error ? rejectClose(error) : resolveClose()));
+      // An open event stream is a live socket, and `close` waits on live
+      // sockets. Without this a console left open holds the process forever.
+      server.closeAllConnections();
+    });
+  }
 }
