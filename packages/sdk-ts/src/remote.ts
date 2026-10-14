@@ -39,9 +39,14 @@ function asTransport(transport: StreamableHTTPClientTransport): Transport {
  * encrypted wherever it goes; over `http:` it is readable by anything on the
  * path, which is nothing only when the path is loopback. A remote `http:`
  * URL means a proxy without TLS, and the SDK refuses to hand it the token
- * rather than leave that to every caller to notice.
+ * rather than leave that to every caller to notice. `allowInsecureHttp` is the
+ * explicit opt-out for a network the caller trusts, matching the Python SDK.
  */
-export function httpTransport(url: string | URL, token: string): Transport {
+export function httpTransport(
+  url: string | URL,
+  token: string,
+  allowInsecureHttp = false,
+): Transport {
   const parsed = new URL(url);
   // `serve --http` prints both the console URL and the MCP URL; accept either,
   // as `melra conformance --url` does. The console URL carries `?token=`,
@@ -53,9 +58,9 @@ export function httpTransport(url: string | URL, token: string): Transport {
   if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
     throw new Error(`melra_unsupported_url: ${parsed.protocol} is not http(s)`);
   }
-  if (parsed.protocol === "http:" && !isLoopbackHost(parsed.hostname)) {
+  if (parsed.protocol === "http:" && !allowInsecureHttp && !isLoopbackHost(parsed.hostname)) {
     throw new Error(
-      `melra_insecure_url: refusing to send the token over plain http to ${parsed.hostname}; use https or a loopback address`,
+      `melra_insecure_url: refusing to send the token over plain http to ${parsed.hostname}; use https, a loopback address, or allowInsecureHttp`,
     );
   }
   return asTransport(

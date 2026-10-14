@@ -134,6 +134,15 @@ describe("MelraClient over remote transports", () => {
         url,
       ).rejects.toThrow(/melra_insecure_url/);
     }
+    // The opt-out lifts only that refusal: the connection is then attempted
+    // (and fails at DNS here; `.invalid` never resolves), rather than refused up front.
+    await expect(
+      MelraClient.connect({
+        url: "http://melra-test.invalid:9/mcp",
+        token: "test-token",
+        allowInsecureHttp: true,
+      }),
+    ).rejects.not.toThrow(/melra_insecure_url/);
   });
 
   it("refuses an empty token before connecting", async () => {

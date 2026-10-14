@@ -98,7 +98,9 @@ a credential on its own and sends it to whatever URL it was handed is how
 tokens leak. A plain `http:` URL is refused unless its host is loopback
 (`localhost`, `127.0.0.0/8`, `[::1]`) — the token drives the machine, and over
 cleartext it is readable by anything on the path. Put TLS in front and use
-`https:`. A wrong token fails `connect()` with `melra_unauthorized`.
+`https:`, or, on a network you trust end to end such as a private container
+network, pass `allowInsecureHttp: true`. A wrong token fails `connect()` with
+`melra_unauthorized`.
 
 ## Workflows
 

@@ -42,6 +42,12 @@ export interface MelraStdioOptions extends ClientIdentity {
 export interface MelraHttpOptions extends ClientIdentity {
   url: string | URL;
   token: string;
+  /**
+   * Send the token over plain `http:` to a host that is not loopback. Off by
+   * default; turn it on only for a network you trust end to end, such as a
+   * private container network, and prefer `https:` everywhere else.
+   */
+  allowInsecureHttp?: boolean;
 }
 
 /** Connect to a running `melra serve --socket <path>`. Not on Windows. */
@@ -56,9 +62,9 @@ type Without<K extends string> = { [P in K]?: never };
 type StdioKeys = "command" | "args" | "cwd" | "env";
 
 export type MelraClientOptions =
-  | (MelraStdioOptions & Without<"url" | "socketPath" | "token">)
+  | (MelraStdioOptions & Without<"url" | "socketPath" | "token" | "allowInsecureHttp">)
   | (MelraHttpOptions & Without<StdioKeys | "socketPath">)
-  | (MelraSocketOptions & Without<StdioKeys | "url">);
+  | (MelraSocketOptions & Without<StdioKeys | "url" | "allowInsecureHttp">);
 
 interface TextContent {
   type: string;
@@ -82,7 +88,7 @@ export class MelraClient {
   static async connect(options: MelraClientOptions = {}): Promise<MelraClient> {
     const transport =
       options.url !== undefined
-        ? httpTransport(options.url, options.token)
+        ? httpTransport(options.url, options.token, options.allowInsecureHttp === true)
         : options.socketPath !== undefined
           ? socketTransport(options.socketPath, options.token)
           : new StdioClientTransport({
