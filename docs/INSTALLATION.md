@@ -794,7 +794,7 @@ merges it there for you:
 | `cline` | Cline (VS Code) | `cline_mcp_settings.json` in Cline's global storage | `mcpServers` |
 | `opencode` | OpenCode | `~/.config/opencode/opencode.json` | `mcp`, `type: "local"` |
 | `kiro` | Kiro | `~/.kiro/settings/mcp.json` | `mcpServers` |
-| `goose` | Goose | `~/.config/goose/config.yaml` (Windows: `%APPDATA%\Block\goose\config\config.yaml`) | YAML `extensions.melra`, `type: stdio` |
+| `goose` | Goose | `~/.config/goose/config.yaml` (Windows: `%APPDATA%\Block\goose\config\config.yaml`); `$GOOSE_PATH_ROOT/config/config.yaml` when that is set to an absolute path | YAML `extensions.melra`, `type: stdio` |
 | `continue` | Continue | `<workspace>/.continue/mcpServers/melra.yaml` | YAML block file, `mcpServers` list |
 | `amp` | Amp | `~/.config/amp/settings.json` (or an existing `settings.jsonc`) | `amp.mcpServers` |
 | `openclaw` | OpenClaw | `$OPENCLAW_CONFIG_PATH`, else `openclaw.json` in `$OPENCLAW_STATE_DIR` (default `~/.openclaw`) | JSON5 `mcp.servers` |

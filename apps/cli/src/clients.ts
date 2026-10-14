@@ -4,7 +4,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { parseJsonc, upsertJsonc } from "./jsonc.js";
 
@@ -134,15 +134,21 @@ export const CLIENTS: Record<string, Client> = {
     bin: "codex",
     path: () => join(process.env.CODEX_HOME ?? home(".codex"), "config.toml"),
   },
+  // https://github.com/aaif-goose/goose/blob/main/crates/goose/src/config/paths.rs
   goose: {
     label: "Goose",
     shape: "goose",
     bin: "goose",
-    // Goose keeps its Windows config under the old "Block" app directory.
-    path: () =>
-      process.platform === "win32"
+    // GOOSE_PATH_ROOT moves the whole tree, config under `<root>/config`, but
+    // only when it is absolute; Goose ignores a relative one, and so does this.
+    // Otherwise Windows keeps the old "Block" app directory.
+    path: () => {
+      const root = process.env.GOOSE_PATH_ROOT;
+      if (root !== undefined && isAbsolute(root)) return join(root, "config", "config.yaml");
+      return process.platform === "win32"
         ? appConfig("Block", "goose", "config", "config.yaml")
-        : join(process.env.XDG_CONFIG_HOME ?? home(".config"), "goose", "config.yaml"),
+        : join(process.env.XDG_CONFIG_HOME ?? home(".config"), "goose", "config.yaml");
+    },
   },
   continue: {
     label: "Continue",
