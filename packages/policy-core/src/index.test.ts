@@ -743,6 +743,9 @@ describe("capability grants", () => {
       read({ identity, operation: { kind: "file", action: "read", path } });
     expect(decide(at("docs/guide.md"), docs).outcome).toBe("allow");
     expect(decide(at("./docs/guide.md"), docs).outcome).toBe("allow");
+    // A grant spelled the Windows way, or with a leading `./`, still means docs.
+    expect(decide(at("docs\\guide.md"), [grant({ target: "docs\\*" })]).outcome).toBe("allow");
+    expect(decide(at("docs/guide.md"), [grant({ target: "./docs/*" })]).outcome).toBe("allow");
     // Each of these reads `.env` in the workspace root, outside the grant.
     for (const path of ["docs/../.env", "docs/a/../../.env", "docs\\..\\.env", "docs/..\\.env"]) {
       expect(decide(at(path), docs).reason).toBe("capability_not_granted:file.read");

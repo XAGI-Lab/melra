@@ -898,6 +898,11 @@ function grantPath(path: string): string {
   return posix.normalize(path.replaceAll("\\", "/"));
 }
 
+/** A file grant's target in the same spelling `grantPath` gives the path. */
+function grantTarget(pattern: string, classified: ClassifiedForGrant): string {
+  return classified.capability.startsWith("file.") ? grantPath(pattern) : pattern;
+}
+
 function patternMatches(pattern: string, value: string): boolean {
   if (pattern === "*") return true;
   const escaped = pattern
@@ -1023,9 +1028,9 @@ export function capabilityCheck(
     (grant) =>
       patternMatches(grant.capability, classified.capability) &&
       grant.effects.includes(classified.effect) &&
-      patternMatches(grant.target, classified.target) &&
+      patternMatches(grantTarget(grant.target, classified), classified.target) &&
       (classified.destination === undefined ||
-        patternMatches(grant.target, classified.destination)) &&
+        patternMatches(grantTarget(grant.target, classified), classified.destination)) &&
       patternMatches(grant.principal, holder),
   );
   const matching = candidates.filter((grant) =>
