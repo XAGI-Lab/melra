@@ -76,6 +76,13 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- A workflow advance in which one node's task refused (a wrong approval
+  phrase, a stale render) no longer throws away what its siblings did in the
+  same wave. A sibling whose challenge had lapsed was cancelled and planned
+  again there; with the wave's changes discarded, the run kept pointing at the
+  cancelled task and read the node as cancelled for good. The other nodes'
+  changes are committed first, then the refusal is reported.
+
 - `melra doctor` no longer reports ready when enforced mode and unsafe-local
   are asked for together through a policy file, which the flag check does not
   see: its `mode` check now fails with the server's own refusal
