@@ -43,7 +43,12 @@ function inside(root: string, candidate: string): boolean {
  */
 function spelling(name: string): string {
   const lower = name.toUpperCase().toLowerCase();
-  return process.platform === "win32" ? lower.replace(/[. ]+$/, "") : lower;
+  if (process.platform !== "win32") return lower;
+  // A loop, not /[. ]+$/: that pattern backtracks quadratically on a long
+  // run of spaces, and the name is the caller's.
+  let end = lower.length;
+  while (end > 0 && (lower[end - 1] === "." || lower[end - 1] === " ")) end -= 1;
+  return lower.slice(0, end);
 }
 
 function identity(entry: { dev: bigint; ino: bigint }): string {
