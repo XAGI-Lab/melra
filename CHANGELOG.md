@@ -130,6 +130,12 @@ All notable changes are documented here. The format follows
   header and all, in cleartext to the proxy, which also could not reach a
   loopback server. Remote `https://` servers may still be reached through
   one.
+
+- A capability grant's file target is matched against the path the file
+  runtime will actually touch. It was matched against the raw string, so
+  `docs/../.env` passed a `docs/*` grant and read `.env` without approval,
+  and a move was checked only at its source, so it could put a file anywhere
+  the workspace allowed.
 - On Windows, a differently cased spelling of the workspace (`..\\WS` for
   `ws`) is recognised as the workspace root, which file operations never
   touch. The check compared strings while the containment check ignored

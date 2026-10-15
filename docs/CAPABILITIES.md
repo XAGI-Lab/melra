@@ -353,6 +353,11 @@ A non-empty list is a closed world: an effect with no matching grant is denied
 `capability_not_granted` before any allowlist is consulted. See
 docs/INSTALLATION.md for the file format.
 
+A file target is matched as the file runtime will resolve it, so `docs/../.env`
+is `.env` and falls outside a `docs/*` grant, and a move needs its destination
+granted as well as its source. Matching is on the path, not on what it resolves
+to on disk: a symlink inside a granted directory reaches wherever it points.
+
 `validUntil` bounds a window; two optional fields bound what happens inside it.
 
 - `maxOperations` is how many times the grant may ever be spent. The count is

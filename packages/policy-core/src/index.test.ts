@@ -1,6 +1,7 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import { describe, expect, it } from "vitest";
 import { TaskRequestSchema } from "@melra/protocol";
 import {
@@ -734,6 +735,52 @@ describe("capability grants", () => {
     // Same holder, target outside the grant.
     expect(decide(read({ identity }), [grant({ target: "/elsewhere/*" })]).reason).toBe(
       "capability_not_granted:file.read",
+    );
+  });
+
+  it("matches a grant against the path the file runtime will touch", () => {
+    const docs = [grant({ target: "docs/*" })];
+    const at = (path: string) =>
+      read({ identity, operation: { kind: "file", action: "read", path } });
+    // Asked of the resolver the file runtime uses rather than restated: a
+    // backslash separates on Windows and is part of a name elsewhere.
+    const insideDocs = (path: string) => {
+      const rel = relative(resolve(root, "docs"), resolve(root, path));
+      return rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+    };
+    for (const path of [
+      "docs/guide.md",
+      "./docs/guide.md",
+      "docs/../.env",
+      "docs/a/../../.env",
+      "docs\\..\\.env",
+      "docs/..\\.env",
+      "docs\\a/../.env",
+      "docs/a\\b/../../.env",
+      ".env/w\\..\\..\\docs\\x\\c/..",
+      "docs/",
+      "docs/x/../",
+    ]) {
+      expect([path, decide(at(path), docs).outcome]).toEqual([
+        path,
+        insideDocs(path) ? "allow" : "deny",
+      ]);
+    }
+    expect(decide(at("docs/guide.md"), [grant({ target: "./docs/*" })]).outcome).toBe("allow");
+  });
+
+  it("requires a move's destination to be granted as well as its source", () => {
+    const docs = [grant({ target: "docs/*", effects: ["mutate"] })];
+    const move = (destination: string) =>
+      read({
+        identity,
+        operation: { kind: "file", action: "move", path: "docs/a.md", destination },
+        requiredEvidence: [{ type: "file_exists", path: destination }],
+      });
+    expect(decide(move("docs/b.md"), docs).outcome).not.toBe("deny");
+    expect(decide(move("src/index.ts"), docs).reason).toBe("capability_not_granted:file.move");
+    expect(decide(move("docs/../src/index.ts"), docs).reason).toBe(
+      "capability_not_granted:file.move",
     );
   });
 

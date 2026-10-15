@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { readFile } from "node:fs/promises";
-import { basename, dirname, resolve } from "node:path";
+import { basename, dirname, normalize, resolve, sep } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { hostOf } from "./network-policy.js";
 import type {
@@ -592,6 +592,8 @@ export function classifyOperation(operation: Operation): {
   traits: CapabilityTrait[];
   /** What the caller declared this operation moves, when it declared one. */
   spend?: DeclaredSpend;
+  /** Where a move puts the file; a grant has to cover it as well as `target`. */
+  destination?: string;
 } {
   switch (operation.kind) {
     case "file": {
@@ -601,7 +603,10 @@ export function classifyOperation(operation: Operation): {
         effect: destructive ? "destructive" : read ? "read" : "mutate",
         risk: destructive ? "high" : read ? "low" : "medium",
         capability: `file.${operation.action}`,
-        target: operation.path,
+        target: grantPath(operation.path),
+        ...(operation.action === "move" && operation.destination !== undefined
+          ? { destination: grantPath(operation.destination) }
+          : {}),
         traits: [],
       };
     }
@@ -883,6 +888,24 @@ function domainAllowed(operation: Operation, policy: LocalPolicy): boolean {
  * `file.*` and `/repo/build/*`, and small enough that a policy author can
  * predict what it matches.
  */
+/**
+ * A file path as the file runtime will resolve it, for matching against a
+ * grant's target. Raw, `docs/../.env` matched a `docs/*` grant and then read
+ * `.env`. Normalised by this platform's rules, the ones the runtime resolves
+ * with: a backslash separates on Windows and is part of a name elsewhere, and
+ * splitting on one where the runtime does not let a `..` cancel a different
+ * segment than the one the runtime cancels. A trailing slash names the
+ * directory itself, so it goes too.
+ */
+function grantPath(path: string): string {
+  return normalize(path).split(sep).join("/").replace(/(?<=.)\/$/, "");
+}
+
+/** A file grant's target in the same spelling `grantPath` gives the path. */
+function grantTarget(pattern: string, classified: ClassifiedForGrant): string {
+  return classified.capability.startsWith("file.") ? grantPath(pattern) : pattern;
+}
+
 function patternMatches(pattern: string, value: string): boolean {
   if (pattern === "*") return true;
   const escaped = pattern
@@ -923,6 +946,7 @@ type ClassifiedForGrant = {
   effect: Effect;
   capability: string;
   target: string;
+  destination?: string;
   spend?: DeclaredSpend;
 };
 
@@ -1007,7 +1031,9 @@ export function capabilityCheck(
     (grant) =>
       patternMatches(grant.capability, classified.capability) &&
       grant.effects.includes(classified.effect) &&
-      patternMatches(grant.target, classified.target) &&
+      patternMatches(grantTarget(grant.target, classified), classified.target) &&
+      (classified.destination === undefined ||
+        patternMatches(grantTarget(grant.target, classified), classified.destination)) &&
       patternMatches(grant.principal, holder),
   );
   const matching = candidates.filter((grant) =>
