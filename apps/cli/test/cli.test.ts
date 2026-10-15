@@ -9,7 +9,13 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
-import { PRODUCT_VERSION, TaskRequestSchema, TerminalOperationSchema } from "@melra/protocol";
+import {
+  BrowserOperationSchema,
+  HttpOperationSchema,
+  PRODUCT_VERSION,
+  TaskRequestSchema,
+  TerminalOperationSchema,
+} from "@melra/protocol";
 import { createMelraRuntime, serveHttp } from "@melra/server";
 import { runConformance } from "../src/conformance.js";
 import { RESTART_SAFE_WORKFLOW } from "../src/demo-workflow.js";
@@ -282,8 +288,67 @@ describe("melra CLI", () => {
     const tail = screen.slice(screen.lastIndexOf("Operation:"));
     expect(tail).toContain("NODE_OPTIONS");
     expect(tail).toContain('cwd: "sub"');
-    // The list is capped, and says so.
-    expect(tail).toMatch(/more list items, all in the JSON above/);
+    // The list is capped, and says so, and its tail, where the code is, stays.
+    expect(tail).toMatch(/more args entries, all in the JSON above/);
+    expect(tail).toContain('"harmless()"');
+  });
+
+  it("gives every field of the operation its own room in the summary", () => {
+    const summary = (capability: string, target: string, operation: unknown): string[] => {
+      const screen = approvalScreen({
+        task: { id: "t1", approval: { expiresAt: "x" } },
+        contract: { capability, target, effect: "mutate", risk: "medium", operation, metadata: { goal: "g" } },
+        renderDigest: "a".repeat(64),
+      });
+      const lines = screen.trimEnd().split("\n");
+      return lines.slice(lines.lastIndexOf("Operation:"));
+    };
+    const padding = Object.fromEntries(Array.from({ length: 80 }, (_, index) => [`PAD_${index}`, "1"]));
+    // Many headers cannot push the url, the only place its query shows, away.
+    const http = summary(
+      "http.post",
+      "https://bank.example/transfer",
+      HttpOperationSchema.parse({
+        kind: "http",
+        action: "request",
+        method: "POST",
+        url: "https://bank.example/transfer?to=attacker&amount=999999",
+        headers: padding,
+        content: "{}",
+      }),
+    );
+    expect(http.join("\n")).toContain("to=attacker&amount=999999");
+    expect(http.join("\n")).toMatch(/more headers entries, all in the JSON above/);
+    // Nor many env entries a command's directory, or the env's first entry.
+    const terminal = summary(
+      "terminal.run",
+      "command:node",
+      TerminalOperationSchema.parse({
+        kind: "terminal",
+        action: "run",
+        command: "node",
+        args: ["build.js"],
+        cwd: "sub",
+        env: { NODE_OPTIONS: "--require /tmp/x.js", ...padding },
+      }),
+    );
+    expect(terminal.join("\n")).toContain('cwd: "sub"');
+    expect(terminal.join("\n")).toContain("NODE_OPTIONS");
+    // Nor padding in one list the files an upload sends.
+    const upload = summary(
+      "browser.upload",
+      "#avatar",
+      BrowserOperationSchema.parse({
+        kind: "browser",
+        action: "upload",
+        target: { selector: "#avatar" },
+        values: Array.from({ length: 20 }, (_, index) => `pad${index}`),
+        filePaths: [".env"],
+      }),
+    );
+    expect(upload.join("\n")).toContain('filePaths[0]: ".env"');
+    // However each field is padded, the summary stays a screen tall.
+    for (const lines of [http, terminal, upload]) expect(lines.length).toBeLessThan(40);
   });
 
   it("leaves a task's target as it is for JSON, escaping it only where it is shown", () => {

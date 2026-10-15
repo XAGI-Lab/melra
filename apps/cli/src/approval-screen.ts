@@ -48,35 +48,48 @@ function bounded(text: string, limit = 160): string {
 }
 
 /**
- * The operation, one bounded line per field, so what the effect actually does
+ * The operation, one bounded line per leaf, so what the effect actually does
  * (a command's arguments and environment, a move's destination, a request's
  * method and body) sits in the summary and not only in the dump above it.
- * Bounded so no field can push the rest off the screen, and saying so when it
- * cut something.
+ *
+ * Every operation schema is strict, so its top-level fields are a fixed set.
+ * Plain values (a url, a cwd, a destination) print first and in full; each
+ * list or record (args, env, headers, values, filePaths) then gets its own
+ * budget of lines, so no number of entries in one field can push another
+ * field off the screen. A field over budget shows its head and its tail, so a
+ * trailing `-e <code>` stays in view, and says how many entries it left out.
  */
-function operationLines(operation: unknown, arrayLimit = 12): string[] {
-  const scalars: string[] = [];
-  const arrays: string[] = [];
-  const walk = (value: unknown, path: string): void => {
+function operationLines(operation: unknown, fieldLimit = 8): string[] {
+  const leaf = (path: string, value: unknown): string =>
+    `${bounded(path, 60)}: ${bounded(typeof value === "string" ? JSON.stringify(value) : String(value))}`;
+  const leaves = (value: unknown, path: string, into: string[]): string[] => {
     if (Array.isArray(value)) {
-      if (value.length === 0) scalars.push(`${path}: []`);
-      value.forEach((item, index) => walk(item, `${path}[${index}]`));
+      if (value.length === 0) into.push(`${bounded(path, 60)}: []`);
+      value.forEach((item, index) => leaves(item, `${path}[${index}]`, into));
     } else if (value !== null && typeof value === "object") {
-      for (const [key, item] of Object.entries(value)) walk(item, path === "" ? key : `${path}.${key}`);
+      const entries = Object.entries(value);
+      if (entries.length === 0) into.push(`${bounded(path, 60)}: {}`);
+      for (const [key, item] of entries) leaves(item, `${path}.${key}`, into);
     } else {
-      const line = `${bounded(path, 60)}: ${bounded(typeof value === "string" ? JSON.stringify(value) : String(value))}`;
-      (/\[\d+\]/.test(path) ? arrays : scalars).push(line);
+      into.push(leaf(path, value));
     }
+    return into;
   };
-  walk(operation, "");
-  // Scalars in full and first, then arrays: no number of list items (a
-  // command's args, a request's headers) can push an effect-bearing scalar
-  // (cwd, env, a move's destination, a body) off the screen.
-  const shownArrays =
-    arrays.length > arrayLimit
-      ? [...arrays.slice(0, arrayLimit), `…(+${arrays.length - arrayLimit} more list items, all in the JSON above)`]
-      : arrays;
-  return [...scalars, ...shownArrays];
+  if (operation === null || typeof operation !== "object") return operation === undefined ? [] : [leaf("operation", operation)];
+  const plain: string[] = [];
+  const grouped: string[] = [];
+  for (const [field, value] of Object.entries(operation)) {
+    const lines = leaves(value, field, []);
+    if (value === null || typeof value !== "object") plain.push(...lines);
+    else if (lines.length <= fieldLimit) grouped.push(...lines);
+    else
+      grouped.push(
+        ...lines.slice(0, fieldLimit / 2),
+        `…(+${lines.length - fieldLimit} more ${bounded(field, 60)} entries, all in the JSON above)`,
+        ...lines.slice(-fieldLimit / 2),
+      );
+  }
+  return [...plain, ...grouped];
 }
 
 /**
