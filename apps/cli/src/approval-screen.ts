@@ -53,11 +53,13 @@ function bounded(text: string, limit = 160): string {
  * method and body) sits in the summary and not only in the dump above it.
  *
  * Every operation schema is strict, so its top-level fields are a fixed set.
- * Plain values (a url, a cwd, a destination) print first and in full; each
- * list or record (args, env, headers, values, filePaths) then gets its own
- * budget of lines, so no number of entries in one field can push another
- * field off the screen. A field over budget shows its head and its tail, so a
- * trailing `-e <code>` stays in view, and says how many entries it left out.
+ * Each list or record (args, env, headers, values, fields, filePaths) shows
+ * whole entries from both ends, the first and last always, within its own
+ * budget of lines, and says how many entries it left out: no number of entries
+ * in one field can crowd out another, and no entry is shown in part. The plain
+ * values (a url, a cwd, a destination, a typed value) come last, in full, right
+ * above the effect: there are at most a schema's worth of them, so nothing an
+ * agent pads can push them away from the question.
  */
 function operationLines(operation: unknown, fieldLimit = 8): string[] {
   const leaf = (path: string, value: unknown): string =>
@@ -79,17 +81,40 @@ function operationLines(operation: unknown, fieldLimit = 8): string[] {
   const plain: string[] = [];
   const grouped: string[] = [];
   for (const [field, value] of Object.entries(operation)) {
-    const lines = leaves(value, field, []);
-    if (value === null || typeof value !== "object") plain.push(...lines);
-    else if (lines.length <= fieldLimit) grouped.push(...lines);
-    else
-      grouped.push(
-        ...lines.slice(0, fieldLimit / 2),
-        `…(+${lines.length - fieldLimit} more ${bounded(field, 60)} entries, all in the JSON above)`,
-        ...lines.slice(-fieldLimit / 2),
-      );
+    if (value === null || typeof value !== "object") {
+      plain.push(leaf(field, value));
+      continue;
+    }
+    const entries = Array.isArray(value)
+      ? value.map((item, index) => leaves(item, `${field}[${index}]`, []))
+      : Object.entries(value).map(([key, item]) => leaves(item, `${field}.${key}`, []));
+    if (entries.length === 0) {
+      grouped.push(`${bounded(field, 60)}: ${Array.isArray(value) ? "[]" : "{}"}`);
+      continue;
+    }
+    // Whole entries, alternately from each end, while they fit.
+    let head = 1;
+    let tail = entries.length > 1 ? 1 : 0;
+    let used = entries[0]!.length + (tail === 1 ? entries.at(-1)!.length : 0);
+    while (head + tail < entries.length) {
+      const fromHead = head <= tail;
+      const next = entries[fromHead ? head : entries.length - 1 - tail]!;
+      if (used + next.length > fieldLimit) break;
+      used += next.length;
+      if (fromHead) head += 1;
+      else tail += 1;
+    }
+    const hidden = entries.slice(head, entries.length - tail);
+    grouped.push(
+      ...entries.slice(0, head).flat(),
+      // A note as tall as what it stands for saves nothing: show that instead.
+      ...(hidden.flat().length <= 1
+        ? hidden.flat()
+        : [`…(+${hidden.length} more ${bounded(field, 60)} entries, all in the JSON above)`]),
+      ...entries.slice(entries.length - tail).flat(),
+    );
   }
-  return [...plain, ...grouped];
+  return [...grouped, ...plain];
 }
 
 /**

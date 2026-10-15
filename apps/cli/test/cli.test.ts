@@ -289,7 +289,7 @@ describe("melra CLI", () => {
     expect(tail).toContain("NODE_OPTIONS");
     expect(tail).toContain('cwd: "sub"');
     // The list is capped, and says so, and its tail, where the code is, stays.
-    expect(tail).toMatch(/more args entries, all in the JSON above/);
+    expect(tail).toContain("…(+34 more args entries, all in the JSON above)");
     expect(tail).toContain('"harmless()"');
   });
 
@@ -318,7 +318,7 @@ describe("melra CLI", () => {
       }),
     );
     expect(http.join("\n")).toContain("to=attacker&amount=999999");
-    expect(http.join("\n")).toMatch(/more headers entries, all in the JSON above/);
+    expect(http.join("\n")).toContain("…(+72 more headers entries, all in the JSON above)");
     // Nor many env entries a command's directory, or the env's first entry.
     const terminal = summary(
       "terminal.run",
@@ -349,6 +349,67 @@ describe("melra CLI", () => {
     expect(upload.join("\n")).toContain('filePaths[0]: ".env"');
     // However each field is padded, the summary stays a screen tall.
     for (const lines of [http, terminal, upload]) expect(lines.length).toBeLessThan(40);
+
+    // An entry is shown whole or not at all, and the note counts entries.
+    const target = (name: string) => ({ selector: `#${name}`, role: "textbox", name, text: name });
+    const form = summary(
+      "browser.fill_form",
+      "form",
+      BrowserOperationSchema.parse({
+        kind: "browser",
+        action: "fill_form",
+        fields: [
+          { target: target("to"), value: "attacker@evil.example" },
+          ...Array.from({ length: 5 }, (_, index) => ({ target: target(`pad${index}`), value: "x" })),
+          { target: target("amount"), value: "999999" },
+        ],
+      }),
+    ).join("\n");
+    expect(form).toContain('fields[0].value: "attacker@evil.example"');
+    expect(form).toContain('fields[6].target.selector: "#amount"');
+    expect(form).toContain("…(+5 more fields entries, all in the JSON above)");
+    // A note as tall as the one entry it would stand for is not worth it.
+    const nine = summary(
+      "terminal.run",
+      "command:node",
+      TerminalOperationSchema.parse({ kind: "terminal", action: "run", command: "node", args: Array.from({ length: 9 }, (_, index) => `a${index}`) }),
+    ).join("\n");
+    expect(nine).toContain('args[4]: "a4"');
+    expect(nine).not.toContain("more args entries");
+
+    // With every list at its schema maximum and every value set, the values a
+    // browser action types or opens still sit right above the question.
+    const worst = summary(
+      "browser.type",
+      "#q",
+      BrowserOperationSchema.parse({
+        kind: "browser",
+        action: "type",
+        url: "https://bank.example/pay?to=attacker",
+        target: target("q"),
+        value: "typed-by-agent",
+        values: Array.from({ length: 50 }, (_, index) => `v${index}`),
+        fields: Array.from({ length: 50 }, (_, index) => ({ target: target(`f${index}`), value: "x" })),
+        filePaths: Array.from({ length: 20 }, (_, index) => `p${index}`),
+        key: "Enter",
+        direction: "down",
+        state: "visible",
+        urlContains: "pay",
+        tabIndex: 1,
+        delayMs: 1,
+        clearFirst: false,
+        pixels: 1,
+        fullPage: true,
+        timeoutMs: 100,
+        settleQuietMs: 25,
+        settleTimeoutMs: 25,
+        maxChars: 100,
+      }),
+    );
+    const nearQuestion = worst.slice(-24).join("\n");
+    expect(nearQuestion).toContain('value: "typed-by-agent"');
+    expect(nearQuestion).toContain("to=attacker");
+    expect(worst.length).toBeLessThan(60);
   });
 
   it("leaves a task's target as it is for JSON, escaping it only where it is shown", () => {
