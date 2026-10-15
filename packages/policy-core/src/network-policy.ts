@@ -39,8 +39,10 @@ function mappedIpv4Address(address: string): string | undefined {
 /** The eight 16-bit groups of an IPv6 address, an embedded IPv4 tail included. */
 function ipv6Groups(address: string): number[] | undefined {
   let text = address.toLowerCase();
-  const tail = /(\d+\.\d+\.\d+\.\d+)$/.exec(text)?.[1];
-  if (tail !== undefined) {
+  // The dotted tail, if any, found without a regular expression: one that
+  // backtracks on long digit runs is a way to stall the destination check.
+  const tail = text.slice(text.lastIndexOf(":") + 1);
+  if (isIP(tail) === 4) {
     const [a, b, c, d] = tail.split(".").map(Number) as [number, number, number, number];
     text = `${text.slice(0, -tail.length)}${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
   }
