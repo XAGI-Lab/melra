@@ -197,7 +197,7 @@ MELRA uses these environment variables:
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `MELRA_WORKSPACE` | Hard boundary for file and process operations | current directory |
+| `MELRA_WORKSPACE` | Hard boundary for file and process operations; a policy file's `workspaceRoot` can only narrow it to a directory inside | the `workspaceRoot` of a `MELRA_POLICY` file, else the current directory |
 | `MELRA_HOME` | SQLite database and browser artifacts | `~/.melra` |
 | `MELRA_POLICY` | Optional local policy JSON | safe built-in policy |
 | `MELRA_BROWSER` | Chrome, Chromium, or Edge executable | auto-detected |

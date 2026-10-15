@@ -25,6 +25,7 @@ import {
 } from "@melra/protocol";
 import {
   assertEnforceable,
+  confinedRoot,
   createMelraRuntime,
   serveHttp,
   OAuthProvider,
@@ -42,6 +43,7 @@ import {
   createDefaultPolicy,
   evaluatePolicy,
   loadPolicy,
+  type LocalPolicy,
 } from "@melra/policy-core";
 import {
   type CliEnvironment,
@@ -73,11 +75,49 @@ import {
   writeClientConfig,
 } from "./clients.js";
 
+/**
+ * Fold in what the policy file says, so every command describes the server it
+ * would actually start: `unhinged` if either asks for it, and the stricter
+ * `mode`, exactly as the server combines them.
+ *
+ * The workspace is MELRA_WORKSPACE when it is set, which every config `setup`
+ * writes does, and the working directory otherwise. A file the operator names
+ * in MELRA_POLICY may pin it when MELRA_WORKSPACE is not set; any policy file
+ * may narrow it to a directory inside, never move it outside. Older `setup`
+ * runs wrote their own workspace into the shared ~/.melra/policy.json, and a
+ * server for any later project was then confined to the first one instead.
+ *
+ * A file that does not parse changes nothing here; `doctor` reports it and the
+ * server refuses to start on it.
+ */
+async function settle(env: CliEnvironment): Promise<CliEnvironment> {
+  const path = await existingPolicyPath(env);
+  if (path === undefined) return env;
+  let file: LocalPolicy;
+  try {
+    file = await loadPolicy(path, env.workspaceRoot);
+  } catch {
+    return env;
+  }
+  const shared = resolve(path) === resolve(env.dataDirectory, "policy.json");
+  return {
+    ...env,
+    workspaceRoot:
+      env.workspaceSet !== true && !shared
+        ? file.workspaceRoot
+        : confinedRoot(env.workspaceRoot, file.workspaceRoot),
+    unhinged: env.unhinged || file.unhinged,
+    mode: env.mode === "enforced" || file.mode === "enforced" ? "enforced" : "developer",
+  };
+}
+
 async function existingPolicyPath(env: CliEnvironment): Promise<string | undefined> {
   if (env.policyPath !== undefined) return env.policyPath;
   const candidate = join(env.dataDirectory, "policy.json");
   try {
-    await access(candidate, constants.R_OK);
+    // Exists, not readable: an unreadable file has to fail loudly, not be
+    // skipped for the built-in defaults along with its enforced mode.
+    await access(candidate, constants.F_OK);
     return candidate;
   } catch {
     return undefined;
@@ -533,7 +573,8 @@ async function doctor(env: CliEnvironment): Promise<{
   });
   try {
     const path = await existingPolicyPath(env);
-    if (path !== undefined) JSON.parse(await readFile(path, "utf8"));
+    // The server's own parser, so a bad `mode` or grant fails here too.
+    if (path !== undefined) await loadPolicy(path, env.workspaceRoot);
     checks.push({
       name: "policy",
       status: "pass",
@@ -570,15 +611,19 @@ async function doctor(env: CliEnvironment): Promise<{
 
 async function init(args: string[], env: CliEnvironment): Promise<InitResult> {
   await mkdir(env.dataDirectory, { recursive: true });
-  const policyPath = join(env.dataDirectory, "policy.json");
+  // The operator's MELRA_POLICY when there is one: writing the default path
+  // into the client config instead quietly swapped their policy for ours.
+  const policyPath = env.policyPath ?? join(env.dataDirectory, "policy.json");
   try {
     await access(policyPath, constants.F_OK);
   } catch {
-    await writeFile(
-      policyPath,
-      `${JSON.stringify(createDefaultPolicy(env.workspaceRoot), null, 2)}\n`,
-      { flag: "wx" },
-    );
+    if (env.policyPath !== undefined) {
+      throw new Error(`MELRA_POLICY names ${policyPath}, which does not exist`);
+    }
+    // No `workspaceRoot`: this file is shared by every project's server, and
+    // each config `setup` writes names its own workspace in MELRA_WORKSPACE.
+    const { workspaceRoot: _shared, ...policy } = createDefaultPolicy(env.workspaceRoot);
+    await writeFile(policyPath, `${JSON.stringify(policy, null, 2)}\n`, { flag: "wx" });
   }
   const client = resolveClient(argument("--client", args) ?? "generic");
   const label = CLIENTS[client]?.label ?? client;
@@ -707,6 +752,7 @@ async function policyTest(args: string[], env: CliEnvironment): Promise<void> {
   // answer for a policy nobody is running.
   const policy = {
     ...(await loadPolicy(await existingPolicyPath(env), env.workspaceRoot)),
+    workspaceRoot: env.workspaceRoot,
     unhinged: env.unhinged,
     mode: env.mode,
   };
@@ -852,7 +898,8 @@ Flags:
   --status <s>     Only tasks in this status, e.g. awaiting_approval.
 
 Environment:
-  MELRA_WORKSPACE  Workspace boundary (default: current directory)
+  MELRA_WORKSPACE  Workspace boundary (default: a MELRA_POLICY file's
+                   workspaceRoot, else the current directory)
   MELRA_HOME       Local database and artifact directory
   MELRA_POLICY     Optional local policy JSON
   MELRA_UNHINGED   Set to 1 to disable every guardrail (see --unsafe-local)
@@ -885,16 +932,22 @@ async function main(): Promise<void> {
     );
   }
   const modeFlag = argument("--mode", args);
-  const env: CliEnvironment = {
+  const requested: CliEnvironment = {
     ...parsed,
     unhinged:
       parsed.unhinged || deprecated || args.includes("--unsafe-local"),
-    ...(modeFlag === undefined ? {} : { mode: deploymentMode(modeFlag) }),
+    // The strictest of the flag and the variable, as for the policy file below:
+    // `--mode developer` does not undo MELRA_MODE=enforced.
+    ...(modeFlag === undefined || deploymentMode(modeFlag) === "developer"
+      ? {}
+      : { mode: "enforced" as const }),
   };
   // Before the banner: a process that refuses to start has no guardrails to warn
   // about, and printing the unsafe-local warning first would read as if it had
-  // taken effect.
-  assertEnforceable(env.mode, env.unhinged);
+  // taken effect. On the flags and variables only: a policy file that asks for
+  // both is the server's to refuse, naming the file, and `doctor` still runs.
+  assertEnforceable(requested.mode, requested.unhinged);
+  const env = await settle(requested);
   // Before the command runs, and for every command including `help` — the mode
   // is a property of the process, so there is no invocation where staying quiet
   // about it is right.

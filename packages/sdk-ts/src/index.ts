@@ -82,6 +82,22 @@ export function parseMelraToolResult(result: unknown): Record<string, unknown> {
   return JSON.parse(text) as Record<string, unknown>;
 }
 
+/**
+ * The settings of this process worth passing to a stdio server it spawns:
+ * where its state and policy live, and a stricter mode. Not the ones that
+ * would redirect or widen it: MELRA_SOCKET moves it off stdio, so connecting
+ * hangs; MELRA_UNHINGED unconfines it, with a banner nobody reads; and an
+ * explicit `cwd` decides the workspace over an inherited MELRA_WORKSPACE.
+ * Pass any of those in `env` to mean them.
+ */
+function melraSettings(environment: NodeJS.ProcessEnv, cwd: string | undefined): Record<string, string> {
+  const names = ["MELRA_HOME", "MELRA_POLICY", "MELRA_MODE", "MELRA_PAYLOAD_KEY"];
+  if (cwd === undefined) names.push("MELRA_WORKSPACE");
+  return Object.fromEntries(
+    names.flatMap((name) => (environment[name] === undefined ? [] : [[name, environment[name]!]])),
+  );
+}
+
 export class MelraClient {
   private constructor(private readonly client: Client) {}
 
@@ -95,7 +111,10 @@ export class MelraClient {
               command: options.command ?? "melra",
               args: options.args ?? ["serve"],
               ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
-              ...(options.env === undefined ? {} : { env: options.env }),
+              // The MCP SDK passes the child only HOME, PATH and a few more,
+              // so MELRA_MODE, MELRA_POLICY and MELRA_HOME set for this
+              // process were dropped and the server ran configured differently.
+              env: { ...melraSettings(process.env, options.cwd), ...options.env },
               stderr: "pipe",
             });
     const client = new Client({

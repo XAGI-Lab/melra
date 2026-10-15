@@ -523,10 +523,14 @@ async function connect(
 ): Promise<Record<string, unknown>> {
   if (options.url !== undefined) {
     // Forgiving about the one thing people get wrong: `serve --http` prints both
-    // the console URL and the MCP URL, and only one of them is an endpoint.
-    const url = new URL(
-      options.url.endsWith("/mcp") ? options.url : `${options.url.replace(/\/$/, "")}/mcp`,
-    );
+    // the console URL and the MCP URL, and only one of them is an endpoint. The
+    // console URL carries `?token=`, so the path is edited as a path and the
+    // token, when --token is not given, is taken from the query.
+    const url = new URL(options.url);
+    if (!url.pathname.endsWith("/mcp")) url.pathname = `${url.pathname.replace(/\/$/, "")}/mcp`;
+    const token = options.token ?? url.searchParams.get("token") ?? undefined;
+    url.search = "";
+    options = { ...options, ...(token === undefined ? {} : { token }) };
     await client.connect(
       // ponytail: the SDK declares `sessionId?: string` on this transport, which
       // `exactOptionalPropertyTypes` reads as incompatible with the `Transport`

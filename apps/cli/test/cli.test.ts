@@ -3,13 +3,15 @@
 
 import { execFile, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { PRODUCT_VERSION } from "@melra/protocol";
+import { createMelraRuntime, serveHttp } from "@melra/server";
+import { runConformance } from "../src/conformance.js";
 import { RESTART_SAFE_WORKFLOW } from "../src/demo-workflow.js";
 import { parseCliEnvironment, serverLaunch } from "../src/environment.js";
 
@@ -57,6 +59,7 @@ describe("melra CLI", () => {
     );
     expect(parsed).toEqual({
       workspaceRoot: resolve("/tmp/melra-workspace"),
+      workspaceSet: true,
       dataDirectory: resolve("/tmp/melra-home"),
       browserExecutablePath: resolve("/Applications/Google Chrome"),
       browserCdpEndpoint: "http://127.0.0.1:9222/",
@@ -604,6 +607,135 @@ describe("melra CLI", () => {
     expect(JSON.parse(await readFile(report.policyPath, "utf8"))).toMatchObject({
       mutations: "confirm",
     });
+  });
+
+  it("keeps each project in its own workspace when they share MELRA_HOME", async () => {
+    // Real path: the working directory comes back as /private/var on macOS.
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-cli-shared-")));
+    roots.push(root);
+    const home = join(root, ".melra");
+    const [first, second] = [join(root, "projA"), join(root, "projB")];
+    await mkdir(first);
+    await mkdir(second);
+    // What `setup` in projA used to leave behind for every later project.
+    await mkdir(home);
+    await writeFile(join(home, "policy.json"), JSON.stringify({ workspaceRoot: first }));
+    const doctor = async (cwd: string, extra: Record<string, string>) => {
+      const run = await execute(process.execPath, [entry, "doctor"], {
+        cwd,
+        env: { ...process.env, MELRA_HOME: home, MELRA_WORKSPACE: "", MELRA_POLICY: "", MELRA_MODE: "", ...extra },
+      }).catch((error: { stdout: string }) => error);
+      const report = JSON.parse(run.stdout) as {
+        unhinged: boolean;
+        mode: string;
+        checks: Array<{ name: string; detail: string; status: string }>;
+      };
+      return { ...report, workspace: report.checks.find((check) => check.name === "workspace")?.detail };
+    };
+    // A client config from `setup` names its workspace; so does the working directory.
+    expect((await doctor(root, { MELRA_WORKSPACE: second })).workspace).toBe(second);
+    expect((await doctor(second, {})).workspace).toBe(second);
+
+    // Naming the shared file in MELRA_POLICY, as every older config does, does
+    // not let it pin the workspace either.
+    expect((await doctor(second, { MELRA_POLICY: join(home, "policy.json") })).workspace).toBe(second);
+
+    // A file the operator names on purpose may still pin the workspace, and
+    // may narrow MELRA_WORKSPACE, but never move it elsewhere.
+    const pinned = join(root, "pinned.json");
+    await writeFile(pinned, JSON.stringify({ workspaceRoot: first }));
+    expect((await doctor(second, { MELRA_POLICY: pinned })).workspace).toBe(first);
+    expect((await doctor(second, { MELRA_POLICY: pinned, MELRA_WORKSPACE: second })).workspace).toBe(second);
+    expect((await doctor(second, { MELRA_POLICY: pinned, MELRA_WORKSPACE: root })).workspace).toBe(first);
+    // Relative to the file, not to wherever the server started.
+    const relative = join(first, "relative.json");
+    await writeFile(relative, JSON.stringify({ workspaceRoot: "." }));
+    expect((await doctor(root, { MELRA_POLICY: relative })).workspace).toBe(first);
+
+    // A file that switches the guardrails off is reported, not hidden.
+    const loose = join(root, "loose.json");
+    await writeFile(loose, JSON.stringify({ unhinged: true }));
+    const unhinged = await doctor(second, { MELRA_POLICY: loose });
+    expect(unhinged.unhinged).toBe(true);
+    expect(unhinged.checks.find((check) => check.name === "guardrails")?.status).toBe("warn");
+    // A file the server would refuse fails doctor too, rather than passing as JSON.
+    const typo = join(root, "typo.json");
+    await writeFile(typo, JSON.stringify({ mode: "enfroced" }));
+    expect((await doctor(second, { MELRA_POLICY: typo })).checks.find((check) => check.name === "policy")?.status).toBe(
+      "fail",
+    );
+    // An empty MELRA_HOME is unset, not the working directory.
+    const emptyHome = await execute(process.execPath, [entry, "doctor"], {
+      cwd: second,
+      env: { ...process.env, MELRA_HOME: "", MELRA_WORKSPACE: "", MELRA_POLICY: "" },
+    }).catch((error: { stdout: string }) => error);
+    expect(
+      (JSON.parse(emptyHome.stdout) as { checks: Array<{ name: string; detail: string }> }).checks.find(
+        (check) => check.name === "data-directory",
+      )?.detail,
+    ).not.toBe(second);
+
+    // `setup` in projB writes projB, and a fresh shared policy names no workspace.
+    const fresh = join(root, "fresh-home");
+    const setup = await execute(process.execPath, [entry, "init", "--client", "claude"], {
+      cwd: second,
+      env: { ...process.env, MELRA_HOME: fresh, MELRA_WORKSPACE: "", MELRA_POLICY: "" },
+    });
+    const initialized = JSON.parse(setup.stdout) as {
+      policyPath: string;
+      config: { mcpServers: { melra: { env: Record<string, string> } } };
+    };
+    expect(initialized.config.mcpServers.melra.env.MELRA_WORKSPACE).toBe(second);
+    expect(JSON.parse(await readFile(initialized.policyPath, "utf8"))).not.toHaveProperty("workspaceRoot");
+  });
+
+  it("writes the operator's MELRA_POLICY into the client config, and refuses one that is missing", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-cli-policy-"));
+    roots.push(root);
+    const strict = join(root, "strict.json");
+    await writeFile(strict, JSON.stringify({ mode: "enforced" }));
+    const env = { ...process.env, MELRA_HOME: join(root, ".melra"), MELRA_WORKSPACE: root };
+    const result = await execute(process.execPath, [entry, "init", "--client", "claude"], {
+      cwd: root,
+      env: { ...env, MELRA_POLICY: strict },
+    });
+    const initialized = JSON.parse(result.stdout) as {
+      config: { mcpServers: { melra: { env: Record<string, string> } } };
+    };
+    expect(initialized.config.mcpServers.melra.env.MELRA_POLICY).toBe(strict);
+    await expect(
+      execute(process.execPath, [entry, "init", "--client", "claude"], {
+        cwd: root,
+        env: { ...env, MELRA_POLICY: join(root, "missing.json") },
+      }),
+    ).rejects.toThrow(/does not exist/);
+    // `--mode developer` does not loosen MELRA_MODE=enforced.
+    const doctor = await execute(process.execPath, [entry, "doctor", "--mode", "developer"], {
+      cwd: root,
+      env: { ...env, MELRA_MODE: "enforced", MELRA_POLICY: "" },
+    }).catch((error: { stdout: string }) => error);
+    expect((JSON.parse(doctor.stdout) as { mode: string }).mode).toBe("enforced");
+    // A file asking for both: the server refuses, naming the file, but the
+    // CLI still answers `help`.
+    const both = join(root, "both.json");
+    await writeFile(both, JSON.stringify({ mode: "enforced", unhinged: true }));
+    await execute(process.execPath, [entry, "help"], { cwd: root, env: { ...env, MELRA_POLICY: both } });
+  });
+
+  it("checks a server given the console URL that serve --http prints", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-cli-console-url-"));
+    roots.push(root);
+    const runtime = await createMelraRuntime({ workspaceRoot: root, dataDirectory: join(root, ".melra"), environment: {} });
+    const http = await serveHttp({ runtime, port: 0, token: "console-token", environment: {} });
+    try {
+      // `http://127.0.0.1:<port>/?token=...` used to become `/?token=.../mcp`.
+      const { report } = await runConformance({ url: http.url, claim: 1 });
+      expect(report.target).toMatchObject({ url: http.mcpUrl, authenticated: true });
+      expect(report.level).toBeGreaterThanOrEqual(1);
+    } finally {
+      await http.close();
+      await runtime.close();
+    }
   });
 
   it("plans, advances, inspects, and cancels a durable workflow", async () => {

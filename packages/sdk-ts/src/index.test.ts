@@ -1,6 +1,9 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { WorkflowDefinitionSchema } from "@melra/protocol";
 import { MelraClient, parseMelraToolResult } from "./index.js";
@@ -196,5 +199,40 @@ describe("TypeScript workflow SDK", () => {
       "taskId or receiptId is required",
     );
     expect(callTool).not.toHaveBeenCalled();
+  });
+});
+
+describe("TypeScript SDK stdio connect", () => {
+  it("passes where state and policy live, and not what would redirect or widen the server", async () => {
+    // A stand-in server that records what it was given and exits; connecting
+    // fails, which is fine, the spawn is what is under test.
+    const directory = mkdtempSync(join(tmpdir(), "melra-sdk-env-"));
+    const out = join(directory, "env.json");
+    const names = ["MELRA_MODE", "MELRA_SOCKET", "MELRA_UNHINGED", "MELRA_WORKSPACE"];
+    const previous = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+    Object.assign(process.env, {
+      MELRA_MODE: "enforced",
+      MELRA_SOCKET: join(directory, "s.sock"),
+      MELRA_UNHINGED: "1",
+      MELRA_WORKSPACE: "/elsewhere",
+    });
+    try {
+      const record = `require("fs").writeFileSync(${JSON.stringify(out)}, JSON.stringify(process.env))`;
+      await expect(
+        MelraClient.connect({ command: process.execPath, args: ["-e", record], cwd: directory }),
+      ).rejects.toThrow();
+      const seen = JSON.parse(readFileSync(out, "utf8")) as Record<string, string | undefined>;
+      expect(seen.MELRA_MODE).toBe("enforced");
+      expect(seen.MELRA_SOCKET).toBeUndefined();
+      expect(seen.MELRA_UNHINGED).toBeUndefined();
+      // `cwd` decides the workspace.
+      expect(seen.MELRA_WORKSPACE).toBeUndefined();
+    } finally {
+      for (const name of names) {
+        if (previous[name] === undefined) delete process.env[name];
+        else process.env[name] = previous[name];
+      }
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });
