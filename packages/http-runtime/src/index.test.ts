@@ -71,6 +71,17 @@ describe("http runtime", () => {
     expect(result.content).toBe('{"created":true}');
   });
 
+  it("reaches an IPv4-only server by name whichever family the resolver lists first", async () => {
+    // macOS answers `localhost` with ::1 before 127.0.0.1. Pinning only the
+    // first answer refused the connection; every checked answer is tried now.
+    const port = new URL(origin).port;
+    const result = await runtime().execute(
+      operation({ method: "GET", url: `http://localhost:${port}/hello` }),
+    );
+    expect(result.status).toBe(201);
+    expect(seen.headers.host).toBe(`localhost:${port}`);
+  });
+
   it("reports a failing status as an unsuccessful effect", async () => {
     const result = await runtime().execute(
       operation({ url: `${origin}/teapot` }),
@@ -156,6 +167,10 @@ describe("http runtime", () => {
     // not be parked for reconciliation.
     await expect(attempt).rejects.toThrow(/ECONNREFUSED/);
     await expect(attempt).rejects.not.toThrow(/effect_outcome_unknown/);
+    // By name, where every resolved address is tried and each one refuses.
+    await expect(
+      runtime().execute(operation({ method: "GET", url: `http://localhost:${port}/` })),
+    ).rejects.toThrow(/ECONNREFUSED/);
   });
 
   it("does not send a mutation down an idle connection the server has closed", async () => {

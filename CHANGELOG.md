@@ -39,6 +39,17 @@ All notable changes are documented here. The format follows
   arrives with the first trusted-publishing release. The GitHub release files
   and container images were attested all along.
 
+- An HTTP or browser request to `http://localhost:<port>` reaches a server that
+  listens only on 127.0.0.1, even where `localhost` resolves to `::1` first, as
+  it does on macOS. The destination check resolves every address and accepts
+  them all, but only the first was used, so the connection was refused. Every
+  checked address is now offered to the connection, still without resolving
+  the name a second time. Found by GovBench (`utility.http.get-localhost-name`).
+- HTTPS to an IPv6 literal (`https://[2606:4700:4700::1111]/`) passes
+  certificate verification. The bracketed host was sent as the TLS server
+  name, so the certificate's IP address never matched, and a credential scoped
+  to the address never applied.
+
 ## [0.3.0-alpha.12] - 2026-10-14
 
 ### Added

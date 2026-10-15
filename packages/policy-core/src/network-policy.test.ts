@@ -1,8 +1,20 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
+import type { LookupAddress } from "node:dns";
+import type { LookupFunction } from "node:net";
 import { describe, expect, it } from "vitest";
 import { assertSafeDestination, assertSafeUrl, isPrivateAddress } from "./network-policy.js";
+
+/** What a socket's happy-eyeballs connect would be offered. */
+function answers(lookup: LookupFunction, family?: 4 | 6): Promise<string[]> {
+  return new Promise((resolve, reject) => {
+    lookup("ignored", { all: true, ...(family === undefined ? {} : { family }) }, (error, found) => {
+      if (error) reject(error);
+      else resolve((found as LookupAddress[]).map((entry) => entry.address));
+    });
+  });
+}
 
 describe("browser network policy", () => {
   it("classifies private IPv4 and IPv6 destinations", () => {
@@ -42,14 +54,30 @@ describe("browser network policy", () => {
       );
     }
     // Loopback stays reachable when the policy allows localhost, as for IPv4.
-    await expect(
-      assertSafeDestination("http://[::1]:8080/", { ...policy, allowLocalhost: true }),
-    ).resolves.toMatchObject({ address: "::1" });
+    const loopback = await assertSafeDestination("http://[::1]:8080/", {
+      ...policy,
+      allowLocalhost: true,
+    });
+    expect(loopback.host).toBe("::1");
+    expect(await answers(loopback.lookup)).toEqual(["::1"]);
     // A public IPv6 literal is allowed, and pinned without brackets so a socket
     // can open it. No DNS lookup is involved.
-    await expect(
-      assertSafeDestination("https://[2606:4700:4700::1111]/", policy),
-    ).resolves.toMatchObject({ address: "2606:4700:4700::1111" });
+    const remote = await assertSafeDestination("https://[2606:4700:4700::1111]/", policy);
+    expect(remote.host).toBe("2606:4700:4700::1111");
+    expect(await answers(remote.lookup)).toEqual(["2606:4700:4700::1111"]);
+  });
+
+  it("pins every checked answer for a name, and only those", async () => {
+    const { host, lookup } = await assertSafeDestination("http://localhost:8080/", {
+      allowedDomains: ["*"],
+      allowLocalhost: true,
+    });
+    expect(host).toBe("localhost");
+    const pinned = await answers(lookup);
+    expect(pinned.length).toBeGreaterThan(0);
+    expect(pinned.every((address) => address === "::1" || address.startsWith("127."))).toBe(true);
+    // A socket asking for one family gets only that family's answers.
+    expect((await answers(lookup, 4)).every((address) => address.startsWith("127."))).toBe(true);
   });
 
   it("asserts nothing about the destination when unhinged", async () => {

@@ -1,7 +1,8 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
-import { isIP } from "node:net";
+import { isIP, type LookupFunction } from "node:net";
+import { lookup as dnsLookup } from "node:dns";
 import { lookup } from "node:dns/promises";
 
 function ipv4Number(address: string): number {
@@ -108,9 +109,28 @@ function domainAllowed(host: string, allowed: string[]): boolean {
  */
 export interface SafeDestination {
   url: URL;
-  /** The literal address to open the socket to: the host itself when it was
-   * already an IP, otherwise the resolver answer this check accepted. */
-  address: string;
+  /** The host to connect to: the name, or an IP literal without brackets. */
+  host: string;
+  /**
+   * A `lookup` for `net`/`http`/`https` that answers only with the addresses
+   * this check accepted, so the socket never resolves the name again. Every
+   * answer is offered, not just the first, so Node can fall back between them:
+   * `localhost` answering `::1` first must still reach a server that listens
+   * only on 127.0.0.1.
+   */
+  lookup: LookupFunction;
+}
+
+function pinnedLookup(addresses: readonly string[]): LookupFunction {
+  const answers = addresses.map((address) => ({ address, family: isIP(address) }));
+  return (_hostname, options, callback) => {
+    const family = { IPv4: 4, IPv6: 6 }[String(options.family)] ?? options.family;
+    const wanted = answers.filter((answer) => !family || answer.family === family);
+    if (wanted.length === 0) {
+      callback(Object.assign(new Error("destination_no_address"), { code: "ENOTFOUND" }), "", 0);
+    } else if (options.all) callback(null, wanted);
+    else callback(null, wanted[0]!.address, wanted[0]!.family);
+  };
 }
 
 /** The URL's host, lowercased, with an IPv6 literal's brackets removed. */
@@ -125,7 +145,7 @@ export async function assertSafeDestination(
   const url = new URL(rawUrl);
   // Unhinged mode still parses the URL — a value the browser cannot navigate to
   // is a bug either way — but asserts nothing about where it points.
-  if (policy.unhinged) return { url, address: url.hostname };
+  if (policy.unhinged) return { url, host: hostOf(url), lookup: dnsLookup };
   if (!["http:", "https:"].includes(url.protocol)) {
     throw new Error("destination_protocol_not_allowed");
   }
@@ -152,7 +172,7 @@ export async function assertSafeDestination(
     ) {
       throw new Error("destination_private_blocked");
     }
-    return { url, address: host };
+    return { url, host, lookup: pinnedLookup([host]) };
   }
   const addresses = await lookup(host, { all: true, verbatim: true });
   if (
@@ -165,9 +185,8 @@ export async function assertSafeDestination(
   ) {
     throw new Error("destination_private_blocked");
   }
-  // Every answer passed, so any of them is safe to pin; the first is the one the
-  // resolver preferred.
-  return { url, address: addresses[0]!.address };
+  // Every answer passed, so all of them are safe to pin, in the resolver's order.
+  return { url, host, lookup: pinnedLookup(addresses.map((item) => item.address)) };
 }
 
 export async function assertSafeUrl(
