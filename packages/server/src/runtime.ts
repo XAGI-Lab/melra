@@ -137,6 +137,20 @@ export function unconfinedRoot(from: string): string {
 }
 
 /**
+ * Whether a workspace holds the data directory, decided the way
+ * `createMelraRuntime` decides it before refusing enforced startup: by
+ * identity, along the data directory's path both as spelled and resolved, so
+ * `melra doctor` cannot disagree with the server it describes.
+ */
+export async function workspaceHoldsData(workspaceRoot: string, dataDirectory: string): Promise<boolean> {
+  const files = await FileRuntime.create({
+    root: workspaceRoot,
+    reserved: [join(dataDirectory, "payload.key")],
+  });
+  return files.holdsReserved(files.root);
+}
+
+/**
  * The root a server confines to, given the one it was started for and the one
  * a policy file names: the file's only when it lies inside the given root, so
  * an operator can narrow a workspace but no file can move it elsewhere. A

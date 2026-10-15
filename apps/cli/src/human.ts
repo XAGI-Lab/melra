@@ -71,6 +71,8 @@ export function nextStep(report: DoctorReport): string | undefined {
         return "point MELRA_WORKSPACE at a directory you can read and write";
       case "data-directory":
         return "point MELRA_HOME at a directory you can write";
+      case "data-location":
+        return "move MELRA_HOME outside MELRA_WORKSPACE";
       case "policy":
         return "fix the policy file's JSON, or unset MELRA_POLICY to use the defaults";
       case "socket":

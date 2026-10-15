@@ -162,6 +162,14 @@ describe("human doctor report", () => {
     expect(renderDoctor(clean).trimEnd().endsWith("Ready")).toBe(true);
   });
 
+  it("says to move a data directory out of the workspace, not to make it writable", () => {
+    const inside = report({
+      checks: [{ name: "data-location", status: "warn", detail: "/w/.melra is inside the workspace" }],
+      clients: [],
+    });
+    expect(nextStep(inside)).toBe("move MELRA_HOME outside MELRA_WORKSPACE");
+  });
+
   it("does not send a missing command round the setup loop", () => {
     const missing = report({
       clients: [

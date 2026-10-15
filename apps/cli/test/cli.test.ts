@@ -509,12 +509,16 @@ describe("melra CLI", () => {
     };
     await mkdir(join(root, "ws"));
     const data = (report: { checks: Array<{ name: string; status: string }> }) =>
-      report.checks.find((check) => check.name === "data-directory")?.status;
+      report.checks.find((check) => check.name === "data-location")?.status;
     // Inside, spelled through a link: still inside.
     await symlink(join(root, "ws"), join(root, "alias"));
     const inside = await doctorWith({ MELRA_HOME: join(root, "alias", ".melra") });
     expect(data(inside)).toBe("warn");
     expect(inside.ready).toBe(true);
+    // Spelled inside, leading out: the server counts it as inside, and so does doctor.
+    await mkdir(join(root, "elsewhere"));
+    await symlink(join(root, "elsewhere"), join(root, "ws", "out"));
+    expect(data(await doctorWith({ MELRA_HOME: join(root, "ws", "out") }))).toBe("warn");
     const enforced = await doctorWith({ MELRA_HOME: join(root, "ws", ".melra"), MELRA_MODE: "enforced" });
     expect(data(enforced)).toBe("fail");
     expect(enforced.ready).toBe(false);

@@ -2,7 +2,7 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
-import { access, lstat, mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import { spawn } from "node:child_process";
 import { basename, dirname, join, resolve } from "node:path";
@@ -32,6 +32,7 @@ import {
   clientPrincipal,
   serveStdio,
   unconfinedRoot,
+  workspaceHoldsData,
   type MelraRuntime,
 } from "@melra/server";
 import { detectBrowserExecutable } from "@melra/browser-runtime";
@@ -483,17 +484,6 @@ async function socketCheck(path: string): Promise<{
       };
 }
 
-/** Whether `inner`, followed through links, is `outer` or inside it, by identity. */
-async function holds(outer: string, inner: string): Promise<boolean> {
-  const target = await stat(outer, { bigint: true }).catch(() => undefined);
-  if (target === undefined) return false;
-  for (let current = await realpath(inner); ; current = dirname(current)) {
-    const found = await stat(current, { bigint: true });
-    if (found.dev === target.dev && found.ino === target.ino) return true;
-    if (dirname(current) === current) return false;
-  }
-}
-
 async function doctor(env: CliEnvironment): Promise<{
   report: DoctorReport;
   failed: boolean;
@@ -548,16 +538,25 @@ async function doctor(env: CliEnvironment): Promise<{
   try {
     await mkdir(env.dataDirectory, { recursive: true });
     await access(env.dataDirectory, constants.R_OK | constants.W_OK);
-    checks.push(
-      (await holds(env.workspaceRoot, env.dataDirectory))
-        ? {
-            name: "data-directory",
-            // The server refuses to start this way in enforced mode.
-            status: env.mode === "enforced" ? "fail" : "warn",
-            detail: `${env.dataDirectory} is inside the workspace, where a recursive read reaches payload.key without naming it; move MELRA_HOME outside MELRA_WORKSPACE`,
-          }
-        : { name: "data-directory", status: "pass", detail: env.dataDirectory },
-    );
+    checks.push({
+      name: "data-directory",
+      status: "pass",
+      detail: env.dataDirectory,
+    });
+    // Only once both are known to exist: the check would create a missing workspace.
+    if (checks.some((check) => check.name === "workspace" && check.status === "pass")) {
+      const inside = await workspaceHoldsData(env.workspaceRoot, env.dataDirectory);
+      checks.push(
+        inside
+          ? {
+              name: "data-location",
+              // The server refuses to start this way in enforced mode.
+              status: env.mode === "enforced" ? "fail" : "warn",
+              detail: `${env.dataDirectory} is inside the workspace, where a recursive read reaches payload.key without naming it`,
+            }
+          : { name: "data-location", status: "pass", detail: "outside the workspace" },
+      );
+    }
   } catch {
     checks.push({
       name: "data-directory",
