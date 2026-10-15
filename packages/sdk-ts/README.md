@@ -40,6 +40,8 @@ const task = await melra.plan({
 const approval = task.approval as
   | { approvalId: string; phrase?: string }
   | undefined;
+// In enforced mode this waits on the operator: until `melra approve` records a
+// decision it fails with approval_awaiting_operator, so call it again then.
 const result = await melra.execute(
   task.id as string,
   approval?.phrase === undefined

@@ -771,11 +771,12 @@ closing every door it owns:
 - **Only an operator approves.** A challenge carries no phrase, so the agent
   is handed nothing to echo, and `melra_execute` refuses any approval it is
   sent with `approval_in_band_refused`. A mutation runs only on a decision an
-  operator recorded with [`melra approve`](#approving-from-the-command-line)
-  from a process in enforced mode; until then the answer is
-  `approval_awaiting_operator`, and `approval_expired` once the challenge has
-  expired, which means plan the task again. A developer-mode `melra approve`
-  on such a task records nothing and fails with `approval_needs_enforced_mode`.
+  operator recorded from a process in enforced mode, with
+  [`melra approve`](#approving-from-the-command-line) or `melra run`'s prompt
+  in a terminal; until then the answer is `approval_awaiting_operator`, and
+  `approval_expired` once the challenge has expired, which means plan the task
+  again. A developer-mode `melra approve` on a task with no phrase records
+  nothing and fails with `approval_needs_enforced_mode`.
 - **Every receipt says `enforced`.** `ActionReceipt.mode` records it, and
   `melra_capabilities` publishes `policy.mode`, so an auditor never has to infer
   whether an effect was governed by the only door or by one of several.
@@ -819,12 +820,20 @@ default), when, and the digest of what they were shown. In enforced mode the
 channel is `out_of_band`; in developer mode it is `in_band`, because there the
 agent may hold the same access. `melra run` asks the same way in a terminal.
 
-In enforced mode this is the only way a mutation gets approved: the agent is
+In enforced mode an operator's decision, recorded this way or through
+`melra run`'s prompt, is the only way a mutation gets approved: the agent is
 given no phrase, and one it sends is refused. Run `melra approve` in enforced
 mode too (`MELRA_MODE=enforced` or `--mode enforced`). A developer-mode
-`melra approve` on a task an enforced kernel planned is refused with
+`melra approve` on a task with no phrase is refused with
 `approval_needs_enforced_mode` and records nothing, because the enforced kernel
 would not run on its in-band decision and a task has only one.
+
+Tasks planned before an upgrade to enforced refusal, or by a developer-mode
+process, keep their phrase and their stored expiry. Echoing that phrase is
+refused in enforced mode, and a developer-mode `melra approve` on such a task
+still records an in-band decision the enforced kernel ignores: a workflow
+plans the step again once the challenge expires, and a single task needs
+`melra approve --deny` and planning again.
 
 ## Unsafe-local mode
 

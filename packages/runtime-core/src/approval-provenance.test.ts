@@ -330,6 +330,40 @@ describe("enforced mode refuses in-band approval", () => {
     expect(run.status).toBe("verified_complete");
     expect(store.getTask(taskId!)?.approvedBy?.channel).toBe("out_of_band");
   });
+
+  it("refuses an in-band workflow approval before any sibling moves", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const { tasks, store, cipher } = await setup({ mode: "enforced", approvalTtlMs: 1_000 });
+    const workflows = new WorkflowController(store, tasks, cipher);
+    const planned = workflows.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: "77777777-7777-4777-8777-777777777777",
+        version: 1,
+        name: "Two gates",
+        nodes: [
+          { id: "a", type: "operation", request: put("a") },
+          { id: "b", type: "operation", request: put("b") },
+        ],
+      }),
+    );
+    const waiting = (await workflows.advance(planned.id)).run;
+    const [a] = waiting.nodes.a!.taskIds;
+    const [b] = waiting.nodes.b!.taskIds;
+    // Both challenges lapse, so the next advance would plan both nodes again.
+    vi.advanceTimersByTime(2_000);
+    await expect(workflows.advance(planned.id, [forge(store.getTask(b!)!)])).rejects.toThrow(
+      "approval_in_band_refused",
+    );
+    // Refused before the wave: `a` was neither cancelled nor planned again,
+    // which, with the wave's transition thrown away, would have stranded it.
+    expect(store.getTask(a!)?.status).toBe("awaiting_approval");
+    expect(store.listTasks()).toHaveLength(2);
+    const next = (await workflows.advance(planned.id)).run;
+    expect(next.nodes.a!.status).toBe("awaiting_approval");
+    // And the next advance, with nothing sent, plans it again as it should.
+    expect(next.nodes.a!.taskIds).not.toContain(a);
+  });
 });
 
 const charge = () =>

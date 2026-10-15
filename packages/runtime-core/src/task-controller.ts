@@ -170,6 +170,11 @@ export class TaskController {
 
   private readonly breaker: CircuitBreaker;
 
+  /** Whether approvals come only from an operator, out of band. */
+  get enforced(): boolean {
+    return this.policy.mode === "enforced";
+  }
+
   constructor(
     private readonly store: SqliteStore,
     private readonly policy: LocalPolicy,

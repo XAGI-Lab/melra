@@ -111,7 +111,8 @@ minus `src/**/*.test.ts`, so tests never reach `dist/` or the tarball) and its
 `TaskRecord`, and — for mutations — returns a task-scoped, expiring approval challenge. In
 developer mode its exact phrase must be echoed back; in enforced mode it has no phrase,
 `melra_execute` refuses any approval the caller sends (`approval_in_band_refused`), and
-only an `out_of_band` decision recorded by `melra approve` lets it run
+only an `out_of_band` decision recorded by an enforced-mode process (`melra approve`, or
+`melra run`'s prompt) lets it run
 (`approval_awaiting_operator` until then). `melra_execute` **re-evaluates policy** so a stale plan
 cannot ride a since-tightened policy, validates the approval, runs the adapter under an
 `AbortSignal` armed with `budget.maxDurationMs`, then verifies.

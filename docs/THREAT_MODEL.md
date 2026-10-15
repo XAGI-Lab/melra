@@ -89,7 +89,7 @@ and what lets the mutation run, depends on the
 | | Developer mode | Enforced mode |
 |---|---|---|
 | Phrase in the challenge | yes: `APPROVE` plus the first 12 hex digits of the action digest | none |
-| What lets a mutation run | the phrase echoed to `melra_execute`, or a decision recorded with [`melra approve`](INSTALLATION.md#approving-from-the-command-line) | only a decision recorded with `melra approve` by a process in enforced mode |
+| What lets a mutation run | the phrase echoed to `melra_execute`, or a decision recorded with [`melra approve`](INSTALLATION.md#approving-from-the-command-line) | only an operator's decision recorded by a process in enforced mode (`melra approve`, or `melra run`'s prompt in a terminal) |
 | An approval the agent sends | checked against the phrase | refused (`approval_in_band_refused`), even when an operator has already decided |
 | No usable decision yet | `approval_required` | `approval_awaiting_operator`, or `approval_expired` once the challenge has expired |
 | Channel on the receipt | `in_band` | `out_of_band` |

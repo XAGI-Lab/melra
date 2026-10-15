@@ -636,6 +636,11 @@ describe("MELRA over real stdio transport", () => {
       const held = await call("write_file", { path: "h.txt", content: "x" });
       expect(held.value.status).toBe("approval_required");
       expect((await call("approve", { taskId: held.value.taskId, phrase: "APPROVE 000000000000" })).ok).toBe(false);
+      // The call an agent makes in enforced mode takes no phrase, over the real
+      // transport and its schema, and waits for the operator.
+      const early = await call("approve", { taskId: held.value.taskId });
+      expect(early.ok).toBe(false);
+      expect(early.text).toContain("approval_awaiting_operator");
 
       // The operator: another process on the same data directory.
       const operator = await createMelraRuntime({
@@ -645,9 +650,14 @@ describe("MELRA over real stdio transport", () => {
       });
       try {
         operator.controller.decide(taskId, operator.controller.approvalView(taskId).renderDigest, "cli:e2e");
+        const heldId = String(held.value.taskId);
+        operator.controller.decide(heldId, operator.controller.approvalView(heldId).renderDigest, "cli:e2e");
       } finally {
         await operator.close();
       }
+      const approved = await call("approve", { taskId: held.value.taskId });
+      expect(approved.ok).toBe(true);
+      expect(approved.value.status).toBe("verified_success");
       const executed = await call("melra_execute", { taskId });
       expect(executed.value).toMatchObject({ task: { status: "verified_success" } });
       const receipt = await call("melra_receipt", { taskId });

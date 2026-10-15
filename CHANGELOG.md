@@ -60,9 +60,11 @@ All notable changes are documented here. The format follows
   and needs an out-of-band approver: the suite runs its own `melra approve`
   when it spawned the server, and stops at L2 against `--url`. Developer-mode
   conformance is unchanged at 14 checks. A developer-mode `melra approve` on a
-  task an enforced kernel planned is refused (`approval_needs_enforced_mode`)
-  and records nothing. 0.3.0-alpha.12 and earlier cannot read back a workflow
-  that reached an approval in enforced mode, so do not downgrade past one.
+  task with no phrase is refused (`approval_needs_enforced_mode`) and records
+  nothing. Tasks planned before the upgrade keep their phrase and stored expiry;
+  echoing it is refused, and a developer-mode decision on one is ignored until
+  it expires. 0.3.0-alpha.12 and earlier cannot read back a workflow that
+  reached an approval in enforced mode, so do not downgrade past one.
 
 - In enforced mode an approval challenge stays open for 30 minutes by default,
   not 5: an operator approves out of band, with `melra approve`, and needs the
@@ -218,9 +220,10 @@ All notable changes are documented here. The format follows
 - In enforced mode an approval challenge carries no phrase, so the agent is
   handed nothing to echo, and any approval it sends to `melra_execute`, the
   harness `approve` tool or `melra_workflow_advance` is refused
-  (`approval_in_band_refused`), even after an operator has decided. Only a
-  decision recorded in enforced mode by `melra approve` (`out_of_band`) runs
-  the effect; until then the answer is `approval_awaiting_operator`, or
+  (`approval_in_band_refused`), even after an operator has decided, and a
+  workflow advance carrying one is refused before any node moves. Only an
+  operator's decision recorded in enforced mode (`melra approve`, or
+  `melra run`'s prompt; `out_of_band`) runs the effect; until then the answer is `approval_awaiting_operator`, or
   `approval_expired` once the challenge has expired. An `in_band` decision row
   counts as none in enforced mode. `validateApproval` also refuses a challenge
   with no phrase, where an in-process `phrase: undefined` used to match it.
