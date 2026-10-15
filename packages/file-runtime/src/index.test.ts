@@ -115,6 +115,46 @@ describe("FileRuntime", () => {
     expect((await run({ action: "read", path: ".melra/notes.txt" })).content).toBe("fine");
   });
 
+  it("knows the reserved files by where they are, not how they are spelled", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-file-"));
+    roots.push(root);
+    // Named before the data directory exists, through the unresolved tmpdir
+    // spelling (on macOS /var, which is really /private/var).
+    const data = join(root, ".melra");
+    const runtime = await FileRuntime.create({
+      root,
+      reserved: [join(data, "melra.sqlite"), join(data, "melra.sqlite-journal")],
+    });
+    await mkdir(data);
+    await writeFile(join(data, "melra.sqlite"), "db");
+    const run = (operation: Record<string, unknown>) =>
+      runtime.execute(FileOperationSchema.parse({ kind: "file", ...operation }));
+    await expect(run({ action: "read", path: ".melra/melra.sqlite" })).rejects.toThrow("path_reserved");
+    // The same file on a case-insensitive disk, and one that does not exist yet.
+    await expect(run({ action: "read", path: ".melra/MELRA.sqlite" })).rejects.toThrow(/path_reserved|ENOENT/);
+    await expect(
+      run({ action: "write", path: ".melra/MELRA.SQLITE-JOURNAL", content: "x" }),
+    ).rejects.toThrow("path_reserved");
+  });
+
+  it.skipIf(process.platform !== "darwin")("sees a reserved file through a macOS firmlink", async () => {
+    // /System/Volumes/Data/<path> is the same directory as <path>, and realpath
+    // keeps whichever spelling it was given.
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-file-")));
+    roots.push(root);
+    await writeFile(join(root, "payload.key"), "secret");
+    const runtime = await FileRuntime.create({ root: "/", reserved: [join(root, "payload.key")] });
+    await expect(
+      runtime.execute(
+        FileOperationSchema.parse({
+          kind: "file",
+          action: "read",
+          path: join("/System/Volumes/Data", root, "payload.key"),
+        }),
+      ),
+    ).rejects.toThrow("path_reserved");
+  });
+
   it("blocks traversal and escaping symlinks", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-file-"));
     const outside = await mkdtemp(join(tmpdir(), "melra-outside-"));

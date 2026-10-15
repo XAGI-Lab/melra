@@ -79,10 +79,11 @@ describe("task ownership", () => {
     const c = open(path);
     const id = "8d1f0f8e-6c1b-4f43-9f55-6c0a3e7d0a01";
     a.saveTask(task(id, "running"), a.ownerId());
+    a.inFlight.add(id);
 
     expect(b.claimInterruptedTask(id)).toBeUndefined();
     expect(c.claimInterruptedTask(id)).toBeUndefined();
-    // Its own task is not abandoned either.
+    // Its own task, while in flight, is not abandoned either.
     expect(a.claimInterruptedTask(id)).toBeUndefined();
     const lock = join(`${path}-owners`, a.ownerId());
     expect(existsSync(lock)).toBe(true);
@@ -115,13 +116,15 @@ describe("task ownership", () => {
     expect(store.claimInterruptedTask("8d1f0f8e-6c1b-4f43-9f55-6c0a3e7d0a04")).toBeUndefined();
   });
 
-  it("takes back its own task only when asked to", () => {
+  it("takes back its own task once nothing has it in flight", () => {
     const store = open(database());
     const id = "8d1f0f8e-6c1b-4f43-9f55-6c0a3e7d0a07";
     store.saveTask(task(id, "running"), store.ownerId());
+    store.inFlight.add(id);
     expect(store.claimInterruptedTask(id)).toBeUndefined();
-    // The caller knows nothing in this process is still working on it.
-    expect(store.claimInterruptedTask(id, true)?.id).toBe(id);
+    // Orphaned in this live process, say by a final write that failed.
+    store.inFlight.delete(id);
+    expect(store.claimInterruptedTask(id)?.id).toBe(id);
   });
 
   it("clears out lock files their processes left, and only those", () => {

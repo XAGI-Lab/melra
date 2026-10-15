@@ -152,8 +152,6 @@ export function capabilityUsageReader(store: SqliteStore): CapabilityUsageReader
 
 export class TaskController {
   private readonly active = new Map<string, AbortController>();
-  /** Tasks a recovery pass in this process has claimed and not yet settled. */
-  private readonly recovering = new Set<string>();
 
   private readonly breaker: CircuitBreaker;
 
@@ -370,6 +368,7 @@ export class TaskController {
 
     const controller = new AbortController();
     this.active.set(task.id, controller);
+    this.store.inFlight.add(task.id);
     task.status = "running";
     task.updatedAt = now();
     // Status and owner land in one write, so no running row is ever unowned.
@@ -557,6 +556,7 @@ export class TaskController {
     } finally {
       if (timeout !== undefined) clearTimeout(timeout);
       this.active.delete(task.id);
+      this.store.inFlight.delete(task.id);
       if (rechecked.grantId !== undefined) this.reserved.get(rechecked.grantId)?.delete(task.id);
     }
   }
@@ -743,24 +743,27 @@ export class TaskController {
 
   async recoverInterrupted(): Promise<TaskRecord[]> {
     const recovered: TaskRecord[] = [];
+    const failures: unknown[] = [];
     for (const listed of this.store.listInterruptedTasks()) {
       // Only tasks whose owning process is gone, and only once: a live peer's
       // work is left to finish. This process's own rows are taken too when
-      // nothing here is working on them, so a task whose final write failed,
+      // nothing here has them in flight, so a task whose final write failed,
       // or whose recovery threw after the claim, is retried by the next pass
       // instead of waiting for a restart.
-      const task = this.store.claimInterruptedTask(
-        listed.id,
-        !this.active.has(listed.id) && !this.recovering.has(listed.id),
-      );
+      const task = this.store.claimInterruptedTask(listed.id);
       if (task === undefined) continue;
-      this.recovering.add(task.id);
+      this.store.inFlight.add(task.id);
       try {
         recovered.push(await this.recoverTask(task));
+      } catch (error) {
+        // One task that cannot be recovered must not keep the rest waiting;
+        // the failure is still reported once every task has had its turn.
+        failures.push(error);
       } finally {
-        this.recovering.delete(task.id);
+        this.store.inFlight.delete(task.id);
       }
     }
+    if (failures.length > 0) throw failures[0];
     return recovered;
   }
 

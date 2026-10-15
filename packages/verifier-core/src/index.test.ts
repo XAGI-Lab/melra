@@ -71,7 +71,9 @@ describe("Verifier", () => {
     const root = await mkdtemp(join(tmpdir(), "melra-verifier-"));
     roots.push(root);
     await writeFile(join(root, "melra.sqlite"), "db");
-    const verifier = await Verifier.create(root, { reserved: [join(root, "melra.sqlite")] });
+    const verifier = await Verifier.create(root, {
+      reserved: async (path) => path.endsWith("melra.sqlite"),
+    });
     const hashed = await verifier.verify(
       [{ type: "file_hash", path: "melra.sqlite", sha256: "0".repeat(64) }],
       {},

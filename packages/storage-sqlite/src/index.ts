@@ -120,6 +120,12 @@ export class SqliteStore {
   // Held as a field on purpose: a garbage-collected handle would drop the lock
   // and make this live process look dead to every other one.
   private owner?: { id: string; lock?: DatabaseSync; file?: string };
+  /**
+   * Tasks something in this process is executing or recovering through this
+   * store. Ownership is per store, so this is too: a row this store owns that
+   * is not in here was orphaned by a write that failed, and may be taken back.
+   */
+  readonly inFlight = new Set<string>();
 
   /**
    * `readOnly` is for observers (`melra tasks`, `status`, `watch`) that sit
@@ -437,19 +443,17 @@ export class SqliteStore {
   /**
    * Takes over a running or verifying task whose owner is gone, or returns
    * undefined. The compare-and-set on the owner means that of two recoverers
-   * only one gets the task, and a live owner's task is never handed out.
-   * `own` also takes this store's own rows, for a caller that knows nothing in
-   * this process is still working on them.
+   * only one gets the task, and a live owner's task is never handed out. This
+   * store's own rows count as abandoned when nothing here has them in flight.
    */
-  claimInterruptedTask(id: string, own = false): TaskRecord | undefined {
+  claimInterruptedTask(id: string): TaskRecord | undefined {
     const row = this.database
       .prepare("SELECT owner FROM tasks WHERE id = ?")
       .get(id) as { owner: string | null } | undefined;
+    const orphaned = row?.owner === this.owner?.id && !this.inFlight.has(id);
     if (
       row === undefined ||
-      (row.owner !== null &&
-        !(own && row.owner === this.owner?.id) &&
-        this.ownerAlive(row.owner))
+      (row.owner !== null && !orphaned && this.ownerAlive(row.owner))
     ) {
       return undefined;
     }

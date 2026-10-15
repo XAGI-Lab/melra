@@ -333,7 +333,7 @@ export async function createMelraRuntime(
     http,
   );
   const verifier = await Verifier.create(runtimeRoot, {
-      reserved,
+      reserved: (path) => files.isReserved(path),
       ...(options.evidenceVerifiers === undefined ? {} : { verifiers: options.evidenceVerifiers }),
       // The same adapter the effects go through, so a verification request is
       // checked against the destination boundary, the allowlist, and the

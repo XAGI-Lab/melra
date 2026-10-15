@@ -236,6 +236,46 @@ describe("task recovery that does not finish", () => {
     expect(recovered).toMatchObject({ id: task.id, status: "recovery_required" });
   });
 
+  it("does not let one task it cannot recover hold up the others", async () => {
+    const at = await home();
+    const adapter = held();
+    const a = await side(at, adapter.execute);
+    const b = await side(at);
+    const [stuck, fine] = [a.tasks.plan(put("stuck")), a.tasks.plan(put("fine"))];
+    void a.tasks.execute(stuck.id, approve(stuck)).catch(() => undefined);
+    await adapter.entered.opened;
+    void a.tasks.execute(fine.id, approve(fine)).catch(() => undefined);
+    await vi.waitFor(() => expect(a.adapter).toHaveBeenCalledTimes(2));
+    a.store.close();
+    // Unreadable however often it is retried: listed first, failing first.
+    b.store.deleteTaskPayload(stuck.id);
+
+    for (let pass = 0; pass < 2; pass += 1) {
+      await expect(b.tasks.recoverInterrupted()).rejects.toThrow("task_payload_not_found");
+    }
+    expect(b.store.getTask(fine.id)?.status).toBe("recovery_required");
+  });
+
+  it("does not take a task another controller on the same store is running", async () => {
+    const at = await home();
+    const adapter = held();
+    const a = await side(at, adapter.execute);
+    const task = a.tasks.plan(put("ledger"));
+    const running = a.tasks.execute(task.id, approve(task));
+    await adapter.entered.opened;
+    // Ownership belongs to the store, so whatever else uses it must see this.
+    const other = new TaskController(
+      a.store,
+      createDefaultPolicy(at.root),
+      { execute: async () => ({ success: true, stored: true }) },
+      a.verifier,
+      new PayloadCipher(Buffer.alloc(32, 41)),
+    );
+    expect(await other.recoverInterrupted()).toEqual([]);
+    adapter.release.open();
+    expect((await running).task.status).toBe("verified_success");
+  });
+
   it("recovers its own task whose last writes failed, without a restart", async () => {
     const at = await home();
     const a = await side(at);

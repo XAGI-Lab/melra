@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { lstat, realpath, stat } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { EvidencePredicate } from "@melra/protocol";
 import { evidenceStrength, type EvidenceItem } from "@melra/receipt-schema";
 
@@ -302,10 +302,11 @@ export interface VerifierOptions {
    */
   verifiers?: ReadonlyArray<RegisteredVerifier>;
   /**
-   * Files no predicate may open, even inside the root: the ones MELRA itself
-   * holds locked. Closing a descriptor to one would drop this process's lock.
+   * Whether a path is one no predicate may open, even inside the root: the
+   * files MELRA itself holds locked, since closing a descriptor to one drops
+   * this process's lock. The runtime passes the file runtime's own check.
    */
-  reserved?: string[];
+  reserved?: (path: string) => Promise<boolean>;
 }
 
 export class Verifier {
@@ -315,7 +316,7 @@ export class Verifier {
     readonly root: string,
     private readonly probe: EvidenceProbe | undefined,
     extra: ReadonlyArray<RegisteredVerifier>,
-    private readonly reserved: string[] = [],
+    private readonly reserved?: (path: string) => Promise<boolean>,
   ) {
     for (const verifier of BUILT_IN) this.verifiers.set(verifier.type, verifier);
     for (const verifier of extra) {
@@ -368,12 +369,7 @@ export class Verifier {
     root: string,
     options: VerifierOptions = {},
   ): Promise<Verifier> {
-    const reserved = await Promise.all(
-      (options.reserved ?? []).map(async (path) =>
-        join(await realpath(dirname(path)).catch(() => resolve(dirname(path))), basename(path)),
-      ),
-    );
-    return new Verifier(await realpath(root), options.probe, options.verifiers ?? [], reserved);
+    return new Verifier(await realpath(root), options.probe, options.verifiers ?? [], options.reserved);
   }
 
   private async filePath(input: string): Promise<string> {
@@ -385,7 +381,7 @@ export class Verifier {
     if (!inside(this.root, actual)) {
       throw new Error("verification_path_outside_workspace");
     }
-    if (this.reserved.some((path) => inside(path, actual))) {
+    if ((await this.reserved?.(actual)) === true) {
       throw new Error("verification_path_reserved");
     }
     return actual;
