@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BrowserOperationSchema } from "@melra/protocol";
 import { afterEach, describe, expect, it } from "vitest";
-import { BrowserRuntime, detectBrowserExecutable } from "./index.js";
+import { BrowserRuntime, detectBrowserExecutable, pageAddress } from "./index.js";
 
 const PAGE = `<!doctype html><html><head><title>untouched</title></head><body>
   <button id="pay" onclick="document.title = 'paid'">Pay</button>
@@ -22,6 +22,13 @@ afterEach(async () => {
 });
 
 describe("a url on an action that does not navigate", () => {
+  it("compares the way Chrome and every supported Node spell a path", () => {
+    expect(pageAddress("http://h/a|b?q#f")).toBe(pageAddress("http://h/a%7Cb"));
+    expect(pageAddress("http://h/a^b")).toBe(pageAddress("http://h/a%5Eb"));
+    // Nothing decoded: paths a server tells apart stay apart.
+    expect(pageAddress("http://h/p%25FF")).not.toBe(pageAddress("http://h/p%FF"));
+  });
+
   it("is the page the action must be on, or it does not happen", { timeout: 120_000 }, async () => {
     const executablePath = await detectBrowserExecutable();
     if (executablePath === undefined) return;
@@ -56,8 +63,9 @@ describe("a url on an action that does not navigate", () => {
       // The page it names, as policy names it: query and fragment aside.
       await run({ action: "click", target: { selector: "#pay" }, url: `${origin}/shop?from=cart#top` });
       expect(await title()).toBe("paid");
-      // Spelled as Node spells it, though Chrome reports these escaped.
-      for (const path of ["/a|b", "/a^b", "/a`b{c}"]) {
+      // Spelled as Node spells it, though Chrome reports these escaped (`^`
+      // differs only on Node 22; the unit test below covers it everywhere).
+      for (const path of ["/a|b", "/a^b"]) {
         await run({ action: "navigate", url: `${origin}${path}` });
         await run({ action: "click", target: { selector: "#pay" }, url: `${origin}${path}` });
       }

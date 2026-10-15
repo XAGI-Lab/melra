@@ -176,19 +176,17 @@ export function inputSent(error: unknown): boolean {
 
 /**
  * A URL as policy names a browser target, without query or fragment. Chrome
- * escapes some path characters Node's URL keeps (`|`, and `^` on Node 22), so
- * every character URL parsers disagree on is escaped on both sides. Nothing is
- * decoded: no two paths a server tells apart compare equal, and no escape
- * becomes a raw character in a message.
+ * escapes two path characters Node's URL can keep raw: `|` on every Node, `^`
+ * on Node 22. Both are escaped on both sides. Nothing is decoded: no two paths
+ * a server tells apart compare equal, and no escape becomes a raw character in
+ * a message. Exported for unit testing.
  */
-function pageAddress(url: string): string {
+export function pageAddress(url: string): string {
   try {
     const parsed = new URL(url);
     parsed.search = "";
     parsed.hash = "";
-    return parsed
-      .toString()
-      .replace(/[ "<>^`{|}]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
+    return parsed.toString().replaceAll("|", "%7C").replaceAll("^", "%5E");
   } catch {
     return url;
   }
