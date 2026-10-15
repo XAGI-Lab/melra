@@ -109,6 +109,11 @@ export const BrowserOperationSchema = z
       "tab_switch",
       "close",
     ]),
+    /**
+     * Where `navigate` and `tab_new` go. On any other action, the page it acts
+     * on (the active page, or the tab `close` and `tab_switch` name): refused
+     * when that page is elsewhere as the action starts.
+     */
     url: z.string().url().max(8_192).optional(),
     target: BrowserTargetSchema.optional(),
     value: z.string().max(100_000).optional(),
