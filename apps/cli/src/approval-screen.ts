@@ -55,11 +55,11 @@ function bounded(text: string, limit = 160): string {
  * Every operation schema is strict, so its top-level fields are a fixed set.
  * Each list or record (args, env, headers, values, fields, filePaths) shows
  * whole entries from both ends, the first and last always, within its own
- * budget of lines, and says how many entries it left out: no number of entries
- * in one field can crowd out another, and no entry is shown in part. The plain
- * values (a url, a cwd, a destination, a typed value) come last, in full, right
- * above the effect: there are at most a schema's worth of them, so nothing an
- * agent pads can push them away from the question.
+ * budget of lines, and says how many entries it left out, so no entry is shown
+ * in part. Fields then print tallest first: how far a field sits from the
+ * question depends only on the fields no taller than it, so padding one field
+ * moves only that field away. Plain values (a url, a cwd, a typed value) and
+ * small objects (a browser target) end up right above the effect.
  */
 function operationLines(operation: unknown, fieldLimit = 8): string[] {
   const leaf = (path: string, value: unknown): string =>
@@ -77,44 +77,46 @@ function operationLines(operation: unknown, fieldLimit = 8): string[] {
     }
     return into;
   };
-  if (operation === null || typeof operation !== "object") return operation === undefined ? [] : [leaf("operation", operation)];
-  const plain: string[] = [];
-  const grouped: string[] = [];
-  for (const [field, value] of Object.entries(operation)) {
-    if (value === null || typeof value !== "object") {
-      plain.push(leaf(field, value));
-      continue;
-    }
+  const summarise = (field: string, value: unknown): string[] => {
+    if (value === null || typeof value !== "object") return [leaf(field, value)];
     const entries = Array.isArray(value)
       ? value.map((item, index) => leaves(item, `${field}[${index}]`, []))
       : Object.entries(value).map(([key, item]) => leaves(item, `${field}.${key}`, []));
-    if (entries.length === 0) {
-      grouped.push(`${bounded(field, 60)}: ${Array.isArray(value) ? "[]" : "{}"}`);
-      continue;
-    }
-    // Whole entries, alternately from each end, while they fit.
+    if (entries.length === 0) return [`${bounded(field, 60)}: ${Array.isArray(value) ? "[]" : "{}"}`];
+    // Whole entries, alternately from each end, while they fit; when one end's
+    // next entry does not, the other end goes on alone.
     let head = 1;
     let tail = entries.length > 1 ? 1 : 0;
     let used = entries[0]!.length + (tail === 1 ? entries.at(-1)!.length : 0);
-    while (head + tail < entries.length) {
-      const fromHead = head <= tail;
+    let headOpen = true;
+    let tailOpen = true;
+    while (head + tail < entries.length && (headOpen || tailOpen)) {
+      const fromHead = headOpen && (!tailOpen || head <= tail);
       const next = entries[fromHead ? head : entries.length - 1 - tail]!;
-      if (used + next.length > fieldLimit) break;
+      if (used + next.length > fieldLimit) {
+        if (fromHead) headOpen = false;
+        else tailOpen = false;
+        continue;
+      }
       used += next.length;
       if (fromHead) head += 1;
       else tail += 1;
     }
     const hidden = entries.slice(head, entries.length - tail);
-    grouped.push(
+    return [
       ...entries.slice(0, head).flat(),
       // A note as tall as what it stands for saves nothing: show that instead.
       ...(hidden.flat().length <= 1
         ? hidden.flat()
         : [`…(+${hidden.length} more ${bounded(field, 60)} entries, all in the JSON above)`]),
       ...entries.slice(entries.length - tail).flat(),
-    );
-  }
-  return [...grouped, ...plain];
+    ];
+  };
+  if (operation === null || typeof operation !== "object") return operation === undefined ? [] : [leaf("operation", operation)];
+  return Object.entries(operation)
+    .map(([field, value]) => summarise(field, value))
+    .sort((a, b) => b.length - a.length)
+    .flat();
 }
 
 /**

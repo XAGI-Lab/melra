@@ -368,6 +368,23 @@ describe("melra CLI", () => {
     expect(form).toContain('fields[0].value: "attacker@evil.example"');
     expect(form).toContain('fields[6].target.selector: "#amount"');
     expect(form).toContain("…(+5 more fields entries, all in the JSON above)");
+    // An entry too tall for the budget at one end does not stop the other end.
+    const uneven = summary(
+      "browser.fill_form",
+      "form",
+      BrowserOperationSchema.parse({
+        kind: "browser",
+        action: "fill_form",
+        fields: [
+          { target: { selector: "#user" }, value: "bob" },
+          { target: target("pw"), value: "hunter2" },
+          { target: { selector: "#to" }, value: "attacker" },
+          { target: { selector: "#memo" }, value: "rent" },
+        ],
+      }),
+    ).join("\n");
+    expect(uneven).toContain('fields[2].value: "attacker"');
+    expect(uneven).toContain("…(+1 more fields entries, all in the JSON above)");
     // A note as tall as the one entry it would stand for is not worth it.
     const nine = summary(
       "terminal.run",
@@ -409,6 +426,8 @@ describe("melra CLI", () => {
     const nearQuestion = worst.slice(-24).join("\n");
     expect(nearQuestion).toContain('value: "typed-by-agent"');
     expect(nearQuestion).toContain("to=attacker");
+    // And so does the element it acts on.
+    expect(nearQuestion).toContain('target.selector: "#q"');
     expect(worst.length).toBeLessThan(60);
   });
 
