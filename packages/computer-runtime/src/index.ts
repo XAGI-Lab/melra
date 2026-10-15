@@ -1529,6 +1529,12 @@ export class ComputerRuntime {
       if (operation.x !== undefined || operation.y !== undefined) {
         throw new Error("computer_target_conflicts_with_coordinates");
       }
+      // The press point resolves into pixels below; a normalized drop point
+      // has no screen size here to scale by, and left as it was, 0.8 read as
+      // 0.8 pixels and the drop landed at the screen's corner.
+      if (operation.action === "drag" && operation.coordinateSpace !== "pixel") {
+        throw new Error("computer_target_drag_requires_pixel_destination");
+      }
       if (!capabilities.elements && !capabilities.ocr) {
         throw new Error("computer_elements_unavailable");
       }

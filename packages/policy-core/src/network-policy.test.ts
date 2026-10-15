@@ -22,6 +22,12 @@ describe("browser network policy", () => {
     expect(isPrivateAddress("169.254.169.254")).toBe(true);
     expect(isPrivateAddress("10.1.2.3")).toBe(true);
     expect(isPrivateAddress("::1")).toBe(true);
+    // NAT64: the IPv4 address inside is what the connection reaches.
+    expect(isPrivateAddress("64:ff9b::a00:5")).toBe(true);
+    expect(isPrivateAddress("64:ff9b::a9fe:a9fe")).toBe(true);
+    expect(isPrivateAddress("64:ff9b::10.0.0.5")).toBe(true);
+    expect(isPrivateAddress("64:ff9b:1::a9fe:a9fe")).toBe(true);
+    expect(isPrivateAddress("64:ff9b::808:808")).toBe(false);
     expect(isPrivateAddress("::ffff:ac10:1")).toBe(true);
     expect(isPrivateAddress("::ffff:192.168.1.1")).toBe(true);
     expect(isPrivateAddress("8.8.8.8")).toBe(false);
