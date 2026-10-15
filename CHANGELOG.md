@@ -73,14 +73,16 @@ All notable changes are documented here. The format follows
   - `git -c core.fsmonitor=<cmd> status` and `rg --pre <cmd>` ran programs;
   - `git log --output=<path>` wrote anywhere;
   - `git branch -D`, `git tag -f` and `git tag -s` changed refs or signed;
-  - `npm config set`, `go env -w`, `uv tree` and `cargo tree` changed
-    configuration or wrote the lockfile, `apt-get download` wrote files, and
-    `go list -toolexec` and `go vet -vettool` ran programs;
-  - `npm ls --logs-dir <path>` created that directory and wrote into it;
-  - every `pnpm` command runs the repository's `.pnpmfile.cjs`, and every
-    `yarn` command the `yarnPath` its `.yarnrc.yml` names, so in a cloned
-    repository `pnpm ls` or `yarn info` ran the clone's code. Neither has
-    reads now;
+  - `npm config set` changed configuration, and `npm ls --logs-dir <path>`
+    created that directory and wrote into it;
+  - other package managers' "reads" ran code or wrote, through their own
+    options or a file a cloned repository carries. Every `pnpm` command runs
+    `.pnpmfile.cjs`, and every `yarn` command the `yarnPath` in `.yarnrc.yml`.
+    `go version` and `cargo search` switch to the toolchain that `go.mod` or
+    `rust-toolchain.toml` names, downloading and running it. `pip --python`
+    runs that interpreter, `gem --config-file` loads plugins, `brew outdated`
+    updates Homebrew, `apt -o` sets hooks that run shell commands, and
+    `uv tree`/`cargo tree` write the lockfile. Only npm has reads now;
   - `tasklist /S <host>` queried another machine;
   - a UNC path (`\\host\share`, `//host/share`) given to `cat`, `findstr` or
     `rg` sent the Windows user's credentials to that host.

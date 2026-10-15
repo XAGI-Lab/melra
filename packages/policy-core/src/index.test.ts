@@ -391,6 +391,8 @@ describe("Windows command spellings", () => {
       ["cat", ["//attacker.example/share/f.txt"]],
       ["rg", ["--ignore-file=\\\\?\\UNC\\host\\share\\x", "x"]],
       ["npm", ["ls", "--userconfig=//host/share/npmrc"]],
+      ["rg", ["x", "\\??\\UNC\\host\\share"]],
+      ["rg", ["-f\\\\host\\share\\pats", "x"]],
       // Package-manager "reads" that write the lockfile, run build tools, or run
       // a program the repository names.
       ["uv", ["tree"]],
@@ -401,6 +403,14 @@ describe("Windows command spellings", () => {
       ["go", ["vet", "-vettool=/tmp/x", "./..."]],
       ["go", ["env", "-w", "GOFLAGS=-mod=mod"]],
       ["yarn", ["info", "react"]],
+      // Toolchain switching, interpreter selection, plugins, self-update.
+      ["go", ["version"]],
+      ["cargo", ["search", "serde"]],
+      ["pip", ["--python=.venv/bin/python", "list"]],
+      ["pip3", ["list", "--log", "/tmp/x.log"]],
+      ["gem", ["list", "--config-file", "proj.gemrc"]],
+      ["brew", ["outdated"]],
+      ["apt", ["search", "x", "-o", "AptCli::Hooks::Search::=touch x"]],
       ["pnpm", ["ls"]],
       ["npm", ["ls", "--logs-dir", "/tmp/elsewhere"]],
     ] as const) {
@@ -424,8 +434,6 @@ describe("Windows command spellings", () => {
       ["git", ["show", "HEAD:README.md"]],
       ["rg", ["-n", "TODO", "src"]],
       ["npm", ["config", "get", "registry"]],
-      ["go", ["env", "GOPATH"]],
-      ["cargo", ["search", "serde"]],
     ] as const) {
       expect(classifyCommand(command, [...args]).read, `${command} ${args.join(" ")}`).toBe(true);
     }

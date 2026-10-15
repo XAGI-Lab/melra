@@ -228,71 +228,37 @@ export {
  *
  * Anything unlisted falls in between: a mutation, but not an install — `npm
  * run build` writes to the workspace and reaches nothing.
+ *
+ * Only npm has reads. Every other manager checked has a way for a "read" to
+ * run code or write, through its own options or a file a cloned repository
+ * carries: pnpm runs .pnpmfile.cjs and yarn its `yarnPath` on every command;
+ * go switches to the toolchain go.mod names and rustup to the one
+ * rust-toolchain.toml names, downloading and running it; `pip --python` runs
+ * that interpreter and `--log` writes anywhere; `gem --config-file` loads
+ * plugins; `brew outdated` updates Homebrew; `apt -o` sets hooks that run shell
+ * commands; uv and cargo write their lockfiles. A read skips approval, so it
+ * has to be one for every argument and every repository.
  */
 const PACKAGE_MANAGERS: Record<
   string,
-  { install: Set<string>; read: Set<string> }
+  { install: Set<string>; read?: Set<string> }
 > = {
   npm: {
     install: new Set(["install", "i", "add", "ci", "update", "up", "publish"]),
     // `config` is a read only as `config get`/`config list`; see readOnlyCall.
     read: new Set(["ls", "list", "view", "info", "outdated", "why", "config"]),
   },
-  pnpm: {
-    install: new Set(["install", "i", "add", "update", "up", "publish", "dlx"]),
-    // None: every pnpm command loads the project's .pnpmfile.cjs, which runs
-    // whatever it contains, and `list` has no option to skip it.
-    read: new Set(),
-  },
-  yarn: {
-    install: new Set(["install", "add", "up", "upgrade", "publish", "dlx"]),
-    // None: every yarn command first runs the `yarnPath` (or `yarn-path`) a
-    // repository's .yarnrc.yml or .yarnrc names, so in a clone it runs the clone.
-    read: new Set(),
-  },
-  pip: {
-    install: new Set(["install", "download", "wheel"]),
-    read: new Set(["list", "show", "freeze", "check"]),
-  },
-  pip3: {
-    install: new Set(["install", "download", "wheel"]),
-    read: new Set(["list", "show", "freeze", "check"]),
-  },
-  uv: {
-    install: new Set(["add", "sync", "install", "pip", "tool", "publish"]),
-    // None: `tree` locks the project first, writing uv.lock and building any
-    // source package to read its metadata; `lock` and `version` write too.
-    read: new Set(),
-  },
-  cargo: {
-    install: new Set(["install", "add", "update", "publish", "fetch"]),
-    // Not `tree` or `metadata`: both write Cargo.lock when it is missing or stale.
-    read: new Set(["search"]),
-  },
-  gem: {
-    install: new Set(["install", "update", "push"]),
-    read: new Set(["list", "info", "which"]),
-  },
-  brew: {
-    install: new Set(["install", "upgrade", "reinstall", "tap"]),
-    read: new Set(["list", "info", "search", "outdated"]),
-  },
-  apt: {
-    install: new Set(["install", "upgrade", "full-upgrade", "update"]),
-    read: new Set(["list", "show", "search", "policy"]),
-  },
-  "apt-get": {
-    install: new Set(["install", "upgrade", "dist-upgrade", "update"]),
-    // Not `download`: it writes the package files into the working directory.
-    read: new Set(["show"]),
-  },
-  go: {
-    install: new Set(["install", "get", "mod"]),
-    // Not `list` or `vet`: both take build flags (`-toolexec`, `-vettool`,
-    // `-mod=mod`) that run programs or rewrite go.mod. `env` only without
-    // `-w`/`-u`; see readOnlyCall.
-    read: new Set(["version", "env"]),
-  },
+  pnpm: { install: new Set(["install", "i", "add", "update", "up", "publish", "dlx"]) },
+  yarn: { install: new Set(["install", "add", "up", "upgrade", "publish", "dlx"]) },
+  pip: { install: new Set(["install", "download", "wheel"]) },
+  pip3: { install: new Set(["install", "download", "wheel"]) },
+  uv: { install: new Set(["add", "sync", "install", "pip", "tool", "publish"]) },
+  cargo: { install: new Set(["install", "add", "update", "publish", "fetch"]) },
+  gem: { install: new Set(["install", "update", "push"]) },
+  brew: { install: new Set(["install", "upgrade", "reinstall", "tap"]) },
+  apt: { install: new Set(["install", "upgrade", "full-upgrade", "update"]) },
+  "apt-get": { install: new Set(["install", "upgrade", "dist-upgrade", "update"]) },
+  go: { install: new Set(["install", "get", "mod"]) },
 };
 
 /** `npx`/`pnpx` fetch and execute a package by name; there is no read form. */
@@ -388,7 +354,7 @@ export function classifyCommand(
       traits.add("package-install");
       traits.add("network");
     }
-    if (manager.read.has(subcommand) && readOnlyCall(command, name, subcommand, args)) {
+    if (manager.read?.has(subcommand) === true && readOnlyCall(command, name, subcommand, args)) {
       // A read subcommand of a package manager still queries the registry in
       // the general case, so it keeps `network` while dropping the mutation.
       return { read: true, traits: [...traits, "network"] };
@@ -445,8 +411,6 @@ function readOnlyCall(
   if (name === "tasklist") return !args.some((arg) => /^[-/][sup](:|$)/i.test(arg));
   // `--logs-dir <path>` creates that directory and writes npm's log into it.
   if (name === "npm" && args.some((arg) => /^--logs-dir(=|$)/i.test(arg))) return false;
-  // `go env -w`/`-u` rewrite the user's Go configuration.
-  if (name === "go") return !args.some((arg) => /^--?[wu](=|$)/.test(arg));
   if (subcommand === "config" && PACKAGE_MANAGERS[name] !== undefined) {
     const action = args[args.findIndex((arg) => arg.toLowerCase() === "config") + 1];
     return action !== undefined && ["get", "list", "ls"].includes(action.toLowerCase());
@@ -455,15 +419,16 @@ function readOnlyCall(
 }
 
 /**
- * A Windows UNC or device path (`\\host\share`, `//host/share`, `\\?\UNC\...`),
- * alone or as an option's value. Opening one connects to that host over SMB or
- * WebDAV and authenticates as the logged-on user, so a "read" of it sends the
- * user's credentials to whoever the caller named. Two leading separators of
- * either kind count. The match also catches a URL in a search pattern
- * (`rg https://x`), which then needs approval: the cautious side.
+ * A Windows UNC or device path (`\\host\share`, `//host/share`, `\\?\UNC\...`,
+ * `\??\UNC\...`), alone or inside an option (`--file=`, `/G:`, `-f\\host`).
+ * Opening one connects to that host over SMB or WebDAV and authenticates as the
+ * logged-on user, so a "read" of it sends the user's credentials to whoever the
+ * caller named. Two separators in a row anywhere count, which also catches a
+ * URL in a search pattern (`rg https://x`); that then needs approval, the
+ * cautious side.
  */
 function namesNetworkPath(arg: string): boolean {
-  return /(^|[=:;,])[\\/]{2}/.test(arg);
+  return /[\\/]{2}/.test(arg) || arg.includes("\\??\\");
 }
 
 /** `--pre <cmd>` and `--hostname-bin <cmd>` run programs; `-z` runs decompressors. */
