@@ -228,59 +228,37 @@ export {
  *
  * Anything unlisted falls in between: a mutation, but not an install — `npm
  * run build` writes to the workspace and reaches nothing.
+ *
+ * Only npm has reads. Every other manager checked has a way for a "read" to
+ * run code or write, through its own options or a file a cloned repository
+ * carries: pnpm runs .pnpmfile.cjs and yarn its `yarnPath` on every command;
+ * go switches to the toolchain go.mod names and rustup to the one
+ * rust-toolchain.toml names, downloading and running it; `pip --python` runs
+ * that interpreter and `--log` writes anywhere; `gem --config-file` loads
+ * plugins; `brew outdated` updates Homebrew; `apt -o` sets hooks that run shell
+ * commands; uv and cargo write their lockfiles. A read skips approval, so it
+ * has to be one for every argument and every repository.
  */
 const PACKAGE_MANAGERS: Record<
   string,
-  { install: Set<string>; read: Set<string> }
+  { install: Set<string>; read?: Set<string> }
 > = {
   npm: {
     install: new Set(["install", "i", "add", "ci", "update", "up", "publish"]),
+    // `config` is a read only as `config get`/`config list`; see readOnlyCall.
     read: new Set(["ls", "list", "view", "info", "outdated", "why", "config"]),
   },
-  pnpm: {
-    install: new Set(["install", "i", "add", "update", "up", "publish", "dlx"]),
-    read: new Set(["ls", "list", "view", "info", "outdated", "why", "licenses"]),
-  },
-  yarn: {
-    install: new Set(["install", "add", "up", "upgrade", "publish", "dlx"]),
-    read: new Set(["info", "why", "list", "outdated"]),
-  },
-  pip: {
-    install: new Set(["install", "download", "wheel"]),
-    read: new Set(["list", "show", "freeze", "check"]),
-  },
-  pip3: {
-    install: new Set(["install", "download", "wheel"]),
-    read: new Set(["list", "show", "freeze", "check"]),
-  },
-  uv: {
-    install: new Set(["add", "sync", "install", "pip", "tool", "publish"]),
-    read: new Set(["tree", "lock", "version"]),
-  },
-  cargo: {
-    install: new Set(["install", "add", "update", "publish", "fetch"]),
-    read: new Set(["tree", "metadata", "search"]),
-  },
-  gem: {
-    install: new Set(["install", "update", "push"]),
-    read: new Set(["list", "info", "which"]),
-  },
-  brew: {
-    install: new Set(["install", "upgrade", "reinstall", "tap"]),
-    read: new Set(["list", "info", "search", "outdated"]),
-  },
-  apt: {
-    install: new Set(["install", "upgrade", "full-upgrade", "update"]),
-    read: new Set(["list", "show", "search", "policy"]),
-  },
-  "apt-get": {
-    install: new Set(["install", "upgrade", "dist-upgrade", "update"]),
-    read: new Set(["show", "download"]),
-  },
-  go: {
-    install: new Set(["install", "get", "mod"]),
-    read: new Set(["list", "version", "env", "vet"]),
-  },
+  pnpm: { install: new Set(["install", "i", "add", "update", "up", "publish", "dlx"]) },
+  yarn: { install: new Set(["install", "add", "up", "upgrade", "publish", "dlx"]) },
+  pip: { install: new Set(["install", "download", "wheel"]) },
+  pip3: { install: new Set(["install", "download", "wheel"]) },
+  uv: { install: new Set(["add", "sync", "install", "pip", "tool", "publish"]) },
+  cargo: { install: new Set(["install", "add", "update", "publish", "fetch"]) },
+  gem: { install: new Set(["install", "update", "push"]) },
+  brew: { install: new Set(["install", "upgrade", "reinstall", "tap"]) },
+  apt: { install: new Set(["install", "upgrade", "full-upgrade", "update"]) },
+  "apt-get": { install: new Set(["install", "upgrade", "dist-upgrade", "update"]) },
+  go: { install: new Set(["install", "get", "mod"]) },
 };
 
 /** `npx`/`pnpx` fetch and execute a package by name; there is no read form. */
@@ -376,7 +354,7 @@ export function classifyCommand(
       traits.add("package-install");
       traits.add("network");
     }
-    if (manager.read.has(subcommand)) {
+    if (manager.read?.has(subcommand) === true && readOnlyCall(command, name, subcommand, args)) {
       // A read subcommand of a package manager still queries the registry in
       // the general case, so it keeps `network` while dropping the mutation.
       return { read: true, traits: [...traits, "network"] };
@@ -396,11 +374,128 @@ export function classifyCommand(
     "where",
   ]);
   const read =
-    READ_COMMANDS.has(name) ||
-    (name === "git" &&
-      subcommand !== undefined &&
-      READ_ONLY_GIT_ACTIONS.has(subcommand));
+    (READ_COMMANDS.has(name) || name === "git") &&
+    readOnlyCall(command, name, subcommand, args);
   return { read, traits: [...traits] };
+}
+
+/**
+ * Whether a call to a read-classified program is still only a read once its
+ * arguments are taken into account.
+ *
+ * A read is the one classification that skips approval, so it is a positive
+ * claim that has to hold for the whole argument list, not just the program
+ * name or subcommand. Before this, `git -c core.fsmonitor=<cmd> status` and
+ * `rg --pre <cmd>` ran commands, `git log --output=<path>` wrote anywhere,
+ * `git branch -D` deleted refs, and `npm config set` rewrote configuration,
+ * all classified as reads and run with no approval. Anything not proven
+ * harmless here falls back to a mutation, which needs approval: the cautious
+ * answer, at the cost of an approval for an unusual but harmless spelling.
+ *
+ * Reading files outside the workspace through these tools stays the residual
+ * the threat model already names for terminal commands.
+ */
+function readOnlyCall(
+  command: string,
+  name: string,
+  subcommand: string | undefined,
+  args: readonly string[],
+): boolean {
+  // A path-qualified program is whatever file sits at that path, which the
+  // name says nothing about: `tools/ls` can be a link to `/bin/sh`.
+  if (/[\\/]/.test(command)) return false;
+  if (args.some(namesNetworkPath)) return false;
+  if (name === "git") return gitReadOnly(args);
+  if (name === "rg") return !args.some(rgRunsOrDecompresses);
+  // `/s <computer>` queries another machine, as the logged-on user.
+  if (name === "tasklist") return !args.some((arg) => /^[-/][sup](:|$)/i.test(arg));
+  // `--logs-dir <path>` creates that directory and writes npm's log into it.
+  if (name === "npm" && args.some((arg) => /^--logs-dir(=|$)/i.test(arg))) return false;
+  if (subcommand === "config" && PACKAGE_MANAGERS[name] !== undefined) {
+    const action = args[args.findIndex((arg) => arg.toLowerCase() === "config") + 1];
+    return action !== undefined && ["get", "list", "ls"].includes(action.toLowerCase());
+  }
+  return true;
+}
+
+/**
+ * A Windows UNC or device path (`\\host\share`, `//host/share`, `\\?\UNC\...`,
+ * `\??\UNC\...`), alone or inside an option (`--file=`, `/G:`, `-f\\host`).
+ * Opening one connects to that host over SMB or WebDAV and authenticates as the
+ * logged-on user, so a "read" of it sends the user's credentials to whoever the
+ * caller named. Two separators in a row anywhere count, which also catches a
+ * URL in a search pattern (`rg https://x`); that then needs approval, the
+ * cautious side.
+ */
+function namesNetworkPath(arg: string): boolean {
+  return /[\\/]{2}/.test(arg) || arg.includes("\\??\\");
+}
+
+/** `--pre <cmd>` and `--hostname-bin <cmd>` run programs; `-z` runs decompressors. */
+function rgRunsOrDecompresses(arg: string): boolean {
+  if (/^--(pre|pre-glob|hostname-bin|search-zip)(=|$)/i.test(arg)) return true;
+  return /^-[^-]/.test(arg) && arg.slice(1).includes("z");
+}
+
+/** `diff`/`log`/`show` options that write files, run configured programs, or leave the repository. */
+const GIT_UNSAFE_OPTION = /^--(output|ext-diff|no-index|exec|upload-pack|receive-pack)(=|$)/i;
+
+/**
+ * Options of `git branch` and `git tag` that only list. Any other option
+ * creates, moves, deletes, or signs. `--color`, `--column` and `--abbrev` take
+ * a value only when it is attached (`--color=always`): git reads
+ * `--color -D x` as two options and a name, so the next argument is never theirs.
+ */
+const GIT_LISTING_FLAGS = new Set([
+  "-a", "--all", "-r", "--remotes", "-v", "-vv", "--verbose", "-n", "-i",
+  "--ignore-case", "--show-current", "--color", "--no-color", "--column",
+  "--no-column", "--abbrev", "--no-abbrev", "--omit-empty",
+]);
+/**
+ * Listing options that take a value. Unless it is attached, git takes the next
+ * argument as the value whatever it looks like (`--contains -D` asks about a
+ * commit named `-D`); only as the last argument does `--contains` and the like
+ * default to HEAD.
+ */
+const GIT_LISTING_VALUE_FLAGS = new Set([
+  "--sort", "--format", "--contains", "--no-contains", "--merged", "--no-merged",
+  "--points-at",
+]);
+
+function gitReadOnly(args: readonly string[]): boolean {
+  // Global options (`-c`, `-C`, `--exec-path`, `--git-dir`, ...) come before
+  // the subcommand and change what any subcommand does, so a read is only a
+  // call that names the subcommand first.
+  const [first, ...rest] = args;
+  if (first === undefined || first.startsWith("-")) return false;
+  const subcommand = first.toLowerCase();
+  if (!READ_ONLY_GIT_ACTIONS.has(subcommand)) return false;
+  if (rest.some((arg) => GIT_UNSAFE_OPTION.test(arg))) return false;
+  if (subcommand !== "branch" && subcommand !== "tag") return true;
+  // `git branch x` and `git tag v1` create; listing is the read. Arguments are
+  // split the way git's option parser splits them, and only then is a name
+  // allowed, as a pattern under `-l`/`--list`. Deciding "listing" from the raw
+  // list let `--format -l x` through: git takes `-l` as the format and creates x.
+  //
+  // `git tag -l` has always listed, but `git branch -l` meant --create-reflog
+  // before git 2.20 (Ubuntu 18.04 ships 2.17), so there `-l x` creates x. Only
+  // `--list` turns on listing for a branch name; a bare `-l` with no name is a
+  // listing either way.
+  let listing = false;
+  let names = 0;
+  for (let index = 0; index < rest.length; index += 1) {
+    const arg = rest[index]!;
+    const equals = arg.indexOf("=");
+    const flag = equals === -1 ? arg : arg.slice(0, equals);
+    if (arg === "--list" || (arg === "-l" && subcommand === "tag")) listing = true;
+    else if (arg === "-l" || GIT_LISTING_FLAGS.has(arg) || /^-n\d+$/.test(arg)) continue;
+    else if (equals !== -1 && /^--(color|column|abbrev)$/.test(flag)) continue;
+    else if (GIT_LISTING_VALUE_FLAGS.has(flag)) {
+      if (equals === -1) index += 1;
+    } else if (arg.startsWith("-")) return false;
+    else names += 1;
+  }
+  return listing || names === 0;
 }
 
 export function createDefaultPolicy(workspaceRoot: string): LocalPolicy {
@@ -743,6 +838,15 @@ function isCommandAllowed(operation: Operation, policy: LocalPolicy): boolean {
   // Normalized on both sides so `powershell.exe` cannot slip past a deny entry
   // written as `powershell`, and an operator's allowlist matches either spelling.
   if (ALWAYS_DENIED_COMMANDS.has(command)) return false;
+  // A bare entry (`ls`) allows the program found on PATH, never a file that
+  // happens to share its name: `tools/ls` may be a link to `/bin/sh`. A
+  // path-qualified command is allowed only by an entry naming that same path.
+  if (/[\\/]/.test(operation.command)) {
+    const spelled = operation.command.replaceAll("\\", "/");
+    return policy.allowedCommands.some(
+      (allowed) => /[\\/]/.test(allowed) && allowed.replaceAll("\\", "/") === spelled,
+    );
+  }
   return policy.allowedCommands.some(
     (allowed) => normalizeCommandName(allowed) === command,
   );

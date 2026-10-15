@@ -57,12 +57,18 @@ async function isFile(candidate: string): Promise<boolean> {
  * the allowlist would otherwise be bypassable by `npm install "%FOO%"`.
  * Newlines are refused for the same reason: a command line cannot carry one.
  *
+ * So is `"`. `CommandLineToArgvW` reads `\"` as a literal quote, but `cmd.exe`
+ * does not: to it every `"` toggles quoting, so `a" & calc & "` closed the
+ * quotes and ran `calc` as cmd syntax (BatBadBut). There is no escape both
+ * layers agree on, and a quote inside an argument to a batch shim is rare
+ * enough that refusing it costs little.
+ *
  * Written as a scan rather than `/(\\*)"/g` + `/(\\*)$/`: both of those
  * backtrack quadratically, and an argument of 40k backslashes took 11s to quote
  * before this. An attacker-supplied argument is exactly the input this sees.
  */
 export function quoteForCmd(value: string): string {
-  if (/[%!\r\n]/.test(value)) {
+  if (/[%!"\r\n]/.test(value)) {
     throw new Error("terminal_windows_argument_not_quotable");
   }
   let escaped = "";
