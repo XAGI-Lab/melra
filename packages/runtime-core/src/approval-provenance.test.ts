@@ -302,6 +302,45 @@ describe("approval on receipts written without a caller", () => {
   });
 });
 
+describe("a refused sibling in a workflow wave", () => {
+  it("keeps the changes the other nodes made in the same wave", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const { tasks, store, cipher } = await setup({ approvalTtlMs: 1_500 });
+    const workflows = new WorkflowController(store, tasks, cipher);
+    const planned = workflows.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: "99999999-9999-4999-8999-999999999999",
+        version: 1,
+        name: "Wave",
+        nodes: [
+          { id: "x", type: "operation", request: put("x") },
+          { id: "loop", type: "bounded_loop", body: [put("l")], maxIterations: 2 },
+        ],
+      }),
+    );
+    let run = (await workflows.advance(planned.id)).run;
+    const [x1] = run.nodes.x!.taskIds;
+    const l0 = store.getTask(run.nodes.loop!.taskIds[0]!)!;
+    vi.advanceTimersByTime(900);
+    // The loop's first step runs and its second is planned, with a fresh challenge.
+    run = (
+      await workflows.advance(planned.id, [{ approvalId: l0.approval!.approvalId, phrase: l0.approval!.phrase! }])
+    ).run;
+    const l1 = store.getTask(run.nodes.loop!.taskIds[1]!)!;
+    // `x`'s challenge lapses, the loop's does not.
+    vi.advanceTimersByTime(800);
+    await expect(
+      workflows.advance(planned.id, [{ approvalId: l1.approval!.approvalId, phrase: "APPROVE 000000000000" }]),
+    ).rejects.toThrow("approval_phrase_mismatch");
+    // `x` was planned again in that wave; the run says so instead of pointing
+    // at the task it cancelled, which read as `x` cancelled for good.
+    expect(store.getTask(x1!)?.status).toBe("cancelled");
+    expect(workflows.status(planned.id).nodes.x!.taskIds).not.toContain(x1);
+    expect((await workflows.advance(planned.id)).run.nodes.x!.status).toBe("awaiting_approval");
+  });
+});
+
 describe("workflow approvals decided by an operator", () => {
   it("runs the approved attempt when the decision beat the expiry", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });

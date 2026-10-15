@@ -330,6 +330,11 @@ export class WorkflowController {
       return { run: current, tasks: [], events: [] };
     }
 
+    // A sibling's refusal is reported only after the others' changes are
+    // committed: a node another sibling cancelled and planned again in this
+    // wave would otherwise keep pointing at the task it cancelled, and stay
+    // cancelled for good.
+    let refused: { reason: unknown } | undefined;
     const results: Array<{ nodeId: string; result: NodeAdvance }> = await (rollback.length >
     0
       ? // Compensations undo each other's preconditions, so the order they run
@@ -359,11 +364,8 @@ export class WorkflowController {
           // Every sibling finishes before one's error is reported. Rejecting
           // at the first throw released the lease while other adapters still
           // ran, and a retry then read their tasks as failed.
-          const refused = settled.find((outcome) => outcome.status === "rejected");
-          if (refused !== undefined) throw refused.reason;
-          return settled.map(
-            (outcome) => (outcome as PromiseFulfilledResult<{ nodeId: string; result: NodeAdvance }>).value,
-          );
+          refused = settled.find((outcome) => outcome.status === "rejected");
+          return settled.flatMap((outcome) => (outcome.status === "fulfilled" ? [outcome.value] : []));
         }));
     // A *compensation* that failed must not open a second unwind. The saga is
     // already stranded, and undoing the next step while this inverse is still
@@ -491,6 +493,7 @@ export class WorkflowController {
         }),
       );
     }
+    if (refused !== undefined) throw refused.reason;
     return {
       run,
       tasks: results.flatMap(({ result }) => result.tasks),
