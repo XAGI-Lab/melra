@@ -101,6 +101,24 @@ export function validateWorkflow(
     ) {
       throw new Error(`workflow_approval_must_precede_target:${node.id}`);
     }
+    // The approval runs its target's effect the moment it is given, so every
+    // other dependency of the target has to be able to finish first. One that
+    // itself waits on the approval would run after the effect it was meant to
+    // precede.
+    if (node.type === "approval") {
+      const target = nodes.get(node.forNodeId)!;
+      for (const dependency of target.dependsOn) {
+        if (dependency !== node.id && hasDependency(nodes, dependency, node.id)) {
+          throw new Error(`workflow_approval_target_dependency_after_approval:${node.id}:${dependency}`);
+        }
+      }
+    }
+    // A condition reads its source's result, so the source has to have run.
+    // Without the dependency both were started together and the condition
+    // threw on every advance.
+    if (node.type === "condition" && !hasDependency(nodes, node.id, node.sourceNodeId)) {
+      throw new Error(`workflow_condition_source_must_precede:${node.id}`);
+    }
   }
 
   return { nodes, layers };
@@ -110,16 +128,21 @@ export function readyNodeIds(
   graph: WorkflowGraph,
   states: Record<string, WorkflowNodeState>,
 ): string[] {
+  const done = (id: string) =>
+    ["verified_complete", "skipped", "compensated"].includes(states[id]?.status ?? "");
   return [...graph.nodes.values()]
     .filter(
       (node) =>
         node.type !== "compensation" &&
         states[node.id]?.status === "pending" &&
-        node.dependsOn.every((id) =>
-          ["verified_complete", "skipped", "compensated"].includes(
-            states[id]?.status ?? "",
-          ),
-        ),
+        node.dependsOn.every(done) &&
+        // An approval executes its target's effect, so it is offered only
+        // once the target could run: before, a delete approved alongside the
+        // backup it depended on ran first, and its undo was then skipped.
+        (node.type !== "approval" ||
+          (graph.nodes.get(node.forNodeId)?.dependsOn ?? []).every(
+            (id) => id === node.id || done(id),
+          )),
     )
     .map((node) => node.id)
     .sort();

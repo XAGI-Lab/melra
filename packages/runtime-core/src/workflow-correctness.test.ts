@@ -1,0 +1,243 @@
+// Copyright 2026 XAGI Labs Private Limited
+// SPDX-License-Identifier: Apache-2.0
+
+import { mkdtemp, rm, unlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  TaskRequestSchema,
+  WorkflowDefinitionSchema,
+  type Operation,
+  type TaskRequest,
+  type WorkflowRun,
+} from "@melra/protocol";
+import { createDefaultPolicy, type LocalPolicy } from "@melra/policy-core";
+import { sha256 } from "@melra/receipt-schema";
+import { SqliteStore } from "@melra/storage-sqlite";
+import { Verifier } from "@melra/verifier-core";
+import { PayloadCipher } from "./payload-cipher.js";
+import { TaskController } from "./task-controller.js";
+import { WorkflowController } from "./workflow-controller.js";
+
+/**
+ * Workflow semantics the audit found broken: effects running before what they
+ * depend on, recovery mistaking a part for the whole, approvals that could
+ * never be given, branches that changed their mind, and halts that refused
+ * exactly the runs that needed one.
+ */
+const roots: string[] = [];
+const stores: SqliteStore[] = [];
+const definitionId = "22222222-2222-4222-8222-222222222222";
+
+afterEach(async () => {
+  for (const store of stores.splice(0)) store.close();
+  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
+
+/** Every memory `put` the adapter performed, by key, in order. */
+async function setup(options: { delayMs?: number; policy?: Partial<LocalPolicy> } = {}) {
+  const root = await mkdtemp(join(tmpdir(), "melra-workflow-correctness-"));
+  roots.push(root);
+  const store = new SqliteStore(":memory:");
+  stores.push(store);
+  const cipher = new PayloadCipher(Buffer.alloc(32, 23));
+  const done: string[] = [];
+  const execute = async (operation: Operation): Promise<Record<string, unknown>> => {
+    if (options.delayMs !== undefined) await new Promise((resolve) => setTimeout(resolve, options.delayMs));
+    if (operation.kind === "memory") done.push(operation.key ?? "");
+    return { success: true, stored: true };
+  };
+  const tasks = new TaskController(
+    store,
+    { ...createDefaultPolicy(root), ...options.policy },
+    { execute },
+    await Verifier.create(root),
+    cipher,
+  );
+  return { root, store, cipher, tasks, done, controller: new WorkflowController(store, tasks, cipher) };
+}
+
+const put = (key: string): TaskRequest =>
+  TaskRequestSchema.parse({
+    goal: `Put ${key}`,
+    operation: { kind: "memory", action: "put", key, value: key },
+    requiredEvidence: [{ type: "result_equals", path: "stored", value: true }],
+  });
+
+const read = (): TaskRequest =>
+  TaskRequestSchema.parse({ goal: "Inspect", operation: { kind: "system", action: "info" } });
+
+const workflow = (nodes: unknown[]) =>
+  WorkflowDefinitionSchema.parse({ schemaVersion: "1.0.0", id: definitionId, version: 1, name: "Correctness", nodes });
+
+/** Approve whatever is waiting, once. */
+const approvalsFor = (run: WorkflowRun) =>
+  Object.values(run.nodes).flatMap((node) =>
+    node.approval === undefined ? [] : [{ approvalId: node.approval.approvalId, phrase: node.approval.phrase }],
+  );
+
+describe("workflow ordering", () => {
+  it("does not run an approved effect before its other dependencies", async () => {
+    const { controller, done } = await setup();
+    const planned = controller.plan(
+      workflow([
+        { id: "backup", type: "operation", request: put("backup") },
+        { id: "approve-delete", type: "approval", forNodeId: "delete" },
+        { id: "delete", type: "operation", dependsOn: ["approve-delete", "backup"], request: put("delete") },
+        { id: "undo-delete", type: "compensation", forNodeId: "delete", request: put("undo") },
+      ]),
+    );
+    let run = (await controller.advance(planned.id)).run;
+    // The approval is not even asked for until the backup it would overtake is done.
+    expect(run.nodes["approve-delete"]?.status).toBe("pending");
+    for (let step = 0; step < 6 && run.status !== "verified_complete"; step += 1) {
+      run = (await controller.advance(planned.id, approvalsFor(run))).run;
+    }
+    expect(run.status).toBe("verified_complete");
+    expect(done).toEqual(["backup", "delete"]);
+  });
+
+  it("refuses a condition whose source is not one of its dependencies", async () => {
+    const { controller } = await setup();
+    expect(() =>
+      controller.plan(
+        workflow([
+          { id: "inspect", type: "operation", request: read() },
+          {
+            id: "choose",
+            type: "condition",
+            sourceNodeId: "inspect",
+            predicate: { type: "result_equals", path: "success", value: true },
+            whenTrue: [put("a")],
+            whenFalse: [],
+          },
+        ]),
+      ),
+    ).toThrow("workflow_condition_source_must_precede:choose");
+  });
+
+  it("lets every sibling finish before reporting one's error", async () => {
+    const { controller, done } = await setup({ delayMs: 300 });
+    const planned = controller.plan(
+      workflow([
+        { id: "write", type: "operation", request: put("write") },
+        { id: "ask", type: "human_input", prompt: "Code?", maxLength: 5 },
+      ]),
+    );
+    const waiting = (await controller.advance(planned.id)).run;
+    await expect(
+      controller.advance(planned.id, approvalsFor(waiting), [{ nodeId: "ask", value: "far too long" }]),
+    ).rejects.toThrow("workflow_input_too_long");
+    // The write finished before that error came back, so a retry sees it done.
+    expect(done).toEqual(["write"]);
+    const retried = (await controller.advance(planned.id, [], [{ nodeId: "ask", value: "ok" }])).run;
+    expect(retried.nodes.write?.status).toBe("verified_complete");
+    expect(retried.status).not.toBe("failed");
+  });
+});
+
+describe("workflow decisions that have to stay made", () => {
+  it("keeps the branch a condition started on even if its predicate changes", async () => {
+    const { controller, root, done } = await setup();
+    await writeFile(join(root, "flag"), "on");
+    const planned = controller.plan(
+      workflow([
+        { id: "inspect", type: "operation", request: read() },
+        {
+          id: "choose",
+          type: "condition",
+          dependsOn: ["inspect"],
+          sourceNodeId: "inspect",
+          predicate: { type: "file_exists", path: "flag" },
+          whenTrue: [put("patch-existing")],
+          whenFalse: [put("create-new"), put("register-new")],
+        },
+      ]),
+    );
+    await controller.advance(planned.id);
+    const waiting = (await controller.advance(planned.id)).run;
+    expect(waiting.nodes.choose?.status).toBe("awaiting_approval");
+    await unlink(join(root, "flag"));
+    const after = (await controller.advance(planned.id, approvalsFor(waiting))).run;
+    expect(done).toEqual(["patch-existing"]);
+    expect(after.nodes.choose?.status).toBe("verified_complete");
+  });
+
+  it("asks again when an approval challenge expired before anyone answered", async () => {
+    const { controller, done } = await setup({ policy: { approvalTtlMs: 50 } });
+    const planned = controller.plan(workflow([{ id: "write", type: "operation", request: put("write") }]));
+    const first = (await controller.advance(planned.id)).run;
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    // Used to throw approval_expired here, and every advance after it.
+    const second = (await controller.advance(planned.id, approvalsFor(first))).run;
+    expect(second.nodes.write?.status).toBe("awaiting_approval");
+    expect(second.nodes.write?.approval?.approvalId).not.toBe(first.nodes.write?.approval?.approvalId);
+    const third = (await controller.advance(planned.id, approvalsFor(second))).run;
+    expect(third.status).toBe("verified_complete");
+    expect(done).toEqual(["write"]);
+  });
+});
+
+describe("workflow recovery", () => {
+  it("does not fail an approved effect because a restart came between the ask and the answer", async () => {
+    const { controller, store, tasks, cipher, done } = await setup();
+    const planned = controller.plan(
+      workflow([
+        { id: "approve-write", type: "approval", forNodeId: "write" },
+        { id: "write", type: "operation", dependsOn: ["approve-write"], request: put("write") },
+        { id: "undo-write", type: "compensation", forNodeId: "write", request: put("undo") },
+      ]),
+    );
+    const waiting = (await controller.advance(planned.id)).run;
+    // Any CLI command builds a runtime, and building one recovers.
+    const restarted = new WorkflowController(store, tasks, cipher);
+    await restarted.recoverInterrupted();
+    let run = (await restarted.advance(planned.id, approvalsFor(waiting))).run;
+    for (let step = 0; step < 3 && run.status !== "verified_complete"; step += 1) {
+      run = (await restarted.advance(planned.id)).run;
+    }
+    expect(run.status).toBe("verified_complete");
+    expect(done).toEqual(["write"]);
+  });
+
+  it("does not call a loop finished when a crash came between its iterations", async () => {
+    const { controller, store, tasks, cipher, done } = await setup();
+    const body = put("step");
+    const planned = controller.plan(
+      workflow([{ id: "loop", type: "bounded_loop", maxIterations: 3, body: [body] }]),
+    );
+    // Iteration 0 ran under its own idempotency key, then the process died.
+    const key = sha256({ workflowId: planned.id, nodeId: "loop", iteration: 0, branch: "loop:0", request: body });
+    const first = tasks.plan(body, { idempotencyKey: key, attempt: 1 });
+    await tasks.execute(first.id, { approvalId: first.approval!.approvalId, phrase: first.approval!.phrase });
+    const restarted = new WorkflowController(store, tasks, cipher);
+    const [recovered] = await restarted.recoverInterrupted();
+    expect(recovered?.nodes.loop?.status).toBe("pending");
+    let run = recovered!;
+    for (let step = 0; step < 6 && run.status !== "verified_complete"; step += 1) {
+      run = (await restarted.advance(planned.id, approvalsFor(run))).run;
+    }
+    expect(run.status).toBe("verified_complete");
+    expect(done).toEqual(["step", "step", "step"]);
+  });
+});
+
+describe("operator halts", () => {
+  it("pauses a run that needs recovery and resumes it still needing it", async () => {
+    const { controller, store, tasks, cipher } = await setup();
+    const planned = controller.plan(workflow([{ id: "write", type: "operation", request: put("write") }]));
+    const waiting = (await controller.advance(planned.id)).run;
+    const task = store.getTask(waiting.nodes.write!.taskIds[0]!)!;
+    task.status = "running";
+    store.saveTask(task);
+    const restarted = new WorkflowController(store, tasks, cipher);
+    const [recovered] = await restarted.recoverInterrupted();
+    expect(recovered?.status).toBe("recovery_required");
+    // Threw workflow_projection_event_mismatch: the halt dropped the error.
+    expect(restarted.pause(planned.id).status).toBe("paused");
+    const resumed = restarted.resume(planned.id);
+    expect(resumed.status).toBe("recovery_required");
+    expect(resumed.error).toBe("workflow_contains_unreconciled_mutation");
+  });
+});
