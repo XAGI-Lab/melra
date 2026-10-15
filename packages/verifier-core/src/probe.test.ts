@@ -121,6 +121,22 @@ describe("verification through a channel that did not act", () => {
     });
   });
 
+  it("reads a provider error status as no answer, not as no", async () => {
+    for (const status of [503, 429, 500, 401]) {
+      const verifier = await Verifier.create(root, {
+        probe: async () => ({ success: false, status, content: "<html>busy</html>" }),
+      });
+      const { verified, evidence } = await verifier.verify([predicate()], created);
+      expect(verified).toBe(false);
+      expect(evidence[0], String(status)).toMatchObject({ passed: false, inconclusive: true });
+    }
+    // "Not found" is the provider's word that it is not there.
+    const gone = await Verifier.create(root, {
+      probe: async () => ({ success: false, status: 404, content: "" }),
+    });
+    expect((await gone.verify([predicate()], created)).evidence[0]?.inconclusive).toBeUndefined();
+  });
+
   it("does not call a value mismatch inconclusive", async () => {
     const verifier = await Verifier.create(root, {
       probe: probeReturning({ state: "pending" }),
