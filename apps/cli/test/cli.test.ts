@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
-import { PRODUCT_VERSION } from "@melra/protocol";
+import { PRODUCT_VERSION, TaskRequestSchema } from "@melra/protocol";
 import { createMelraRuntime, serveHttp } from "@melra/server";
 import { runConformance } from "../src/conformance.js";
 import { RESTART_SAFE_WORKFLOW } from "../src/demo-workflow.js";
@@ -61,6 +61,7 @@ describe("melra CLI", () => {
       workspaceRoot: resolve("/tmp/melra-workspace"),
       workspaceSet: true,
       dataDirectory: resolve("/tmp/melra-home"),
+      approver: "operator",
       browserExecutablePath: resolve("/Applications/Google Chrome"),
       browserCdpEndpoint: "http://127.0.0.1:9222/",
       browserCdpContextIndex: -1,
@@ -150,6 +151,69 @@ describe("melra CLI", () => {
       command: process.execPath,
       args: ["serve"],
     });
+  });
+
+  it("approves from the command line as the named operator, without running anything", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-cli-")));
+    roots.push(root);
+    const dataDirectory = join(root, ".melra");
+    const server = await createMelraRuntime({
+      workspaceRoot: root,
+      dataDirectory,
+      environment: { MELRA_MODE: "enforced" },
+    });
+    try {
+      const plan = () =>
+        server.controller.plan(
+          TaskRequestSchema.parse({
+            goal: "Write the report",
+            operation: { kind: "file", action: "write", path: "report.txt", content: "x" },
+          }),
+        );
+      const planned = plan();
+      const env = { ...process.env, MELRA_HOME: dataDirectory, MELRA_WORKSPACE: root, MELRA_MODE: "enforced" };
+
+      // Off a terminal and without --yes: shown, never decided.
+      const asked = (await execute(process.execPath, [entry, "approve", planned.id], { cwd: root, env }).catch(
+        (error: unknown) => error,
+      )) as { code: number; stdout: string };
+      expect(asked.code).toBe(3);
+      expect(JSON.parse(asked.stdout)).toMatchObject({
+        taskId: planned.id,
+        renderDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+      });
+      expect(server.store.getApprovalDecision(planned.approval!.approvalId)).toBeUndefined();
+
+      const approved = await execute(process.execPath, [entry, "approve", planned.id, "--yes"], {
+        cwd: root,
+        env: { ...env, MELRA_APPROVER: "alice" },
+      });
+      expect(JSON.parse(approved.stdout).decision).toMatchObject({
+        approvalId: planned.approval!.approvalId,
+        channel: "out_of_band",
+        approver: "cli:alice",
+      });
+      // Approving is not running: the task waits for the agent that planned it.
+      expect(server.store.getTask(planned.id)?.status).toBe("awaiting_approval");
+      const done = await server.controller.execute(planned.id);
+      expect(done.task.status).toBe("verified_success");
+      expect(done.receipt?.policyDecision.approval).toMatchObject({ channel: "out_of_band", approver: "cli:alice" });
+
+      const denied = plan();
+      await execute(process.execPath, [entry, "approve", denied.id, "--deny"], { cwd: root, env });
+      expect(server.store.getTask(denied.id)?.status).toBe("cancelled");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("takes the approver's name from MELRA_APPROVER, and never just anything", () => {
+    const defaults = { cwd: "/w", home: "/h" };
+    expect(parseCliEnvironment({}, defaults).approver).toBe("operator");
+    expect(parseCliEnvironment({ MELRA_APPROVER: " alice@ops " }, defaults).approver).toBe("alice@ops");
+    expect(() => parseCliEnvironment({ MELRA_APPROVER: "alice\nAPPROVED" }, defaults)).toThrow(
+      "approver_label_invalid",
+    );
   });
 
   it("prints the product version", async () => {

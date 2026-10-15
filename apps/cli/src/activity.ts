@@ -23,7 +23,7 @@ import { isHuman, paint, table } from "./output.js";
 
 const DEFAULT_HTTP_PORT = 7457;
 const POLL_MS = 1_000;
-const APPROVAL_HINT = "approve from the agent that planned them";
+const APPROVAL_HINT = "approve with `melra approve <task-id>`";
 
 /**
  * A task as an observer may see it. The approval block goes entirely, not just

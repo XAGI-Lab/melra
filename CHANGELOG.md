@@ -8,6 +8,15 @@ All notable changes are documented here. The format follows
 
 ### Added
 
+- `melra approve <task-id>` shows an approver the effect a task is waiting on
+  (operation, target, evidence, budget, and the goal the agent stated, marked
+  unverified) and records a yes bound to exactly that, without running
+  anything; the agent that planned the task runs it. `--yes` skips the
+  question, `--deny` cancels the task, and off a terminal it prints the effect
+  and exits 3. The receipt names the approver as `cli:` plus `MELRA_APPROVER`
+  (default `operator`), a label the operator chooses rather than the OS
+  account. `melra run` asks the same way in a terminal instead of having the
+  phrase retyped, and the console and `melra tasks` point at `melra approve`.
 - Receipts say who approved an effect and how. `policyDecision.approval` records
   the channel (`in_band` for an echoed phrase, which anything that knows the
   task can compute; `out_of_band` for a decision recorded through an operator

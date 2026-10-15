@@ -13,6 +13,12 @@ export interface CliEnvironment {
   /** MELRA_WORKSPACE was set, so no policy file's `workspaceRoot` replaces it. */
   workspaceSet?: boolean;
   dataDirectory: string;
+  /**
+   * `MELRA_APPROVER`: the name `melra approve` records as the approver, as
+   * `cli:<name>`. Receipts carry it and an agent can read receipts, so it is
+   * a label the operator chooses, never the OS account name.
+   */
+  approver: string;
   unhinged: boolean;
   mode: DeploymentMode;
   policyPath?: string;
@@ -49,6 +55,12 @@ export function serverLaunch(
   return /[\\/]_npx[\\/]/.test(moduleDirectory)
     ? { command: "npx", args: ["-y", `@melra/cli@${version}`, "serve"] }
     : { command: "melra", args: ["serve"] };
+}
+
+function approverLabel(value: string | undefined): string {
+  const label = value?.trim() || "operator";
+  if (!/^[\w.@-]{1,64}$/.test(label)) throw new Error("approver_label_invalid");
+  return label;
 }
 
 function cdpEndpoint(value: string | undefined): string | undefined {
@@ -135,6 +147,7 @@ export function parseCliEnvironment(
     // Empty is unset here too, or the database and payload key would land in
     // the working directory, inside the workspace a confined agent can write.
     dataDirectory: resolve(source.MELRA_HOME?.trim() || join(defaults.home, ".melra")),
+    approver: approverLabel(source.MELRA_APPROVER),
     unhinged: unhingedFromEnvironment(source),
     mode: deploymentMode(source.MELRA_MODE),
     ...(source.MELRA_POLICY === undefined || source.MELRA_POLICY.trim() === ""

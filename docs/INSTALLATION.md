@@ -204,6 +204,7 @@ MELRA uses these environment variables:
 | `MELRA_PAYLOAD_KEY` | Optional canonical base64url 256-bit payload key | private `<MELRA_HOME>/payload.key` |
 | `MELRA_UNHINGED` | Set to `1` to remove every guardrail — see below | unset (all guardrails on) |
 | `MELRA_MODE` | `developer` or `enforced` — see [deployment modes](#deployment-modes) | `developer` |
+| `MELRA_APPROVER` | The name [`melra approve`](#approving-from-the-command-line) records as the approver, as `cli:<name>`. Letters, digits, `.`, `_`, `@` and `-`, at most 64. Receipts carry it, and an agent can read receipts. | `operator` |
 | `MELRA_HTTP_PORT` | Port for `melra serve --http` | `7457` |
 | `MELRA_HTTP_TOKEN` | Bearer token for `melra serve --http` | a fresh random token, printed at startup |
 | `MELRA_HTTP_OAUTH` | Set to `0` so that token is the only way in and no client can register itself | unset (clients may register, on loopback) |
@@ -773,6 +774,27 @@ A `melra conformance` run against an enforced endpoint keeps the same level — 
 mode does not earn checks — but its first `notProven` entry narrows from "nothing
 observable rules out a second path" to naming whose word the remaining claim
 rests on. See [CONFORMANCE.md](CONFORMANCE.md).
+
+## Approving from the command line
+
+`melra approve <task-id>` shows an approver the effect a task is waiting on (the
+operation, its target, the evidence it must leave, its budget, and the goal the
+agent stated, marked as unverified) and asks y/N. A yes is recorded as a
+decision bound to exactly what was shown; it does not run anything. The agent
+that planned the task runs it with `melra_execute`, and the decision lets it.
+
+```bash
+melra approve 3f2a…        # shows the effect, asks y/N
+melra approve 3f2a… --yes  # no question, for a script that already decided
+melra approve 3f2a… --deny # cancel the task instead
+```
+
+Off a terminal and without `--yes` it prints the effect as JSON and exits 3
+without deciding. The receipt for the run records who approved it
+(`cli:` plus [`MELRA_APPROVER`](#local-configuration), `operator` by
+default), when, and the digest of what they were shown. In enforced mode the
+channel is `out_of_band`; in developer mode it is `in_band`, because there the
+agent may hold the same access. `melra run` asks the same way in a terminal.
 
 ## Unsafe-local mode
 
