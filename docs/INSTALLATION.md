@@ -506,8 +506,8 @@ MELRA HTTP server listening on http://127.0.0.1:7457
   MCP:      http://127.0.0.1:7457/mcp
   Token:    <token>
 A client that cannot be given the token can register itself and ask
-you to approve it in a browser; approved clients are named on every
-receipt. Set MELRA_HTTP_OAUTH=0 to allow only the token above.
+you to approve it in a browser, with the token above; approved clients
+are named on every receipt. Set MELRA_HTTP_OAUTH=0 to allow only the token.
 Loopback only. Anyone who can read this token can drive this machine.
 ```
 
@@ -587,7 +587,15 @@ name. It discovers the flow from the `WWW-Authenticate` header on a `401`,
 registers itself (RFC 7591), sends you to a consent page in your browser, and —
 once you approve — exchanges an authorization code for a bearer token of its
 own, under PKCE S256. Nothing about registration grants anything; approval is
-the whole gate, and it is a person.
+the whole gate, and it takes the operator's token. The consent page asks for
+the token `melra serve --http` printed (or your `MELRA_HTTP_TOKEN`), checks it
+on the server, and never passes it to the client. Any process that can reach
+the port can submit the form, so the token is what makes the approval yours.
+The sign-in routes (`/.well-known/*` and `/oauth/*`) also answer only when
+`Host` is a loopback name (`127.0.0.1`, `localhost`, `[::1]`, or the address
+the server is bound to), on any port, so an SSH tunnel still works but a web
+page that re-resolves its own name to `127.0.0.1` cannot drive the flow from
+your browser. Every other route needs the token, whatever the name.
 
 After that the client is a principal. It becomes `harness:<name>#<id prefix>` —
 the name it registered under, plus part of the id MELRA minted, so two clients

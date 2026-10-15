@@ -2,7 +2,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+  type Stats,
+} from "node:fs";
 import { join } from "node:path";
 import type { Principal } from "@melra/protocol";
 
@@ -124,6 +134,31 @@ function escapeHtml(value: string): string {
   );
 }
 
+/** The authorization request a submitted consent form came from. */
+export function requestOf(form: URLSearchParams): URLSearchParams {
+  return new URLSearchParams({
+    client_id: form.get("client_id") ?? "",
+    redirect_uri: form.get("redirect_uri") ?? "",
+    response_type: "code",
+    code_challenge_method: "S256",
+    code_challenge: form.get("code_challenge") ?? "",
+    ...(form.get("state") === null ? {} : { state: form.get("state")! }),
+  });
+}
+
+/** No framing, so nobody can lay the consent page under a decoy and collect the click. */
+export const CONSENT_HEADERS: Record<string, string> = {
+  "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'",
+  "x-frame-options": "DENY",
+  "x-content-type-options": "nosniff",
+  "referrer-policy": "no-referrer",
+};
+
+/** Every write renames a new file into place, so the inode changes too. */
+function versionOf(stat: Stats): string {
+  return `${stat.ino}:${stat.mtimeMs}:${stat.size}`;
+}
+
 function hash(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
@@ -145,17 +180,11 @@ export class OAuthProvider {
    * Re-read the file if anything else has written it since. `melra clients
    * --revoke` is another process: a server that kept its startup copy went on
    * honouring revoked tokens, and its next write put them back on disk.
-   *
-   * ponytail: the read-modify-write is not locked across processes, but every
-   * step is synchronous, so the window is a few microseconds; add a lock file
-   * if two writers ever race in practice.
    */
   private reload(): void {
     let version = "missing";
     try {
-      const stat = statSync(this.path);
-      // Every write renames a new file into place, so the inode changes too.
-      version = `${stat.ino}:${stat.mtimeMs}:${stat.size}`;
+      version = versionOf(statSync(this.path));
     } catch {
       // No file: the register is empty.
     }
@@ -172,12 +201,45 @@ export class OAuthProvider {
     }
   }
 
-  private persist(): void {
-    const temporary = `${this.path}.${process.pid}.tmp`;
-    writeFileSync(temporary, JSON.stringify(this.state), { mode: 0o600 });
-    renameSync(temporary, this.path);
-    const stat = statSync(this.path);
-    this.loaded = `${stat.ino}:${stat.mtimeMs}:${stat.size}`;
+  /**
+   * One read-modify-write of the file, held against every other process.
+   *
+   * Registration needs no credential, so anyone can make the server write at
+   * will. Unlocked, a write timed against `melra clients --revoke` put the
+   * revoked tokens back. The version is taken from our own file before it is
+   * renamed into place, so a write that lands between the two is reloaded
+   * next time rather than mistaken for ours.
+   */
+  private update<T>(change: () => T): T {
+    const lock = `${this.path}.lock`;
+    const deadline = Date.now() + 2_000;
+    for (;;) {
+      try {
+        closeSync(openSync(lock, "wx", 0o600));
+        break;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        // A holder that died leaves its lock behind; none is held this long.
+        try {
+          if (Date.now() - statSync(lock).mtimeMs > 10_000) rmSync(lock, { force: true });
+        } catch {
+          // Released while we looked.
+        }
+        if (Date.now() > deadline) throw new Error("temporarily_unavailable:oauth state is busy");
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+      }
+    }
+    try {
+      this.reload();
+      const result = change();
+      const temporary = `${this.path}.${process.pid}.tmp`;
+      writeFileSync(temporary, JSON.stringify(this.state), { mode: 0o600 });
+      this.loaded = versionOf(statSync(temporary));
+      renameSync(temporary, this.path);
+      return result;
+    } finally {
+      rmSync(lock, { force: true });
+    }
   }
 
   /** RFC 8414 authorization server metadata. */
@@ -224,18 +286,24 @@ export class OAuthProvider {
       redirectUris: uris.slice(0, 10),
       registeredAt: new Date().toISOString(),
     };
-    this.reload();
-    // Over the ceiling, the oldest client nobody approved makes room. An
-    // approved one is never evicted by a registration, which anyone can send:
-    // a flood used to push approved clients out and kill their tokens.
-    const clients = [...this.state.clients, client];
-    const pending = clients.findIndex((candidate) => candidate.approvedAt === undefined);
-    if (clients.length > MAX_CLIENTS) {
-      if (pending === -1 || clients[pending] === client) throw new Error("registration_full");
-      clients.splice(pending, 1);
-    }
-    this.state.clients = clients;
-    this.persist();
+    this.update(() => {
+      // Over the ceiling, the oldest client that holds no token makes room. One
+      // that does is never evicted by a registration, which anyone can send: a
+      // flood used to push approved clients out and kill their tokens. A client
+      // whose tokens were revoked holds none, so revoking frees its slot.
+      const holding = new Set(this.state.tokens.map((entry) => entry.clientId));
+      const clients = [...this.state.clients, client];
+      const spare = clients.findIndex((candidate) => !holding.has(candidate.id));
+      if (clients.length > MAX_CLIENTS) {
+        if (clients[spare] === client) {
+          throw new Error(
+            "invalid_client_metadata:every client slot holds a live token; revoke one with melra clients --revoke",
+          );
+        }
+        clients.splice(spare, 1);
+      }
+      this.state.clients = clients;
+    });
     return {
       client_id: client.id,
       client_name: client.name,
@@ -272,8 +340,12 @@ export class OAuthProvider {
     return { client, redirectUri, challenge };
   }
 
-  /** The consent screen. The only place a person is asked. */
-  consentPage(query: URLSearchParams): string {
+  /**
+   * The consent screen. The only place a person is asked, and approving takes
+   * the operator's token: anything that can reach this port can submit the
+   * form, and only the operator holds that.
+   */
+  consentPage(query: URLSearchParams, error?: string): string {
     const { client, redirectUri } = this.resolve(query);
     // The redirect URI the check resolved, not the raw query: a client with one
     // registered URI may leave it out, and an absent field reached `decide` as
@@ -305,7 +377,12 @@ p.warn { padding: 10px 12px; border-radius: 6px; background: #b3261e; color: #ff
 button { font: inherit; padding: 8px 18px; border-radius: 6px; border: 1px solid currentColor;
   background: transparent; color: inherit; cursor: pointer; }
 button.go { background: #b3261e; color: #fff; border-color: #b3261e; }
-form { display: flex; gap: 10px; margin-top: 20px; }
+form { display: grid; gap: 8px; margin-top: 20px; }
+form div { display: flex; gap: 10px; margin-top: 8px; }
+input[type=password] { font: inherit; padding: 6px 8px; border-radius: 6px; border: 1px solid currentColor;
+  background: transparent; color: inherit; }
+p.hint { margin: 0; opacity: .7; font-size: 13px; }
+p.error { margin: 0; color: #b3261e; font-weight: 600; }
 </style>
 </head>
 <body>
@@ -322,8 +399,15 @@ form { display: flex; gap: 10px; margin-top: 20px; }
 desktop. Policy, approvals and receipts still apply. Only approve a client you
 started yourself, and check the name above matches it.</p>
 <form method="post" action="/oauth/authorize">${fields}
+<label for="operator-token">Operator token</label>
+<input id="operator-token" type="password" name="operator_token" autocomplete="off" required autofocus />
+<p class="hint">The token <code>melra serve --http</code> printed when it started, or your
+<code>MELRA_HTTP_TOKEN</code>. It is checked here and never sent to the client.</p>
+${error === undefined ? "" : `<p class="error" role="alert">${escapeHtml(error)}</p>`}
+<div>
 <button class="go" type="submit" name="decision" value="approve">Approve ${escapeHtml(client.name)}</button>
-<button type="submit" name="decision" value="deny">Deny</button>
+<button type="submit" name="decision" value="deny" formnovalidate>Deny</button>
+</div>
 </form>
 </main>
 </body>
@@ -331,17 +415,12 @@ started yourself, and check the name above matches it.</p>
 `;
   }
 
-  /** Where the browser goes once the operator has decided. */
+  /**
+   * Where the browser goes once the operator has decided. The caller has
+   * already checked the operator token on an approval.
+   */
   decide(form: URLSearchParams): string {
-    const { client, redirectUri, challenge } = this.resolve(
-      new URLSearchParams({
-        client_id: form.get("client_id") ?? "",
-        redirect_uri: form.get("redirect_uri") ?? "",
-        response_type: "code",
-        code_challenge_method: "S256",
-        code_challenge: form.get("code_challenge") ?? "",
-      }),
-    );
+    const { redirectUri } = this.resolve(requestOf(form));
     const target = new URL(redirectUri);
     const state = form.get("state");
     if (state !== null) target.searchParams.set("state", state);
@@ -350,14 +429,18 @@ started yourself, and check the name above matches it.</p>
       return target.toString();
     }
     const code = randomBytes(32).toString("base64url");
-    this.codes.set(code, {
-      clientId: client.id,
-      redirectUri,
-      challenge,
-      expiresAt: Date.now() + CODE_LIFETIME_MS,
+    this.update(() => {
+      // Resolved again under the lock: the client object has to be the one in
+      // the state that is about to be written.
+      const { client, challenge } = this.resolve(requestOf(form));
+      this.codes.set(code, {
+        clientId: client.id,
+        redirectUri,
+        challenge,
+        expiresAt: Date.now() + CODE_LIFETIME_MS,
+      });
+      client.approvedAt = new Date().toISOString();
     });
-    client.approvedAt = new Date().toISOString();
-    this.persist();
     target.searchParams.set("code", code);
     return target.toString();
   }
@@ -367,7 +450,6 @@ started yourself, and check the name above matches it.</p>
     if (form.get("grant_type") !== "authorization_code") {
       throw new Error("unsupported_grant_type");
     }
-    this.reload();
     const code = form.get("code") ?? "";
     const pending = this.codes.get(code);
     // Consumed whatever happens next: a code that survived a failed redemption
@@ -386,15 +468,16 @@ started yourself, and check the name above matches it.</p>
       throw new Error("invalid_grant");
     }
     const token = randomBytes(32).toString("base64url");
-    this.state.tokens = [
-      ...this.state.tokens,
-      {
-        hash: hash(token),
-        clientId: pending.clientId,
-        issuedAt: new Date().toISOString(),
-      },
-    ].slice(-MAX_TOKENS);
-    this.persist();
+    this.update(() => {
+      this.state.tokens = [
+        ...this.state.tokens,
+        {
+          hash: hash(token),
+          clientId: pending.clientId,
+          issuedAt: new Date().toISOString(),
+        },
+      ].slice(-MAX_TOKENS);
+    });
     return { access_token: token, token_type: "Bearer", scope: "melra" };
   }
 
@@ -416,12 +499,12 @@ started yourself, and check the name above matches it.</p>
 
   /** Drops every token for one client, or every token at all. */
   revoke(clientId?: string): number {
-    this.reload();
-    const before = this.state.tokens.length;
-    this.state.tokens = this.state.tokens.filter((entry) =>
-      clientId === undefined ? false : entry.clientId !== clientId,
-    );
-    this.persist();
-    return before - this.state.tokens.length;
+    return this.update(() => {
+      const before = this.state.tokens.length;
+      this.state.tokens = this.state.tokens.filter((entry) =>
+        clientId === undefined ? false : entry.clientId !== clientId,
+      );
+      return before - this.state.tokens.length;
+    });
   }
 }

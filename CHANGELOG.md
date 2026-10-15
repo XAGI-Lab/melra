@@ -56,6 +56,14 @@ All notable changes are documented here. The format follows
 
 ### Security
 
+- Approving an OAuth client takes the operator's token. The consent page's
+  form was the whole gate, and anything that could reach the port could post
+  its own approval with no person involved: another OS user, a sandboxed
+  process, or a web page that re-resolved its name to `127.0.0.1`. That
+  client then held a token for every tool. The page now asks for the token
+  `melra serve --http` printed and refuses an approval without it. It also
+  refuses framing, and on loopback the server answers only to its loopback
+  names, so a rebound page gets nothing.
 - An empty `MELRA_HTTP_TOKEN` (for example `MELRA_HTTP_TOKEN=${TOKEN}` with
   `TOKEN` unset) is treated as unset, so the server gets a random token. It
   used to become the token, and an empty `?token=` or `Bearer ` header then
@@ -64,8 +72,10 @@ All notable changes are documented here. The format follows
   `oauth.json` once at startup, kept honouring revoked tokens, and wrote them
   back on its next change; it now reloads the file whenever it changes.
 - A flood of unauthenticated client registrations no longer evicts approved
-  clients. The oldest unapproved registration makes room instead, and
-  registration is refused once every slot holds an approved client.
+  clients. The oldest client holding no token makes room instead, and
+  registration is refused once every slot holds a client with a live token.
+  Changes to `oauth.json` are locked across processes, so a registration
+  timed against `melra clients --revoke` cannot write the revoked tokens back.
 
 - A terminal command is classified as a read, which runs without approval,
   only when every argument keeps it one. The classifier looked at the program

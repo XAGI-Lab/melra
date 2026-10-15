@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createHash, randomBytes } from "node:crypto";
-import { mkdtempSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -77,6 +77,7 @@ describe("melra oauth", () => {
       redirect_uri: REDIRECT,
       code_challenge: challenge,
       state: "xyz",
+      operator_token: "operator-token",
       decision: "approve",
     });
     expect(approved.status).toBe(302);
@@ -186,6 +187,7 @@ describe("melra oauth", () => {
         client_id: clientId,
         redirect_uri: REDIRECT,
         code_challenge: challenge,
+        operator_token: "operator-token",
         decision: "approve",
       });
       return new URL(approved.headers.get("location")!).searchParams.get(
@@ -207,6 +209,50 @@ describe("melra oauth", () => {
 
     const clean = await redeem(await code(), verifier);
     expect(clean.status).toBe(200);
+  });
+
+  it("takes the operator's token to approve, so a local process cannot approve itself", async () => {
+    const registered = await fetch(`${base}/oauth/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ client_name: "Self-approver", redirect_uris: [REDIRECT] }),
+    });
+    const clientId = ((await registered.json()) as { client_id: string }).client_id;
+    const request = {
+      client_id: clientId,
+      redirect_uri: REDIRECT,
+      code_challenge: createHash("sha256").update("v").digest("base64url"),
+      decision: "approve",
+    };
+    // What any process that can reach the port used to do: POST its own approval.
+    for (const attempt of [request, { ...request, operator_token: "guess" }]) {
+      const refused = await form(`${base}/oauth/authorize`, attempt);
+      expect(refused.status).toBe(403);
+      expect(refused.headers.get("location")).toBe(null);
+      expect(await refused.text()).toContain("not this server&#39;s token");
+    }
+    // Pasted with a stray space, as tokens often are.
+    const approved = await form(`${base}/oauth/authorize`, {
+      ...request,
+      operator_token: " operator-token ",
+    });
+    expect(new URL(approved.headers.get("location")!).searchParams.get("code")).not.toBe(null);
+  });
+
+  it("serves the consent page so it cannot be framed under a decoy", async () => {
+    const registered = await fetch(`${base}/oauth/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ client_name: "Framed", redirect_uris: [REDIRECT] }),
+    });
+    const clientId = ((await registered.json()) as { client_id: string }).client_id;
+    const page = await fetch(
+      `${base}/oauth/authorize?response_type=code&client_id=${clientId}` +
+        `&code_challenge_method=S256&code_challenge=${"x".repeat(43)}`,
+    );
+    expect(page.headers.get("x-frame-options")).toBe("DENY");
+    expect(page.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
+    expect(await page.text()).toContain('name="operator_token"');
   });
 
   it("turns a denial into a redirect that carries no code", async () => {
@@ -360,6 +406,27 @@ describe("OAuthProvider", () => {
       provider.register({ client_name: `flood ${index}`, redirect_uris: [REDIRECT] });
     }
     expect(provider.clientFor(token)?.name).toBe("approved");
+  });
+
+  it("frees a slot when a client's tokens are revoked, and only then", () => {
+    const provider = new OAuthProvider(join(home, "slots"));
+    const issued = Array.from({ length: 100 }, (_, index) => issue(provider, `client ${index}`));
+    expect(() => provider.register({ client_name: "one more", redirect_uris: [REDIRECT] })).toThrow(
+      /every client slot holds a live token/,
+    );
+    provider.revoke(issued[5]!.id);
+    provider.register({ client_name: "one more", redirect_uris: [REDIRECT] });
+    expect(provider.clientFor(issued[6]!.token)).toBeDefined();
+  });
+
+  it("clears a lock a dead process left behind", () => {
+    const directory = join(home, "stale-lock");
+    const provider = new OAuthProvider(directory);
+    const lock = join(directory, "oauth.json.lock");
+    writeFileSync(lock, "");
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(lock, old, old);
+    expect(issue(provider, "after a crash").token).not.toBe("");
   });
 
   it("approves a client whose authorization request left out its one redirect URI", () => {
