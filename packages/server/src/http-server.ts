@@ -93,7 +93,8 @@ function html(response: ServerResponse, status: number, page: string): void {
  * commands, so a timing oracle on it is worth closing even on loopback.
  */
 function tokenMatches(expected: string, supplied: string | undefined): boolean {
-  if (supplied === undefined) return false;
+  // Two empty strings compare equal, so an empty token would let `?token=` in.
+  if (supplied === undefined || supplied === "" || expected === "") return false;
   const a = Buffer.from(expected);
   const b = Buffer.from(supplied);
   if (a.length !== b.length) return false;
@@ -261,10 +262,13 @@ export async function serveHttp(
     configuredPort <= 65_535
       ? configuredPort
       : DEFAULT_HTTP_PORT);
+  // An empty MELRA_HTTP_TOKEN (`MELRA_HTTP_TOKEN=${TOKEN}` with TOKEN unset) is
+  // treated as unset, like an empty MELRA_SOCKET, so it gets a random token
+  // rather than becoming one that matches an empty `?token=`.
   const token =
     options.token ??
-    environment.MELRA_HTTP_TOKEN?.trim() ??
-    randomUUID().replaceAll("-", "");
+    (environment.MELRA_HTTP_TOKEN?.trim() || randomUUID().replaceAll("-", ""));
+  if (token.trim() === "") throw new Error("http_token_empty");
   const sessions = new Map<
     string,
     { transport: StreamableHTTPServerTransport; client: string }

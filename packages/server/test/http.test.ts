@@ -70,6 +70,30 @@ describe("melra http server", () => {
     expect(response.status).toBe(401);
   });
 
+  it("treats an empty MELRA_HTTP_TOKEN as unset rather than as a token", async () => {
+    // `MELRA_HTTP_TOKEN=${TOKEN}` with TOKEN unset: an empty token used to
+    // match `?token=` and an empty Bearer header, so anyone was the operator.
+    const blank = await serveHttp({
+      runtime,
+      port: 0,
+      environment: { MELRA_HTTP_TOKEN: "  " },
+    });
+    try {
+      expect(blank.token.length).toBeGreaterThan(16);
+      const origin = `http://${blank.host}:${blank.port}`;
+      expect((await fetch(`${origin}/api/capabilities?token=`)).status).toBe(401);
+      const bearer = await fetch(`${origin}/api/capabilities`, {
+        headers: { authorization: "Bearer " },
+      });
+      expect(bearer.status).toBe(401);
+    } finally {
+      await blank.close();
+    }
+    await expect(serveHttp({ runtime, port: 0, token: "", environment: {} })).rejects.toThrow(
+      "http_token_empty",
+    );
+  });
+
   it("accepts the token in the query string, for EventSource", async () => {
     const response = await fetch(`${base}/api/capabilities?token=test-token`);
     expect(response.status).toBe(200);

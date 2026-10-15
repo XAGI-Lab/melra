@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Principal } from "@melra/protocol";
 
@@ -132,14 +132,39 @@ export class OAuthProvider {
   private state: OAuthState = { clients: [], tokens: [] };
   private readonly codes = new Map<string, PendingCode>();
   private readonly path: string;
+  /** Which version of the file `state` came from. */
+  private loaded = "";
 
   constructor(dataDirectory: string) {
     mkdirSync(dataDirectory, { recursive: true, mode: 0o700 });
     this.path = join(dataDirectory, "oauth.json");
+    this.reload();
+  }
+
+  /**
+   * Re-read the file if anything else has written it since. `melra clients
+   * --revoke` is another process: a server that kept its startup copy went on
+   * honouring revoked tokens, and its next write put them back on disk.
+   *
+   * ponytail: the read-modify-write is not locked across processes, but every
+   * step is synchronous, so the window is a few microseconds; add a lock file
+   * if two writers ever race in practice.
+   */
+  private reload(): void {
+    let version = "missing";
     try {
-      this.state = JSON.parse(readFileSync(this.path, "utf8")) as OAuthState;
-      this.state.clients ??= [];
-      this.state.tokens ??= [];
+      const stat = statSync(this.path);
+      // Every write renames a new file into place, so the inode changes too.
+      version = `${stat.ino}:${stat.mtimeMs}:${stat.size}`;
+    } catch {
+      // No file: the register is empty.
+    }
+    if (version === this.loaded) return;
+    this.loaded = version;
+    this.state = { clients: [], tokens: [] };
+    try {
+      const parsed = JSON.parse(readFileSync(this.path, "utf8")) as Partial<OAuthState>;
+      this.state = { clients: parsed.clients ?? [], tokens: parsed.tokens ?? [] };
     } catch {
       // No file yet, or one this build cannot read. Either way the honest
       // recovery is an empty register: a client re-runs the flow, and the
@@ -151,6 +176,8 @@ export class OAuthProvider {
     const temporary = `${this.path}.${process.pid}.tmp`;
     writeFileSync(temporary, JSON.stringify(this.state), { mode: 0o600 });
     renameSync(temporary, this.path);
+    const stat = statSync(this.path);
+    this.loaded = `${stat.ino}:${stat.mtimeMs}:${stat.size}`;
   }
 
   /** RFC 8414 authorization server metadata. */
@@ -197,7 +224,17 @@ export class OAuthProvider {
       redirectUris: uris.slice(0, 10),
       registeredAt: new Date().toISOString(),
     };
-    this.state.clients = [...this.state.clients, client].slice(-MAX_CLIENTS);
+    this.reload();
+    // Over the ceiling, the oldest client nobody approved makes room. An
+    // approved one is never evicted by a registration, which anyone can send:
+    // a flood used to push approved clients out and kill their tokens.
+    const clients = [...this.state.clients, client];
+    const pending = clients.findIndex((candidate) => candidate.approvedAt === undefined);
+    if (clients.length > MAX_CLIENTS) {
+      if (pending === -1 || clients[pending] === client) throw new Error("registration_full");
+      clients.splice(pending, 1);
+    }
+    this.state.clients = clients;
     this.persist();
     return {
       client_id: client.id,
@@ -213,6 +250,7 @@ export class OAuthProvider {
   private resolve(
     query: URLSearchParams,
   ): { client: OAuthClient; redirectUri: string; challenge: string } {
+    this.reload();
     const client = this.state.clients.find(
       (candidate) => candidate.id === query.get("client_id"),
     );
@@ -237,8 +275,11 @@ export class OAuthProvider {
   /** The consent screen. The only place a person is asked. */
   consentPage(query: URLSearchParams): string {
     const { client, redirectUri } = this.resolve(query);
+    // The redirect URI the check resolved, not the raw query: a client with one
+    // registered URI may leave it out, and an absent field reached `decide` as
+    // "" and failed both buttons.
     const fields = ["client_id", "redirect_uri", "state", "code_challenge"]
-      .map((name) => [name, query.get(name) ?? ""] as const)
+      .map((name) => [name, name === "redirect_uri" ? redirectUri : query.get(name) ?? ""] as const)
       .filter(([, value]) => value !== "")
       .map(
         ([name, value]) =>
@@ -326,6 +367,7 @@ started yourself, and check the name above matches it.</p>
     if (form.get("grant_type") !== "authorization_code") {
       throw new Error("unsupported_grant_type");
     }
+    this.reload();
     const code = form.get("code") ?? "";
     const pending = this.codes.get(code);
     // Consumed whatever happens next: a code that survived a failed redemption
@@ -358,6 +400,7 @@ started yourself, and check the name above matches it.</p>
 
   /** The client behind a bearer token, or `undefined` if it is not one of ours. */
   clientFor(token: string): OAuthClient | undefined {
+    this.reload();
     const issued = this.state.tokens.find((entry) => entry.hash === hash(token));
     if (issued === undefined) return undefined;
     return this.state.clients.find(
@@ -367,11 +410,13 @@ started yourself, and check the name above matches it.</p>
 
   /** Approved clients, for the console and `melra inspect`. */
   clients(): OAuthClient[] {
+    this.reload();
     return this.state.clients.map((client) => ({ ...client }));
   }
 
   /** Drops every token for one client, or every token at all. */
   revoke(clientId?: string): number {
+    this.reload();
     const before = this.state.tokens.length;
     this.state.tokens = this.state.tokens.filter((entry) =>
       clientId === undefined ? false : entry.clientId !== clientId,

@@ -50,6 +50,23 @@ All notable changes are documented here. The format follows
   name, so the certificate's IP address never matched, and a credential scoped
   to the address never applied.
 
+- The OAuth consent page's Approve and Deny buttons work for a client that
+  leaves `redirect_uri` out of its authorization request, which OAuth allows
+  when one URI is registered. Both used to fail with `invalid_redirect_uri`.
+
+### Security
+
+- An empty `MELRA_HTTP_TOKEN` (for example `MELRA_HTTP_TOKEN=${TOKEN}` with
+  `TOKEN` unset) is treated as unset, so the server gets a random token. It
+  used to become the token, and an empty `?token=` or `Bearer ` header then
+  authenticated as the operator.
+- `melra clients --revoke` takes effect on a running server. The server read
+  `oauth.json` once at startup, kept honouring revoked tokens, and wrote them
+  back on its next change; it now reloads the file whenever it changes.
+- A flood of unauthenticated client registrations no longer evicts approved
+  clients. The oldest unapproved registration makes room instead, and
+  registration is refused once every slot holds an approved client.
+
 ## [0.3.0-alpha.12] - 2026-10-14
 
 ### Added
