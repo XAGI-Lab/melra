@@ -6,6 +6,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -205,6 +206,21 @@ async def test_python_sdk_connects_to_a_running_http_server(tmp_path: Path) -> N
                 f"http://127.0.0.1:{port}/mcp", token="wrong-token"
             ):
                 pass
+        # A proxy in the environment is not on the way to loopback: it would read
+        # the token off the plain http request. This one refuses connections, so
+        # a request routed through it fails.
+        with socket.socket() as closed:
+            closed.bind(("127.0.0.1", 0))
+            proxy = f"http://127.0.0.1:{closed.getsockname()[1]}"
+        with pytest.MonkeyPatch.context() as environment:
+            for name in ("NO_PROXY", "no_proxy"):
+                environment.delenv(name, raising=False)
+            for name in ("HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"):
+                environment.setenv(name, proxy)
+            async with MelraClient.connect_http(
+                f"http://127.0.0.1:{port}/mcp", token=TOKEN
+            ) as melra:
+                assert (await melra.capabilities())["product"] == "MELRA"
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Unix sockets are POSIX-only")
