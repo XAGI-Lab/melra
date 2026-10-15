@@ -753,16 +753,15 @@ export class TaskController {
           ),
         )
       ) {
-        // What the adapter reported before the crash. Evidence alone is not
-        // success: a build that exited 1 beside a dist/ left by an earlier one
-        // would otherwise recover as verified.
+        // What the adapter reported before the crash, when it got that far.
+        // Evidence alone is not success: a build that exited 1 beside a dist/
+        // left by an earlier one would otherwise recover as verified.
         const sealed = this.store.getTaskResult(task.id);
         const reported =
           sealed === undefined
             ? undefined
             : (this.payloadCipher.open(sealed, `task:${task.id}:result`) as Record<string, unknown>);
-        const actionSucceeded =
-          reported !== undefined && (reported.success === undefined || reported.success === true);
+        const actionSucceeded = reported?.success !== false;
         const verification = await this.verifier.verify(
           request.requiredEvidence,
           {},
