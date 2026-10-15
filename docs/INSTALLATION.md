@@ -279,7 +279,10 @@ a worked example that allows only `example.com`.
 
 Mutations default to `"confirm"`: every non-read operation returns a
 task-scoped approval phrase that must be echoed back before it runs. Set
-`"mutations": "deny"` for a read-only install.
+`"mutations": "deny"` for a read-only install. A challenge stays open for
+`approvalTtlMs`: 5 minutes by default in developer mode and 30 in enforced
+mode, where an operator approves out of band; a value the policy file sets
+(a whole number of milliseconds, at most 24 hours) applies in either mode.
 
 `allowedCommands` matches on the program's basename, so it cannot tell `npm
 test` from `npm install left-pad`. `deniedTraits` is the axis that can. MELRA

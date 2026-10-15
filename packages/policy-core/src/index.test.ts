@@ -1,7 +1,9 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { describe, expect, it } from "vitest";
 import { TaskRequestSchema } from "@melra/protocol";
 import {
@@ -10,11 +12,53 @@ import {
   createDefaultPolicy,
   defaultEvidenceFor,
   evaluatePolicy,
+  loadPolicy,
   validateApproval,
   type LocalPolicy,
 } from "./index.js";
 
 const root = "/tmp/melra-policy-test";
+
+describe("approval window", () => {
+  const write = () =>
+    TaskRequestSchema.parse({
+      goal: "Write",
+      operation: { kind: "file", action: "write", path: "a.txt", content: "x" },
+      requiredEvidence: [{ type: "file_exists", path: "a.txt" }],
+    });
+  const window = (policy: LocalPolicy) => {
+    const before = Date.now();
+    const { challenge } = evaluatePolicy("t", write(), policy);
+    return Date.parse(challenge!.expiresAt) - before;
+  };
+
+  it("gives an operator approving out of band longer in enforced mode", () => {
+    const developer = createDefaultPolicy(root);
+    expect(window(developer)).toBeGreaterThan(4 * 60_000);
+    expect(window(developer)).toBeLessThanOrEqual(5 * 60_000);
+    expect(window({ ...developer, mode: "enforced" })).toBeGreaterThan(29 * 60_000);
+    // A window the policy names is the window, in either mode.
+    expect(window({ ...developer, mode: "enforced", approvalTtlMs: 60_000 })).toBeLessThanOrEqual(60_000);
+  });
+
+  it("refuses a window that would leave every challenge expired or open for good", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "melra-policy-"));
+    try {
+      const load = async (approvalTtlMs: unknown) => {
+        const path = join(directory, "policy.json");
+        await writeFile(path, JSON.stringify({ approvalTtlMs }));
+        return loadPolicy(path, directory);
+      };
+      for (const bad of [0, -1, 1.5, "300000", 24 * 60 * 60_000 + 1]) {
+        await expect(load(bad)).rejects.toThrow("policy_approval_ttl_invalid");
+      }
+      expect((await load(1)).approvalTtlMs).toBe(1);
+      expect((await load(24 * 60 * 60_000)).approvalTtlMs).toBe(24 * 60 * 60_000);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("local policy", () => {
   it("allows a read-only file operation", () => {
