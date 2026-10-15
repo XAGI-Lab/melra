@@ -34,6 +34,10 @@ All notable changes are documented here. The format follows
 
 ### Changed
 
+- `rg -L`/`--follow`, `findstr /D: /F:` and `wc --files0-from` now need
+  approval and evidence. Each reads files no argument names: `rg -L` follows a
+  link in the workspace wherever it leads, and the others take their files
+  from a list.
 - Releases publish to npm by trusted publishing: the registry accepts the
   release workflow's GitHub OIDC identity, so no npm token is stored, and npm
   attaches provenance to every `@melra/*` package. Owners register the trust
@@ -153,6 +157,29 @@ All notable changes are documented here. The format follows
     reports `recovery_required` rather than `running`.
 
 ### Security
+
+- A `git` read that runs without approval (`diff`, `show`, `log`, `status`,
+  `rev-parse`, `branch`, `tag`) no longer runs programs the repository's own
+  config or attributes name. Those live in the git directory, which the
+  terminal argument check never sees, so a read could run a program able to
+  read `payload.key`. The file capability now refuses to write, create or move
+  anything into a git directory (`path_git_metadata`, every mode), so only a
+  person approving a command can change what git's config makes it run. As
+  defence in depth, the terminal runtime spawns a git read with system and
+  global config off and fsmonitor, hooks, signature verifiers, fetching of
+  missing objects, external diff and textconv disabled; only the spawned
+  command changes, so receipts still quote what was asked, and git mutations
+  keep their configured identity. `--textconv` on a git read now needs
+  approval, like `--ext-diff`.
+
+- Terminal commands can no longer reach `payload.key`, `melra.sqlite` or a
+  directory holding them through an absolute, `..`, symlinked, firmlinked or
+  option-attached argument, in any mode (`terminal_path_reserved`). `ls`,
+  `where` and `pwd` print names only, so they may still be given a directory
+  holding them. In enforced mode a read-only command naming a path outside the
+  workspace needs approval (`read_outside_workspace`), an argument that links
+  out of the workspace is refused, and a data directory inside the workspace
+  refuses to start (`enforced_mode_refuses_data_inside_workspace`).
 
 - The Python SDK no longer sends the bearer token through a proxy from
   `HTTP_PROXY`, `ALL_PROXY` or the macOS system settings when it connects to

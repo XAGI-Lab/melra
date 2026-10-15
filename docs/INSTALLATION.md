@@ -745,6 +745,17 @@ closing every door it owns:
   served at all, on loopback or anywhere else. Enforced mode admits service
   identities the operator issued, and nothing that asks to be let in — so the
   bearer token is the only way in.
+- **A read that leaves the workspace is shown to a person first.** A
+  read-only terminal command whose argument or option value names a path
+  outside the workspace plans as `confirm` with reason `read_outside_workspace`
+  and runs only once its phrase is echoed back. Developer mode lets those reads
+  through, as before.
+- **An argument that only looks inside the workspace is refused if it links
+  out**, with `terminal_path_outside_workspace`, approved or not.
+- **`MELRA_HOME` must sit outside `MELRA_WORKSPACE`.** A workspace holding the
+  data directory lets a recursive search of no path at all reach the database
+  and the payload key, so the process exits with
+  `enforced_mode_refuses_data_inside_workspace` instead.
 - **Every receipt says `enforced`.** `ActionReceipt.mode` records it, and
   `melra_capabilities` publishes `policy.mode`, so an auditor never has to infer
   whether an effect was governed by the only door or by one of several.

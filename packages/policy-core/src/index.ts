@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { readFile } from "node:fs/promises";
-import { basename, dirname, normalize, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, normalize, relative, resolve, sep } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { hostOf } from "./network-policy.js";
 import type {
@@ -27,6 +27,7 @@ import {
   deploymentMode,
   LOCAL_IDENTITY,
   principalRef,
+  terminalArgumentPaths,
 } from "@melra/protocol";
 
 export interface LocalPolicy {
@@ -392,8 +393,9 @@ export function classifyCommand(
  * harmless here falls back to a mutation, which needs approval: the cautious
  * answer, at the cost of an approval for an unusual but harmless spelling.
  *
- * Reading files outside the workspace through these tools stays the residual
- * the threat model already names for terminal commands.
+ * Reading outside the workspace through these tools stays a developer-mode
+ * residual. Enforced mode asks a person first (`read_outside_workspace`), and
+ * the terminal runtime refuses MELRA's own files in every mode.
  */
 function readOnlyCall(
   command: string,
@@ -407,6 +409,10 @@ function readOnlyCall(
   if (args.some(namesNetworkPath)) return false;
   if (name === "git") return gitReadOnly(args);
   if (name === "rg") return !args.some(rgRunsOrDecompresses);
+  // `/D:` and `/F:` take the directories and files to search from a list no
+  // argument shows, and `--files0-from` the files to count.
+  if (name === "findstr" && args.some((arg) => /^[-/][df]:/i.test(arg))) return false;
+  if (name === "wc" && args.some((arg) => /^--files0-from(=|$)/.test(arg))) return false;
   // `/s <computer>` queries another machine, as the logged-on user.
   if (name === "tasklist") return !args.some((arg) => /^[-/][sup](:|$)/i.test(arg));
   // `--logs-dir <path>` creates that directory and writes npm's log into it.
@@ -431,14 +437,31 @@ function namesNetworkPath(arg: string): boolean {
   return /[\\/]{2}/.test(arg) || arg.includes("\\??\\");
 }
 
-/** `--pre <cmd>` and `--hostname-bin <cmd>` run programs; `-z` runs decompressors. */
+/**
+ * `--pre <cmd>` and `--hostname-bin <cmd>` run programs; `-z` runs
+ * decompressors; `-L`/`--follow` follow links to files no argument names, the
+ * data directory included.
+ */
 function rgRunsOrDecompresses(arg: string): boolean {
-  if (/^--(pre|pre-glob|hostname-bin|search-zip)(=|$)/i.test(arg)) return true;
-  return /^-[^-]/.test(arg) && arg.slice(1).includes("z");
+  if (/^--(pre|pre-glob|hostname-bin|search-zip|follow)(=|$)/i.test(arg)) return true;
+  return /^-[^-]/.test(arg) && /[zL]/.test(arg.slice(1));
+}
+
+/** Whether a terminal command names a path outside the workspace, by spelling. Links are the runtime's half. */
+function namesPathOutside(operation: Operation, root: string): boolean {
+  if (operation.kind !== "terminal") return false;
+  const cwd = resolve(root, operation.cwd ?? ".");
+  return terminalArgumentPaths(operation.args).some((path) => {
+    // A bare switch (`/S`, `/I`, `/?`) is not a path on Windows. One with a
+    // value attached (`/G:x`) still has that value judged.
+    if (process.platform === "win32" && /^\/[a-z?]+$/i.test(path)) return false;
+    const rel = relative(root, resolve(cwd, path));
+    return rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel);
+  });
 }
 
 /** `diff`/`log`/`show` options that write files, run configured programs, or leave the repository. */
-const GIT_UNSAFE_OPTION = /^--(output|ext-diff|no-index|exec|upload-pack|receive-pack)(=|$)/i;
+const GIT_UNSAFE_OPTION = /^--(output|ext-diff|textconv|no-index|exec|upload-pack|receive-pack)(=|$)/i;
 
 /**
  * Options of `git branch` and `git tag` that only list. Any other option
@@ -1183,10 +1206,12 @@ export function evaluatePolicy(
   }
 
   if (classified.effect === "read") {
-    return { decision: decide("allow", "read_only_operation"), ...metered };
-  }
-
-  if (policy.mutations === "deny") {
+    // Enforced mode asserts MELRA is the only door, so a read that leaves the
+    // workspace is shown to a person first.
+    if (policy.mode !== "enforced" || !namesPathOutside(request.operation, policy.workspaceRoot)) {
+      return { decision: decide("allow", "read_only_operation"), ...metered };
+    }
+  } else if (policy.mutations === "deny") {
     return { decision: decide("deny", "mutations_disabled") };
   }
 
@@ -1194,7 +1219,10 @@ export function evaluatePolicy(
   const approvalId = randomUUID();
   const phrase = `APPROVE ${digest.slice(0, 12)}`;
   return {
-    decision: decide("confirm", "explicit_approval_required"),
+    decision: decide(
+      "confirm",
+      classified.effect === "read" ? "read_outside_workspace" : "explicit_approval_required",
+    ),
     ...metered,
     challenge: {
       approvalId,

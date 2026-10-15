@@ -4,8 +4,8 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { realpath } from "node:fs/promises";
-import { isAbsolute, relative, resolve, sep } from "node:path";
-import { outcomeUnknown, type TerminalOperation } from "@melra/protocol";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { outcomeUnknown, terminalArgumentPaths, type TerminalOperation } from "@melra/protocol";
 import { redactSecrets } from "@melra/receipt-schema";
 import { resolveCommand } from "./resolve-command.js";
 
@@ -16,8 +16,20 @@ export interface TerminalRuntimeOptions {
   root: string;
   allowedEnvironment?: string[];
   baseEnvironment?: NodeJS.ProcessEnv;
+  /** Whether a path is, or is inside, one of MELRA's own files, which no argument may reach in any mode. Absent, nothing is. */
+  reserved?: (path: string) => Promise<boolean>;
+  /** Whether a path is a directory holding one of them, which a recursive reader given it reaches unnamed. Absent, none is. */
+  holdsReserved?: (path: string) => Promise<boolean>;
+  /** Refuse an argument spelled inside the root that leads out: policy asked approval only for ones spelled outside. */
+  confineArguments?: boolean;
 }
 
+/**
+ * Programs that print names, never contents, so a directory holding MELRA's
+ * files is safe to give them: `ls ..` from a project under home keeps working.
+ * Naming the files themselves is still refused.
+ */
+const NAME_LISTERS = new Set(["ls", "pwd", "where"]);
 
 function inside(root: string, candidate: string): boolean {
   const rel = relative(root, candidate);
@@ -28,6 +40,87 @@ function inside(root: string, candidate: string): boolean {
 // receipt or a memory value would be.
 export function redactTerminalOutput(value: string): string {
   return redactSecrets(value).value;
+}
+
+/** Where a path leads: through every link, or for one not there yet, through its directory's. */
+async function leadsTo(spelled: string): Promise<string> {
+  return await realpath(spelled).catch(async () =>
+    join(await realpath(dirname(spelled)).catch(() => resolve(dirname(spelled))), basename(spelled)));
+}
+
+/** The null device, so git's system/global config files resolve to nothing. */
+const GIT_NULL_CONFIG = process.platform === "win32" ? "NUL" : "/dev/null";
+
+/**
+ * git subcommands policy classifies as approval-free reads (the same set as
+ * `READ_ONLY_GIT_ACTIONS` in policy-core). Kept here, not imported, because this
+ * is the spawn boundary and it has to decide for itself what git it is about to
+ * run — policy cannot see what the .git/config of the repo will do.
+ */
+const GIT_READ_SUBCOMMANDS = new Set(["branch", "diff", "log", "rev-parse", "show", "status", "tag"]);
+/** The read subcommands that emit diffs — the only ones that accept the diff flags below. */
+const GIT_DIFF_SUBCOMMANDS = new Set(["diff", "log", "show"]);
+
+/** Whether a command, path-qualified or not, is the git program by name. */
+function isGitCommand(command: string): boolean {
+  return (
+    basename(command.replaceAll("\\", "/")).toLowerCase().replace(/\.(exe|cmd|bat|com|ps1)$/, "") ===
+    "git"
+  );
+}
+
+/**
+ * Settings that each turn off a whole family of programs git can run while
+ * serving a read: hooks (every hook, through one hooks path), signature
+ * verifiers (every format's program), and fetching objects a partial clone is
+ * missing (every transport, proxy and credential program behind it). Each is a
+ * `-c` or an environment variable, so it also reaches any git a read starts in
+ * turn, such as a submodule's.
+ *
+ * ponytail: GIT_NO_LAZY_FETCH needs git 2.45; an older git ignores it.
+ */
+const GIT_READ_SWITCHES = [
+  "-c", "core.fsmonitor=false",
+  "-c", `core.hooksPath=${GIT_NULL_CONFIG}`,
+  "-c", `gpg.program=${GIT_NULL_CONFIG}`,
+  "-c", `gpg.ssh.program=${GIT_NULL_CONFIG}`,
+  "-c", `gpg.x509.program=${GIT_NULL_CONFIG}`,
+];
+
+/**
+ * Policy classifies several `git` subcommands (diff, show, log, status, ...) as
+ * approval-free reads, but git runs programs the repository's own config and
+ * attributes name while serving one. Those live in the git directory, not in
+ * the terminal arguments, so `checkArguments` never sees them, and policy
+ * cannot either.
+ *
+ * The guarantee is that nothing MELRA writes lands in a git directory: the
+ * file runtime refuses it (`path_git_metadata`), so only a person approving a
+ * command that does so can change what git's config makes it run. This is
+ * defence in depth on top: a read-shaped call (subcommand first, as policy
+ * requires for a read) spawns with system and global config nulled, the
+ * switches above, and external diff and textconv off on the subcommands that
+ * emit diffs (the only ones that accept the flags). Mutations — commit, push,
+ * or a global option before the subcommand — are left untouched, so a
+ * committer's identity and credentials from global config still apply.
+ *
+ * Pure and exported for unit testing. The caller's `operation.args` are never
+ * touched, only the spawned argv, so receipts still quote what was asked.
+ */
+export function hardenGitRead(
+  command: string,
+  args: readonly string[],
+): { args: string[]; env: Record<string, string> } | undefined {
+  if (!isGitCommand(command)) return undefined;
+  const first = args[0];
+  if (first === undefined || !GIT_READ_SUBCOMMANDS.has(first.toLowerCase())) return undefined;
+  const diffFlags = GIT_DIFF_SUBCOMMANDS.has(first.toLowerCase())
+    ? ["--no-ext-diff", "--no-textconv"]
+    : [];
+  return {
+    args: [...GIT_READ_SWITCHES, first, ...diffFlags, ...args.slice(1)],
+    env: { GIT_CONFIG_SYSTEM: GIT_NULL_CONFIG, GIT_CONFIG_GLOBAL: GIT_NULL_CONFIG, GIT_NO_LAZY_FETCH: "1" },
+  };
 }
 
 interface PreparedCommand {
@@ -135,6 +228,11 @@ export class TerminalRuntime {
   readonly root: string;
   readonly allowedEnvironment: Set<string>;
   readonly baseEnvironment: NodeJS.ProcessEnv;
+  /** The root as policy spelled it, which is what "spelled inside" is measured against. */
+  private readonly lexicalRoot: string;
+  private readonly reserved: (path: string) => Promise<boolean>;
+  private readonly holdsReserved: (path: string) => Promise<boolean>;
+  private readonly confineArguments: boolean;
   private readonly jobs = new Map<string, BackgroundJob>();
 
   private constructor(
@@ -146,6 +244,10 @@ export class TerminalRuntime {
       options.allowedEnvironment ?? ["CI", "LANG", "LC_ALL", "NO_COLOR", "TERM"],
     );
     this.baseEnvironment = options.baseEnvironment ?? process.env;
+    this.lexicalRoot = resolve(options.root);
+    this.reserved = options.reserved ?? (async () => false);
+    this.holdsReserved = options.holdsReserved ?? (async () => false);
+    this.confineArguments = options.confineArguments ?? false;
   }
 
   static async create(options: TerminalRuntimeOptions): Promise<TerminalRuntime> {
@@ -160,6 +262,30 @@ export class TerminalRuntime {
     return actual;
   }
 
+  private async checkArguments(operation: TerminalOperation, cwd: string): Promise<void> {
+    const lexicalCwd = resolve(this.lexicalRoot, operation.cwd ?? ".");
+    // A path-qualified program is whatever file sits at that path, so only a
+    // bare name is taken at its word.
+    const command = operation.command ?? "";
+    const listsNames =
+      !/[\\/]/.test(command) &&
+      NAME_LISTERS.has(command.toLowerCase().replace(/\.(exe|cmd|bat|com|ps1)$/, ""));
+    for (const path of [".", ...terminalArgumentPaths(operation.args)]) {
+      // Unnormalised: the program resolves `link/..` through the link.
+      const real = await leadsTo(isAbsolute(path) ? path : `${cwd}${sep}${path}`);
+      // findstr and where expand their own wildcards, reading the directory.
+      for (const probe of /[*?]/.test(path) ? [real, dirname(real)] : [real]) {
+        if ((await this.reserved(probe)) || (!listsNames && (await this.holdsReserved(probe)))) {
+          throw new Error("terminal_path_reserved");
+        }
+      }
+      const spelledInside = inside(this.lexicalRoot, resolve(lexicalCwd, path));
+      if (this.confineArguments && spelledInside && !inside(this.root, real)) {
+        throw new Error("terminal_path_outside_workspace");
+      }
+    }
+  }
+
   private async prepare(operation: TerminalOperation): Promise<PreparedCommand> {
     if (operation.command === undefined) {
       throw new Error(`terminal_${operation.action}_requires_command`);
@@ -168,6 +294,9 @@ export class TerminalRuntime {
       throw new Error("terminal_input_contains_null");
     }
     const cwd = await this.resolveCwd(operation.cwd);
+    // Before the program is looked up, so a refusal never depends on whether
+    // it is installed.
+    await this.checkArguments(operation, cwd);
     const environment: NodeJS.ProcessEnv = {};
     for (const name of ["PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "COMSPEC"]) {
       if (this.baseEnvironment[name] !== undefined) {
@@ -191,15 +320,22 @@ export class TerminalRuntime {
       pathExt: environment["PATHEXT"],
       comspec: this.baseEnvironment["COMSPEC"],
     });
+    // Disable git's config-defined program channels on a read at the spawn
+    // boundary, since policy cannot see .git/config (see hardenGitRead).
+    // Skipped when resolveCommand wrapped the call in cmd.exe, where `args` is an
+    // already-quoted command line rather than git's own arguments.
+    const hardened = resolved.windowsVerbatimArguments
+      ? undefined
+      : hardenGitRead(resolved.executable, resolved.args);
     return {
       command: operation.command,
       args: operation.args,
       file: resolved.file,
-      spawnArgs: resolved.args,
+      spawnArgs: hardened?.args ?? resolved.args,
       windowsVerbatimArguments: resolved.windowsVerbatimArguments,
       executable: resolved.executable,
       cwd,
-      environment,
+      environment: hardened === undefined ? environment : { ...environment, ...hardened.env },
       timeoutMs: operation.timeoutMs,
       maxOutputChars: operation.maxOutputChars,
       interactive: operation.interactive,

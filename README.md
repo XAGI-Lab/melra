@@ -25,7 +25,7 @@ worked, and keeps a receipt. Any agent, any model, same guarantees.
 <a href="https://github.com/XAGI-Lab/melra/releases"><img src="https://img.shields.io/github/v/release/XAGI-Lab/melra?include_prereleases&style=flat-square&color=8b5cf6&logo=github&label=release" alt="Latest release" /></a>
 <a href="https://www.npmjs.com/package/@melra/cli"><img src="https://img.shields.io/npm/v/@melra/cli/alpha?style=flat-square&logo=npm&label=%40melra%2Fcli&color=cb3837" alt="@melra/cli on npm" /></a>
 <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-f97316?style=flat-square" alt="Apache-2.0 license" /></a>
-<img src="https://img.shields.io/badge/evals-51%2F51-22c55e?style=flat-square&logo=checkmarx&logoColor=white" alt="51 of 51 deterministic evaluation scenarios passing" />
+<img src="https://img.shields.io/badge/evals-52%2F52-22c55e?style=flat-square&logo=checkmarx&logoColor=white" alt="52 of 52 deterministic evaluation scenarios passing" />
 <img src="https://img.shields.io/badge/telemetry-off-0f172a?style=flat-square" alt="Telemetry off" />
 
 <!-- Platforms & stack -->
@@ -595,7 +595,7 @@ or that unlike benchmarks are comparable.
 
 | | What | Result | What it means |
 |:--:|---|---:|---|
-| ✅ | Safety and execution evals | **51/51** | Deterministic policy, capability-grant, credential-scope, traversal, terminal, memory, computer, HTTP, cancellation and verification scenarios |
+| ✅ | Safety and execution evals | **52/52** | Deterministic policy, capability-grant, credential-scope, traversal, terminal, memory, computer, HTTP, cancellation and verification scenarios |
 | 🔁 | Durable Core eval | **8/8** | 100% expected recovery, 0 duplicate execution, 0 false success, 100% event consistency |
 | 🛡️ | [GovBench](docs/research/GOVBENCH.md) (self-authored) | **312/312** safety, **50/50** utility | 362 model-free cases through the real runtime: containment, approval integrity, verification honesty, exactly-once, redaction, and false positives on legitimate work. Its first run found two real bugs (293/307), both fixed; governance adds about 0.5–1.4 ms per action |
 | 🧠 | LoCoMo retrieval | **0.7597** coverage@20 | 1,982 evidence-bearing questions with zero model, embedding or network calls; re-run on 2026-10-14 and identical on every metric |

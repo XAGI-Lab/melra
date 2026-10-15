@@ -90,7 +90,18 @@ export class FileRuntime {
     return new FileRuntime(options, await realpath(options.root));
   }
 
-  async resolvePath(input: string, allowRoot = false): Promise<string> {
+  /**
+   * `creating` refuses a path that is, or is inside, a git directory: a
+   * repository's config, attributes and hooks name programs git runs while
+   * serving a read that needs no approval, so content written there by an
+   * innocent-looking approved write would run later with none. Judged on the
+   * resolved path, by the filesystem's spelling, so a link or a case variant
+   * reaches the same refusal.
+   *
+   * ponytail: by name, so an NTFS stream spelling of `.git` is not caught; the
+   * reserved-file check has the same Windows follow-up.
+   */
+  async resolvePath(input: string, allowRoot = false, creating = false): Promise<string> {
     const lexical = resolve(this.root, input);
     // "Is it the root" asked the way `inside` asks "is it within": through
     // `relative`, which ignores case on Windows. A string compare let `..\\WS`
@@ -119,6 +130,9 @@ export class FileRuntime {
       }
     }
     if (await this.isReserved(real)) throw new Error("path_reserved");
+    if (creating && relative(this.root, real).split(sep).some((part) => spelling(part) === ".git")) {
+      throw new Error("path_git_metadata");
+    }
     return lexical;
   }
 
@@ -127,6 +141,9 @@ export class FileRuntime {
     // A descriptor path names whatever this process has open, MELRA's locked
     // files included, and on macOS realpath leaves it under /dev/fd.
     if (process.platform !== "win32" && inside("/dev/fd", resolve(path))) return true;
+    // ponytail: one stat per name match, so `payload.key/` repeated 340 times
+    // across 100 arguments still costs about 0.9 s. Cache the reserved
+    // identities if that ever shows up.
     for (let current = resolve(path); ; current = dirname(current)) {
       const name = spelling(basename(current));
       for (const entry of this.reserved) {
@@ -153,17 +170,44 @@ export class FileRuntime {
       }
     }
     if (identities.size === 0) return false;
+    // Root first, stopping at the first missing directory: nothing below it
+    // exists, and a 4 KB argument would otherwise cost thousands of failed stats.
+    const chain: string[] = [];
     for (let current = resolve(path); ; current = dirname(current)) {
+      chain.unshift(current);
+      if (dirname(current) === current) break;
+    }
+    for (const current of chain) {
       const found = await stat(current, { bigint: true }).catch(() => undefined);
       if (found !== undefined && identities.has(identity(found))) return true;
-      if (dirname(current) === current) return false;
+      // Except /.vol/<dev>, which never stats though /.vol/<dev>/<ino> below it does.
+      if (found === undefined && dirname(current) !== "/.vol") return false;
     }
+    return false;
+  }
+
+  /** Whether `path` is a directory holding a reserved entry at any depth: a recursive reader given it reaches them unnamed. */
+  async holdsReserved(path: string): Promise<boolean> {
+    const target = await stat(path, { bigint: true }).catch(() => undefined);
+    if (target?.isDirectory() !== true) return false;
+    for (const holder of new Set(this.reserved.map((entry) => dirname(entry)))) {
+      // Lexically and through links, so a holder under a symlinked home is still found.
+      for (const start of new Set([holder, await realpath(holder).catch(() => holder)])) {
+        for (let current = start; ; current = dirname(current)) {
+          const found = await stat(current, { bigint: true }).catch(() => undefined);
+          if (found !== undefined && identity(found) === identity(target)) return true;
+          if (dirname(current) === current) break;
+        }
+      }
+    }
+    return false;
   }
 
   async execute(operation: FileOperation): Promise<Record<string, unknown>> {
     const path = await this.resolvePath(
       operation.path,
       operation.action === "list" && operation.path === ".",
+      operation.action === "write" || operation.action === "mkdir",
     );
     switch (operation.action) {
       case "list": {
@@ -256,7 +300,7 @@ export class FileRuntime {
         if (operation.destination === undefined) {
           throw new Error("file_move_requires_destination");
         }
-        const destination = await this.resolvePath(operation.destination);
+        const destination = await this.resolvePath(operation.destination, false, true);
         await mkdir(dirname(destination), { recursive: true });
         await rename(path, destination);
         return {

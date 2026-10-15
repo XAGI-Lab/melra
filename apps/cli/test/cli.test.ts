@@ -219,10 +219,13 @@ describe("melra CLI", () => {
     ).toEqual([]);
 
     // Enforced mode does not earn a level the endpoint has not earned; what it
-    // changes is whose word the remaining caveat rests on.
+    // changes is whose word the remaining caveat rests on. It refuses a data
+    // directory inside the workspace, so this one sits beside it.
+    const strictHome = await mkdtemp(join(tmpdir(), "melra-cli-home-"));
+    roots.push(strictHome);
     const strict = await execute(process.execPath, [entry, "conformance"], {
       cwd: root,
-      env: { ...env, MELRA_MODE: "enforced" },
+      env: { ...env, MELRA_MODE: "enforced", MELRA_HOME: strictHome },
     });
     const strictReport = JSON.parse(strict.stdout) as {
       level: number;

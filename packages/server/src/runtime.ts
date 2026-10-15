@@ -277,7 +277,22 @@ export async function createMelraRuntime(
     maxFileBytes: policy.maxFileBytes,
     reserved,
   });
-  const terminal = await TerminalRuntime.create({ root: runtimeRoot });
+  // A workspace holding the data directory reaches it with a recursive read of
+  // no path at all, so refusing the directories above it would be theatre
+  // there; enforced mode refuses that layout instead.
+  const holdsData = await files.holdsReserved(files.root);
+  if (mode === "enforced" && holdsData) {
+    store.close();
+    throw new Error(
+      "enforced_mode_refuses_data_inside_workspace: move MELRA_HOME outside MELRA_WORKSPACE.",
+    );
+  }
+  const terminal = await TerminalRuntime.create({
+    root: runtimeRoot,
+    reserved: (path) => files.isReserved(path),
+    ...(holdsData ? {} : { holdsReserved: (path: string) => files.holdsReserved(path) }),
+    confineArguments: mode === "enforced",
+  });
   const browser = new BrowserRuntime({
     artifactDirectory: join(dataDirectory, "artifacts"),
     workspaceRoot: runtimeRoot,

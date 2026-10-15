@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { TerminalOperationSchema } from "@melra/protocol";
-import { TerminalRuntime, redactTerminalOutput } from "./index.js";
+import { TerminalRuntime, hardenGitRead, redactTerminalOutput } from "./index.js";
 
 const roots: string[] = [];
 
@@ -351,4 +351,119 @@ describe("TerminalRuntime", () => {
     // is gone, and no throw means close resolved while it was still running.
     expect(() => process.kill(pid, 0)).toThrow(/ESRCH/);
   }, 30_000);
+});
+
+describe("arguments", () => {
+  const run = (runtime: TerminalRuntime, spelling: string) =>
+    runtime.execute(
+      TerminalOperationSchema.parse({
+        kind: "terminal",
+        action: "run",
+        command: process.execPath,
+        args: ["-e", "", "--", spelling],
+      }),
+    );
+
+  it("refuses every spelling that reaches MELRA's files, before anything runs", async () => {
+    const base = await mkdtemp(join(tmpdir(), "melra-terminal-"));
+    roots.push(base);
+    const ws = join(base, "ws");
+    const data = join(base, "data");
+    await mkdir(ws);
+    await mkdir(join(data, "sub"), { recursive: true });
+    await writeFile(join(data, "payload.key"), "secret");
+    const realData = await realpath(data);
+    const realKey = join(realData, "payload.key");
+    const runtime = await TerminalRuntime.create({
+      root: ws,
+      reserved: async (path) => [realKey, realData, join(realData, "melra.sqlite-journal")].includes(path),
+    });
+    const key = join(data, "payload.key");
+    const spellings = [key, join("..", "data", "payload.key"), `--file=${key}`, `-f${key}`, join(data, "payload.*")];
+    if (process.platform !== "win32") {
+      // The program resolves `l/..` through the link, to data/, not to ws/.
+      await symlink(join(data, "sub"), join(ws, "l"));
+      spellings.push("l/../payload.key", "l/../melra.sqlite-journal");
+    }
+    for (const spelling of spellings) {
+      await expect(run(runtime, spelling), spelling).rejects.toThrow(/terminal_path_reserved/);
+    }
+    await expect(run(runtime, "ok.txt")).resolves.toMatchObject({ success: true });
+  });
+
+  it("in enforced mode, refuses an argument spelled inside that leads out", async () => {
+    const base = await mkdtemp(join(tmpdir(), "melra-terminal-"));
+    roots.push(base);
+    const ws = join(base, "ws");
+    await mkdir(ws);
+    await mkdir(join(base, "outside"));
+    await symlink(join(base, "outside"), join(ws, "out"), "junction");
+    // Spelled outside, policy already asked a person; spelled inside, it did not.
+    const confined = await TerminalRuntime.create({ root: ws, confineArguments: true });
+    await expect(run(confined, join("out", "f"))).rejects.toThrow(/terminal_path_outside_workspace/);
+    await expect(run(confined, join(base, "outside", "f"))).resolves.toMatchObject({ success: true });
+    const developer = await TerminalRuntime.create({ root: ws });
+    for (const spelling of [join("out", "f"), join(base, "outside", "f")]) {
+      await expect(run(developer, spelling)).resolves.toMatchObject({ success: true });
+    }
+  });
+});
+
+describe("hardenGitRead", () => {
+  // Portable: it asserts the hardening decision, not a spawned POSIX program, so
+  // it runs on every OS. The null device differs per platform.
+  const nullConfig = process.platform === "win32" ? "NUL" : "/dev/null";
+  const env = { GIT_CONFIG_SYSTEM: nullConfig, GIT_CONFIG_GLOBAL: nullConfig, GIT_NO_LAZY_FETCH: "1" };
+  // Hooks, signature verifiers and fsmonitor off by `-c`s that beat local config.
+  const switches = [
+    "-c", "core.fsmonitor=false",
+    "-c", `core.hooksPath=${nullConfig}`,
+    "-c", `gpg.program=${nullConfig}`,
+    "-c", `gpg.ssh.program=${nullConfig}`,
+    "-c", `gpg.x509.program=${nullConfig}`,
+  ];
+
+  it("turns off every config-defined program channel on a git read", () => {
+    // fsmonitor off by a `-c` that beats local config; external-diff and
+    // textconv off by the flags the diff-emitting subcommands take; system and
+    // global config nulled in the env.
+    expect(hardenGitRead("git", ["show", "HEAD"])).toEqual({
+      args: [...switches, "show", "--no-ext-diff", "--no-textconv", "HEAD"],
+      env,
+    });
+    expect(hardenGitRead("git", ["log", "-p"])).toEqual({
+      args: [...switches, "log", "--no-ext-diff", "--no-textconv", "-p"],
+      env,
+    });
+    expect(hardenGitRead("git", ["diff", "--stat"])).toEqual({
+      args: [...switches, "diff", "--no-ext-diff", "--no-textconv", "--stat"],
+      env,
+    });
+  });
+
+  it("omits the diff flags on reads that do not accept them", () => {
+    // `git status --no-ext-diff` is an error, so the flags go only on diff/log/show.
+    for (const sub of [["status"], ["rev-parse", "HEAD"], ["branch"], ["tag"]]) {
+      expect(hardenGitRead("git", sub)).toEqual({
+        args: [...switches, ...sub],
+        env,
+      });
+    }
+  });
+
+  it("hardens a path-qualified git, since it is still the git program", () => {
+    expect(hardenGitRead("/usr/bin/git", ["log"])).toBeDefined();
+    expect(hardenGitRead("C:\\Program Files\\Git\\bin\\git.exe", ["status"])).toBeDefined();
+  });
+
+  it("leaves mutations, global-option-first calls, and other programs alone", () => {
+    // A mutation keeps its global config (a committer's identity, credentials).
+    expect(hardenGitRead("git", ["commit", "-m", "x"])).toBeUndefined();
+    expect(hardenGitRead("git", ["push"])).toBeUndefined();
+    // A global option before the subcommand is not a read to policy either.
+    expect(hardenGitRead("git", ["-c", "core.pager=cat", "status"])).toBeUndefined();
+    // Only git itself, not a lookalike.
+    expect(hardenGitRead("git-foo", ["show"])).toBeUndefined();
+    expect(hardenGitRead("cat", ["show", "HEAD"])).toBeUndefined();
+  });
 });

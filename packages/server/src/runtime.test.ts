@@ -1,9 +1,10 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, parse, resolve } from "node:path";
+import { basename, join, parse, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { deploymentMode, TaskRequestSchema, type TaskRequest } from "@melra/protocol";
 import { serveHttp } from "./http-server.js";
@@ -297,6 +298,258 @@ describe("enforced mode", () => {
       expect(refused.status).toBe(401);
     } finally {
       await endpoint.close();
+    }
+  });
+});
+
+describe("terminal arguments", () => {
+  let base: string;
+  let workspace: string;
+  let data: string;
+  let runtime: MelraRuntime | undefined;
+
+  beforeEach(async () => {
+    base = await mkdtemp(join(tmpdir(), "melra-arguments-"));
+    workspace = join(base, "workspace");
+    data = join(base, "data");
+    await mkdir(workspace, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await runtime?.close();
+    runtime = undefined;
+    await rm(base, { recursive: true, force: true });
+  });
+
+  const terminal = (command: string, args: string[], evidence = false) =>
+    request({
+      operation: { kind: "terminal", action: "run", command, args },
+      ...(evidence ? { requiredEvidence: [{ type: "exit_code", value: 0 }] } : {}),
+    });
+  /** Plans and runs a task, echoing the phrase back when one is asked for. */
+  const run = async (task: TaskRequest) => {
+    const planned = runtime!.controller.plan(task);
+    const approval =
+      planned.approval === undefined
+        ? undefined
+        : { approvalId: planned.approval.approvalId, phrase: planned.approval.phrase };
+    return { planned, task: (await runtime!.controller.execute(planned.id, approval)).task };
+  };
+
+  it("refuses MELRA's own files however an argument reaches them, in every mode", async () => {
+    runtime = await createMelraRuntime({ workspaceRoot: workspace, dataDirectory: data, environment: {} });
+    const key = join(data, "payload.key");
+    // Spread over several programs: three failures of one open its circuit.
+    for (const task of [
+      terminal("cat", [key]),
+      terminal("head", [join("..", basename(data), "melra.sqlite")]),
+      // A directory holding them, which a recursive reader reaches unnamed.
+      terminal("cat", [base]),
+      terminal("rg", ["x", base]),
+      // Approval does not open them either.
+      terminal("node", ["-e", "process.stdout.write(require('fs').readFileSync(process.argv[1]))", key], true),
+    ]) {
+      const { planned, task: done } = await run(task);
+      expect(planned.status).not.toBe("policy_blocked");
+      expect(done.status).toBe("failed");
+      expect(done.error).toMatch(/terminal_path_reserved/);
+    }
+    // `ls` prints names, not contents, so `ls ..` from a project under home works.
+    const listed = (await run(terminal("ls", [base]))).task;
+    expect(listed.error ?? "").not.toMatch(/terminal_path_reserved/);
+    if (process.platform !== "win32") expect(listed.status).toBe("verified_success");
+    expect((await run(terminal("ls", [key]))).task.error).toMatch(/terminal_path_reserved/);
+    if (process.platform === "darwin") {
+      // A firmlink spells the same directory another way.
+      for (const task of [
+        terminal("cat", [`/System/Volumes/Data${await realpath(key)}`]),
+        terminal("rg", ["x", `/System/Volumes/Data${await realpath(base)}`]),
+      ]) {
+        expect((await run(task)).task.error).toMatch(/terminal_path_reserved/);
+      }
+    }
+    await runtime.close();
+    runtime = await createMelraRuntime({
+      workspaceRoot: workspace,
+      dataDirectory: data,
+      environment: {},
+      unhinged: true,
+    });
+    const unhinged = await run(terminal("cat", [key]));
+    expect(unhinged.planned.status).toBe("planned");
+    expect(unhinged.task.error).toMatch(/terminal_path_reserved/);
+  });
+
+  it("in enforced mode, shows a person a read outside the workspace and refuses a link out", async () => {
+    await writeFile(join(base, "outside.txt"), "outside", "utf8");
+    await mkdir(join(base, "outside"));
+    await writeFile(join(base, "outside", "f"), "linked", "utf8");
+    await symlink(join(base, "outside"), join(workspace, "out"), "junction");
+    runtime = await createMelraRuntime({
+      workspaceRoot: workspace,
+      dataDirectory: data,
+      environment: { MELRA_MODE: "enforced" },
+    });
+    const outside = runtime.controller.plan(terminal("cat", [join(base, "outside.txt")]));
+    expect(outside.status).toBe("awaiting_approval");
+    expect(outside.policyDecision.reason).toBe("read_outside_workspace");
+    await expect(runtime.controller.execute(outside.id)).rejects.toThrow(/approval_required/);
+    if (process.platform !== "win32") {
+      const approved = await runtime.controller.execute(outside.id, {
+        approvalId: outside.approval!.approvalId,
+        phrase: outside.approval!.phrase,
+      });
+      expect(approved.task.status).toBe("verified_success");
+    }
+    // Spelled inside, so policy asked no one; the runtime sees where it leads.
+    const linked = await run(terminal("cat", [join("out", "f")]));
+    expect(linked.planned.status).toBe("planned");
+    expect(linked.task.status).toBe("failed");
+    expect(linked.task.error).toMatch(/terminal_path_outside_workspace/);
+    await runtime.close();
+    runtime = await createMelraRuntime({ workspaceRoot: workspace, dataDirectory: data, environment: {} });
+    if (process.platform !== "win32") {
+      expect((await run(terminal("cat", [join("out", "f")]))).task.status).toBe("verified_success");
+    }
+  });
+
+  it("refuses enforced mode when the workspace holds the data directory", async () => {
+    await expect(
+      createMelraRuntime({
+        workspaceRoot: base,
+        dataDirectory: join(base, ".melra"),
+        environment: { MELRA_MODE: "enforced" },
+      }),
+    ).rejects.toThrow(/enforced_mode_refuses_data_inside_workspace/);
+    // Developer mode starts, and the workspace itself is still usable: refusing
+    // the directories above the data would refuse every command there.
+    runtime = await createMelraRuntime({ workspaceRoot: base, dataDirectory: join(base, ".melra"), environment: {} });
+    const { task } = await run(terminal("node", ["-e", "", "."], true));
+    expect(task.status).toBe("verified_success");
+  });
+});
+
+describe("git read hardening", () => {
+  let base: string;
+
+  afterEach(async () => {
+    await rm(base, { recursive: true, force: true });
+  });
+
+  // POSIX only: the planted programs are `sh`/`cat`. The portable assertion that
+  // the hardening argv/env is applied lives in terminal-runtime's hardenGitRead
+  // unit test; this one proves end to end that no planted program runs.
+  it.skipIf(process.platform === "win32")(
+    "a repo-config textconv, external-diff, or fsmonitor program never runs on an approval-free git read, in either mode",
+    async () => {
+      base = await mkdtemp(join(tmpdir(), "melra-githarden-"));
+      const canary = join(base, "canary.txt");
+      await writeFile(canary, "CANARY_LEAK_DO_NOT_RETURN", "utf8");
+
+      for (const mode of ["developer", "enforced"] as const) {
+        const workspace = join(base, mode, "workspace");
+        const data = join(base, mode, "data");
+        await mkdir(workspace, { recursive: true });
+        const git = (args: string[]) => execFileSync("git", args, { cwd: workspace });
+        git(["init", "-q"]);
+        git(["config", "user.email", "t@t.t"]);
+        git(["config", "user.name", "t"]);
+        git(["config", "commit.gpgsign", "false"]);
+        await writeFile(join(workspace, "f.txt"), "hello\nworld\n", "utf8");
+        git(["add", "f.txt"]);
+        git(["commit", "-qm", "init"]);
+        await writeFile(join(workspace, "f.txt"), "hello\nchanged\n", "utf8"); // an uncommitted diff
+
+        // The sibling data layout enforced mode requires; it also writes payload.key.
+        const runtime = await createMelraRuntime({
+          workspaceRoot: workspace,
+          dataDirectory: data,
+          environment: mode === "enforced" ? { MELRA_MODE: "enforced" } : {},
+        });
+        try {
+          // The planted program writes a marker (proof it ran, immune to output
+          // redaction) and echoes the canary to stdout.
+          const marker = join(base, `${mode}-ran.txt`);
+          const program = `sh -c 'cat "${canary}" > "${marker}"; cat "${canary}"' #`;
+          const ran = async () => (await readFile(marker, "utf8").catch(() => "")) !== "";
+
+          const readGit = async (args: string[]) => {
+            const planned = runtime.controller.plan(
+              request({ operation: { kind: "terminal", action: "run", command: "git", args } }),
+            );
+            // Approval-free: policy allows the read and asks for no phrase.
+            expect(planned.policyDecision.outcome, `${mode} git ${args.join(" ")}`).toBe("allow");
+            expect(planned.approval, `${mode} git ${args.join(" ")}`).toBeUndefined();
+            const result = await runtime.controller.execute(planned.id);
+            const output = (result.output ?? {}) as Record<string, unknown>;
+            return { task: result.task, stdout: String(output.stdout ?? "") };
+          };
+
+          // textconv, run by `git show`/`git log -p`.
+          await writeFile(join(workspace, ".gitattributes"), "f.txt diff=leak\n", "utf8");
+          git(["config", "diff.leak.textconv", program]);
+          for (const args of [["show", "HEAD"], ["log", "-p"]]) {
+            const { task, stdout } = await readGit(args);
+            expect(task.status).toBe("verified_success");
+            expect(stdout).not.toContain("CANARY_LEAK_DO_NOT_RETURN");
+          }
+          git(["config", "--unset", "diff.leak.textconv"]);
+
+          // external diff, run by `git diff`.
+          git(["config", "diff.leak.command", program]);
+          expect((await readGit(["diff"])).stdout).not.toContain("CANARY_LEAK_DO_NOT_RETURN");
+          git(["config", "--unset", "diff.leak.command"]);
+          await rm(join(workspace, ".gitattributes"));
+
+          // fsmonitor, run by `git status`.
+          const fsmonitor = join(base, `${mode}-fsm.sh`);
+          await writeFile(fsmonitor, `#!/bin/sh\ncat "${canary}" > "${marker}"\nexit 1\n`, { mode: 0o755 });
+          git(["config", "core.fsmonitor", fsmonitor]);
+          expect((await readGit(["status"])).task.status).toBe("verified_success");
+          git(["config", "--unset", "core.fsmonitor"]);
+
+          expect(await ran(), `${mode}: a planted git-config program ran`).toBe(false);
+        } finally {
+          await runtime.close();
+        }
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")("still returns correct output for ordinary git reads", async () => {
+    base = await mkdtemp(join(tmpdir(), "melra-githarden-ok-"));
+    const workspace = join(base, "workspace");
+    const data = join(base, "data");
+    await mkdir(workspace, { recursive: true });
+    const git = (args: string[]) => execFileSync("git", args, { cwd: workspace });
+    git(["init", "-q"]);
+    git(["config", "user.email", "t@t.t"]);
+    git(["config", "user.name", "t"]);
+    git(["config", "commit.gpgsign", "false"]);
+    await writeFile(join(workspace, "f.txt"), "hello\nworld\n", "utf8");
+    git(["add", "f.txt"]);
+    git(["commit", "-qm", "init"]);
+    await writeFile(join(workspace, "f.txt"), "hello\nchanged\n", "utf8");
+
+    const runtime = await createMelraRuntime({ workspaceRoot: workspace, dataDirectory: data, environment: {} });
+    try {
+      const readGit = async (args: string[]) => {
+        const planned = runtime.controller.plan(
+          request({ operation: { kind: "terminal", action: "run", command: "git", args } }),
+        );
+        const result = await runtime.controller.execute(planned.id);
+        const output = (result.output ?? {}) as Record<string, unknown>;
+        return { task: result.task, stdout: String(output.stdout ?? "") };
+      };
+      expect((await readGit(["diff", "--stat"])).stdout).toContain("f.txt");
+      expect((await readGit(["show", "HEAD:f.txt"])).stdout).toBe("hello\nworld\n");
+      expect((await readGit(["log", "--oneline"])).stdout).toContain("init");
+      expect((await readGit(["status", "--porcelain"])).stdout).toContain("f.txt");
+      const revParse = await readGit(["rev-parse", "HEAD"]);
+      expect(revParse.task.status).toBe("verified_success");
+      expect(revParse.stdout.trim()).toMatch(/^[0-9a-f]{40}$/);
+    } finally {
+      await runtime.close();
     }
   });
 });
