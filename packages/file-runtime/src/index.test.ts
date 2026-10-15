@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, open, readdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { link, mkdir, mkdtemp, open, readdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, parse } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -154,6 +154,29 @@ describe("FileRuntime", () => {
       ).rejects.toThrow("path_reserved");
     } finally {
       await handle.close();
+    }
+  });
+
+  it("sees a reserved file under another name: a hard link, or macOS's /.vol", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-file-")));
+    roots.push(root);
+    const owners = join(root, ".melra", "melra.sqlite-owners");
+    await mkdir(owners, { recursive: true });
+    await writeFile(join(root, ".melra", "melra.sqlite"), "db");
+    await writeFile(join(owners, "lock"), "lock");
+    await link(join(root, ".melra", "melra.sqlite"), join(root, "copy.db"));
+    await link(join(owners, "lock"), join(root, "copy.lock"));
+    const runtime = await FileRuntime.create({
+      root: process.platform === "darwin" ? "/" : root,
+      reserved: [join(root, ".melra", "melra.sqlite"), owners],
+    });
+    const hash = (path: string) =>
+      runtime.execute(FileOperationSchema.parse({ kind: "file", action: "hash", path }));
+    await expect(hash(join(root, "copy.db"))).rejects.toThrow("path_reserved");
+    await expect(hash(join(root, "copy.lock"))).rejects.toThrow("path_reserved");
+    if (process.platform === "darwin") {
+      const held = await stat(join(root, ".melra", "melra.sqlite"));
+      await expect(hash(`/.vol/${held.dev}/${held.ino}`)).rejects.toThrow("path_reserved");
     }
   });
 

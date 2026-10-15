@@ -211,12 +211,17 @@ export class WorkflowController {
       left.expiresAt <= new Date().toISOString() &&
       RECOVERABLE.includes(current.status)
     ) {
-      // What failed in that pass belongs to other runs or tasks and reaches
-      // the sweep's warnings. This advance needs only one answer: a repaired
-      // run has no lease left. One still there is a task still running, a
-      // repair that failed, or a live process that got in first.
-      await this.recoverInterrupted({ abandonedOnly: true }).catch(() => undefined);
-      if (this.store.getWorkflowLease(workflowId) !== undefined) {
+      // A repaired run has no lease left. One still there is a task still
+      // running, a live process that got in first, or a repair that failed.
+      // Only the last is reported as itself; failures elsewhere in the pass
+      // belong to other runs or tasks and reach the sweep's warnings.
+      const failure = await this.recoverInterrupted({ abandonedOnly: true }).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      const still = this.store.getWorkflowLease(workflowId);
+      if (still !== undefined) {
+        if (failure !== undefined && still.owner === this.recoveryOwner) throw failure;
         throw new Error("workflow_lease_held");
       }
     }
@@ -554,20 +559,22 @@ export class WorkflowController {
       ) {
         continue;
       }
-      let settled = false;
+      let repaired = false;
       try {
-        // Advanced since the listing: that advance already left it straight.
+        // Changed since the listing, by an advance or by an operator's pause,
+        // so the tasks read above may be stale: left for a later pass.
         if (this.store.getWorkflowRun(stored.id)?.stateVersion === stored.stateVersion) {
           recovered.push(this.recoverRun(stored, definition, allTasks));
+          repaired = true;
         }
-        settled = true;
       } catch (error) {
         failures.push(error);
       } finally {
-        // A repair that failed leaves its lease expired rather than deleted:
-        // that lease is how the sweep and the next advance know the run still
-        // needs one, and without it an advance would plan its tasks again.
-        if (settled) this.store.releaseWorkflowLease(stored.id, this.recoveryOwner);
+        // Unless it was repaired, the run keeps its lease, expired rather than
+        // deleted: that lease is how the sweep and the next advance know it
+        // still needs repairing, and without it an advance would plan its
+        // tasks again. At worst a healthy run gets one more repair.
+        if (repaired) this.store.releaseWorkflowLease(stored.id, this.recoveryOwner);
         else this.store.renewWorkflowLease(stored.id, this.recoveryOwner, new Date(0).toISOString());
       }
     }

@@ -126,8 +126,23 @@ export class FileRuntime {
           return true;
         }
       }
-      if (dirname(current) === current) return false;
+      if (dirname(current) === current) break;
     }
+    // The same file under another name: a hard link, or macOS's
+    // /.vol/<dev>/<ino>. Inside a reserved directory, each file counts too.
+    const target = await stat(path, { bigint: true }).catch(() => undefined);
+    if (target === undefined || target.isDirectory()) return false;
+    for (const entry of this.reserved) {
+      const found = await stat(entry, { bigint: true }).catch(() => undefined);
+      if (found === undefined) continue;
+      const files = found.isDirectory()
+        ? (await readdir(entry).catch(() => [])).map((name) => join(entry, name))
+        : [entry];
+      for (const file of files) {
+        if (await sameEntry(file, path)) return true;
+      }
+    }
+    return false;
   }
 
   async execute(operation: FileOperation): Promise<Record<string, unknown>> {

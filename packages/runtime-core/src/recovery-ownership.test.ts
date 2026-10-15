@@ -466,6 +466,45 @@ describe("workflow recovery across processes", () => {
     expect(b.adapter).not.toHaveBeenCalled();
   });
 
+  it("keeps the lease when an operator pauses the run in the middle of its repair", async () => {
+    const at = await home();
+    const adapter = held();
+    const a = await side(at, adapter.execute);
+    const b = await side(at);
+    const { id } = await midFlight(a, adapter);
+    a.store.close();
+    expireLease(b.store, id);
+    // The pause lands after the pass listed the run and before it took the lease.
+    const acquire = b.store.acquireWorkflowLease.bind(b.store);
+    vi.spyOn(b.store, "acquireWorkflowLease").mockImplementationOnce((...args) => {
+      b.workflows.pause(id);
+      return acquire(...args);
+    });
+
+    expect(await b.workflows.recoverInterrupted({ abandonedOnly: true })).toEqual([]);
+    expect(b.store.getWorkflowLease(id)).toBeDefined();
+    b.workflows.resume(id);
+    const after = (await b.workflows.advance(id)).run;
+    expect(after.nodes.write?.status).toBe("recovery_required");
+    expect(b.adapter).not.toHaveBeenCalled();
+  });
+
+  it("reports why its own run's repair failed rather than calling it contention", async () => {
+    const at = await home();
+    const adapter = held();
+    const a = await side(at, adapter.execute);
+    const b = await side(at);
+    const { id } = await midFlight(a, adapter);
+    a.store.close();
+    expireLease(b.store, id);
+    vi.spyOn(b.store, "transitionWorkflow").mockImplementationOnce(() => {
+      throw new Error("database is locked");
+    });
+
+    await expect(b.workflows.advance(id)).rejects.toThrow("database is locked");
+    expect((await b.workflows.advance(id)).run.nodes.write?.status).toBe("recovery_required");
+  });
+
   it("waits out a lapsed lease while its task still runs, then recovers before advancing", async () => {
     const at = await home();
     const adapter = held();
