@@ -65,6 +65,12 @@ export interface ExecutionResult {
 export interface TaskPlanOptions {
   idempotencyKey?: string;
   attempt?: number;
+  /**
+   * Planned again from a workflow definition stored when it was accepted.
+   * Checks that only govern new work (an unused browser list) are not applied
+   * again, so a run accepted before a check existed does not stop mid-way.
+   */
+  stored?: boolean;
 }
 
 function now(): string {
@@ -228,7 +234,7 @@ export class TaskController {
     ) {
       throw new Error("idempotency_attempt_invalid");
     }
-    this.preflight(parsedRequest);
+    this.preflight(parsedRequest, options);
     const id = randomUUID();
     const policy = evaluatePolicy(
       id,
@@ -276,7 +282,7 @@ export class TaskController {
     };
   }
 
-  preflight(request: TaskRequest): PolicyDecision {
+  preflight(request: TaskRequest, options: { stored?: boolean } = {}): PolicyDecision {
     const parsed = withDefaultEvidence(TaskRequestSchema.parse(request));
     const capabilities = this.executor.capabilities?.();
     if (
@@ -289,7 +295,7 @@ export class TaskController {
     }
     // A list the browser action never reads would sit in the approval as a
     // decoy: shown to the person approving, doing nothing.
-    if (parsed.operation.kind === "browser") {
+    if (parsed.operation.kind === "browser" && options.stored !== true) {
       for (const [field, action] of BROWSER_LIST_ACTIONS) {
         if (parsed.operation[field] !== undefined && parsed.operation.action !== action) {
           throw new Error(`browser_field_unused:${field}`);

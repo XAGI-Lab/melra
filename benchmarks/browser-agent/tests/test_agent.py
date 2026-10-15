@@ -12,7 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import httpx
 import pytest
 
-from melra_browser_bench.agent import AgentContext, OpenAICompatibleAgent
+from melra_browser_bench.agent import AgentContext, BrowserActionDecision, OpenAICompatibleAgent
 
 
 class _CompletionHandler(BaseHTTPRequestHandler):
@@ -372,3 +372,16 @@ async def test_agent_reraises_transport_error_after_bounded_attempts(
         )
         with pytest.raises(httpx.TransportError):
             await agent.decide(_CONTEXT)
+
+
+def test_decision_sends_a_list_only_to_the_action_that_reads_it() -> None:
+    target = {"selector": "#t"}
+    click = BrowserActionDecision(
+        goal="g", action="click", target=target, values=(), file_paths=("a",)
+    )
+    assert "values" not in click.operation()
+    assert "filePaths" not in click.operation()
+    select = BrowserActionDecision(goal="g", action="select", target=target, values=("x",))
+    assert select.operation()["values"] == ["x"]
+    upload = BrowserActionDecision(goal="g", action="upload", target=target, file_paths=("a",))
+    assert upload.operation()["filePaths"] == ["a"]

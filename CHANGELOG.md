@@ -55,7 +55,8 @@ All notable changes are documented here. The format follows
   (`browser_field_unused:<field>`): `values` belongs to `select`, `fields` to
   `fill_form`, `filePaths` to `upload`. The runtime ignored such a list, so it
   showed the person approving an effect that would not happen, and it padded
-  the approval summary.
+  the approval summary. A workflow run accepted before this change keeps
+  running: its stored steps are not checked again as it advances.
 
 ### Fixed
 

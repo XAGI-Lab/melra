@@ -68,8 +68,18 @@ class BrowserActionDecision:
             **({} if self.target is None else {"target": self.target}),
             **({} if self.url is None else {"url": self.url}),
             **({} if self.value is None else {"value": self.value}),
-            **({} if self.values is None else {"values": list(self.values)}),
-            **({} if self.file_paths is None else {"filePaths": list(self.file_paths)}),
+            # MELRA refuses a list its action never reads (browser_field_unused),
+            # and a model offered both on every action sometimes fills them in.
+            **(
+                {}
+                if self.values is None or self.action != "select"
+                else {"values": list(self.values)}
+            ),
+            **(
+                {}
+                if self.file_paths is None or self.action != "upload"
+                else {"filePaths": list(self.file_paths)}
+            ),
             **({} if self.key is None else {"key": self.key}),
             **({} if self.direction is None else {"direction": self.direction}),
             **({} if self.tab_index is None else {"tabIndex": self.tab_index}),
