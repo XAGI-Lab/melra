@@ -17,6 +17,13 @@ All notable changes are documented here. The format follows
   (default `operator`), a label the operator chooses rather than the OS
   account. `melra run` asks the same way in a terminal instead of having the
   phrase retyped, and the console and `melra tasks` point at `melra approve`.
+
+- `melra doctor` reports a data directory inside the workspace in a new
+  `data-location` check, decided exactly as the server decides it: a `warn` in
+  developer mode, where a recursive read that names no path still reaches
+  `payload.key`, and a `fail` in enforced mode, which refuses to start that way.
+  Unsafe-local mode, which reaches every file, gets no such verdict; its
+  guardrails warning already says so.
 - Receipts say who approved an effect and how. `policyDecision.approval` records
   the channel (`in_band` for an echoed phrase, which anything that knows the
   task can compute; `out_of_band` for a decision recorded through an operator

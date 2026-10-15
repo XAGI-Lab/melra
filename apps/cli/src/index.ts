@@ -32,6 +32,7 @@ import {
   clientPrincipal,
   serveStdio,
   unconfinedRoot,
+  workspaceHoldsData,
   type MelraRuntime,
 } from "@melra/server";
 import { detectBrowserExecutable } from "@melra/browser-runtime";
@@ -521,6 +522,8 @@ async function doctor(env: CliEnvironment): Promise<{
         : "developer: MELRA governs what it is asked for; the harness may have another path",
   });
   try {
+    // A file passes access() too, and the runtime then fails to start on it.
+    if (!(await stat(env.workspaceRoot)).isDirectory()) throw new Error("not a directory");
     await access(env.workspaceRoot, constants.R_OK | constants.W_OK);
     checks.push({
       name: "workspace",
@@ -548,6 +551,33 @@ async function doctor(env: CliEnvironment): Promise<{
       status: "fail",
       detail: env.dataDirectory,
     });
+  }
+  // Only once both exist as directories: the check would create a missing
+  // workspace. Not in unsafe-local, which reaches every file on the machine and
+  // whose guardrails warning already says so.
+  if (
+    !env.unhinged &&
+    checks.every((check) => !["workspace", "data-directory"].includes(check.name) || check.status === "pass")
+  ) {
+    try {
+      const inside = await workspaceHoldsData(env.workspaceRoot, env.dataDirectory);
+      checks.push(
+        inside
+          ? {
+              name: "data-location",
+              // The server refuses to start this way in enforced mode.
+              status: env.mode === "enforced" ? "fail" : "warn",
+              detail: `${env.dataDirectory} is inside the workspace, where a recursive read reaches payload.key without naming it`,
+            }
+          : { name: "data-location", status: "pass", detail: "outside the workspace" },
+      );
+    } catch (error) {
+      checks.push({
+        name: "data-location",
+        status: "fail",
+        detail: `could not resolve the workspace: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
   }
   try {
     const database = new DatabaseSync(":memory:");
