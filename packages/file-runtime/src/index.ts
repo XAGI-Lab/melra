@@ -90,7 +90,18 @@ export class FileRuntime {
     return new FileRuntime(options, await realpath(options.root));
   }
 
-  async resolvePath(input: string, allowRoot = false): Promise<string> {
+  /**
+   * `creating` refuses a path that is, or is inside, a git directory: a
+   * repository's config, attributes and hooks name programs git runs while
+   * serving a read that needs no approval, so content written there by an
+   * innocent-looking approved write would run later with none. Judged on the
+   * resolved path, by the filesystem's spelling, so a link or a case variant
+   * reaches the same refusal.
+   *
+   * ponytail: by name, so an NTFS stream spelling of `.git` is not caught; the
+   * reserved-file check has the same Windows follow-up.
+   */
+  async resolvePath(input: string, allowRoot = false, creating = false): Promise<string> {
     const lexical = resolve(this.root, input);
     // "Is it the root" asked the way `inside` asks "is it within": through
     // `relative`, which ignores case on Windows. A string compare let `..\\WS`
@@ -119,6 +130,9 @@ export class FileRuntime {
       }
     }
     if (await this.isReserved(real)) throw new Error("path_reserved");
+    if (creating && relative(this.root, real).split(sep).some((part) => spelling(part) === ".git")) {
+      throw new Error("path_git_metadata");
+    }
     return lexical;
   }
 
@@ -193,6 +207,7 @@ export class FileRuntime {
     const path = await this.resolvePath(
       operation.path,
       operation.action === "list" && operation.path === ".",
+      operation.action === "write" || operation.action === "mkdir",
     );
     switch (operation.action) {
       case "list": {
@@ -285,7 +300,7 @@ export class FileRuntime {
         if (operation.destination === undefined) {
           throw new Error("file_move_requires_destination");
         }
-        const destination = await this.resolvePath(operation.destination);
+        const destination = await this.resolvePath(operation.destination, false, true);
         await mkdir(dirname(destination), { recursive: true });
         await rename(path, destination);
         return {

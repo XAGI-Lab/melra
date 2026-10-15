@@ -364,6 +364,8 @@ describe("Windows command spellings", () => {
       ["git", ["-C", "/etc", "log"]],
       ["git", ["log", "-1", "--output=/tmp/out"]],
       ["git", ["diff", "--no-index", "/etc/passwd", "/dev/null"]],
+      // Wins over the `--no-textconv` the runtime adds to a read, last flag first.
+      ["git", ["show", "--textconv", "HEAD:notes.bin"]],
       ["git", ["branch", "-D", "main"]],
       ["git", ["branch", "new"]],
       ["git", ["tag", "-d", "v1"]],

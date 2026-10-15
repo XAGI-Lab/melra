@@ -70,22 +70,38 @@ function isGitCommand(command: string): boolean {
 }
 
 /**
- * Policy classifies several `git` subcommands (diff, show, log, status, ...) as
- * approval-free reads, but git runs programs named in the repository's *own*
- * config and attributes while serving one: a diff `textconv` or external-diff
- * driver bound through `.gitattributes` + `.git/config`, and a `core.fsmonitor`
- * program on `git status`. Those program paths live in config, not in the
- * terminal arguments, so `checkArguments` never sees them — a single approved,
- * innocuous file write can plant one, and a later approval-free read then runs
- * an arbitrary program, which can read payload.key or melra.sqlite. Policy
- * cannot see .git/config either; the spawn is the only place that can close it.
+ * Settings that each turn off a whole family of programs git can run while
+ * serving a read: hooks (every hook, through one hooks path), signature
+ * verifiers (every format's program), and fetching objects a partial clone is
+ * missing (every transport, proxy and credential program behind it). Each is a
+ * `-c` or an environment variable, so it also reaches any git a read starts in
+ * turn, such as a submodule's.
  *
- * So when the program is git and the call is read-shaped (subcommand first, as
- * policy requires for a read), spawn it with those channels off: system and
- * global config nulled, fsmonitor disabled by a highest-precedence `-c` that
- * beats local config, and external-diff/textconv turned off on the subcommands
- * that emit diffs (the only ones that accept the flags). Mutations — commit,
- * push, or a global option before the subcommand — are left untouched, so a
+ * ponytail: GIT_NO_LAZY_FETCH needs git 2.45; an older git ignores it.
+ */
+const GIT_READ_SWITCHES = [
+  "-c", "core.fsmonitor=false",
+  "-c", `core.hooksPath=${GIT_NULL_CONFIG}`,
+  "-c", `gpg.program=${GIT_NULL_CONFIG}`,
+  "-c", `gpg.ssh.program=${GIT_NULL_CONFIG}`,
+  "-c", `gpg.x509.program=${GIT_NULL_CONFIG}`,
+];
+
+/**
+ * Policy classifies several `git` subcommands (diff, show, log, status, ...) as
+ * approval-free reads, but git runs programs the repository's own config and
+ * attributes name while serving one. Those live in the git directory, not in
+ * the terminal arguments, so `checkArguments` never sees them, and policy
+ * cannot either.
+ *
+ * The guarantee is that nothing MELRA writes lands in a git directory: the
+ * file runtime refuses it (`path_git_metadata`), so only a person approving a
+ * command that does so can change what git's config makes it run. This is
+ * defence in depth on top: a read-shaped call (subcommand first, as policy
+ * requires for a read) spawns with system and global config nulled, the
+ * switches above, and external diff and textconv off on the subcommands that
+ * emit diffs (the only ones that accept the flags). Mutations — commit, push,
+ * or a global option before the subcommand — are left untouched, so a
  * committer's identity and credentials from global config still apply.
  *
  * Pure and exported for unit testing. The caller's `operation.args` are never
@@ -102,8 +118,8 @@ export function hardenGitRead(
     ? ["--no-ext-diff", "--no-textconv"]
     : [];
   return {
-    args: ["-c", "core.fsmonitor=false", first, ...diffFlags, ...args.slice(1)],
-    env: { GIT_CONFIG_SYSTEM: GIT_NULL_CONFIG, GIT_CONFIG_GLOBAL: GIT_NULL_CONFIG },
+    args: [...GIT_READ_SWITCHES, first, ...diffFlags, ...args.slice(1)],
+    env: { GIT_CONFIG_SYSTEM: GIT_NULL_CONFIG, GIT_CONFIG_GLOBAL: GIT_NULL_CONFIG, GIT_NO_LAZY_FETCH: "1" },
   };
 }
 

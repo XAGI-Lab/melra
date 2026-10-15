@@ -461,7 +461,7 @@ function namesPathOutside(operation: Operation, root: string): boolean {
 }
 
 /** `diff`/`log`/`show` options that write files, run configured programs, or leave the repository. */
-const GIT_UNSAFE_OPTION = /^--(output|ext-diff|no-index|exec|upload-pack|receive-pack)(=|$)/i;
+const GIT_UNSAFE_OPTION = /^--(output|ext-diff|textconv|no-index|exec|upload-pack|receive-pack)(=|$)/i;
 
 /**
  * Options of `git branch` and `git tag` that only list. Any other option

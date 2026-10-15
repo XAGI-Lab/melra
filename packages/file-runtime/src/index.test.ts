@@ -115,6 +115,41 @@ describe("FileRuntime", () => {
     expect((await run({ action: "read", path: ".melra/notes.txt" })).content).toBe("fine");
   });
 
+  it("never writes into a git directory, however the path reaches it", async () => {
+    // A repository's config and hooks name programs git runs during a read
+    // that needs no approval; nothing the file capability writes may land there.
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-file-")));
+    roots.push(root);
+    await mkdir(join(root, ".git", "info"), { recursive: true });
+    await writeFile(join(root, ".git", "config"), "[core]\n");
+    await mkdir(join(root, "vendor", "lib"), { recursive: true });
+    await writeFile(join(root, "notes.txt"), "fine");
+    await symlink(join(root, ".git"), join(root, "meta"));
+    const runtime = await FileRuntime.create({ root });
+    const run = (operation: Record<string, unknown>) =>
+      runtime.execute(FileOperationSchema.parse({ kind: "file", ...operation }));
+    const caseInsensitive = await realpath(join(root, ".GIT")).then(() => true, () => false);
+    for (const operation of [
+      { action: "write", path: ".git/config", content: "x" },
+      { action: "write", path: ".git/info/attributes", content: "x" },
+      { action: "mkdir", path: ".git/hooks", recursive: true },
+      { action: "write", path: "meta/config", content: "x" },
+      // A nested repository, or a gitfile pointing at one.
+      { action: "write", path: "vendor/lib/.git/config", content: "x" },
+      { action: "write", path: "vendor/lib/.git", content: "gitdir: ../../elsewhere" },
+      { action: "move", path: "notes.txt", destination: ".git/config" },
+      ...(caseInsensitive ? [{ action: "write", path: ".GIT/config", content: "x" }] : []),
+    ]) {
+      await expect(run(operation)).rejects.toThrow("path_git_metadata");
+    }
+    expect(await readFile(join(root, ".git", "config"), "utf8")).toBe("[core]\n");
+    // Reading it, and files that only look like it, stay ordinary.
+    expect((await run({ action: "read", path: ".git/config" })).content).toBe("[core]\n");
+    await run({ action: "write", path: ".gitignore", content: "dist\n" });
+    await run({ action: "write", path: ".github/workflows/ci.yml", content: "on: push\n" });
+    await run({ action: "write", path: ".gitattributes", content: "* text=auto\n" });
+  });
+
   it("knows the reserved files by where they are, not how they are spelled", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-file-"));
     roots.push(root);

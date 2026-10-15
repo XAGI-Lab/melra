@@ -413,22 +413,30 @@ describe("hardenGitRead", () => {
   // Portable: it asserts the hardening decision, not a spawned POSIX program, so
   // it runs on every OS. The null device differs per platform.
   const nullConfig = process.platform === "win32" ? "NUL" : "/dev/null";
-  const env = { GIT_CONFIG_SYSTEM: nullConfig, GIT_CONFIG_GLOBAL: nullConfig };
+  const env = { GIT_CONFIG_SYSTEM: nullConfig, GIT_CONFIG_GLOBAL: nullConfig, GIT_NO_LAZY_FETCH: "1" };
+  // Hooks, signature verifiers and fsmonitor off by `-c`s that beat local config.
+  const switches = [
+    "-c", "core.fsmonitor=false",
+    "-c", `core.hooksPath=${nullConfig}`,
+    "-c", `gpg.program=${nullConfig}`,
+    "-c", `gpg.ssh.program=${nullConfig}`,
+    "-c", `gpg.x509.program=${nullConfig}`,
+  ];
 
   it("turns off every config-defined program channel on a git read", () => {
     // fsmonitor off by a `-c` that beats local config; external-diff and
     // textconv off by the flags the diff-emitting subcommands take; system and
     // global config nulled in the env.
     expect(hardenGitRead("git", ["show", "HEAD"])).toEqual({
-      args: ["-c", "core.fsmonitor=false", "show", "--no-ext-diff", "--no-textconv", "HEAD"],
+      args: [...switches, "show", "--no-ext-diff", "--no-textconv", "HEAD"],
       env,
     });
     expect(hardenGitRead("git", ["log", "-p"])).toEqual({
-      args: ["-c", "core.fsmonitor=false", "log", "--no-ext-diff", "--no-textconv", "-p"],
+      args: [...switches, "log", "--no-ext-diff", "--no-textconv", "-p"],
       env,
     });
     expect(hardenGitRead("git", ["diff", "--stat"])).toEqual({
-      args: ["-c", "core.fsmonitor=false", "diff", "--no-ext-diff", "--no-textconv", "--stat"],
+      args: [...switches, "diff", "--no-ext-diff", "--no-textconv", "--stat"],
       env,
     });
   });
@@ -437,7 +445,7 @@ describe("hardenGitRead", () => {
     // `git status --no-ext-diff` is an error, so the flags go only on diff/log/show.
     for (const sub of [["status"], ["rev-parse", "HEAD"], ["branch"], ["tag"]]) {
       expect(hardenGitRead("git", sub)).toEqual({
-        args: ["-c", "core.fsmonitor=false", ...sub],
+        args: [...switches, ...sub],
         env,
       });
     }
