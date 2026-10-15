@@ -45,7 +45,8 @@ export class HttpRuntime {
     // Checked here and not only in the router: the destination check above is
     // an await, and a cancel that lands inside that window would otherwise be
     // lost and the request would go out anyway.
-    if (signal?.aborted === true) throw new Error("task_cancelled");
+    const cancelled = (): boolean => signal?.aborted === true;
+    if (cancelled()) throw new Error("task_cancelled");
     const secure = url.protocol === "https:";
     const send = secure ? httpsRequest : httpRequest;
     // Brokered against the host that was *checked*: the name, or an IPv6
@@ -57,6 +58,9 @@ export class HttpRuntime {
       capability,
       target,
     });
+    // Again: reading a credential from a file is an await too, and the abort
+    // listener below only hears an abort that comes after it is added.
+    if (cancelled()) throw new Error("task_cancelled");
 
     const headers: Record<string, string> = {
       // Lowercased before the merge, or `Authorization: guess` from the caller
@@ -81,6 +85,7 @@ export class HttpRuntime {
       headers["content-length"] = String(Buffer.byteLength(operation.content));
     }
 
+    let deadline: NodeJS.Timeout | undefined;
     return await new Promise<Record<string, unknown>>((resolve, reject) => {
       const call = send(
         {
@@ -90,7 +95,6 @@ export class HttpRuntime {
           method: operation.method,
           path: `${url.pathname}${url.search}`,
           headers,
-          timeout: operation.timeoutMs,
           // A fresh connection per effect, never one from Node's keep-alive
           // pool. A pooled socket the server has already closed takes the whole
           // request and then resets, and below that reads as "the far end may
@@ -115,6 +119,14 @@ export class HttpRuntime {
             chunks.push(chunk);
           });
           const finish = (): void => {
+            // The headers arrived, so the request did too: a body cut off
+            // before its end is an answer that stopped, not a call that never
+            // happened, and only `outcomeUnknown` says so. Stopping at the
+            // size cap is the one deliberate exception.
+            if (!response.complete && !truncated) {
+              reject(outcomeUnknown("http_response_incomplete"));
+              return;
+            }
             const status = response.statusCode ?? 0;
             resolve({
               // The far end's own word, which is all HTTP can offer. A caller
@@ -149,7 +161,7 @@ export class HttpRuntime {
           };
           response.on("end", finish);
           response.on("close", finish);
-          response.on("error", reject);
+          response.on("error", (error) => reject(outcomeUnknown(error.message)));
         },
       );
       // Whether the request made it out. A socket error before this is a
@@ -165,11 +177,12 @@ export class HttpRuntime {
         }
         reject(call.writableFinished ? outcomeUnknown(error.message) : error);
       };
-      // A timeout fires the event but does not end the request; without this an
-      // unresponsive host holds the socket for the life of the process.
-      call.on("timeout", () => {
-        call.destroy(new Error("http_timeout"));
-      });
+      // One deadline for the whole exchange. Node's own `timeout` only notices
+      // a socket that goes quiet, so a server sending a byte at a time held the
+      // call, and any verification or reconciliation waiting on it, for as
+      // long as it liked.
+      deadline = setTimeout(() => call.destroy(new Error("http_timeout")), operation.timeoutMs);
+      deadline.unref();
       call.on("error", failed);
       signal?.addEventListener(
         "abort",
@@ -178,6 +191,6 @@ export class HttpRuntime {
       );
       if (operation.content !== undefined) call.write(operation.content);
       call.end();
-    });
+    }).finally(() => clearTimeout(deadline));
   }
 }

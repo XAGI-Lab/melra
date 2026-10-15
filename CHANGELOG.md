@@ -54,6 +54,16 @@ All notable changes are documented here. The format follows
   leaves `redirect_uri` out of its authorization request, which OAuth allows
   when one URI is registered. Both used to fail with `invalid_redirect_uri`.
 
+- An HTTP response that stops partway through its body, after a POST has
+  been sent and its headers have arrived, is an unknown outcome, as a reset
+  after the write already was. It was reported as a plain failure, which
+  reads as "the charge did not happen" and invites sending it again.
+- An HTTP call's `timeoutMs` bounds the whole exchange. It only bounded quiet
+  gaps, so a server sending a byte at a time held the call, and any
+  verification or reconciliation waiting on it, indefinitely.
+- An HTTP request cancelled while its credential was being read from a file
+  is not sent. The cancel was missed in that window and the request went out.
+
 ### Security
 
 - Approving an OAuth client takes the operator's token. The consent page's
