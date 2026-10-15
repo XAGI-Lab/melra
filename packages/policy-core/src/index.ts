@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { readFile } from "node:fs/promises";
-import { basename, dirname, resolve } from "node:path";
+import { basename, dirname, posix, resolve } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { hostOf } from "./network-policy.js";
 import type {
@@ -592,6 +592,8 @@ export function classifyOperation(operation: Operation): {
   traits: CapabilityTrait[];
   /** What the caller declared this operation moves, when it declared one. */
   spend?: DeclaredSpend;
+  /** Where a move puts the file; a grant has to cover it as well as `target`. */
+  destination?: string;
 } {
   switch (operation.kind) {
     case "file": {
@@ -601,7 +603,10 @@ export function classifyOperation(operation: Operation): {
         effect: destructive ? "destructive" : read ? "read" : "mutate",
         risk: destructive ? "high" : read ? "low" : "medium",
         capability: `file.${operation.action}`,
-        target: operation.path,
+        target: grantPath(operation.path),
+        ...(operation.action === "move" && operation.destination !== undefined
+          ? { destination: grantPath(operation.destination) }
+          : {}),
         traits: [],
       };
     }
@@ -883,6 +888,16 @@ function domainAllowed(operation: Operation, policy: LocalPolicy): boolean {
  * `file.*` and `/repo/build/*`, and small enough that a policy author can
  * predict what it matches.
  */
+/**
+ * A file path as the file runtime will resolve it, for matching against a
+ * grant's target. Raw, `docs/../.env` matched a `docs/*` grant and then read
+ * `.env`. Backslashes count as separators because they are on Windows; on
+ * POSIX that only ever makes a match stricter.
+ */
+function grantPath(path: string): string {
+  return posix.normalize(path.replaceAll("\\", "/"));
+}
+
 function patternMatches(pattern: string, value: string): boolean {
   if (pattern === "*") return true;
   const escaped = pattern
@@ -923,6 +938,7 @@ type ClassifiedForGrant = {
   effect: Effect;
   capability: string;
   target: string;
+  destination?: string;
   spend?: DeclaredSpend;
 };
 
@@ -1008,6 +1024,8 @@ export function capabilityCheck(
       patternMatches(grant.capability, classified.capability) &&
       grant.effects.includes(classified.effect) &&
       patternMatches(grant.target, classified.target) &&
+      (classified.destination === undefined ||
+        patternMatches(grant.target, classified.destination)) &&
       patternMatches(grant.principal, holder),
   );
   const matching = candidates.filter((grant) =>

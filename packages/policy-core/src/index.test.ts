@@ -737,6 +737,33 @@ describe("capability grants", () => {
     );
   });
 
+  it("matches a grant against the path the file runtime will touch", () => {
+    const docs = [grant({ target: "docs/*" })];
+    const at = (path: string) =>
+      read({ identity, operation: { kind: "file", action: "read", path } });
+    expect(decide(at("docs/guide.md"), docs).outcome).toBe("allow");
+    expect(decide(at("./docs/guide.md"), docs).outcome).toBe("allow");
+    // Each of these reads `.env` in the workspace root, outside the grant.
+    for (const path of ["docs/../.env", "docs/a/../../.env", "docs\\..\\.env", "docs/..\\.env"]) {
+      expect(decide(at(path), docs).reason).toBe("capability_not_granted:file.read");
+    }
+  });
+
+  it("requires a move's destination to be granted as well as its source", () => {
+    const docs = [grant({ target: "docs/*", effects: ["mutate"] })];
+    const move = (destination: string) =>
+      read({
+        identity,
+        operation: { kind: "file", action: "move", path: "docs/a.md", destination },
+        requiredEvidence: [{ type: "file_exists", path: destination }],
+      });
+    expect(decide(move("docs/b.md"), docs).outcome).not.toBe("deny");
+    expect(decide(move("src/index.ts"), docs).reason).toBe("capability_not_granted:file.move");
+    expect(decide(move("docs/../src/index.ts"), docs).reason).toBe(
+      "capability_not_granted:file.move",
+    );
+  });
+
   it("refuses a grant that has expired or names another policy version", () => {
     expect(
       decide(read({ identity }), [grant({ validUntil: "2020-01-01T00:00:00.000Z" })]),
