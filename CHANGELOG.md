@@ -64,7 +64,28 @@ All notable changes are documented here. The format follows
 - An HTTP request cancelled while its credential was being read from a file
   is not sent. The cancel was missed in that window and the request went out.
 
+- Editing a memory that superseded another, by sending its fields back with
+  the same `supersedesId`, deleted it and left the one it replaced hidden for
+  good. The edit now applies; superseding a record that something else has
+  already superseded is refused before anything is written.
+- A reconciliation or evidence probe that gets `503`, `429` or another error
+  status is inconclusive, as a dropped connection is. It was read as the
+  provider saying the effect never happened, so a charge that went through
+  was marked `failed` and could be sent again.
+- A terminal mutation cancelled, or stopped by its budget, after the process
+  started is `recovery_required`: it may have done its work before it was
+  killed. It was `cancelled` or `budget_exhausted` with conclusive evidence.
+- Recovering a task interrupted while `verifying` honours the adapter's own
+  report. An action that reported failure no longer recovers as verified
+  because its evidence happened to hold.
+
 ### Security
+
+- A metered grant cannot be overdrawn by tasks running at once. Its draw was
+  recorded only after the work verified, so two tasks re-checked against the
+  same unspent grant: two operations against `maxOperations: 1`, a parallel
+  workflow node over `dailyMax`. In-flight draws now count. An effect that is
+  reconciled after its grant ran out is still charged; it went uncharged.
 
 - Approving an OAuth client takes the operator's token. The consent page's
   form was the whole gate, and anything that could reach the port could post

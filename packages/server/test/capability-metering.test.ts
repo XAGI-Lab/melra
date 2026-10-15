@@ -55,6 +55,11 @@ beforeAll(async () => {
     req.resume();
     req.on("end", () => {
       served += 1;
+      // Did the refund, then lost the reply.
+      if (req.url === "/refunds-lost") {
+        req.socket.destroy();
+        return;
+      }
       res.writeHead(req.method === "POST" ? 201 : 200, {
         "content-type": "application/json",
       });
@@ -154,6 +159,57 @@ describe("a grant that runs out", () => {
     );
     await runtime.close();
     state = "succeeded";
+  });
+
+  it("does not let tasks running at once overdraw the grant", async () => {
+    const runtime = await open("concurrent");
+    const planned = [refund(), refund(), refund()].map((request) => runtime.controller.plan(request));
+    // All three planned against an unspent grant, then run together, as a
+    // parallel workflow node or three melra_execute calls would.
+    const tasks = await Promise.all(
+      planned.map(async (task) =>
+        (
+          await runtime.controller.execute(
+            task.id,
+            task.approval === undefined
+              ? undefined
+              : { approvalId: task.approval.approvalId, phrase: task.approval.phrase },
+          )
+        ).task,
+      ),
+    );
+    expect(tasks.map((task) => task.status).sort()).toEqual([
+      "policy_blocked",
+      "verified_success",
+      "verified_success",
+    ]);
+    expect(runtime.store.capabilityUsage("refunds-two", "").operations).toBe(2);
+    await runtime.close();
+  });
+
+  it("charges a reconciled effect even after the grant has run out", async () => {
+    const runtime = await open("reconciled");
+    const lost = TaskRequestSchema.parse({
+      ...refund(),
+      operation: { ...refund().operation, url: `http://127.0.0.1:${port}/refunds-lost` },
+      reconciliation: [
+        {
+          type: "http_resource_matches",
+          url: `http://127.0.0.1:${port}/refunds/rf_1`,
+          path: "json.state",
+          value: "succeeded",
+        },
+      ],
+    });
+    const parked = await run(runtime, lost);
+    expect(parked.status).toBe("recovery_required");
+    // Two more spend the grant while the first is unsettled.
+    expect((await run(runtime, refund())).status).toBe("verified_success");
+    expect((await run(runtime, refund())).status).toBe("verified_success");
+    // The provider confirms the first one happened: it is paid for too.
+    expect((await runtime.controller.reconcile(parked.id)).task.status).toBe("verified_success");
+    expect(runtime.store.capabilityUsage("refunds-two", "").operations).toBe(3);
+    await runtime.close();
   });
 
   it("refuses an amount over the per-operation ceiling before anything runs", async () => {

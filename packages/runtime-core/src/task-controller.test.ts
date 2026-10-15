@@ -287,6 +287,29 @@ describe("TaskController", () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
+  it("does not recover as verified an action that reported failure", async () => {
+    const { controller, store } = await setup();
+    const root = roots.at(-1)!;
+    const planned = controller.plan(
+      TaskRequestSchema.parse({
+        goal: "A build that failed beside an old output",
+        operation: { kind: "file", action: "write", path: "dist.txt", content: "new" },
+        requiredEvidence: [{ type: "file_exists", path: "dist.txt" }],
+      }),
+    );
+    // Left by an earlier run, so the evidence passes whatever this one did.
+    await writeFile(join(root, "dist.txt"), "old");
+    const interrupted = store.getTask(planned.id)!;
+    interrupted.status = "verifying";
+    store.saveTaskExecutionResult(
+      interrupted,
+      new PayloadCipher(Buffer.alloc(32, 7)).seal({ success: false }, `task:${planned.id}:result`),
+    );
+
+    const [recovered] = await controller.recoverInterrupted();
+    expect(recovered?.status).not.toBe("verified_success");
+  });
+
   it("reconciles a verifying file mutation from independent evidence", async () => {
     const execute = vi.fn(async () => ({ success: true }));
     const { controller, store } = await setup({ execute });
@@ -312,7 +335,11 @@ describe("TaskController", () => {
     await writeFile(join(root, "recovered.txt"), "complete");
     const interrupted = store.getTask(planned.id)!;
     interrupted.status = "verifying";
-    store.saveTask(interrupted);
+    // What execute() writes on its way into `verifying`: the adapter's result.
+    store.saveTaskExecutionResult(
+      interrupted,
+      new PayloadCipher(Buffer.alloc(32, 7)).seal({ success: true }, `task:${planned.id}:result`),
+    );
 
     const [recovered] = await controller.recoverInterrupted();
 

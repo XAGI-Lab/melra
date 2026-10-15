@@ -319,6 +319,27 @@ describe("LocalMemory", () => {
     expect(ranked[0]?.id).toBe("00000000-0000-4000-8000-000000000022");
   });
 
+  it("edits a superseding record without losing it or the one it replaced", () => {
+    store = new SqliteStore(":memory:");
+    const memory = new LocalMemory(store);
+    const put = (fields: Record<string, unknown>) =>
+      memory.execute(
+        MemoryOperationSchema.parse({ kind: "memory", action: "put", scope: "workspace", key: "runtime", ...fields }),
+      ) as { id: string };
+    const first = put({ value: "Use version one" });
+    const second = put({ value: "Use version two", supersedesId: first.id });
+    // The obvious edit: send the record's own fields back, supersedesId included.
+    put({ id: second.id, value: "Use version two (fixed)", supersedesId: first.id });
+    expect(store.getMemory(second.id)?.value).toBe("Use version two (fixed)");
+    expect(store.getMemory(first.id)?.supersededBy).toBe(second.id);
+    // A third record cannot supersede what is already superseded, and trying
+    // leaves the current one alone.
+    expect(() => put({ value: "Use version three", supersedesId: first.id })).toThrow(
+      "memory_supersedes_target_invalid",
+    );
+    expect(store.getMemory(second.id)?.value).toBe("Use version two (fixed)");
+  });
+
   it("supports expiry and scoped supersession", () => {
     store = new SqliteStore(":memory:");
     const memory = new LocalMemory(store);

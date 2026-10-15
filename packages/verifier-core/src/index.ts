@@ -246,6 +246,20 @@ const httpResourceMatches: Built<"http_resource_matches"> = {
       };
     }
     const passed = Object.is(readResultPath(observed, predicate.path), predicate.value);
+    // A provider that answered 503 or 429 did not say no; it did not answer.
+    // Only a success or "not found" is its word on the resource, so a miss on
+    // any other status is as inconclusive as a dropped connection. Read as a
+    // denial, a degraded provider turned a charge that went through into
+    // `failed`, and the caller charged again.
+    const status = observed.status;
+    if (!passed && typeof status === "number" && !(status >= 200 && status < 300) && status !== 404 && status !== 410) {
+      return {
+        passed: false,
+        inconclusive: true,
+        summary: `independent read unavailable: the provider answered ${status}`,
+        source: url,
+      };
+    }
     return {
       passed,
       summary: `independent read of ${predicate.path} ${passed ? "matched" : "did not match"} expected value`,

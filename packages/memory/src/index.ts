@@ -351,7 +351,10 @@ export class LocalMemory {
           operation.supersedesId !== undefined &&
           (superseded === undefined ||
             superseded.scope !== operation.scope ||
-            operation.supersedesId === operation.id)
+            operation.supersedesId === operation.id ||
+            // Already replaced by some other record: superseding it again is
+            // not possible, and finding that out after the write lost data.
+            (superseded.supersededBy !== undefined && superseded.supersededBy !== operation.id))
         ) {
           throw new Error("memory_supersedes_target_invalid");
         }
@@ -387,13 +390,20 @@ export class LocalMemory {
         this.store.putMemory(memory);
         if (
           operation.supersedesId !== undefined &&
+          // Re-putting the record that already superseded it is an edit of
+          // that record, not a second supersede.
+          superseded?.supersededBy !== memory.id &&
           !this.store.supersedeMemory(
             operation.supersedesId,
             operation.scope,
             memory.id,
           )
         ) {
-          this.store.deleteMemory(memory.id, memory.scope);
+          // Undo the write: put back what was there, or remove what was new.
+          // Deleting an existing record here lost it and orphaned the one it
+          // had superseded.
+          if (existing === undefined) this.store.deleteMemory(memory.id, memory.scope);
+          else this.store.putMemory(existing);
           throw new Error("memory_supersedes_target_invalid");
         }
         // Compact on the write path rather than on a timer: a scope only grows

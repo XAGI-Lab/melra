@@ -5,7 +5,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
-import type { TerminalOperation } from "@melra/protocol";
+import { outcomeUnknown, type TerminalOperation } from "@melra/protocol";
 import { redactSecrets } from "@melra/receipt-schema";
 import { resolveCommand } from "./resolve-command.js";
 
@@ -196,6 +196,14 @@ export class TerminalRuntime {
 
       child.once("error", (error) => {
         clearTimeout(timer);
+        // Cancelled or out of budget after the process started: it may well
+        // have done its work (written the file, pushed the branch) before it
+        // was killed, so this is not "it did not happen".
+        if (error.name === "AbortError" && child.pid !== undefined) {
+          const reason = signal?.reason instanceof Error ? signal.reason.message : "task_cancelled";
+          reject(outcomeUnknown(reason));
+          return;
+        }
         reject(describeSpawnError(error, prepared.command));
       });
       child.once("close", (code, terminationSignal) => {
