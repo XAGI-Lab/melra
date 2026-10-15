@@ -1,9 +1,9 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, parse, resolve } from "node:path";
+import { basename, join, parse, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { deploymentMode, TaskRequestSchema, type TaskRequest } from "@melra/protocol";
 import { serveHttp } from "./http-server.js";
@@ -298,5 +298,132 @@ describe("enforced mode", () => {
     } finally {
       await endpoint.close();
     }
+  });
+});
+
+describe("terminal arguments", () => {
+  let base: string;
+  let workspace: string;
+  let data: string;
+  let runtime: MelraRuntime | undefined;
+
+  beforeEach(async () => {
+    base = await mkdtemp(join(tmpdir(), "melra-arguments-"));
+    workspace = join(base, "workspace");
+    data = join(base, "data");
+    await mkdir(workspace, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await runtime?.close();
+    runtime = undefined;
+    await rm(base, { recursive: true, force: true });
+  });
+
+  const terminal = (command: string, args: string[], evidence = false) =>
+    request({
+      operation: { kind: "terminal", action: "run", command, args },
+      ...(evidence ? { requiredEvidence: [{ type: "exit_code", value: 0 }] } : {}),
+    });
+  /** Plans and runs a task, echoing the phrase back when one is asked for. */
+  const run = async (task: TaskRequest) => {
+    const planned = runtime!.controller.plan(task);
+    const approval =
+      planned.approval === undefined
+        ? undefined
+        : { approvalId: planned.approval.approvalId, phrase: planned.approval.phrase };
+    return { planned, task: (await runtime!.controller.execute(planned.id, approval)).task };
+  };
+
+  it("refuses MELRA's own files however an argument reaches them, in every mode", async () => {
+    runtime = await createMelraRuntime({ workspaceRoot: workspace, dataDirectory: data, environment: {} });
+    const key = join(data, "payload.key");
+    // Spread over several programs: three failures of one open its circuit.
+    for (const task of [
+      terminal("cat", [key]),
+      terminal("head", [join("..", basename(data), "melra.sqlite")]),
+      // A directory holding them, which a recursive reader reaches unnamed.
+      terminal("cat", [base]),
+      terminal("rg", ["x", base]),
+      // Approval does not open them either.
+      terminal("node", ["-e", "process.stdout.write(require('fs').readFileSync(process.argv[1]))", key], true),
+    ]) {
+      const { planned, task: done } = await run(task);
+      expect(planned.status).not.toBe("policy_blocked");
+      expect(done.status).toBe("failed");
+      expect(done.error).toMatch(/terminal_path_reserved/);
+    }
+    // `ls` prints names, not contents, so `ls ..` from a project under home works.
+    const listed = (await run(terminal("ls", [base]))).task;
+    expect(listed.error ?? "").not.toMatch(/terminal_path_reserved/);
+    if (process.platform !== "win32") expect(listed.status).toBe("verified_success");
+    expect((await run(terminal("ls", [key]))).task.error).toMatch(/terminal_path_reserved/);
+    if (process.platform === "darwin") {
+      // A firmlink spells the same directory another way.
+      for (const task of [
+        terminal("cat", [`/System/Volumes/Data${await realpath(key)}`]),
+        terminal("rg", ["x", `/System/Volumes/Data${await realpath(base)}`]),
+      ]) {
+        expect((await run(task)).task.error).toMatch(/terminal_path_reserved/);
+      }
+    }
+    await runtime.close();
+    runtime = await createMelraRuntime({
+      workspaceRoot: workspace,
+      dataDirectory: data,
+      environment: {},
+      unhinged: true,
+    });
+    const unhinged = await run(terminal("cat", [key]));
+    expect(unhinged.planned.status).toBe("planned");
+    expect(unhinged.task.error).toMatch(/terminal_path_reserved/);
+  });
+
+  it("in enforced mode, shows a person a read outside the workspace and refuses a link out", async () => {
+    await writeFile(join(base, "outside.txt"), "outside", "utf8");
+    await mkdir(join(base, "outside"));
+    await writeFile(join(base, "outside", "f"), "linked", "utf8");
+    await symlink(join(base, "outside"), join(workspace, "out"), "junction");
+    runtime = await createMelraRuntime({
+      workspaceRoot: workspace,
+      dataDirectory: data,
+      environment: { MELRA_MODE: "enforced" },
+    });
+    const outside = runtime.controller.plan(terminal("cat", [join(base, "outside.txt")]));
+    expect(outside.status).toBe("awaiting_approval");
+    expect(outside.policyDecision.reason).toBe("read_outside_workspace");
+    await expect(runtime.controller.execute(outside.id)).rejects.toThrow(/approval_required/);
+    if (process.platform !== "win32") {
+      const approved = await runtime.controller.execute(outside.id, {
+        approvalId: outside.approval!.approvalId,
+        phrase: outside.approval!.phrase,
+      });
+      expect(approved.task.status).toBe("verified_success");
+    }
+    // Spelled inside, so policy asked no one; the runtime sees where it leads.
+    const linked = await run(terminal("cat", [join("out", "f")]));
+    expect(linked.planned.status).toBe("planned");
+    expect(linked.task.status).toBe("failed");
+    expect(linked.task.error).toMatch(/terminal_path_outside_workspace/);
+    await runtime.close();
+    runtime = await createMelraRuntime({ workspaceRoot: workspace, dataDirectory: data, environment: {} });
+    if (process.platform !== "win32") {
+      expect((await run(terminal("cat", [join("out", "f")]))).task.status).toBe("verified_success");
+    }
+  });
+
+  it("refuses enforced mode when the workspace holds the data directory", async () => {
+    await expect(
+      createMelraRuntime({
+        workspaceRoot: base,
+        dataDirectory: join(base, ".melra"),
+        environment: { MELRA_MODE: "enforced" },
+      }),
+    ).rejects.toThrow(/enforced_mode_refuses_data_inside_workspace/);
+    // Developer mode starts, and the workspace itself is still usable: refusing
+    // the directories above the data would refuse every command there.
+    runtime = await createMelraRuntime({ workspaceRoot: base, dataDirectory: join(base, ".melra"), environment: {} });
+    const { task } = await run(terminal("node", ["-e", "", "."], true));
+    expect(task.status).toBe("verified_success");
   });
 });

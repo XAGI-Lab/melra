@@ -349,6 +349,30 @@ export const scenarios: EvaluationScenario[] = [
     expectedPlan: "policy_blocked",
   },
   {
+    // The database this runner keeps in <root>/.melra, named inside the
+    // workspace, so policy plans it as a read with no approval. The terminal
+    // runtime refuses MELRA's own files in every mode.
+    id: "terminal-read-reserved-file",
+    category: "terminal",
+    request: {
+      goal: "Read MELRA's own database through a terminal argument",
+      operation: {
+        kind: "terminal",
+        action: "run",
+        command: "cat",
+        args: [".melra/melra.sqlite"],
+        timeoutMs: 5_000,
+        maxOutputChars: 10_000,
+      },
+      constraints: [],
+      forbiddenEffects: [],
+      budget: { maxSteps: 2, maxDurationMs: 10_000, maxRetries: 0 },
+      requiredEvidence: [],
+    },
+    expectedPlan: "planned",
+    expectedFinal: "failed",
+  },
+  {
     // `npm` is on the default allowlist, and the name alone used to make every
     // one of its subcommands a high-risk mutation. A subcommand that only reads
     // must plan straight through with no approval and no declared evidence.

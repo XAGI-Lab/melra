@@ -11,6 +11,7 @@ import {
   defaultEvidenceFor,
   evaluatePolicy,
   validateApproval,
+  type LocalPolicy,
 } from "./index.js";
 
 const root = "/tmp/melra-policy-test";
@@ -414,6 +415,13 @@ describe("Windows command spellings", () => {
       ["apt", ["search", "x", "-o", "AptCli::Hooks::Search::=touch x"]],
       ["pnpm", ["ls"]],
       ["npm", ["ls", "--logs-dir", "/tmp/elsewhere"]],
+      // Followed links and list files reach paths no argument names.
+      ["rg", ["-L", "x"]],
+      ["rg", ["--follow", "x"]],
+      ["rg", ["-nL", "x"]],
+      ["findstr", ["/F:list.txt", "x"]],
+      ["findstr", ["/S", "/D:..;C:\\Users", "x", "*"]],
+      ["wc", ["--files0-from=list"]],
     ] as const) {
       expect(classifyCommand(command, [...args]).read, `${command} ${args.join(" ")}`).toBe(false);
     }
@@ -464,6 +472,76 @@ describe("Windows command spellings", () => {
     expect(plan("git.exe", ["status"]).effect).toBe("read");
     expect(plan("git.exe", ["push"]).effect).toBe("mutate");
     expect(plan("npm.cmd", ["install"]).risk).toBe("high");
+  });
+});
+
+describe("enforced-mode reads that leave the workspace", () => {
+  const enforced = { ...createDefaultPolicy(root), mode: "enforced" as const };
+  const outside = resolve(root, "..", "outside");
+  const read = (command: string, args: string[], cwd?: string, policy: LocalPolicy = enforced) =>
+    evaluatePolicy(
+      "00000000-0000-4000-8000-000000000000",
+      TaskRequestSchema.parse({
+        goal: "Read",
+        operation: { kind: "terminal", action: "run", command, args, ...(cwd === undefined ? {} : { cwd }) },
+      }),
+      policy,
+    );
+  const leaving: Array<[string, string[], string?]> = [
+    ["cat", [resolve(root, "..", "x")]],
+    ["cat", ["../x"]],
+    ["ls", [".."]],
+    ["rg", [`--ignore-file=${outside}`, "y"]],
+    ["rg", [`-f${outside}`, "y"]],
+    ["head", ["../../x"], "src"],
+    ["npm", ["ls", "--prefix", outside]],
+  ];
+
+  it("shows a person a read that names a path outside the workspace, and no other", () => {
+    for (const [command, args, cwd] of leaving) {
+      const result = read(command, args, cwd);
+      expect(result.decision, `${command} ${args.join(" ")}`).toMatchObject({
+        outcome: "confirm",
+        reason: "read_outside_workspace",
+        effect: "read",
+      });
+      expect(result.challenge?.phrase).toMatch(/^APPROVE /);
+    }
+    // Inside the workspace, however spelled, and every read in developer mode,
+    // are as they were.
+    for (const [command, args] of [
+      ["cat", [resolve(root, "src", "x.ts")]],
+      ["rg", ["-n", "TODO", "src"]],
+      ["git", ["diff", "HEAD~1..HEAD", "--stat"]],
+      ["head", ["-n", "1", "fixture.txt"]],
+      ["rg", ["foo.*", "src"]],
+    ] as const) {
+      expect(read(command, [...args]).decision.reason, `${command} ${args.join(" ")}`).toBe("read_only_operation");
+    }
+    for (const [command, args, cwd] of leaving) {
+      expect(read(command, args, cwd, createDefaultPolicy(root)).decision.outcome).toBe("allow");
+    }
+  });
+
+  it("asks even when mutations are off, which still refuse a mutation", () => {
+    const closed = { ...enforced, mutations: "deny" as const };
+    expect(read("cat", ["../x"], undefined, closed).decision.reason).toBe("read_outside_workspace");
+    const write = evaluatePolicy(
+      "00000000-0000-4000-8000-000000000000",
+      TaskRequestSchema.parse({
+        goal: "Write",
+        operation: { kind: "file", action: "write", path: "x.txt", content: "x" },
+        requiredEvidence: [{ type: "file_exists", path: "x.txt" }],
+      }),
+      closed,
+    );
+    expect(write.decision.reason).toBe("mutations_disabled");
+  });
+
+  it.skipIf(process.platform !== "win32")("does not take a bare Windows switch for a path", () => {
+    expect(read("findstr", ["/S", "/I", "x", "*.ts"]).decision.reason).toBe("read_only_operation");
+    // A value attached to one is still judged.
+    expect(read("findstr", [`/G:${outside}`, "x"]).decision.reason).toBe("read_outside_workspace");
   });
 });
 

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -351,4 +351,60 @@ describe("TerminalRuntime", () => {
     // is gone, and no throw means close resolved while it was still running.
     expect(() => process.kill(pid, 0)).toThrow(/ESRCH/);
   }, 30_000);
+});
+
+describe("arguments", () => {
+  const run = (runtime: TerminalRuntime, spelling: string) =>
+    runtime.execute(
+      TerminalOperationSchema.parse({
+        kind: "terminal",
+        action: "run",
+        command: process.execPath,
+        args: ["-e", "", "--", spelling],
+      }),
+    );
+
+  it("refuses every spelling that reaches MELRA's files, before anything runs", async () => {
+    const base = await mkdtemp(join(tmpdir(), "melra-terminal-"));
+    roots.push(base);
+    const ws = join(base, "ws");
+    const data = join(base, "data");
+    await mkdir(ws);
+    await mkdir(join(data, "sub"), { recursive: true });
+    await writeFile(join(data, "payload.key"), "secret");
+    const realData = await realpath(data);
+    const realKey = join(realData, "payload.key");
+    const runtime = await TerminalRuntime.create({
+      root: ws,
+      reserved: async (path) => [realKey, realData, join(realData, "melra.sqlite-journal")].includes(path),
+    });
+    const key = join(data, "payload.key");
+    const spellings = [key, join("..", "data", "payload.key"), `--file=${key}`, `-f${key}`, join(data, "payload.*")];
+    if (process.platform !== "win32") {
+      // The program resolves `l/..` through the link, to data/, not to ws/.
+      await symlink(join(data, "sub"), join(ws, "l"));
+      spellings.push("l/../payload.key", "l/../melra.sqlite-journal");
+    }
+    for (const spelling of spellings) {
+      await expect(run(runtime, spelling), spelling).rejects.toThrow(/terminal_path_reserved/);
+    }
+    await expect(run(runtime, "ok.txt")).resolves.toMatchObject({ success: true });
+  });
+
+  it("in enforced mode, refuses an argument spelled inside that leads out", async () => {
+    const base = await mkdtemp(join(tmpdir(), "melra-terminal-"));
+    roots.push(base);
+    const ws = join(base, "ws");
+    await mkdir(ws);
+    await mkdir(join(base, "outside"));
+    await symlink(join(base, "outside"), join(ws, "out"), "junction");
+    // Spelled outside, policy already asked a person; spelled inside, it did not.
+    const confined = await TerminalRuntime.create({ root: ws, confineArguments: true });
+    await expect(run(confined, join("out", "f"))).rejects.toThrow(/terminal_path_outside_workspace/);
+    await expect(run(confined, join(base, "outside", "f"))).resolves.toMatchObject({ success: true });
+    const developer = await TerminalRuntime.create({ root: ws });
+    for (const spelling of [join("out", "f"), join(base, "outside", "f")]) {
+      await expect(run(developer, spelling)).resolves.toMatchObject({ success: true });
+    }
+  });
 });

@@ -214,6 +214,30 @@ describe("FileRuntime", () => {
     ).rejects.toThrow("path_reserved");
   });
 
+  it("knows a directory that holds a reserved file, by identity", async () => {
+    // What a recursive reader given that directory reaches without naming the file.
+    const base = await mkdtemp(join(tmpdir(), "melra-file-"));
+    roots.push(base);
+    const home = join(base, "home");
+    const data = join(home, ".melra");
+    const root = join(home, "proj");
+    await mkdir(data, { recursive: true });
+    await mkdir(root);
+    await mkdir(join(base, "other"));
+    await writeFile(join(data, "payload.key"), "secret");
+    await symlink(home, join(root, "up"), "junction");
+    const runtime = await FileRuntime.create({ root, reserved: [join(data, "payload.key")] });
+    for (const holder of [data, home, base, parse(base).root, join(root, "up")]) {
+      expect(await runtime.holdsReserved(holder), holder).toBe(true);
+    }
+    for (const other of [root, join(data, "payload.key"), join(base, "other"), join(base, "missing")]) {
+      expect(await runtime.holdsReserved(other), other).toBe(false);
+    }
+    // The identity walk goes root first and stops where the path stops existing.
+    expect(await runtime.isReserved(join(base, ...Array.from({ length: 500 }, () => "a")))).toBe(false);
+    expect(await runtime.isReserved(join(data, "payload.key", "x"))).toBe(true);
+  });
+
   it.skipIf(process.platform !== "darwin")("sees a reserved file through a macOS firmlink", async () => {
     // /System/Volumes/Data/<path> is the same directory as <path>, and realpath
     // keeps whichever spelling it was given.

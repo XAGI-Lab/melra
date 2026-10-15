@@ -127,6 +127,9 @@ export class FileRuntime {
     // A descriptor path names whatever this process has open, MELRA's locked
     // files included, and on macOS realpath leaves it under /dev/fd.
     if (process.platform !== "win32" && inside("/dev/fd", resolve(path))) return true;
+    // ponytail: one stat per name match, so `payload.key/` repeated 340 times
+    // across 100 arguments still costs about 0.9 s. Cache the reserved
+    // identities if that ever shows up.
     for (let current = resolve(path); ; current = dirname(current)) {
       const name = spelling(basename(current));
       for (const entry of this.reserved) {
@@ -153,11 +156,37 @@ export class FileRuntime {
       }
     }
     if (identities.size === 0) return false;
+    // Root first, stopping at the first missing directory: nothing below it
+    // exists, and a 4 KB argument would otherwise cost thousands of failed stats.
+    const chain: string[] = [];
     for (let current = resolve(path); ; current = dirname(current)) {
+      chain.unshift(current);
+      if (dirname(current) === current) break;
+    }
+    for (const current of chain) {
       const found = await stat(current, { bigint: true }).catch(() => undefined);
       if (found !== undefined && identities.has(identity(found))) return true;
-      if (dirname(current) === current) return false;
+      // Except /.vol/<dev>, which never stats though /.vol/<dev>/<ino> below it does.
+      if (found === undefined && dirname(current) !== "/.vol") return false;
     }
+    return false;
+  }
+
+  /** Whether `path` is a directory holding a reserved entry at any depth: a recursive reader given it reaches them unnamed. */
+  async holdsReserved(path: string): Promise<boolean> {
+    const target = await stat(path, { bigint: true }).catch(() => undefined);
+    if (target?.isDirectory() !== true) return false;
+    for (const holder of new Set(this.reserved.map((entry) => dirname(entry)))) {
+      // Lexically and through links, so a holder under a symlinked home is still found.
+      for (const start of new Set([holder, await realpath(holder).catch(() => holder)])) {
+        for (let current = start; ; current = dirname(current)) {
+          const found = await stat(current, { bigint: true }).catch(() => undefined);
+          if (found !== undefined && identity(found) === identity(target)) return true;
+          if (dirname(current) === current) break;
+        }
+      }
+    }
+    return false;
   }
 
   async execute(operation: FileOperation): Promise<Record<string, unknown>> {

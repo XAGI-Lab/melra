@@ -4,8 +4,8 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { realpath } from "node:fs/promises";
-import { isAbsolute, relative, resolve, sep } from "node:path";
-import { outcomeUnknown, type TerminalOperation } from "@melra/protocol";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { outcomeUnknown, terminalArgumentPaths, type TerminalOperation } from "@melra/protocol";
 import { redactSecrets } from "@melra/receipt-schema";
 import { resolveCommand } from "./resolve-command.js";
 
@@ -16,8 +16,20 @@ export interface TerminalRuntimeOptions {
   root: string;
   allowedEnvironment?: string[];
   baseEnvironment?: NodeJS.ProcessEnv;
+  /** Whether a path is, or is inside, one of MELRA's own files, which no argument may reach in any mode. Absent, nothing is. */
+  reserved?: (path: string) => Promise<boolean>;
+  /** Whether a path is a directory holding one of them, which a recursive reader given it reaches unnamed. Absent, none is. */
+  holdsReserved?: (path: string) => Promise<boolean>;
+  /** Refuse an argument spelled inside the root that leads out: policy asked approval only for ones spelled outside. */
+  confineArguments?: boolean;
 }
 
+/**
+ * Programs that print names, never contents, so a directory holding MELRA's
+ * files is safe to give them: `ls ..` from a project under home keeps working.
+ * Naming the files themselves is still refused.
+ */
+const NAME_LISTERS = new Set(["ls", "pwd", "where"]);
 
 function inside(root: string, candidate: string): boolean {
   const rel = relative(root, candidate);
@@ -28,6 +40,12 @@ function inside(root: string, candidate: string): boolean {
 // receipt or a memory value would be.
 export function redactTerminalOutput(value: string): string {
   return redactSecrets(value).value;
+}
+
+/** Where a path leads: through every link, or for one not there yet, through its directory's. */
+async function leadsTo(spelled: string): Promise<string> {
+  return await realpath(spelled).catch(async () =>
+    join(await realpath(dirname(spelled)).catch(() => resolve(dirname(spelled))), basename(spelled)));
 }
 
 interface PreparedCommand {
@@ -135,6 +153,11 @@ export class TerminalRuntime {
   readonly root: string;
   readonly allowedEnvironment: Set<string>;
   readonly baseEnvironment: NodeJS.ProcessEnv;
+  /** The root as policy spelled it, which is what "spelled inside" is measured against. */
+  private readonly lexicalRoot: string;
+  private readonly reserved: (path: string) => Promise<boolean>;
+  private readonly holdsReserved: (path: string) => Promise<boolean>;
+  private readonly confineArguments: boolean;
   private readonly jobs = new Map<string, BackgroundJob>();
 
   private constructor(
@@ -146,6 +169,10 @@ export class TerminalRuntime {
       options.allowedEnvironment ?? ["CI", "LANG", "LC_ALL", "NO_COLOR", "TERM"],
     );
     this.baseEnvironment = options.baseEnvironment ?? process.env;
+    this.lexicalRoot = resolve(options.root);
+    this.reserved = options.reserved ?? (async () => false);
+    this.holdsReserved = options.holdsReserved ?? (async () => false);
+    this.confineArguments = options.confineArguments ?? false;
   }
 
   static async create(options: TerminalRuntimeOptions): Promise<TerminalRuntime> {
@@ -160,6 +187,30 @@ export class TerminalRuntime {
     return actual;
   }
 
+  private async checkArguments(operation: TerminalOperation, cwd: string): Promise<void> {
+    const lexicalCwd = resolve(this.lexicalRoot, operation.cwd ?? ".");
+    // A path-qualified program is whatever file sits at that path, so only a
+    // bare name is taken at its word.
+    const command = operation.command ?? "";
+    const listsNames =
+      !/[\\/]/.test(command) &&
+      NAME_LISTERS.has(command.toLowerCase().replace(/\.(exe|cmd|bat|com|ps1)$/, ""));
+    for (const path of [".", ...terminalArgumentPaths(operation.args)]) {
+      // Unnormalised: the program resolves `link/..` through the link.
+      const real = await leadsTo(isAbsolute(path) ? path : `${cwd}${sep}${path}`);
+      // findstr and where expand their own wildcards, reading the directory.
+      for (const probe of /[*?]/.test(path) ? [real, dirname(real)] : [real]) {
+        if ((await this.reserved(probe)) || (!listsNames && (await this.holdsReserved(probe)))) {
+          throw new Error("terminal_path_reserved");
+        }
+      }
+      const spelledInside = inside(this.lexicalRoot, resolve(lexicalCwd, path));
+      if (this.confineArguments && spelledInside && !inside(this.root, real)) {
+        throw new Error("terminal_path_outside_workspace");
+      }
+    }
+  }
+
   private async prepare(operation: TerminalOperation): Promise<PreparedCommand> {
     if (operation.command === undefined) {
       throw new Error(`terminal_${operation.action}_requires_command`);
@@ -168,6 +219,9 @@ export class TerminalRuntime {
       throw new Error("terminal_input_contains_null");
     }
     const cwd = await this.resolveCwd(operation.cwd);
+    // Before the program is looked up, so a refusal never depends on whether
+    // it is installed.
+    await this.checkArguments(operation, cwd);
     const environment: NodeJS.ProcessEnv = {};
     for (const name of ["PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "COMSPEC"]) {
       if (this.baseEnvironment[name] !== undefined) {
