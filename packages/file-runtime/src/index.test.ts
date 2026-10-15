@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, open, readdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, parse } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -134,6 +134,47 @@ describe("FileRuntime", () => {
     await expect(run({ action: "read", path: ".melra/MELRA.sqlite" })).rejects.toThrow(/path_reserved|ENOENT/);
     await expect(
       run({ action: "write", path: ".melra/MELRA.SQLITE-JOURNAL", content: "x" }),
+    ).rejects.toThrow("path_reserved");
+  });
+
+  it.skipIf(process.platform === "win32")("sees a reserved file through this process's descriptors", async () => {
+    // On macOS realpath leaves /dev/fd/N as /dev/fd/<name>, and opening it
+    // duplicates, then closing drops the locks on, whatever the server holds.
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-file-")));
+    roots.push(root);
+    const held = join(root, "melra.sqlite");
+    await writeFile(held, "db");
+    const handle = await open(held, "r");
+    try {
+      const runtime = await FileRuntime.create({ root: "/", reserved: [held] });
+      await expect(
+        runtime.execute(
+          FileOperationSchema.parse({ kind: "file", action: "hash", path: `/dev/fd/${handle.fd}` }),
+        ),
+      ).rejects.toThrow("path_reserved");
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it("folds a reserved name the way a case-insensitive disk does", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-file-")));
+    roots.push(root);
+    await mkdir(join(root, ".melra"));
+    const runtime = await FileRuntime.create({
+      root,
+      reserved: [join(root, ".melra", "melra.sqlite-journal")],
+    });
+    // U+017F, the long s, is "s" to APFS but unchanged by toLowerCase.
+    await expect(
+      runtime.execute(
+        FileOperationSchema.parse({
+          kind: "file",
+          action: "write",
+          path: ".melra/melra.\u017Fqlite-journal",
+          content: "x",
+        }),
+      ),
     ).rejects.toThrow("path_reserved");
   });
 

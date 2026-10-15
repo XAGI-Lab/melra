@@ -211,9 +211,12 @@ export class WorkflowController {
       left.expiresAt <= new Date().toISOString() &&
       RECOVERABLE.includes(current.status)
     ) {
-      await this.recoverInterrupted({ abandonedOnly: true });
-      const still = this.store.getWorkflowLease(workflowId);
-      if (still?.owner === left.owner && still.expiresAt === left.expiresAt) {
+      // What failed in that pass belongs to other runs or tasks and reaches
+      // the sweep's warnings. This advance needs only one answer: a repaired
+      // run has no lease left. One still there is a task still running, a
+      // repair that failed, or a live process that got in first.
+      await this.recoverInterrupted({ abandonedOnly: true }).catch(() => undefined);
+      if (this.store.getWorkflowLease(workflowId) !== undefined) {
         throw new Error("workflow_lease_held");
       }
     }
@@ -498,7 +501,19 @@ export class WorkflowController {
   async recoverInterrupted(
     { abandonedOnly = false }: { abandonedOnly?: boolean } = {},
   ): Promise<WorkflowRun[]> {
-    await this.tasks.recoverInterrupted();
+    // A task or run that cannot be recovered is reported once everything else
+    // has been: one bad record must not hold up the rest. A run with a task
+    // left unsettled is skipped below anyway.
+    const failures: unknown[] = [];
+    await this.tasks.recoverInterrupted().catch((error: unknown) => {
+      failures.push(error);
+    });
+    const recovered = this.repairRuns(abandonedOnly, failures);
+    if (failures.length > 0) throw failures[0];
+    return recovered;
+  }
+
+  private repairRuns(abandonedOnly: boolean, failures: unknown[]): WorkflowRun[] {
     const at = Date.now();
     let runs = this.store.listWorkflowRuns(RECOVERABLE);
     if (abandonedOnly) {
@@ -511,7 +526,13 @@ export class WorkflowController {
     const allTasks = this.store.listTasks(100_000);
     for (const stored of runs) {
       if (this.leased.has(stored.id)) continue;
-      const definition = this.loadDefinition(stored);
+      let definition: WorkflowDefinition;
+      try {
+        definition = this.loadDefinition(stored);
+      } catch (error) {
+        failures.push(error);
+        continue;
+      }
       const keys = new Set(
         definition.nodes.flatMap((node) => expectedTaskKeys(stored.id, node, definition)),
       );
@@ -533,14 +554,21 @@ export class WorkflowController {
       ) {
         continue;
       }
+      let settled = false;
       try {
         // Advanced since the listing: that advance already left it straight.
-        if (this.store.getWorkflowRun(stored.id)?.stateVersion !== stored.stateVersion) {
-          continue;
+        if (this.store.getWorkflowRun(stored.id)?.stateVersion === stored.stateVersion) {
+          recovered.push(this.recoverRun(stored, definition, allTasks));
         }
-        recovered.push(this.recoverRun(stored, definition, allTasks));
+        settled = true;
+      } catch (error) {
+        failures.push(error);
       } finally {
-        this.store.releaseWorkflowLease(stored.id, this.recoveryOwner);
+        // A repair that failed leaves its lease expired rather than deleted:
+        // that lease is how the sweep and the next advance know the run still
+        // needs one, and without it an advance would plan its tasks again.
+        if (settled) this.store.releaseWorkflowLease(stored.id, this.recoveryOwner);
+        else this.store.renewWorkflowLease(stored.id, this.recoveryOwner, new Date(0).toISOString());
       }
     }
     return recovered;

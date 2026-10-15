@@ -423,6 +423,49 @@ describe("workflow recovery across processes", () => {
     expect(b.adapter).not.toHaveBeenCalled();
   });
 
+  it("repairs runs even when a task cannot be recovered", async () => {
+    const at = await home();
+    const adapter = held();
+    const a = await side(at, adapter.execute);
+    const b = await side(at);
+    const stuck = a.tasks.plan(put("stuck"));
+    void a.tasks.execute(stuck.id, approve(stuck)).catch(() => undefined);
+    await adapter.entered.opened;
+    const { id } = await midFlight(a, adapter);
+    a.store.close();
+    expireLease(b.store, id);
+    b.store.deleteTaskPayload(stuck.id);
+
+    await expect(b.workflows.recoverInterrupted({ abandonedOnly: true })).rejects.toThrow(
+      "task_payload_not_found",
+    );
+    expect(b.workflows.status(id).nodes.write?.status).toBe("recovery_required");
+    expect(b.store.getWorkflowLease(id)).toBeUndefined();
+  });
+
+  it("keeps a dead advance's lease when repairing its run fails", async () => {
+    const at = await home();
+    const adapter = held();
+    const a = await side(at, adapter.execute);
+    const b = await side(at);
+    const { id } = await midFlight(a, adapter);
+    a.store.close();
+    expireLease(b.store, id);
+    vi.spyOn(b.store, "transitionWorkflow").mockImplementationOnce(() => {
+      throw new Error("database is locked");
+    });
+
+    await expect(b.workflows.recoverInterrupted({ abandonedOnly: true })).rejects.toThrow(
+      "database is locked",
+    );
+    // Still marked: without it the next advance would take the run over from
+    // a projection that predates the dead advance's task.
+    expect(b.store.expiredWorkflowLeases(new Date().toISOString())).toContain(id);
+    await expect(b.workflows.advance(id)).resolves.toBeDefined();
+    expect(b.workflows.status(id).nodes.write?.status).toBe("recovery_required");
+    expect(b.adapter).not.toHaveBeenCalled();
+  });
+
   it("waits out a lapsed lease while its task still runs, then recovers before advancing", async () => {
     const at = await home();
     const adapter = held();

@@ -111,6 +111,19 @@ describe("recovery between runtimes sharing a home", () => {
       expect(task.status).toBe("failed");
       expect(task.error).toContain("path_reserved");
     }
+    // The verifier asks the same question before it opens anything.
+    const write = runtime.controller.plan(
+      TaskRequestSchema.parse({
+        goal: "Write and check",
+        operation: { kind: "file", action: "write", path: "out.txt", content: "x" },
+        requiredEvidence: [{ type: "file_hash", path: ".melra/melra.sqlite", sha256: "0".repeat(64) }],
+      }),
+    );
+    const checked = await runtime.controller.execute(write.id, {
+      approvalId: write.approval!.approvalId,
+      phrase: write.approval!.phrase,
+    });
+    expect(checked.receipt?.evidence[0]?.summary).toBe("verification_path_reserved");
   });
 
   it("waits for a sweep in flight before closing the database under it", async () => {

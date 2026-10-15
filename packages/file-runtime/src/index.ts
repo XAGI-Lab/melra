@@ -36,9 +36,13 @@ function inside(root: string, candidate: string): boolean {
   return rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel));
 }
 
-/** A name as a case-insensitive filesystem, or Windows' trailing-dot rule, sees it. */
+/**
+ * A name as a case-insensitive filesystem, or Windows' trailing-dot rule, sees
+ * it. Upper then lower is closer to the filesystem's case folding than lower
+ * alone: it takes `ſ` to `s` and the Kelvin sign to `k`, as APFS does.
+ */
 function spelling(name: string): string {
-  const lower = name.toLowerCase();
+  const lower = name.toUpperCase().toLowerCase();
   return process.platform === "win32" ? lower.replace(/[. ]+$/, "") : lower;
 }
 
@@ -111,6 +115,9 @@ export class FileRuntime {
 
   /** Whether `path` is, or is inside, one of the reserved entries. */
   async isReserved(path: string): Promise<boolean> {
+    // A descriptor path names whatever this process has open, MELRA's locked
+    // files included, and on macOS realpath leaves it under /dev/fd.
+    if (process.platform !== "win32" && inside("/dev/fd", resolve(path))) return true;
     for (let current = resolve(path); ; current = dirname(current)) {
       const name = spelling(basename(current));
       for (const entry of this.reserved) {
