@@ -672,6 +672,53 @@ describe("workflow recovery across processes", () => {
     expect(third.adapter).not.toHaveBeenCalled();
   });
 
+  it("keeps a failed run failed when it repairs it", async () => {
+    // q verified; p's branches: one failed, one still waiting for approval.
+    // Live, p counts as failed and the run unwinds. A repair that ranked p's
+    // tasks its own way reopened the waiting branch on a half-undone run.
+    const at = await home();
+    const execute = async (operation?: Operation) =>
+      operation?.kind === "memory" && operation.action === "search"
+        ? { success: true, found: false }
+        : { success: true, stored: true };
+    const a = await side(at, execute);
+    const look = TaskRequestSchema.parse({
+      goal: "Find x",
+      operation: { kind: "memory", action: "search", query: "x" },
+      requiredEvidence: [{ type: "result_equals", path: "found", value: true }],
+    });
+    const run = a.workflows.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Mixed",
+        nodes: [
+          { id: "q", type: "operation", request: put("q") },
+          { id: "p", type: "parallel", dependsOn: ["q"], branches: [[look], [put("p2")]] },
+          { id: "undo-q", type: "compensation", forNodeId: "q", request: put("undo-q") },
+        ],
+      }),
+    );
+    let current = (await a.workflows.advance(run.id)).run;
+    current = (await a.workflows.advance(run.id, approvalsFor(current))).run;
+    current = (await a.workflows.advance(run.id)).run;
+    expect(current.status).toBe("failed");
+    // An advance on it died without changing anything; its lease lapsed.
+    a.store.database
+      .prepare("INSERT INTO workflow_leases(workflow_id, owner, acquired_at, expires_at) VALUES (?, ?, ?, ?)")
+      .run(run.id, "dead", new Date(0).toISOString(), new Date(Date.now() - 1_000).toISOString());
+    const b = await side(at, execute);
+    await b.workflows.recoverInterrupted({ abandonedOnly: true });
+    const repaired = b.workflows.status(run.id);
+    expect(repaired.status).toBe("failed");
+    expect(repaired.nodes.p?.status).toBe("failed");
+    // The unwind carries on: only the compensation runs.
+    const after = (await b.workflows.advance(run.id, approvalsFor(repaired))).run;
+    expect(after.nodes["undo-q"]?.status).toBe("compensated");
+    expect(b.adapter.mock.calls.map(([operation]) => (operation as { key?: string }).key)).toEqual(["undo-q"]);
+  });
+
   it("waits out a lapsed lease while its task still runs, then recovers before advancing", async () => {
     const at = await home();
     const adapter = held();

@@ -537,12 +537,14 @@ export class WorkflowController {
     runFailures: Map<string, unknown>,
   ): WorkflowRun[] {
     const at = Date.now();
-    let runs = this.store.listWorkflowRuns(abandonedOnly ? ABANDONABLE : RECOVERABLE);
-    if (abandonedOnly) {
-      const expired = new Set(this.store.expiredWorkflowLeases(new Date(at).toISOString()));
-      if (expired.size === 0) return [];
-      runs = runs.filter((run) => expired.has(run.id));
-    }
+    // The sweep reads only runs with an expired lease, so a home's history of
+    // finished and failed runs costs it nothing.
+    const runs = abandonedOnly
+      ? this.store
+          .expiredWorkflowLeases(new Date(at).toISOString())
+          .map((id) => this.store.getWorkflowRun(id))
+          .filter((run): run is WorkflowRun => run !== undefined && ABANDONABLE.includes(run.status))
+      : this.store.listWorkflowRuns(RECOVERABLE);
     if (runs.length === 0) return [];
     const recovered: WorkflowRun[] = [];
     const allTasks = this.store.listTasks(100_000);
@@ -618,6 +620,11 @@ export class WorkflowController {
     }
     return this.transition(stored, (draft, emit) => {
       for (const node of definition.nodes) {
+        // An advance on a failed run only ever runs compensations, so only
+        // they can be stale. Re-deriving the forward nodes would rank their
+        // tasks differently from the live path and could take the run out of
+        // failed: a branch awaiting approval beside a failed one reopened.
+        if (stored.status === "failed" && node.type !== "compensation") continue;
         const found = expectedTaskKeys(stored.id, node, definition).map((key) =>
           preferredTask(allTasks, key),
         );
