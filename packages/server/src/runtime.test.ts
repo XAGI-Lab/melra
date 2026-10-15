@@ -1,7 +1,8 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
-import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, parse, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -425,5 +426,130 @@ describe("terminal arguments", () => {
     runtime = await createMelraRuntime({ workspaceRoot: base, dataDirectory: join(base, ".melra"), environment: {} });
     const { task } = await run(terminal("node", ["-e", "", "."], true));
     expect(task.status).toBe("verified_success");
+  });
+});
+
+describe("git read hardening", () => {
+  let base: string;
+
+  afterEach(async () => {
+    await rm(base, { recursive: true, force: true });
+  });
+
+  // POSIX only: the planted programs are `sh`/`cat`. The portable assertion that
+  // the hardening argv/env is applied lives in terminal-runtime's hardenGitRead
+  // unit test; this one proves end to end that no planted program runs.
+  it.skipIf(process.platform === "win32")(
+    "a repo-config textconv, external-diff, or fsmonitor program never runs on an approval-free git read, in either mode",
+    async () => {
+      base = await mkdtemp(join(tmpdir(), "melra-githarden-"));
+      const canary = join(base, "canary.txt");
+      await writeFile(canary, "CANARY_LEAK_DO_NOT_RETURN", "utf8");
+
+      for (const mode of ["developer", "enforced"] as const) {
+        const workspace = join(base, mode, "workspace");
+        const data = join(base, mode, "data");
+        await mkdir(workspace, { recursive: true });
+        const git = (args: string[]) => execFileSync("git", args, { cwd: workspace });
+        git(["init", "-q"]);
+        git(["config", "user.email", "t@t.t"]);
+        git(["config", "user.name", "t"]);
+        git(["config", "commit.gpgsign", "false"]);
+        await writeFile(join(workspace, "f.txt"), "hello\nworld\n", "utf8");
+        git(["add", "f.txt"]);
+        git(["commit", "-qm", "init"]);
+        await writeFile(join(workspace, "f.txt"), "hello\nchanged\n", "utf8"); // an uncommitted diff
+
+        // The sibling data layout enforced mode requires; it also writes payload.key.
+        const runtime = await createMelraRuntime({
+          workspaceRoot: workspace,
+          dataDirectory: data,
+          environment: mode === "enforced" ? { MELRA_MODE: "enforced" } : {},
+        });
+        try {
+          // The planted program writes a marker (proof it ran, immune to output
+          // redaction) and echoes the canary to stdout.
+          const marker = join(base, `${mode}-ran.txt`);
+          const program = `sh -c 'cat "${canary}" > "${marker}"; cat "${canary}"' #`;
+          const ran = async () => (await readFile(marker, "utf8").catch(() => "")) !== "";
+
+          const readGit = async (args: string[]) => {
+            const planned = runtime.controller.plan(
+              request({ operation: { kind: "terminal", action: "run", command: "git", args } }),
+            );
+            // Approval-free: policy allows the read and asks for no phrase.
+            expect(planned.policyDecision.outcome, `${mode} git ${args.join(" ")}`).toBe("allow");
+            expect(planned.approval, `${mode} git ${args.join(" ")}`).toBeUndefined();
+            const result = await runtime.controller.execute(planned.id);
+            const output = (result.output ?? {}) as Record<string, unknown>;
+            return { task: result.task, stdout: String(output.stdout ?? "") };
+          };
+
+          // textconv, run by `git show`/`git log -p`.
+          await writeFile(join(workspace, ".gitattributes"), "f.txt diff=leak\n", "utf8");
+          git(["config", "diff.leak.textconv", program]);
+          for (const args of [["show", "HEAD"], ["log", "-p"]]) {
+            const { task, stdout } = await readGit(args);
+            expect(task.status).toBe("verified_success");
+            expect(stdout).not.toContain("CANARY_LEAK_DO_NOT_RETURN");
+          }
+          git(["config", "--unset", "diff.leak.textconv"]);
+
+          // external diff, run by `git diff`.
+          git(["config", "diff.leak.command", program]);
+          expect((await readGit(["diff"])).stdout).not.toContain("CANARY_LEAK_DO_NOT_RETURN");
+          git(["config", "--unset", "diff.leak.command"]);
+          await rm(join(workspace, ".gitattributes"));
+
+          // fsmonitor, run by `git status`.
+          const fsmonitor = join(base, `${mode}-fsm.sh`);
+          await writeFile(fsmonitor, `#!/bin/sh\ncat "${canary}" > "${marker}"\nexit 1\n`, { mode: 0o755 });
+          git(["config", "core.fsmonitor", fsmonitor]);
+          expect((await readGit(["status"])).task.status).toBe("verified_success");
+          git(["config", "--unset", "core.fsmonitor"]);
+
+          expect(await ran(), `${mode}: a planted git-config program ran`).toBe(false);
+        } finally {
+          await runtime.close();
+        }
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")("still returns correct output for ordinary git reads", async () => {
+    base = await mkdtemp(join(tmpdir(), "melra-githarden-ok-"));
+    const workspace = join(base, "workspace");
+    const data = join(base, "data");
+    await mkdir(workspace, { recursive: true });
+    const git = (args: string[]) => execFileSync("git", args, { cwd: workspace });
+    git(["init", "-q"]);
+    git(["config", "user.email", "t@t.t"]);
+    git(["config", "user.name", "t"]);
+    git(["config", "commit.gpgsign", "false"]);
+    await writeFile(join(workspace, "f.txt"), "hello\nworld\n", "utf8");
+    git(["add", "f.txt"]);
+    git(["commit", "-qm", "init"]);
+    await writeFile(join(workspace, "f.txt"), "hello\nchanged\n", "utf8");
+
+    const runtime = await createMelraRuntime({ workspaceRoot: workspace, dataDirectory: data, environment: {} });
+    try {
+      const readGit = async (args: string[]) => {
+        const planned = runtime.controller.plan(
+          request({ operation: { kind: "terminal", action: "run", command: "git", args } }),
+        );
+        const result = await runtime.controller.execute(planned.id);
+        const output = (result.output ?? {}) as Record<string, unknown>;
+        return { task: result.task, stdout: String(output.stdout ?? "") };
+      };
+      expect((await readGit(["diff", "--stat"])).stdout).toContain("f.txt");
+      expect((await readGit(["show", "HEAD:f.txt"])).stdout).toBe("hello\nworld\n");
+      expect((await readGit(["log", "--oneline"])).stdout).toContain("init");
+      expect((await readGit(["status", "--porcelain"])).stdout).toContain("f.txt");
+      const revParse = await readGit(["rev-parse", "HEAD"]);
+      expect(revParse.task.status).toBe("verified_success");
+      expect(revParse.stdout.trim()).toMatch(/^[0-9a-f]{40}$/);
+    } finally {
+      await runtime.close();
+    }
   });
 });

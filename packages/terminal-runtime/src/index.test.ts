@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { TerminalOperationSchema } from "@melra/protocol";
-import { TerminalRuntime, redactTerminalOutput } from "./index.js";
+import { TerminalRuntime, hardenGitRead, redactTerminalOutput } from "./index.js";
 
 const roots: string[] = [];
 
@@ -406,5 +406,56 @@ describe("arguments", () => {
     for (const spelling of [join("out", "f"), join(base, "outside", "f")]) {
       await expect(run(developer, spelling)).resolves.toMatchObject({ success: true });
     }
+  });
+});
+
+describe("hardenGitRead", () => {
+  // Portable: it asserts the hardening decision, not a spawned POSIX program, so
+  // it runs on every OS. The null device differs per platform.
+  const nullConfig = process.platform === "win32" ? "NUL" : "/dev/null";
+  const env = { GIT_CONFIG_SYSTEM: nullConfig, GIT_CONFIG_GLOBAL: nullConfig };
+
+  it("turns off every config-defined program channel on a git read", () => {
+    // fsmonitor off by a `-c` that beats local config; external-diff and
+    // textconv off by the flags the diff-emitting subcommands take; system and
+    // global config nulled in the env.
+    expect(hardenGitRead("git", ["show", "HEAD"])).toEqual({
+      args: ["-c", "core.fsmonitor=false", "show", "--no-ext-diff", "--no-textconv", "HEAD"],
+      env,
+    });
+    expect(hardenGitRead("git", ["log", "-p"])).toEqual({
+      args: ["-c", "core.fsmonitor=false", "log", "--no-ext-diff", "--no-textconv", "-p"],
+      env,
+    });
+    expect(hardenGitRead("git", ["diff", "--stat"])).toEqual({
+      args: ["-c", "core.fsmonitor=false", "diff", "--no-ext-diff", "--no-textconv", "--stat"],
+      env,
+    });
+  });
+
+  it("omits the diff flags on reads that do not accept them", () => {
+    // `git status --no-ext-diff` is an error, so the flags go only on diff/log/show.
+    for (const sub of [["status"], ["rev-parse", "HEAD"], ["branch"], ["tag"]]) {
+      expect(hardenGitRead("git", sub)).toEqual({
+        args: ["-c", "core.fsmonitor=false", ...sub],
+        env,
+      });
+    }
+  });
+
+  it("hardens a path-qualified git, since it is still the git program", () => {
+    expect(hardenGitRead("/usr/bin/git", ["log"])).toBeDefined();
+    expect(hardenGitRead("C:\\Program Files\\Git\\bin\\git.exe", ["status"])).toBeDefined();
+  });
+
+  it("leaves mutations, global-option-first calls, and other programs alone", () => {
+    // A mutation keeps its global config (a committer's identity, credentials).
+    expect(hardenGitRead("git", ["commit", "-m", "x"])).toBeUndefined();
+    expect(hardenGitRead("git", ["push"])).toBeUndefined();
+    // A global option before the subcommand is not a read to policy either.
+    expect(hardenGitRead("git", ["-c", "core.pager=cat", "status"])).toBeUndefined();
+    // Only git itself, not a lookalike.
+    expect(hardenGitRead("git-foo", ["show"])).toBeUndefined();
+    expect(hardenGitRead("cat", ["show", "HEAD"])).toBeUndefined();
   });
 });

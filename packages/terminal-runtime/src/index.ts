@@ -48,6 +48,65 @@ async function leadsTo(spelled: string): Promise<string> {
     join(await realpath(dirname(spelled)).catch(() => resolve(dirname(spelled))), basename(spelled)));
 }
 
+/** The null device, so git's system/global config files resolve to nothing. */
+const GIT_NULL_CONFIG = process.platform === "win32" ? "NUL" : "/dev/null";
+
+/**
+ * git subcommands policy classifies as approval-free reads (the same set as
+ * `READ_ONLY_GIT_ACTIONS` in policy-core). Kept here, not imported, because this
+ * is the spawn boundary and it has to decide for itself what git it is about to
+ * run — policy cannot see what the .git/config of the repo will do.
+ */
+const GIT_READ_SUBCOMMANDS = new Set(["branch", "diff", "log", "rev-parse", "show", "status", "tag"]);
+/** The read subcommands that emit diffs — the only ones that accept the diff flags below. */
+const GIT_DIFF_SUBCOMMANDS = new Set(["diff", "log", "show"]);
+
+/** Whether a command, path-qualified or not, is the git program by name. */
+function isGitCommand(command: string): boolean {
+  return (
+    basename(command.replaceAll("\\", "/")).toLowerCase().replace(/\.(exe|cmd|bat|com|ps1)$/, "") ===
+    "git"
+  );
+}
+
+/**
+ * Policy classifies several `git` subcommands (diff, show, log, status, ...) as
+ * approval-free reads, but git runs programs named in the repository's *own*
+ * config and attributes while serving one: a diff `textconv` or external-diff
+ * driver bound through `.gitattributes` + `.git/config`, and a `core.fsmonitor`
+ * program on `git status`. Those program paths live in config, not in the
+ * terminal arguments, so `checkArguments` never sees them — a single approved,
+ * innocuous file write can plant one, and a later approval-free read then runs
+ * an arbitrary program, which can read payload.key or melra.sqlite. Policy
+ * cannot see .git/config either; the spawn is the only place that can close it.
+ *
+ * So when the program is git and the call is read-shaped (subcommand first, as
+ * policy requires for a read), spawn it with those channels off: system and
+ * global config nulled, fsmonitor disabled by a highest-precedence `-c` that
+ * beats local config, and external-diff/textconv turned off on the subcommands
+ * that emit diffs (the only ones that accept the flags). Mutations — commit,
+ * push, or a global option before the subcommand — are left untouched, so a
+ * committer's identity and credentials from global config still apply.
+ *
+ * Pure and exported for unit testing. The caller's `operation.args` are never
+ * touched, only the spawned argv, so receipts still quote what was asked.
+ */
+export function hardenGitRead(
+  command: string,
+  args: readonly string[],
+): { args: string[]; env: Record<string, string> } | undefined {
+  if (!isGitCommand(command)) return undefined;
+  const first = args[0];
+  if (first === undefined || !GIT_READ_SUBCOMMANDS.has(first.toLowerCase())) return undefined;
+  const diffFlags = GIT_DIFF_SUBCOMMANDS.has(first.toLowerCase())
+    ? ["--no-ext-diff", "--no-textconv"]
+    : [];
+  return {
+    args: ["-c", "core.fsmonitor=false", first, ...diffFlags, ...args.slice(1)],
+    env: { GIT_CONFIG_SYSTEM: GIT_NULL_CONFIG, GIT_CONFIG_GLOBAL: GIT_NULL_CONFIG },
+  };
+}
+
 interface PreparedCommand {
   /** The command as the caller spelled it — what receipts and evidence quote. */
   command: string;
@@ -245,15 +304,22 @@ export class TerminalRuntime {
       pathExt: environment["PATHEXT"],
       comspec: this.baseEnvironment["COMSPEC"],
     });
+    // Disable git's config-defined program channels on a read at the spawn
+    // boundary, since policy cannot see .git/config (see hardenGitRead).
+    // Skipped when resolveCommand wrapped the call in cmd.exe, where `args` is an
+    // already-quoted command line rather than git's own arguments.
+    const hardened = resolved.windowsVerbatimArguments
+      ? undefined
+      : hardenGitRead(resolved.executable, resolved.args);
     return {
       command: operation.command,
       args: operation.args,
       file: resolved.file,
-      spawnArgs: resolved.args,
+      spawnArgs: hardened?.args ?? resolved.args,
       windowsVerbatimArguments: resolved.windowsVerbatimArguments,
       executable: resolved.executable,
       cwd,
-      environment,
+      environment: hardened === undefined ? environment : { ...environment, ...hardened.env },
       timeoutMs: operation.timeoutMs,
       maxOutputChars: operation.maxOutputChars,
       interactive: operation.interactive,

@@ -158,6 +158,16 @@ All notable changes are documented here. The format follows
 
 ### Security
 
+- A `git` read that runs without approval (`diff`, `show`, `log`, `status`,
+  `rev-parse`, `branch`, `tag`) no longer runs programs the repository's own
+  config or attributes name, such as diff drivers, textconv and fsmonitor.
+  Those live in `.git/config`, which the terminal argument check never sees, so
+  a read could run a program able to read `payload.key`. The terminal runtime
+  now spawns a git read with system and global config off and those channels
+  disabled. Only the spawned command changes, so receipts still quote what was
+  asked, and git mutations keep their configured identity. External diff and
+  textconv are therefore not applied to reads MELRA runs.
+
 - Terminal commands can no longer reach `payload.key`, `melra.sqlite` or a
   directory holding them through an absolute, `..`, symlinked, firmlinked or
   option-attached argument, in any mode (`terminal_path_reserved`). `ls`,
