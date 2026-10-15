@@ -162,9 +162,12 @@ describe("melra CLI", () => {
   });
 
   it("approves from the command line as the named operator, without running anything", async () => {
-    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-cli-")));
-    roots.push(root);
-    const dataDirectory = join(root, ".melra");
+    const base = await realpath(await mkdtemp(join(tmpdir(), "melra-cli-")));
+    roots.push(base);
+    // Enforced mode refuses a data directory inside the workspace.
+    const root = join(base, "workspace");
+    await mkdir(root);
+    const dataDirectory = join(base, "data");
     const server = await createMelraRuntime({
       workspaceRoot: root,
       dataDirectory,
