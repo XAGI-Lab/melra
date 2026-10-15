@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { readFile } from "node:fs/promises";
-import { basename, dirname, posix, resolve } from "node:path";
+import { basename, dirname, normalize, resolve, sep } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { hostOf } from "./network-policy.js";
 import type {
@@ -891,11 +891,14 @@ function domainAllowed(operation: Operation, policy: LocalPolicy): boolean {
 /**
  * A file path as the file runtime will resolve it, for matching against a
  * grant's target. Raw, `docs/../.env` matched a `docs/*` grant and then read
- * `.env`. Backslashes count as separators because they are on Windows; on
- * POSIX that only ever makes a match stricter.
+ * `.env`. Normalised by this platform's rules, the ones the runtime resolves
+ * with: a backslash separates on Windows and is part of a name elsewhere, and
+ * splitting on one where the runtime does not let a `..` cancel a different
+ * segment than the one the runtime cancels. A trailing slash names the
+ * directory itself, so it goes too.
  */
 function grantPath(path: string): string {
-  return posix.normalize(path.replaceAll("\\", "/"));
+  return normalize(path).split(sep).join("/").replace(/(?<=.)\/$/, "");
 }
 
 /** A file grant's target in the same spelling `grantPath` gives the path. */

@@ -1,6 +1,7 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import { describe, expect, it } from "vitest";
 import { TaskRequestSchema } from "@melra/protocol";
 import {
@@ -741,15 +742,31 @@ describe("capability grants", () => {
     const docs = [grant({ target: "docs/*" })];
     const at = (path: string) =>
       read({ identity, operation: { kind: "file", action: "read", path } });
-    expect(decide(at("docs/guide.md"), docs).outcome).toBe("allow");
-    expect(decide(at("./docs/guide.md"), docs).outcome).toBe("allow");
-    // A grant spelled the Windows way, or with a leading `./`, still means docs.
-    expect(decide(at("docs\\guide.md"), [grant({ target: "docs\\*" })]).outcome).toBe("allow");
-    expect(decide(at("docs/guide.md"), [grant({ target: "./docs/*" })]).outcome).toBe("allow");
-    // Each of these reads `.env` in the workspace root, outside the grant.
-    for (const path of ["docs/../.env", "docs/a/../../.env", "docs\\..\\.env", "docs/..\\.env"]) {
-      expect(decide(at(path), docs).reason).toBe("capability_not_granted:file.read");
+    // Asked of the resolver the file runtime uses rather than restated: a
+    // backslash separates on Windows and is part of a name elsewhere.
+    const insideDocs = (path: string) => {
+      const rel = relative(resolve(root, "docs"), resolve(root, path));
+      return rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+    };
+    for (const path of [
+      "docs/guide.md",
+      "./docs/guide.md",
+      "docs/../.env",
+      "docs/a/../../.env",
+      "docs\\..\\.env",
+      "docs/..\\.env",
+      "docs\\a/../.env",
+      "docs/a\\b/../../.env",
+      ".env/w\\..\\..\\docs\\x\\c/..",
+      "docs/",
+      "docs/x/../",
+    ]) {
+      expect([path, decide(at(path), docs).outcome]).toEqual([
+        path,
+        insideDocs(path) ? "allow" : "deny",
+      ]);
     }
+    expect(decide(at("docs/guide.md"), [grant({ target: "./docs/*" })]).outcome).toBe("allow");
   });
 
   it("requires a move's destination to be granted as well as its source", () => {
