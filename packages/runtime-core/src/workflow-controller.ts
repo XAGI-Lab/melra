@@ -66,6 +66,12 @@ const RECOVERABLE: WorkflowRun["status"][] = [
   "recovery_required",
 ];
 
+// A failed run's advance runs its compensations, so an advance that died on
+// one leaves the same hazard as any other: a compensation it started, planned
+// and run again. Repaired too, but only once an expired lease says an advance
+// died there; the full startup pass leaves failed runs as they are.
+const ABANDONABLE: WorkflowRun["status"][] = [...RECOVERABLE, "failed"];
+
 export class WorkflowController {
   // In-process advances serialize on this map; competing *processes* serialize
   // on a SQLite lease (see `advance`). Both are needed: the map keeps one
@@ -209,7 +215,7 @@ export class WorkflowController {
       left !== undefined &&
       left.owner !== this.owner &&
       left.expiresAt <= new Date().toISOString() &&
-      RECOVERABLE.includes(current.status)
+      ABANDONABLE.includes(current.status)
     ) {
       // A repaired run has no lease left. One still there is a task still
       // running, a live process that got in first, or a repair that failed.
@@ -531,7 +537,7 @@ export class WorkflowController {
     runFailures: Map<string, unknown>,
   ): WorkflowRun[] {
     const at = Date.now();
-    let runs = this.store.listWorkflowRuns(RECOVERABLE);
+    let runs = this.store.listWorkflowRuns(abandonedOnly ? ABANDONABLE : RECOVERABLE);
     if (abandonedOnly) {
       const expired = new Set(this.store.expiredWorkflowLeases(new Date(at).toISOString()));
       if (expired.size === 0) return [];

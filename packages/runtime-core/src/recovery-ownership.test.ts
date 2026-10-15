@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   TaskRequestSchema,
   WorkflowDefinitionSchema,
+  type Operation,
   type TaskRequest,
   type WorkflowRun,
 } from "@melra/protocol";
@@ -56,7 +57,10 @@ async function home() {
 /** One process: its own connection, verifier and controllers, the shared key. */
 async function side(
   at: { root: string; path: string },
-  execute: () => Promise<Record<string, unknown>> = async () => ({ success: true, stored: true }),
+  execute: (operation?: Operation) => Promise<Record<string, unknown>> = async () => ({
+    success: true,
+    stored: true,
+  }),
   probe?: EvidenceProbe,
   policy: Partial<LocalPolicy> = {},
 ) {
@@ -597,6 +601,75 @@ describe("workflow recovery across processes", () => {
 
     await expect(b.workflows.advance(id)).rejects.toThrow("database is locked");
     expect((await b.workflows.advance(id)).run.nodes.write?.status).toBe("recovery_required");
+  });
+
+  it("does not run a compensation again that a dead unwind had started", async () => {
+    // a verifies, b fails while its sibling s is still running, and the
+    // process dies. The next process repairs the run to failed and starts
+    // undoing a, then dies inside the compensation. Unsafe-local mode, so a
+    // compensation needs no approval and is planned and run in one advance.
+    const at = await home();
+    const key = (operation?: Operation) => (operation as { key?: string } | undefined)?.key;
+    const sibling = gate();
+    const first = await side(
+      at,
+      async (operation) => {
+        if (key(operation) === "b") return { success: false, stored: false };
+        if (key(operation) === "s") {
+          sibling.open();
+          await new Promise(() => undefined);
+        }
+        return { success: true, stored: true };
+      },
+      undefined,
+      { unhinged: true },
+    );
+    const run = first.workflows.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Rollback",
+        nodes: [
+          { id: "a", type: "operation", request: put("a") },
+          { id: "b", type: "operation", request: put("b"), dependsOn: ["a"] },
+          { id: "s", type: "operation", request: put("s"), dependsOn: ["a"] },
+          { id: "undo-a", type: "compensation", forNodeId: "a", request: put("undo-a") },
+        ],
+      }),
+    );
+    await first.workflows.advance(run.id);
+    void first.workflows.advance(run.id).catch(() => undefined);
+    await sibling.opened;
+    // b has failed; only s is still running when the process dies.
+    await vi.waitFor(() => expect(first.store.listInterruptedTasks()).toHaveLength(1));
+    first.store.close();
+
+    const undoing = gate();
+    const second = await side(
+      at,
+      async (operation) => {
+        if (key(operation) === "undo-a") {
+          undoing.open();
+          await new Promise(() => undefined);
+        }
+        return { success: true, stored: true };
+      },
+      undefined,
+      { unhinged: true },
+    );
+    expireLease(second.store, run.id);
+    void second.workflows.advance(run.id).catch(() => undefined);
+    await undoing.opened;
+    expect(second.workflows.status(run.id).status).toBe("failed");
+    second.store.close();
+
+    const third = await side(at, undefined, undefined, { unhinged: true });
+    expireLease(third.store, run.id);
+    await third.workflows.recoverInterrupted();
+    const after = (await third.workflows.advance(run.id)).run;
+    expect(after.nodes["undo-a"]?.status).toBe("recovery_required");
+    expect(third.adapter).not.toHaveBeenCalled();
   });
 
   it("waits out a lapsed lease while its task still runs, then recovers before advancing", async () => {
