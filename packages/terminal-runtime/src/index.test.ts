@@ -12,7 +12,11 @@ import { TerminalRuntime, redactTerminalOutput } from "./index.js";
 const roots: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  // A stopped process can hold its cwd a moment longer on Windows, where the
+  // tree is stopped by `taskkill`, and rmdir then fails EBUSY.
+  await Promise.all(
+    roots.splice(0).map((root) => rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })),
+  );
 });
 
 describe("TerminalRuntime", () => {
@@ -114,7 +118,9 @@ describe("TerminalRuntime", () => {
     expect(alive(pid)).toBe(false);
   });
 
-  it("refuses input to a job whose reader has gone, without taking the process down", async () => {
+  // POSIX only: a Windows pipe takes the write into its buffer rather than
+  // failing it, so there is no EPIPE to survive there.
+  it.skipIf(process.platform === "win32")("refuses input to a job whose reader has gone, without taking the process down", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-terminal-"));
     roots.push(root);
     const runtime = await TerminalRuntime.create({ root });
