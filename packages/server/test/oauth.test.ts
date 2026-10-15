@@ -10,7 +10,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { createMelraRuntime, serveHttp } from "../src/index.js";
-import { redirectUriAllowed } from "../src/oauth.js";
+import { OAuthProvider, redirectUriAllowed } from "../src/oauth.js";
 import type { MelraHttpServer } from "../src/http-server.js";
 import type { MelraRuntime } from "../src/runtime.js";
 
@@ -307,5 +307,77 @@ describe("redirectUriAllowed", () => {
     ]) {
       expect(redirectUriAllowed(uri), uri).toBe(false);
     }
+  });
+});
+
+describe("OAuthProvider", () => {
+  let home: string;
+  beforeAll(() => {
+    home = mkdtempSync(join(tmpdir(), "melra-oauth-provider-"));
+  });
+  afterAll(() => rmSync(home, { recursive: true, force: true }));
+
+  /** Register, approve and redeem, straight through the provider. */
+  const issue = (provider: OAuthProvider, name: string): { id: string; token: string } => {
+    const id = provider.register({ client_name: name, redirect_uris: [REDIRECT] })
+      .client_id as string;
+    const verifier = randomBytes(32).toString("base64url");
+    const challenge = createHash("sha256").update(verifier).digest("base64url");
+    const target = new URL(
+      provider.decide(
+        new URLSearchParams({ client_id: id, redirect_uri: REDIRECT, code_challenge: challenge, decision: "approve" }),
+      ),
+    );
+    const { access_token } = provider.token(
+      new URLSearchParams({
+        grant_type: "authorization_code",
+        code: target.searchParams.get("code")!,
+        client_id: id,
+        code_verifier: verifier,
+      }),
+    ) as { access_token: string };
+    return { id, token: access_token };
+  };
+
+  it("stops honouring a token another process revoked, and never writes it back", () => {
+    const server = new OAuthProvider(join(home, "revoke"));
+    const { token } = issue(server, "agent");
+    expect(server.clientFor(token)).toBeDefined();
+
+    // `melra clients --revoke all` runs in its own process with its own copy.
+    expect(new OAuthProvider(join(home, "revoke")).revoke()).toBe(1);
+    expect(server.clientFor(token)).toBeUndefined();
+
+    // The server's next write used to put its stale copy, token included, back.
+    server.register({ client_name: "later", redirect_uris: [REDIRECT] });
+    expect(new OAuthProvider(join(home, "revoke")).clientFor(token)).toBeUndefined();
+  });
+
+  it("never lets a registration flood evict an approved client", () => {
+    const provider = new OAuthProvider(join(home, "flood"));
+    const { token } = issue(provider, "approved");
+    for (let index = 0; index < 150; index += 1) {
+      provider.register({ client_name: `flood ${index}`, redirect_uris: [REDIRECT] });
+    }
+    expect(provider.clientFor(token)?.name).toBe("approved");
+  });
+
+  it("approves a client whose authorization request left out its one redirect URI", () => {
+    const provider = new OAuthProvider(join(home, "implicit-redirect"));
+    const id = provider.register({ client_name: "one-uri", redirect_uris: [REDIRECT] })
+      .client_id as string;
+    const query = new URLSearchParams({
+      client_id: id,
+      response_type: "code",
+      code_challenge_method: "S256",
+      code_challenge: "x".repeat(43),
+    });
+    // What the browser submits: every hidden field on the page, plus the button.
+    const page = provider.consentPage(query);
+    const submitted = new URLSearchParams({ decision: "approve" });
+    for (const [, name, value] of page.matchAll(/name="([^"]+)" value="([^"]*)"/g)) {
+      submitted.set(name!, value!.replaceAll("&amp;", "&"));
+    }
+    expect(new URL(provider.decide(submitted)).origin + new URL(REDIRECT).pathname).toBe(REDIRECT);
   });
 });
