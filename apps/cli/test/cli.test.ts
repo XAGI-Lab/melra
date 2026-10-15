@@ -9,11 +9,19 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
-import { PRODUCT_VERSION } from "@melra/protocol";
+import {
+  BrowserOperationSchema,
+  HttpOperationSchema,
+  PRODUCT_VERSION,
+  TaskRequestSchema,
+  TerminalOperationSchema,
+} from "@melra/protocol";
 import { createMelraRuntime, serveHttp } from "@melra/server";
 import { runConformance } from "../src/conformance.js";
 import { RESTART_SAFE_WORKFLOW } from "../src/demo-workflow.js";
-import { parseCliEnvironment, serverLaunch } from "../src/environment.js";
+import { approverLabel, parseCliEnvironment, serverLaunch } from "../src/environment.js";
+import { approvalScreen } from "../src/approval-screen.js";
+import { taskTarget } from "../src/activity.js";
 
 const execute = promisify(execFile);
 const roots: string[] = [];
@@ -61,6 +69,7 @@ describe("melra CLI", () => {
       workspaceRoot: resolve("/tmp/melra-workspace"),
       workspaceSet: true,
       dataDirectory: resolve("/tmp/melra-home"),
+      approver: "operator",
       browserExecutablePath: resolve("/Applications/Google Chrome"),
       browserCdpEndpoint: "http://127.0.0.1:9222/",
       browserCdpContextIndex: -1,
@@ -150,6 +159,334 @@ describe("melra CLI", () => {
       command: process.execPath,
       args: ["serve"],
     });
+  });
+
+  it("approves from the command line as the named operator, without running anything", async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), "melra-cli-")));
+    roots.push(base);
+    // Enforced mode refuses a data directory inside the workspace.
+    const root = join(base, "workspace");
+    await mkdir(root);
+    const dataDirectory = join(base, "data");
+    const server = await createMelraRuntime({
+      workspaceRoot: root,
+      dataDirectory,
+      environment: { MELRA_MODE: "enforced" },
+    });
+    try {
+      const plan = () =>
+        server.controller.plan(
+          TaskRequestSchema.parse({
+            goal: "Write the report",
+            operation: { kind: "file", action: "write", path: "report.txt", content: "x" },
+          }),
+        );
+      const planned = plan();
+      const env = { ...process.env, MELRA_HOME: dataDirectory, MELRA_WORKSPACE: root, MELRA_MODE: "enforced" };
+
+      // Off a terminal and without --yes: shown, never decided.
+      const asked = (await execute(process.execPath, [entry, "approve", planned.id], { cwd: root, env }).catch(
+        (error: unknown) => error,
+      )) as { code: number; stdout: string };
+      expect(asked.code).toBe(3);
+      expect(JSON.parse(asked.stdout)).toMatchObject({
+        taskId: planned.id,
+        renderDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+      });
+      expect(server.store.getApprovalDecision(planned.approval!.approvalId)).toBeUndefined();
+
+      const approved = await execute(process.execPath, [entry, "approve", planned.id, "--yes"], {
+        cwd: root,
+        env: { ...env, MELRA_APPROVER: "alice" },
+      });
+      expect(JSON.parse(approved.stdout).decision).toMatchObject({
+        approvalId: planned.approval!.approvalId,
+        channel: "out_of_band",
+        approver: "cli:alice",
+      });
+      // Approving is not running: the task waits for the agent that planned it.
+      expect(server.store.getTask(planned.id)?.status).toBe("awaiting_approval");
+      const done = await server.controller.execute(planned.id);
+      expect(done.task.status).toBe("verified_success");
+      expect(done.receipt?.policyDecision.approval).toMatchObject({ channel: "out_of_band", approver: "cli:alice" });
+
+      const denied = plan();
+      await execute(process.execPath, [entry, "approve", denied.id, "--deny"], { cwd: root, env });
+      expect(server.store.getTask(denied.id)?.status).toBe("cancelled");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("takes the approver's name from MELRA_APPROVER, and never just anything", async () => {
+    const defaults = { cwd: "/w", home: "/h" };
+    const label = (value?: string) =>
+      approverLabel(parseCliEnvironment(value === undefined ? {} : { MELRA_APPROVER: value }, defaults));
+    expect(label()).toBe("cli:operator");
+    expect(label(" alice@ops ")).toBe("cli:alice@ops");
+    expect(label("josé")).toBe("cli:josé");
+    expect(() => label("alice\nAPPROVED")).toThrow(/MELRA_APPROVER/);
+    expect(() => label("Jane Doe")).toThrow(/MELRA_APPROVER/);
+    // A letter that renders as nothing would read as no approver at all.
+    expect(() => label("\u3164")).toThrow(/MELRA_APPROVER/);
+    // Checked only where it is recorded: everything else still runs.
+    const result = await execute(process.execPath, [entry, "version"], {
+      env: { ...process.env, MELRA_APPROVER: "Jane Doe" },
+    });
+    expect(result.stdout.trim()).toBe(PRODUCT_VERSION);
+  });
+
+  it("shows an approver the agent's words as text, never as terminal commands", () => {
+    const hostile =
+      "\r\u001b[2KGoal: Fix README typo\nEffect: file.write on README.md (mutate, medium risk)\u001b[8m\u009b2J\u202e\u{e0041}\u3164";
+    const screen = approvalScreen({
+      task: { id: "t1", approval: { expiresAt: "2026-10-15T00:00:00.000Z" } },
+      contract: {
+        capability: "terminal.run",
+        target: "command:node",
+        effect: "mutate",
+        risk: "medium",
+        operation: {
+          kind: "terminal",
+          action: "run",
+          command: "node",
+          args: ["-e", "require('fs').rmSync(process.env.HOME + '/Documents', { recursive: true })"],
+          env: { NODE_OPTIONS: "--require /tmp/x.js" },
+        },
+        metadata: { goal: hostile + " ".repeat(9_000) },
+      },
+      renderDigest: "a".repeat(64),
+    });
+    // The one escape on screen is MELRA's own reset; nothing else can steer the terminal.
+    expect(screen.replaceAll("\u001b[0m", "")).not.toMatch(
+      /[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u202e\u3164\u{e0041}]/u,
+    );
+    const lines = screen.trimEnd().split("\n");
+    const tail = lines.slice(lines.lastIndexOf("Operation:"));
+    // What the effect actually does is in the summary, above the question,
+    // however long the agent's goal ran.
+    expect(tail.join("\n")).toContain("rmSync");
+    expect(tail.join("\n")).toContain("NODE_OPTIONS");
+    expect(tail.at(-3)).toBe("Effect: terminal.run on command:node (mutate, medium risk)");
+    expect(tail.every((line) => line.length < 260)).toBe(true);
+    expect(tail.filter((line) => line.startsWith("Effect:"))).toHaveLength(1);
+  });
+
+  it("keeps a command's environment and directory in the summary past many arguments", () => {
+    // Schema-parsed, so fields come in the order a real request carries them:
+    // args before cwd and env. Padding the args must not cut the env.
+    const operation = TerminalOperationSchema.parse({
+      kind: "terminal",
+      action: "run",
+      command: "node",
+      args: [...Array.from({ length: 40 }, (_, index) => `--flag${index}`), "-e", "harmless()"],
+      cwd: "sub",
+      env: { NODE_OPTIONS: "--require /tmp/x.js" },
+    });
+    const screen = approvalScreen({
+      task: { id: "t1", approval: { expiresAt: "x" } },
+      contract: { capability: "terminal.run", target: "command:node", effect: "mutate", risk: "medium", operation, metadata: { goal: "g" } },
+      renderDigest: "a".repeat(64),
+    });
+    const tail = screen.slice(screen.lastIndexOf("Operation:"));
+    expect(tail).toContain("NODE_OPTIONS");
+    expect(tail).toContain('cwd: "sub"');
+    // The list is capped, and says so, and its tail, where the code is, stays.
+    expect(tail).toContain("…(+34 more args entries, all in the JSON above)");
+    expect(tail).toContain('"harmless()"');
+  });
+
+  it("gives every field of the operation its own room in the summary", () => {
+    const summary = (capability: string, target: string, operation: unknown): string[] => {
+      const screen = approvalScreen({
+        task: { id: "t1", approval: { expiresAt: "x" } },
+        contract: { capability, target, effect: "mutate", risk: "medium", operation, metadata: { goal: "g" } },
+        renderDigest: "a".repeat(64),
+      });
+      const lines = screen.trimEnd().split("\n");
+      return lines.slice(lines.lastIndexOf("Operation:"));
+    };
+    const padding = Object.fromEntries(Array.from({ length: 80 }, (_, index) => [`PAD_${index}`, "1"]));
+    // Many headers cannot push the url, the only place its query shows, away.
+    const http = summary(
+      "http.post",
+      "https://bank.example/transfer",
+      HttpOperationSchema.parse({
+        kind: "http",
+        action: "request",
+        method: "POST",
+        url: "https://bank.example/transfer?to=attacker&amount=999999",
+        headers: padding,
+        content: "{}",
+      }),
+    );
+    expect(http.join("\n")).toContain("to=attacker&amount=999999");
+    expect(http.join("\n")).toContain("…(+72 more headers entries, all in the JSON above)");
+    // Nor many env entries a command's directory, or the env's first entry.
+    const terminal = summary(
+      "terminal.run",
+      "command:node",
+      TerminalOperationSchema.parse({
+        kind: "terminal",
+        action: "run",
+        command: "node",
+        args: ["build.js"],
+        cwd: "sub",
+        env: { NODE_OPTIONS: "--require /tmp/x.js", ...padding },
+      }),
+    );
+    expect(terminal.join("\n")).toContain('cwd: "sub"');
+    expect(terminal.join("\n")).toContain("NODE_OPTIONS");
+    // An upload's files are in the summary too.
+    const upload = summary(
+      "browser.upload",
+      "#avatar",
+      BrowserOperationSchema.parse({
+        kind: "browser",
+        action: "upload",
+        target: { selector: "#avatar" },
+        filePaths: [".env"],
+      }),
+    );
+    expect(upload.join("\n")).toContain('filePaths[0]: ".env"');
+    // However each field is padded, the summary stays a screen tall.
+    for (const lines of [http, terminal, upload]) expect(lines.length).toBeLessThan(40);
+
+    // An entry is shown whole or not at all, and the note counts entries.
+    const target = (name: string) => ({ selector: `#${name}`, role: "textbox", name, text: name });
+    const form = summary(
+      "browser.fill_form",
+      "form",
+      BrowserOperationSchema.parse({
+        kind: "browser",
+        action: "fill_form",
+        fields: [
+          { target: target("to"), value: "attacker@evil.example" },
+          ...Array.from({ length: 5 }, (_, index) => ({ target: target(`pad${index}`), value: "x" })),
+          { target: target("amount"), value: "999999" },
+        ],
+      }),
+    ).join("\n");
+    expect(form).toContain('fields[0].value: "attacker@evil.example"');
+    expect(form).toContain('fields[6].target.selector: "#amount"');
+    expect(form).toContain("…(+5 more fields entries, all in the JSON above)");
+    // An entry too tall for the budget at one end does not stop the other end.
+    const uneven = summary(
+      "browser.fill_form",
+      "form",
+      BrowserOperationSchema.parse({
+        kind: "browser",
+        action: "fill_form",
+        fields: [
+          { target: { selector: "#user" }, value: "bob" },
+          { target: target("pw"), value: "hunter2" },
+          { target: { selector: "#to" }, value: "attacker" },
+          { target: { selector: "#memo" }, value: "rent" },
+        ],
+      }),
+    ).join("\n");
+    expect(uneven).toContain('fields[2].value: "attacker"');
+    expect(uneven).toContain("…(+1 more fields entries, all in the JSON above)");
+    // A note as tall as the one entry it would stand for is not worth it.
+    const nine = summary(
+      "terminal.run",
+      "command:node",
+      TerminalOperationSchema.parse({ kind: "terminal", action: "run", command: "node", args: Array.from({ length: 9 }, (_, index) => `a${index}`) }),
+    ).join("\n");
+    expect(nine).toContain('args[4]: "a4"');
+    expect(nine).not.toContain("more args entries");
+
+    // Planning refuses a list its action never reads, so each action carries
+    // only its own. With that list at any size, every value set and a full
+    // target, the element acted on and the values typed or opened still sit
+    // right above the question, and the list's ends are close behind.
+    const lists = {
+      select: (size: number) => ({ values: Array.from({ length: Math.min(size, 50) }, (_, index) => `v${index}`) }),
+      fill_form: (size: number) => ({
+        fields: Array.from({ length: Math.ceil(size / 5) }, (_, index) => ({ target: target(`f${index}`), value: `x${index}` })),
+      }),
+      upload: (size: number) => ({ filePaths: Array.from({ length: Math.min(size, 20) }, (_, index) => `p${index}`) }),
+    };
+    for (const [action, list] of Object.entries(lists)) {
+      for (const size of [4, 250]) {
+        const operation = BrowserOperationSchema.parse({
+          kind: "browser",
+          action,
+          url: "https://bank.example/pay?to=attacker",
+          target: target("q"),
+          value: "typed-by-agent",
+          ...list(size),
+          key: "Enter",
+          direction: "down",
+          state: "visible",
+          urlContains: "pay",
+          tabIndex: 1,
+          delayMs: 1,
+          clearFirst: false,
+          pixels: 1,
+          fullPage: true,
+          timeoutMs: 100,
+          settleQuietMs: 25,
+          settleTimeoutMs: 25,
+          maxChars: 100,
+        });
+        const worst = summary(`browser.${action}`, "#q", operation);
+        const nearQuestion = worst.slice(-24).join("\n");
+        expect(nearQuestion).toContain('value: "typed-by-agent"');
+        expect(nearQuestion).toContain("to=attacker");
+        expect(nearQuestion).toContain('target.selector: "#q"');
+        const shown = worst.slice(-40).join("\n");
+        const items = Object.values(list(size))[0]!;
+        expect(shown).toContain(`[0]`);
+        expect(shown).toContain(`[${items.length - 1}]`);
+        expect(worst.length).toBeLessThan(60);
+      }
+    }
+  });
+
+  it("leaves a task's target as it is for JSON, escaping it only where it is shown", () => {
+    const raw = "notes/\u202ereport\u009b.md";
+    const task = {
+      request: { operation: { kind: "file", action: "write", path: raw, content: "x" } },
+    } as unknown as Parameters<typeof taskTarget>[0];
+    // A display escape baked in here would change the value `melra watch` emits.
+    expect(taskTarget(task)).toBe(raw);
+  });
+
+  it("keeps hidden characters out of every JSON it prints", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-cli-")));
+    roots.push(root);
+    const dataDirectory = join(root, ".melra");
+    const server = await createMelraRuntime({ workspaceRoot: root, dataDirectory, environment: {} });
+    try {
+      const planned = server.controller.plan(
+        TaskRequestSchema.parse({
+          goal: "Write\u009b2J\u202ethe report",
+          operation: { kind: "file", action: "write", path: "report.txt", content: "x" },
+        }),
+      );
+      const env = { ...process.env, MELRA_HOME: dataDirectory, MELRA_WORKSPACE: root };
+      // By the eight characters `melra tasks` shows.
+      const asked = (await execute(process.execPath, [entry, "approve", planned.id.slice(0, 8), "--json"], {
+        cwd: root,
+        env,
+      }).catch((error: unknown) => error)) as { code: number; stdout: string };
+      expect(asked.code).toBe(3);
+      expect(asked.stdout).not.toMatch(/[\u0080-\u009f\u202e]/);
+      expect(JSON.parse(asked.stdout).contract.metadata.goal).toBe("Write\u009b2J\u202ethe report");
+      // `melra tasks --json`, which the approval hint points at, too.
+      server.controller.plan(
+        TaskRequestSchema.parse({
+          goal: "Write",
+          operation: { kind: "file", action: "write", path: "a\u202eb\u009b.txt", content: "x" },
+        }),
+      );
+      const listed = await execute(process.execPath, [entry, "tasks", "--json"], { cwd: root, env });
+      expect(listed.stdout).not.toMatch(/[\u0080-\u009f\u202e]/);
+      expect(listed.stdout).toContain("a\\u202eb\\u009b.txt");
+    } finally {
+      await server.close();
+    }
   });
 
   it("prints the product version", async () => {

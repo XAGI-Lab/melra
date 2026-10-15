@@ -8,6 +8,8 @@
 // a readable report instead, decided by one rule: stdout is a TTY and `--json`
 // was not passed. Anything piped or captured never sees a single ANSI byte.
 
+import { printable } from "./approval-screen.js";
+
 export type Status = "pass" | "warn" | "fail";
 
 /** A readable report for this invocation, rather than JSON. */
@@ -107,6 +109,6 @@ export function printJsonOrHuman<T>(
   args: readonly string[],
 ): void {
   process.stdout.write(
-    isHuman(args) ? `${renderHuman(value)}\n` : `${JSON.stringify(value, null, 2)}\n`,
+    isHuman(args) ? `${renderHuman(value)}\n` : `${printable(JSON.stringify(value, null, 2), true)}\n`,
   );
 }

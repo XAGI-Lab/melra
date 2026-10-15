@@ -418,8 +418,8 @@ async function renderTaskDetail(id, into) {
     const left = task.approval?.expiresAt ? until(task.approval.expiresAt) : undefined;
     parts.push(el("div", { class: "callout" }, left === "expired"
       ? "The approval window for this task has closed. Plan it again to get a fresh challenge."
-      : ["Waiting for an approval" + (left ? " — expires in " + left : "") + ". Approve it from the agent that planned it, or with ",
-        el("code", { text: "melra run" }), " in a terminal. The console is read-only and never shows the phrase."]));
+      : ["Waiting for an approval" + (left ? " — expires in " + left : "") + ". Approve it with ",
+        el("code", { text: "melra approve " + task.id }), " in a terminal. The console is read-only and never shows the phrase."]));
   }
   if (task.error) parts.push(el("div", { class: "callout bad", text: task.error }));
   parts.push(el("div", { class: "section" }, el("h2", { text: "Request" }), kv([

@@ -47,9 +47,11 @@ import {
 } from "@melra/policy-core";
 import {
   type CliEnvironment,
+  approverLabel,
   parseCliEnvironment,
   serverLaunch,
 } from "./environment.js";
+import { approvalScreen, printable } from "./approval-screen.js";
 import { runConformance } from "./conformance.js";
 import { statusCommand, tasksCommand, watchCommand } from "./activity.js";
 import { clientStatuses, clientsCheck, detectClients } from "./client-status.js";
@@ -187,7 +189,10 @@ async function runtime(env: CliEnvironment): Promise<MelraRuntime> {
 }
 
 function output(value: unknown): void {
-  process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+  // JSON.stringify escapes C0 controls but leaves C1, DEL and the invisible
+  // and reordering characters raw, and much of what is printed came from an
+  // agent. Spelled out, it is still valid JSON for the same values.
+  process.stdout.write(`${printable(JSON.stringify(value, null, 2), true)}\n`);
 }
 
 function argument(name: string, args: string[]): string | undefined {
@@ -211,7 +216,8 @@ function rejectUnknownFlags(args: string[], known: readonly string[]): void {
   ]);
   // A flag's own value can look like a flag (`--input node=--x`), so skip the
   // slot after any known flag that takes one.
-  const valued = new Set(known.filter((flag) => flag !== "--http" && flag !== "--json"));
+  const boolean = new Set(["--http", "--json", "--yes", "--deny"]);
+  const valued = new Set(known.filter((flag) => !boolean.has(flag)));
   for (let index = 0; index < args.length; index += 1) {
     const argument_ = args[index];
     if (argument_ === undefined || !argument_.startsWith("--")) continue;
@@ -709,21 +715,84 @@ async function runTask(args: string[], env: CliEnvironment): Promise<number> {
         output({ task, next: "rerun interactively to approve this scoped action" });
         return 3;
       }
-      const prompt = createInterface({ input: process.stdin, output: process.stderr });
-      const phrase = await prompt.question(
-        `Type the exact approval phrase '${task.approval!.phrase}' to continue: `,
-      );
-      prompt.close();
-      const execution = await melra.controller.execute(task.id, {
-        approvalId: task.approval!.approvalId,
-        phrase,
-      });
+      // Shown the effect and asked, rather than made to retype a phrase that
+      // proves only that someone typed it.
+      const approver = approverLabel(env);
+      const view = melra.controller.approvalView(task.id);
+      if (!(await confirmInTerminal(view))) return 1;
+      melra.controller.decide(task.id, view.renderDigest, approver);
+      const execution = await melra.controller.execute(task.id);
       output(execution);
       return execution.task.status === "verified_success" ? 0 : 2;
     }
     const execution = await melra.controller.execute(task.id);
     output(execution);
     return execution.task.status === "verified_success" ? 0 : 2;
+  } finally {
+    await melra.close();
+  }
+}
+
+type ApprovalView = ReturnType<MelraRuntime["controller"]["approvalView"]>;
+
+/** The effect as an approver needs to see it, on stderr, then y/N. */
+async function confirmInTerminal(view: ApprovalView): Promise<boolean> {
+  process.stderr.write(approvalScreen(view));
+  const prompt = createInterface({ input: process.stdin, output: process.stderr });
+  const answer = (await prompt.question("Approve this effect? [y/N] ")).trim().toLowerCase();
+  prompt.close();
+  return answer === "y" || answer === "yes";
+}
+
+/**
+ * Records an approval for a task another process planned, without running it:
+ * the agent that planned it runs it, and the decision lets it.
+ */
+async function approveCommand(args: string[], env: CliEnvironment): Promise<number> {
+  // `--mode` is the one flag here that takes a value.
+  const given = args.find((value, index) => !value.startsWith("--") && args[index - 1] !== "--mode");
+  if (given === undefined) throw new Error("approve requires a task ID");
+  const approver = approverLabel(env);
+  const melra = await runtime(env);
+  try {
+    // `melra tasks` shows the first eight characters, so a prefix naming one
+    // waiting task is enough.
+    const waiting = melra.store
+      .listTasks(500, "awaiting_approval")
+      .filter((task) => task.id.startsWith(given));
+    if (given.length < 36 && waiting.length > 1) throw new Error(`task_id_ambiguous:${given}`);
+    const taskId = given.length < 36 && waiting.length === 1 ? waiting[0]!.id : given;
+    const view = melra.controller.approvalView(taskId);
+    if (args.includes("--deny")) {
+      melra.controller.cancel(taskId);
+      // Read back: another process may have started it in the meantime.
+      const task = melra.controller.status(taskId);
+      output({ task });
+      return task.status === "cancelled" ? 0 : 1;
+    }
+    if (!args.includes("--yes")) {
+      if (!process.stdin.isTTY || args.includes("--json")) {
+        output({
+          taskId,
+          renderDigest: view.renderDigest,
+          contract: view.contract,
+          next: "rerun with --yes to approve, or in a terminal to be asked",
+        });
+        return 3;
+      }
+      if (!(await confirmInTerminal(view))) {
+        process.stderr.write("Not approved.\n");
+        return 1;
+      }
+    }
+    const decision = melra.controller.decide(taskId, view.renderDigest, approver);
+    if (decision.channel === "in_band") {
+      process.stderr.write(
+        "Recorded in band: this process is in developer mode. Set \"mode\": \"enforced\" in the policy file (or MELRA_MODE=enforced) for the server and for this command.\n",
+      );
+    }
+    output({ decision });
+    return 0;
   } finally {
     await melra.close();
   }
@@ -799,7 +868,7 @@ function clientsCommand(args: string[], env: CliEnvironment): number {
   for (const client of clients) {
     process.stdout.write(
       `${client.approvedAt === undefined ? "pending " : "approved"}  ` +
-        `${client.id}  ${client.name}\n` +
+        `${client.id}  ${printable(client.name)}\n` +
         `          ${principalRef(clientPrincipal(client))}\n`,
     );
   }
@@ -844,6 +913,7 @@ Usage:
   melra serve [--http] [--port <port>] [--open]
   melra serve --socket <path>
   melra run --request <task.json>
+  melra approve <task-id> [--yes] [--deny] [--json]
   melra inspect <task-id>
   melra tasks [--limit <n>] [--status <status>] [--json]
   melra watch [--json]
@@ -904,6 +974,7 @@ Environment:
   MELRA_POLICY     Optional local policy JSON
   MELRA_UNHINGED   Set to 1 to disable every guardrail (see --unsafe-local)
   MELRA_MODE       developer (default) or enforced (see --mode)
+  MELRA_APPROVER   Name 'melra approve' records as the approver (default: operator)
   MELRA_HTTP_PORT  Port for 'serve --http' (default: 7457)
   MELRA_HTTP_TOKEN Fixed bearer token for 'serve --http' (default: random)
   MELRA_HTTP_OAUTH Set to 0 so only that token gets in; no client can register
@@ -1075,6 +1146,10 @@ async function main(): Promise<void> {
     case "run":
       rejectUnknownFlags(args, ["--request"]);
       process.exitCode = await runTask(args, env);
+      return;
+    case "approve":
+      rejectUnknownFlags(args, ["--yes", "--deny", "--json"]);
+      process.exitCode = await approveCommand(args, env);
       return;
     case "inspect":
     case "export":

@@ -1126,6 +1126,7 @@ export class WorkflowController {
         ? this.tasks.plan(request, {
             idempotencyKey: taskIdempotencyKey(identity, request),
             attempt: 1,
+            stored: true,
           })
         : this.tasks.status(existingTaskId);
     // A challenge that expired before anyone answered it can never be
@@ -1145,6 +1146,7 @@ export class WorkflowController {
       task = this.tasks.plan(request, {
         idempotencyKey: taskIdempotencyKey(identity, request),
         attempt: (task.attempt ?? 1) + 1,
+        stored: true,
       });
     }
     if (task.status === "awaiting_approval") {

@@ -7,12 +7,21 @@ import { isSea } from "node:sea";
 import type { DeploymentMode } from "@melra/protocol";
 import { deploymentMode } from "@melra/protocol";
 import { unhingedFromEnvironment } from "@melra/server";
+import { printable } from "./approval-screen.js";
 
 export interface CliEnvironment {
   workspaceRoot: string;
   /** MELRA_WORKSPACE was set, so no policy file's `workspaceRoot` replaces it. */
   workspaceSet?: boolean;
   dataDirectory: string;
+  /**
+   * `MELRA_APPROVER`, as set: the name `melra approve` records as the
+   * approver, as `cli:<name>`. Receipts carry it and an agent can read
+   * receipts, so it is a label the operator chooses, never the OS account
+   * name. Checked by `approverLabel` only where it is used, so a bad value
+   * cannot stop `serve` or `help`.
+   */
+  approver: string;
   unhinged: boolean;
   mode: DeploymentMode;
   policyPath?: string;
@@ -49,6 +58,14 @@ export function serverLaunch(
   return /[\\/]_npx[\\/]/.test(moduleDirectory)
     ? { command: "npx", args: ["-y", `@melra/cli@${version}`, "serve"] }
     : { command: "melra", args: ["serve"] };
+}
+
+/** The approver as receipts record it: `cli:` and a label nothing can disguise. */
+export function approverLabel(env: CliEnvironment): string {
+  if (!/^[\p{L}\p{N}_.@-]{1,64}$/u.test(env.approver) || printable(env.approver) !== env.approver) {
+    throw new Error("MELRA_APPROVER must be 1 to 64 letters, digits, '.', '_', '@' or '-'");
+  }
+  return `cli:${env.approver}`;
 }
 
 function cdpEndpoint(value: string | undefined): string | undefined {
@@ -135,6 +152,7 @@ export function parseCliEnvironment(
     // Empty is unset here too, or the database and payload key would land in
     // the working directory, inside the workspace a confined agent can write.
     dataDirectory: resolve(source.MELRA_HOME?.trim() || join(defaults.home, ".melra")),
+    approver: source.MELRA_APPROVER?.trim() || "operator",
     unhinged: unhingedFromEnvironment(source),
     mode: deploymentMode(source.MELRA_MODE),
     ...(source.MELRA_POLICY === undefined || source.MELRA_POLICY.trim() === ""

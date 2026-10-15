@@ -65,6 +65,12 @@ export interface ExecutionResult {
 export interface TaskPlanOptions {
   idempotencyKey?: string;
   attempt?: number;
+  /**
+   * Planned again from a workflow definition stored when it was accepted.
+   * Checks that only govern new work (an unused browser list) are not applied
+   * again, so a run accepted before a check existed does not stop mid-way.
+   */
+  stored?: boolean;
 }
 
 function now(): string {
@@ -151,6 +157,13 @@ export function capabilityUsageReader(store: SqliteStore): CapabilityUsageReader
   };
 }
 
+/** The one browser action that reads each list. */
+const BROWSER_LIST_ACTIONS = [
+  ["values", "select"],
+  ["fields", "fill_form"],
+  ["filePaths", "upload"],
+] as const;
+
 export class TaskController {
   private readonly active = new Map<string, AbortController>();
 
@@ -221,7 +234,7 @@ export class TaskController {
     ) {
       throw new Error("idempotency_attempt_invalid");
     }
-    this.preflight(parsedRequest);
+    this.preflight(parsedRequest, options);
     const id = randomUUID();
     const policy = evaluatePolicy(
       id,
@@ -269,7 +282,7 @@ export class TaskController {
     };
   }
 
-  preflight(request: TaskRequest): PolicyDecision {
+  preflight(request: TaskRequest, options: { stored?: boolean } = {}): PolicyDecision {
     const parsed = withDefaultEvidence(TaskRequestSchema.parse(request));
     const capabilities = this.executor.capabilities?.();
     if (
@@ -279,6 +292,15 @@ export class TaskController {
       throw new Error(
         `operation_capability_unavailable:${parsed.operation.kind}`,
       );
+    }
+    // A list the browser action never reads would sit in the approval as a
+    // decoy: shown to the person approving, doing nothing.
+    if (parsed.operation.kind === "browser" && options.stored !== true) {
+      for (const [field, action] of BROWSER_LIST_ACTIONS) {
+        if (parsed.operation[field] !== undefined && parsed.operation.action !== action) {
+          throw new Error(`browser_field_unused:${field}`);
+        }
+      }
     }
     // Refused before anything is approved: a mutation run against evidence no
     // registered verifier can check would end `partial` after the effect.

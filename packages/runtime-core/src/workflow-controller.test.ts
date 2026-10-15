@@ -161,6 +161,35 @@ describe("WorkflowController planning", () => {
     );
   });
 
+  it("refuses an unused browser list in a new workflow, and keeps running one accepted before", async () => {
+    const { controller, tasks } = await setup();
+    const browser = WorkflowDefinitionSchema.parse({
+      schemaVersion: "1.0.0",
+      id: definitionId,
+      version: 1,
+      name: "Click",
+      nodes: [
+        {
+          id: "click",
+          type: "operation",
+          request: {
+            goal: "Click",
+            operation: { kind: "browser", action: "click", target: { selector: "#ok" }, values: [] },
+          },
+        },
+      ],
+    });
+    expect(() => controller.plan(browser)).toThrow("browser_field_unused:values");
+    // A definition stored by a version without the check: its steps are
+    // planned again as the run advances, and must not stop it there.
+    const preflight = tasks.preflight.bind(tasks);
+    const spy = vi.spyOn(tasks, "preflight").mockImplementation((request) => preflight(request, { stored: true }));
+    const run = controller.plan(browser);
+    spy.mockRestore();
+    const advanced = await controller.advance(run.id);
+    expect(advanced.run.nodes.click?.status).not.toBe("pending");
+  });
+
   it("rejects a denied nested request before writing anything", async () => {
     const { controller, store } = await setup();
     const denied = WorkflowDefinitionSchema.parse({
