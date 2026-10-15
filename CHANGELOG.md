@@ -24,6 +24,8 @@ All notable changes are documented here. The format follows
   `payload.key`, and a `fail` in enforced mode, which refuses to start that way.
   Unsafe-local mode, which reaches every file, gets no such verdict; its
   guardrails warning already says so.
+- The CLI package publishes its MCP Registry name in `mcpName`, and the root
+  `server.json` describes the stdio npm install for the next registry listing.
 - Receipts say who approved an effect and how. `policyDecision.approval` records
   the channel (`in_band` for an echoed phrase, which anything that knows the
   task can compute; `out_of_band` for a decision recorded through an operator
