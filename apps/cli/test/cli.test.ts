@@ -524,6 +524,10 @@ describe("melra CLI", () => {
     expect(enforced.ready).toBe(false);
     // Beside the workspace, as the deploy examples lay it out.
     expect(data(await doctorWith({ MELRA_HOME: join(root, "data") }))).toBe("pass");
+    // A workspace that is a file is the workspace's problem, reported once.
+    await writeFile(join(root, "file"), "");
+    const file = await doctorWith({ MELRA_WORKSPACE: join(root, "file"), MELRA_HOME: join(root, "data") });
+    expect(file.checks.filter((check) => check.status === "fail").map((check) => check.name)).toEqual(["workspace"]);
   });
 
   it("reports local readiness through doctor", async () => {

@@ -522,6 +522,8 @@ async function doctor(env: CliEnvironment): Promise<{
         : "developer: MELRA governs what it is asked for; the harness may have another path",
   });
   try {
+    // A file passes access() too, and the runtime then fails to start on it.
+    if (!(await stat(env.workspaceRoot)).isDirectory()) throw new Error("not a directory");
     await access(env.workspaceRoot, constants.R_OK | constants.W_OK);
     checks.push({
       name: "workspace",
@@ -543,8 +545,16 @@ async function doctor(env: CliEnvironment): Promise<{
       status: "pass",
       detail: env.dataDirectory,
     });
-    // Only once both are known to exist: the check would create a missing workspace.
-    if (checks.some((check) => check.name === "workspace" && check.status === "pass")) {
+  } catch {
+    checks.push({
+      name: "data-directory",
+      status: "fail",
+      detail: env.dataDirectory,
+    });
+  }
+  // Only once both exist as directories: the check would create a missing workspace.
+  if (checks.every((check) => !["workspace", "data-directory"].includes(check.name) || check.status === "pass")) {
+    try {
       const inside = await workspaceHoldsData(env.workspaceRoot, env.dataDirectory);
       checks.push(
         inside
@@ -556,13 +566,13 @@ async function doctor(env: CliEnvironment): Promise<{
             }
           : { name: "data-location", status: "pass", detail: "outside the workspace" },
       );
+    } catch (error) {
+      checks.push({
+        name: "data-location",
+        status: "fail",
+        detail: error instanceof Error ? error.message : String(error),
+      });
     }
-  } catch {
-    checks.push({
-      name: "data-directory",
-      status: "fail",
-      detail: env.dataDirectory,
-    });
   }
   try {
     const database = new DatabaseSync(":memory:");
