@@ -358,9 +358,8 @@ describe("enforced mode refuses in-band approval", () => {
     await expect(workflows.advance(planned.id, [forge(store.getTask(b!)!)])).rejects.toThrow(
       "approval_in_band_refused",
     );
-    // Refused before the wave: `a` was neither cancelled nor planned again,
-    // where refusing at `b`'s turn threw the wave away and left `a` pointing
-    // at the task it had cancelled, read as cancelled for good.
+    // Refused before the wave: `a` was neither cancelled nor planned again by
+    // an advance that was refused.
     expect(store.getTask(a!)?.status).toBe("awaiting_approval");
     expect(store.listTasks()).toHaveLength(2);
     const next = (await workflows.advance(planned.id)).run;
