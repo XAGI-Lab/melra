@@ -124,6 +124,12 @@ All notable changes are documented here. The format follows
 
 ### Security
 
+- The Python SDK no longer sends the bearer token through a proxy from
+  `HTTP_PROXY`, `ALL_PROXY` or the macOS system settings when it connects to
+  a loopback or plain-http server. httpx routed the request, `Authorization`
+  header and all, in cleartext to the proxy, which also could not reach a
+  loopback server. Remote `https://` servers may still be reached through
+  one.
 - On Windows, a differently cased spelling of the workspace (`..\\WS` for
   `ws`) is recognised as the workspace root, which file operations never
   touch. The check compared strings while the containment check ignored

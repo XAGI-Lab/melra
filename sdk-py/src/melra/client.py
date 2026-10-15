@@ -65,7 +65,9 @@ class MelraClient:
         a URL without the `/mcp` path gets it appended. `token` is required and
         never read from the environment. It drives the machine, so plain `http://` is
         refused for anything but a loopback host unless `allow_insecure_http` is
-        set; use `https://` to reach a server through a TLS proxy.
+        set; use `https://` to reach a server through a TLS proxy. Plain http and
+        loopback connections ignore proxies named in the environment or the
+        system settings, which would otherwise see the token.
         """
         parts = urlsplit(url)
         host = parts.hostname
@@ -101,15 +103,24 @@ class MelraClient:
                     read, write = await stack.enter_async_context(stdio_client(self._parameters))
                 else:
                     url, token, socket_path = self._remote
+                    parts = urlsplit(url)
+                    # An explicit transport keeps httpx from routing through a
+                    # proxy named in the environment or macOS's settings, which
+                    # would read the token off a plain http request and could
+                    # not reach a loopback server anyway. Only remote https,
+                    # tunnelled and encrypted end to end, may go through one.
+                    direct = (
+                        socket_path is not None
+                        or parts.scheme == "http"
+                        or _is_loopback(parts.hostname or "")
+                    )
                     http = await stack.enter_async_context(
                         httpx.AsyncClient(
                             headers={"Authorization": f"Bearer {token}"},
                             # The MCP SDK's own defaults: 30 s, 5 min for the event stream.
                             timeout=httpx.Timeout(30.0, read=300.0),
                             transport=(
-                                None
-                                if socket_path is None
-                                else httpx.AsyncHTTPTransport(uds=socket_path)
+                                httpx.AsyncHTTPTransport(uds=socket_path) if direct else None
                             ),
                         )
                     )
