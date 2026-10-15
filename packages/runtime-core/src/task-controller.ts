@@ -22,6 +22,7 @@ import {
   TaskRequestSchema,
 } from "@melra/protocol";
 import {
+  approvalTtl,
   CAPABILITY_DAY_MS,
   classifyOperation,
   defaultEvidenceFor,
@@ -936,7 +937,7 @@ export class TaskController {
     return (
       task.approval !== undefined &&
       decidedAt <= Date.parse(task.approval.expiresAt) &&
-      Date.now() < decidedAt + this.policy.approvalTtlMs
+      Date.now() < decidedAt + approvalTtl(this.policy)
     );
   }
 

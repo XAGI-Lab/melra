@@ -48,7 +48,12 @@ export interface LocalPolicy {
    */
   popups: "allow" | "block";
   mutations: "deny" | "confirm";
-  approvalTtlMs: number;
+  /**
+   * How long an approval challenge stays open, and a recorded decision usable.
+   * Absent, it follows the mode (`approvalTtl`): an operator approving out of
+   * band in enforced mode needs longer than someone answering in the chat.
+   */
+  approvalTtlMs?: number;
   maxFileBytes: number;
   /**
    * How long unreachable memory rows are kept before compaction reclaims them,
@@ -551,7 +556,6 @@ export function createDefaultPolicy(workspaceRoot: string): LocalPolicy {
     allowLocalhost: true,
     popups: "block",
     mutations: "confirm",
-    approvalTtlMs: 5 * 60_000,
     maxFileBytes: 10 * 1024 * 1024,
     memoryRetention: { maxAgeDays: 30, maxPerScope: 0 },
     deniedTraits: [],
@@ -563,6 +567,13 @@ export function createDefaultPolicy(workspaceRoot: string): LocalPolicy {
   };
 }
 
+/** The approval window a policy gives: its own, or 5 minutes in developer mode and 30 in enforced. */
+export function approvalTtl(policy: Pick<LocalPolicy, "approvalTtlMs" | "mode">): number {
+  return policy.approvalTtlMs ?? (policy.mode === "enforced" ? 30 * 60_000 : 5 * 60_000);
+}
+
+const MAX_APPROVAL_TTL_MS = 24 * 60 * 60_000;
+
 export async function loadPolicy(
   path: string | undefined,
   workspaceRoot: string,
@@ -570,6 +581,16 @@ export async function loadPolicy(
   const defaults = createDefaultPolicy(workspaceRoot);
   if (path === undefined) return defaults;
   const parsed = JSON.parse(await readFile(path, "utf8")) as Partial<LocalPolicy>;
+  // A window of zero, a negative one or a string would leave every challenge
+  // expired, or never expiring; refused loudly rather than read as a default.
+  if (
+    parsed.approvalTtlMs !== undefined &&
+    !(Number.isInteger(parsed.approvalTtlMs) && parsed.approvalTtlMs >= 1 && parsed.approvalTtlMs <= MAX_APPROVAL_TTL_MS)
+  ) {
+    throw new Error(
+      `policy_approval_ttl_invalid: approvalTtlMs must be a whole number of milliseconds from 1 to ${MAX_APPROVAL_TTL_MS} (24 hours)`,
+    );
+  }
   return {
     ...defaults,
     ...parsed,
@@ -1229,7 +1250,7 @@ export function evaluatePolicy(
       taskId,
       actionDigest: digest,
       phrase,
-      expiresAt: new Date(Date.now() + policy.approvalTtlMs).toISOString(),
+      expiresAt: new Date(Date.now() + approvalTtl(policy)).toISOString(),
     },
   };
 }
