@@ -32,6 +32,13 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- Recovery keeps a bounded loop's place. A loop waiting on a step past its
+  first iteration lost its iteration count on any restart, so the next
+  advance started again at iteration 0. If `until` had come true meanwhile,
+  the loop finished there, the approved step never ran, and the run never
+  completed. A loop that had already finished early on `until` was also
+  reopened by a restart, so `until` was asked again of a world that had moved
+  on and another iteration could run after later steps had used its result.
 - Workflow recovery no longer reopens a parallel branch that was waiting for
   approval beside a branch that failed. The live path counted such a node as
   failed and began the rollback; recovery ranked the waiting branch first and

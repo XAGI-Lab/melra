@@ -648,7 +648,15 @@ export class WorkflowController {
         // steps remain: a crash between a loop's iterations, or between a
         // branch's steps, recovered as complete with the rest never run.
         // Pending, so the next advance carries on from the tasks it has.
-        if (state.status === "verified_complete" && !sequenceFinished(node, found)) {
+        // A loop the projection already recorded as finished with these same
+        // tasks did finish: it stopped early on `until`. Reopened, `until`
+        // would be asked again of a world that has since moved on.
+        const recorded = replayed.nodes[node.id]!;
+        if (
+          state.status === "verified_complete" &&
+          !sequenceFinished(node, found) &&
+          !(recorded.status === "verified_complete" && canonicalJson(recorded.taskIds) === canonicalJson(state.taskIds))
+        ) {
           state = {
             status: "pending",
             taskIds: state.taskIds,
@@ -657,6 +665,12 @@ export class WorkflowController {
               ? { iterations: Math.floor(state.taskIds.length / node.body.length) }
               : {}),
           };
+        }
+        // A loop that stopped on a step keeps the iteration it stopped in, as
+        // runLoop records it. Without it the next advance starts again at
+        // iteration 0 and asks `until` of a task long finished.
+        if (node.type === "bounded_loop" && state.iterations === undefined && state.taskIds.length > 0) {
+          state = { ...state, iterations: Math.floor((state.taskIds.length - 1) / node.body.length) };
         }
         if (canonicalJson(draft.nodes[node.id]) === canonicalJson(state)) {
           continue;
