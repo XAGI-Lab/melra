@@ -51,6 +51,11 @@ All notable changes are documented here. The format follows
   release workflow's GitHub OIDC identity, so no npm token is stored, and npm
   attaches provenance to every `@melra/*` package. Owners register the trust
   once with `node scripts/npm-trust.mjs`; see `docs/RELEASES.md`. (#152)
+- Planning refuses a browser operation carrying a list its action never reads
+  (`browser_field_unused:<field>`): `values` belongs to `select`, `fields` to
+  `fill_form`, `filePaths` to `upload`. The runtime ignored such a list, so it
+  showed the person approving an effect that would not happen, and it padded
+  the approval summary.
 
 ### Fixed
 

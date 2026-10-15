@@ -334,7 +334,7 @@ describe("melra CLI", () => {
     );
     expect(terminal.join("\n")).toContain('cwd: "sub"');
     expect(terminal.join("\n")).toContain("NODE_OPTIONS");
-    // Nor padding in one list the files an upload sends.
+    // An upload's files are in the summary too.
     const upload = summary(
       "browser.upload",
       "#avatar",
@@ -342,7 +342,6 @@ describe("melra CLI", () => {
         kind: "browser",
         action: "upload",
         target: { selector: "#avatar" },
-        values: Array.from({ length: 20 }, (_, index) => `pad${index}`),
         filePaths: [".env"],
       }),
     );
@@ -394,41 +393,52 @@ describe("melra CLI", () => {
     expect(nine).toContain('args[4]: "a4"');
     expect(nine).not.toContain("more args entries");
 
-    // With every list at its schema maximum and every value set, the values a
-    // browser action types or opens still sit right above the question.
-    const worst = summary(
-      "browser.type",
-      "#q",
-      BrowserOperationSchema.parse({
-        kind: "browser",
-        action: "type",
-        url: "https://bank.example/pay?to=attacker",
-        target: target("q"),
-        value: "typed-by-agent",
-        values: Array.from({ length: 50 }, (_, index) => `v${index}`),
-        fields: Array.from({ length: 50 }, (_, index) => ({ target: target(`f${index}`), value: "x" })),
-        filePaths: Array.from({ length: 20 }, (_, index) => `p${index}`),
-        key: "Enter",
-        direction: "down",
-        state: "visible",
-        urlContains: "pay",
-        tabIndex: 1,
-        delayMs: 1,
-        clearFirst: false,
-        pixels: 1,
-        fullPage: true,
-        timeoutMs: 100,
-        settleQuietMs: 25,
-        settleTimeoutMs: 25,
-        maxChars: 100,
+    // Planning refuses a list its action never reads, so each action carries
+    // only its own. With that list at any size, every value set and a full
+    // target, the element acted on and the values typed or opened still sit
+    // right above the question, and the list's ends are close behind.
+    const lists = {
+      select: (size: number) => ({ values: Array.from({ length: Math.min(size, 50) }, (_, index) => `v${index}`) }),
+      fill_form: (size: number) => ({
+        fields: Array.from({ length: Math.ceil(size / 5) }, (_, index) => ({ target: target(`f${index}`), value: `x${index}` })),
       }),
-    );
-    const nearQuestion = worst.slice(-24).join("\n");
-    expect(nearQuestion).toContain('value: "typed-by-agent"');
-    expect(nearQuestion).toContain("to=attacker");
-    // And so does the element it acts on.
-    expect(nearQuestion).toContain('target.selector: "#q"');
-    expect(worst.length).toBeLessThan(60);
+      upload: (size: number) => ({ filePaths: Array.from({ length: Math.min(size, 20) }, (_, index) => `p${index}`) }),
+    };
+    for (const [action, list] of Object.entries(lists)) {
+      for (const size of [4, 250]) {
+        const operation = BrowserOperationSchema.parse({
+          kind: "browser",
+          action,
+          url: "https://bank.example/pay?to=attacker",
+          target: target("q"),
+          value: "typed-by-agent",
+          ...list(size),
+          key: "Enter",
+          direction: "down",
+          state: "visible",
+          urlContains: "pay",
+          tabIndex: 1,
+          delayMs: 1,
+          clearFirst: false,
+          pixels: 1,
+          fullPage: true,
+          timeoutMs: 100,
+          settleQuietMs: 25,
+          settleTimeoutMs: 25,
+          maxChars: 100,
+        });
+        const worst = summary(`browser.${action}`, "#q", operation);
+        const nearQuestion = worst.slice(-24).join("\n");
+        expect(nearQuestion).toContain('value: "typed-by-agent"');
+        expect(nearQuestion).toContain("to=attacker");
+        expect(nearQuestion).toContain('target.selector: "#q"');
+        const shown = worst.slice(-40).join("\n");
+        const items = Object.values(list(size))[0]!;
+        expect(shown).toContain(`[0]`);
+        expect(shown).toContain(`[${items.length - 1}]`);
+        expect(worst.length).toBeLessThan(60);
+      }
+    }
   });
 
   it("leaves a task's target as it is for JSON, escaping it only where it is shown", () => {

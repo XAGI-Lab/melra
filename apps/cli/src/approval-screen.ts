@@ -56,10 +56,11 @@ function bounded(text: string, limit = 160): string {
  * Each list or record (args, env, headers, values, fields, filePaths) shows
  * whole entries from both ends, the first and last always, within its own
  * budget of lines, and says how many entries it left out, so no entry is shown
- * in part. Fields then print tallest first: how far a field sits from the
- * question depends only on the fields no taller than it, so padding one field
- * moves only that field away. Plain values (a url, a cwd, a typed value) and
- * small objects (a browser target) end up right above the effect.
+ * in part. Lists print first, then objects (a browser target, env, headers),
+ * then plain values (a url, a cwd, a typed value) right above the effect: the
+ * fields of fixed size sit below everything an agent can make longer.
+ * Planning refuses a browser list its action never reads, so a list on screen
+ * is the action's own and never padding.
  */
 function operationLines(operation: unknown, fieldLimit = 8): string[] {
   const leaf = (path: string, value: unknown): string =>
@@ -113,10 +114,10 @@ function operationLines(operation: unknown, fieldLimit = 8): string[] {
     ];
   };
   if (operation === null || typeof operation !== "object") return operation === undefined ? [] : [leaf("operation", operation)];
+  const rank = (value: unknown): number => (Array.isArray(value) ? 0 : value !== null && typeof value === "object" ? 1 : 2);
   return Object.entries(operation)
-    .map(([field, value]) => summarise(field, value))
-    .sort((a, b) => b.length - a.length)
-    .flat();
+    .sort(([, a], [, b]) => rank(a) - rank(b))
+    .flatMap(([field, value]) => summarise(field, value));
 }
 
 /**

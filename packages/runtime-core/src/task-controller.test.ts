@@ -182,6 +182,25 @@ describe("TaskController", () => {
     expect(store.listTasks()).toEqual([]);
   });
 
+  it("refuses a browser list its action never reads, before anything is saved", async () => {
+    const { controller, store } = await setup();
+    const browser = (operation: Record<string, unknown>) =>
+      TaskRequestSchema.parse({ goal: "Click", operation: { kind: "browser", ...operation } });
+    // A list the runtime ignores would show the approver an effect that does not happen.
+    expect(() =>
+      controller.plan(browser({ action: "click", target: { selector: "#ok" }, filePaths: [".env"] })),
+    ).toThrow("browser_field_unused:filePaths");
+    expect(() =>
+      controller.plan(browser({ action: "fill_form", fields: [{ target: { selector: "#a" }, value: "x" }], values: ["pad"] })),
+    ).toThrow("browser_field_unused:values");
+    expect(() =>
+      controller.plan(browser({ action: "type", target: { selector: "#q" }, value: "x", fields: [{ target: { selector: "#a" }, value: "x" }] })),
+    ).toThrow("browser_field_unused:fields");
+    expect(store.listTasks()).toEqual([]);
+    // Each list is still accepted by the action that reads it.
+    expect(() => controller.plan(browser({ action: "select", target: { selector: "#s" }, values: ["a"] }))).not.toThrow();
+  });
+
   it("rejects an approval whose stored action digest no longer matches", async () => {
     const { controller, store } = await setup();
     const planned = controller.plan(
