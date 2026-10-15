@@ -168,6 +168,11 @@ describe("human doctor report", () => {
       clients: [],
     });
     expect(nextStep(inside)).toBe("move MELRA_HOME outside MELRA_WORKSPACE");
+    const unresolved = report({
+      checks: [{ name: "data-location", status: "fail", detail: "could not resolve the workspace: EISDIR" }],
+      clients: [],
+    });
+    expect(nextStep(unresolved)).toBe("point MELRA_WORKSPACE at a directory you can read and write");
   });
 
   it("does not send a missing command round the setup loop", () => {

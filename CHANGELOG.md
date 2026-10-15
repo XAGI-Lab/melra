@@ -18,11 +18,6 @@ All notable changes are documented here. The format follows
   account. `melra run` asks the same way in a terminal instead of having the
   phrase retyped, and the console and `melra tasks` point at `melra approve`.
 
-- `melra doctor` reports a data directory inside the workspace, followed
-  through links: a `warn` in developer mode, where a recursive read that names
-  no path still reaches `payload.key`, and a `fail` in enforced mode, which
-  refuses to start that way.
-
 - `melra doctor` reports a data directory inside the workspace in a new
   `data-location` check, decided exactly as the server decides it: a `warn` in
   developer mode, where a recursive read that names no path still reaches

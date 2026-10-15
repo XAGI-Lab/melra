@@ -555,14 +555,16 @@ async function doctor(env: CliEnvironment): Promise<{
   // Only once both exist as directories: the check would create a missing workspace.
   if (checks.every((check) => !["workspace", "data-directory"].includes(check.name) || check.status === "pass")) {
     try {
-      const inside = await workspaceHoldsData(env.workspaceRoot, env.dataDirectory);
+      // Unsafe-local roots the server at the filesystem root, which holds everything.
+      const root = env.unhinged ? unconfinedRoot(env.workspaceRoot) : env.workspaceRoot;
+      const inside = await workspaceHoldsData(root, env.dataDirectory);
       checks.push(
         inside
           ? {
               name: "data-location",
               // The server refuses to start this way in enforced mode.
               status: env.mode === "enforced" ? "fail" : "warn",
-              detail: `${env.dataDirectory} is inside the workspace, where a recursive read reaches payload.key without naming it`,
+              detail: `${env.dataDirectory} is inside the ${env.unhinged ? "unconfined root" : "workspace"}, where a recursive read reaches payload.key without naming it`,
             }
           : { name: "data-location", status: "pass", detail: "outside the workspace" },
       );
@@ -570,7 +572,7 @@ async function doctor(env: CliEnvironment): Promise<{
       checks.push({
         name: "data-location",
         status: "fail",
-        detail: error instanceof Error ? error.message : String(error),
+        detail: `could not resolve the workspace: ${error instanceof Error ? error.message : String(error)}`,
       });
     }
   }
