@@ -943,6 +943,17 @@ export class TaskController {
     };
   }
 
+  /**
+   * The mode a task's effect ran under: recorded when it started running, or,
+   * for a task that started before that was recorded, the mode on its first
+   * receipt.
+   */
+  private runMode(task: TaskRecord): string | undefined {
+    if (task.mode !== undefined) return task.mode;
+    const [first] = task.receiptIds;
+    return first === undefined ? undefined : this.store.getReceipt(first)?.mode;
+  }
+
   private createReceipt(
     task: TaskRecord,
     request: TaskRequest,
@@ -979,7 +990,7 @@ export class TaskController {
         effect,
         request.reconciliation.length > 0,
       ),
-      mode: task.mode ?? this.policy.mode,
+      mode: this.runMode(task) ?? this.policy.mode,
       policyDecision: {
         outcome: task.policyDecision.outcome,
         policyVersion: task.policyDecision.policyVersion,
@@ -1066,6 +1077,11 @@ export class TaskController {
           ? "not_required"
           : "bypassed"
         : undefined);
+    // Sealed, so never guessed: a task that ran says how it ran, one that
+    // never did was decided here, and one that ran before the mode was
+    // recorded and left no receipt saying so goes without.
+    const mode =
+      this.runMode(task) ?? (task.receiptIds.length === 0 ? this.policy.mode : undefined);
     const certificate = createCertificate({
       taskId: task.id,
       goal: task.request.goal,
@@ -1074,7 +1090,7 @@ export class TaskController {
       receiptIds: task.receiptIds,
       evidence,
       createdAt: now(),
-      mode: task.mode ?? this.policy.mode,
+      ...(mode === undefined ? {} : { mode }),
       ...(approvalChannel === undefined ? {} : { approvalChannel }),
     });
     task.certificateId = certificate.certificateId;

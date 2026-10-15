@@ -167,6 +167,32 @@ describe("operator approval decisions", () => {
     expect(done.certificate).toMatchObject({ mode: "developer", approvalChannel: "in_band" });
   });
 
+  it("takes a task's mode from its first receipt when it ran before the mode was recorded", async () => {
+    const probe = async () => ({ status: 200, content: JSON.stringify({ status: "applied" }) });
+    const developer = await setup({}, async () => {
+      throw outcomeUnknown("socket hang up");
+    });
+    const enforced = new TaskController(
+      developer.store,
+      { ...createDefaultPolicy(developer.root), mode: "enforced" },
+      { execute: async () => ({ success: true }) },
+      await Verifier.create(developer.root, { probe }),
+      developer.cipher,
+    );
+    const planned = developer.tasks.plan(charge());
+    await developer.tasks.execute(planned.id, {
+      approvalId: planned.approval!.approvalId,
+      phrase: planned.approval!.phrase,
+    });
+    // As a row an older version wrote: no mode on the task itself.
+    const legacy = developer.store.getTask(planned.id)!;
+    delete legacy.mode;
+    developer.store.saveTask(legacy);
+    const settled = await enforced.execute(planned.id);
+    expect(settled.receipt?.mode).toBe("developer");
+    expect(settled.certificate?.mode).toBe("developer");
+  });
+
   it("keeps the mode an effect ran under on what is written after it", async () => {
     // Run in developer mode, parked on an unknown outcome, settled by an
     // enforced-mode process: the certificate describes the run, not the settler.
