@@ -60,6 +60,57 @@ function describeSpawnError(error: unknown, command: string): Error {
 
 /** How long a signalled child gets to exit on its own before SIGKILL. */
 const CLOSE_GRACE_MS = 2_000;
+/** How long a SIGTERM gets before SIGKILL when a run times out or is cancelled. */
+const KILL_GRACE_MS = 1_000;
+/**
+ * How long after the command exits its output pipes may stay open. A process
+ * it started can inherit them and keep them open for as long as it lives,
+ * which held a run, its timeout and its cancel, until that process ended.
+ */
+const EXIT_DRAIN_MS = 250;
+/** Jobs kept at once, running or finished; the oldest finished one makes room. */
+const MAX_JOBS = 64;
+
+/**
+ * Each command leads its own process group on POSIX, so a timeout, a cancel
+ * or `stop` reaches what it started too, not only the program itself. Windows
+ * has no process groups to signal; `taskkill /T` walks the tree instead.
+ */
+const OWN_GROUP = process.platform !== "win32";
+
+function signalTree(child: ChildProcess, signal: NodeJS.Signals): void {
+  if (child.pid === undefined) return;
+  if (!OWN_GROUP) {
+    // `/F` because Windows has no SIGTERM to trap: TerminateProcess is all
+    // `child.kill` did there too.
+    spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true })
+      .on("error", () => child.kill(signal));
+    return;
+  }
+  try {
+    process.kill(-child.pid, signal);
+  } catch {
+    // The group is already gone.
+  }
+}
+
+/** SIGTERM to the tree now and SIGKILL shortly after, unless it has all exited. */
+function stopTree(child: ChildProcess, graceMs: number): NodeJS.Timeout {
+  signalTree(child, "SIGTERM");
+  const escalation = setTimeout(() => signalTree(child, "SIGKILL"), graceMs);
+  escalation.unref();
+  return escalation;
+}
+
+/** Once the command exits, its pipes get a moment to drain and are then closed. */
+function closePipesAfterExit(child: ChildProcess): void {
+  child.once("exit", () => {
+    setTimeout(() => {
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+    }, EXIT_DRAIN_MS).unref();
+  });
+}
 
 interface BackgroundJob {
   id: string;
@@ -75,6 +126,8 @@ interface BackgroundJob {
   exitCode?: number | null;
   signal?: NodeJS.Signals | null;
   error?: string;
+  /** Why the job's stdin stopped taking input, once it has. */
+  stdinError?: string;
   timer: NodeJS.Timeout;
 }
 
@@ -157,57 +210,80 @@ export class TerminalRuntime {
     prepared: PreparedCommand,
     signal?: AbortSignal,
   ): Promise<Record<string, unknown>> {
+    if (signal?.aborted === true) throw new Error("task_cancelled");
     return await new Promise<Record<string, unknown>>((resolvePromise, reject) => {
       const child = spawn(prepared.file, prepared.spawnArgs, {
         cwd: prepared.cwd,
         env: prepared.environment,
         shell: false,
+        detached: OWN_GROUP,
         windowsHide: true,
         windowsVerbatimArguments: prepared.windowsVerbatimArguments,
         stdio: ["ignore", "pipe", "pipe"],
-        signal,
       });
       let stdout = "";
       let stderr = "";
       let truncated = false;
       let timedOut = false;
+      let settled = false;
 
-      const append = (current: string, chunk: Buffer): string => {
-        const next = current + chunk.toString("utf8");
+      // Decoded across chunks, so a character split between two reads stays one.
+      child.stdout.setEncoding("utf8");
+      child.stderr.setEncoding("utf8");
+      const append = (current: string, chunk: string): string => {
+        const next = current + chunk;
         if (next.length > prepared.maxOutputChars) {
           truncated = true;
           return next.slice(0, prepared.maxOutputChars);
         }
         return next;
       };
-      child.stdout.on("data", (chunk: Buffer) => {
+      child.stdout.on("data", (chunk: string) => {
         stdout = append(stdout, chunk);
       });
-      child.stderr.on("data", (chunk: Buffer) => {
+      child.stderr.on("data", (chunk: string) => {
         stderr = append(stderr, chunk);
       });
 
       const timer = setTimeout(() => {
         timedOut = true;
-        child.kill("SIGTERM");
-        setTimeout(() => child.kill("SIGKILL"), 1_000).unref();
+        stopTree(child, KILL_GRACE_MS);
       }, prepared.timeoutMs);
       timer.unref();
 
+      // Not spawn's own `signal` option: that sends SIGTERM to the program
+      // alone, and its listener is gone once the program exits, so a program
+      // that traps SIGTERM, or anything it started, outlived the cancel.
+      const onAbort = (): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        stopTree(child, KILL_GRACE_MS);
+        // It may well have done its work (written the file, pushed the
+        // branch) before it was stopped, so this is not "it did not happen".
+        const reason = signal?.reason instanceof Error ? signal.reason.message : "task_cancelled";
+        reject(outcomeUnknown(reason));
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+
+      closePipesAfterExit(child);
+      // A foreground run is over when its program is; whatever it left behind
+      // in its group goes with it.
+      child.once("exit", () => {
+        if (OWN_GROUP) signalTree(child, "SIGTERM");
+      });
       child.once("error", (error) => {
         clearTimeout(timer);
-        // Cancelled or out of budget after the process started: it may well
-        // have done its work (written the file, pushed the branch) before it
-        // was killed, so this is not "it did not happen".
-        if (error.name === "AbortError" && child.pid !== undefined) {
-          const reason = signal?.reason instanceof Error ? signal.reason.message : "task_cancelled";
-          reject(outcomeUnknown(reason));
-          return;
-        }
+        signal?.removeEventListener("abort", onAbort);
+        if (settled) return;
+        settled = true;
         reject(describeSpawnError(error, prepared.command));
       });
       child.once("close", (code, terminationSignal) => {
         clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
+        if (settled) return;
+        settled = true;
         resolvePromise({
           command: prepared.command,
           args: prepared.args,
@@ -227,19 +303,24 @@ export class TerminalRuntime {
   private async startBackground(
     prepared: PreparedCommand,
   ): Promise<Record<string, unknown>> {
+    // Jobs are kept for their output after they end, so a caller looping
+    // `start` grew memory and processes for the life of the server.
+    if (this.jobs.size >= MAX_JOBS) {
+      const finished = [...this.jobs.values()].find((candidate) => candidate.endedAt !== undefined);
+      if (finished === undefined) throw new Error("terminal_too_many_jobs");
+      this.jobs.delete(finished.id);
+    }
     const id = randomUUID();
     const child = spawn(prepared.file, prepared.spawnArgs, {
       cwd: prepared.cwd,
       env: prepared.environment,
       shell: false,
+      detached: OWN_GROUP,
       windowsHide: true,
       windowsVerbatimArguments: prepared.windowsVerbatimArguments,
       stdio: [prepared.interactive ? "pipe" : "ignore", "pipe", "pipe"],
     });
-    const timer = setTimeout(() => {
-      child.kill("SIGTERM");
-      setTimeout(() => child.kill("SIGKILL"), 1_000).unref();
-    }, prepared.timeoutMs);
+    const timer = setTimeout(() => stopTree(child, KILL_GRACE_MS), prepared.timeoutMs);
     timer.unref();
     const job: BackgroundJob = {
       id,
@@ -253,20 +334,28 @@ export class TerminalRuntime {
       startedAt: new Date().toISOString(),
       timer,
     };
-    const append = (current: string, chunk: Buffer): string => {
-      const next = current + chunk.toString("utf8");
+    const append = (current: string, chunk: string): string => {
+      const next = current + chunk;
       if (next.length > prepared.maxOutputChars) {
         job.truncated = true;
         return next.slice(0, prepared.maxOutputChars);
       }
       return next;
     };
-    child.stdout?.on("data", (chunk: Buffer) => {
+    child.stdout?.setEncoding("utf8");
+    child.stderr?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => {
       job.stdout = append(job.stdout, chunk);
     });
-    child.stderr?.on("data", (chunk: Buffer) => {
+    child.stderr?.on("data", (chunk: string) => {
       job.stderr = append(job.stderr, chunk);
     });
+    // A write to a reader that has gone fails later, as an error event on the
+    // pipe. Unheard, that event took the whole server down.
+    child.stdin?.on("error", (error) => {
+      job.stdinError = error.message;
+    });
+    closePipesAfterExit(child);
     child.once("error", (error) => {
       job.error = error.message;
       job.endedAt = new Date().toISOString();
@@ -328,6 +417,7 @@ export class TerminalRuntime {
     if (stdin === null || stdin.destroyed || !stdin.writable) {
       throw new Error("terminal_job_not_interactive");
     }
+    if (job.stdinError !== undefined) throw new Error("terminal_job_stdin_closed");
     const payload =
       operation.appendNewline && !operation.input.endsWith("\n")
         ? `${operation.input}\n`
@@ -390,7 +480,7 @@ export class TerminalRuntime {
         return this.sendInput(operation);
       case "stop": {
         const job = this.job(operation);
-        if (job.endedAt === undefined) job.child.kill("SIGTERM");
+        if (job.endedAt === undefined) stopTree(job.child, CLOSE_GRACE_MS);
         return { stopped: true, ...this.jobResult(job, true) };
       }
     }
@@ -407,11 +497,9 @@ export class TerminalRuntime {
       clearTimeout(job.timer);
       if (job.endedAt !== undefined) return;
       const exited = new Promise<void>((done) => job.child.once("close", () => done()));
-      job.child.kill("SIGTERM");
       // A child is free to trap SIGTERM, and shutdown blocking forever on one
       // that does is worse than the race this replaced.
-      const escalation = setTimeout(() => job.child.kill("SIGKILL"), CLOSE_GRACE_MS);
-      escalation.unref();
+      const escalation = stopTree(job.child, CLOSE_GRACE_MS);
       await exited;
       clearTimeout(escalation);
     });

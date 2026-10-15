@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { existsSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -54,6 +54,115 @@ describe("TerminalRuntime", () => {
     controller.abort(new Error("task_budget_exhausted"));
     await expect(running).rejects.toThrow(/effect_outcome_unknown:task_budget_exhausted/);
     expect(existsSync(done)).toBe(true);
+  });
+
+  const op = (fields: Record<string, unknown>) =>
+    TerminalOperationSchema.parse({ kind: "terminal", action: "run", command: process.execPath, ...fields });
+  const alive = (pid: number): boolean => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const until = async (check: () => boolean, ms = 5000): Promise<void> => {
+    for (let waited = 0; !check() && waited < ms; waited += 20) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  };
+
+  it("finishes when the program does, even if something it started holds the output", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-terminal-"));
+    roots.push(root);
+    const runtime = await TerminalRuntime.create({ root });
+    const started = Date.now();
+    const result = await runtime.execute(
+      op({
+        args: [
+          "-e",
+          "require('child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 8000)'], { stdio: 'inherit' }).unref(); console.log('done')",
+        ],
+        timeoutMs: 20_000,
+      }),
+    );
+    expect(result.success).toBe(true);
+    expect(result.stdout).toContain("done");
+    expect(Date.now() - started).toBeLessThan(4_000);
+  });
+
+  it("stops a cancelled program that ignores SIGTERM, and what it started", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-terminal-"));
+    roots.push(root);
+    const runtime = await TerminalRuntime.create({ root });
+    const controller = new AbortController();
+    const pidFile = join(root, "pid");
+    const running = runtime.execute(
+      op({
+        args: [
+          "-e",
+          "process.on('SIGTERM', () => {}); require('fs').writeFileSync('pid', String(process.pid)); setInterval(() => {}, 1000)",
+        ],
+      }),
+      controller.signal,
+    );
+    await until(() => existsSync(pidFile));
+    const pid = Number(await readFile(pidFile, "utf8"));
+    controller.abort(new Error("task_cancelled"));
+    await expect(running).rejects.toThrow(/effect_outcome_unknown/);
+    await until(() => !alive(pid), 4_000);
+    expect(alive(pid)).toBe(false);
+  });
+
+  it("refuses input to a job whose reader has gone, without taking the process down", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-terminal-"));
+    roots.push(root);
+    const runtime = await TerminalRuntime.create({ root });
+    const started = await runtime.execute(
+      op({ action: "start", interactive: true, args: ["-e", "require('fs').closeSync(0); setTimeout(() => {}, 3000)"] }),
+    );
+    const jobId = started.jobId as string;
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const send = () =>
+      runtime.execute(TerminalOperationSchema.parse({ kind: "terminal", action: "send", jobId, input: "hello" }));
+    // The first write may be accepted; its EPIPE arrives afterwards. That used
+    // to be an unhandled error event, which killed this whole process.
+    await send().catch(() => undefined);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    await expect(send()).rejects.toThrow(/terminal_job_(stdin_closed|not_interactive|not_running)/);
+    await runtime.close();
+  });
+
+  it("keeps a bounded number of jobs, making room from the finished ones", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-terminal-"));
+    roots.push(root);
+    const runtime = await TerminalRuntime.create({ root });
+    const ids: unknown[] = [];
+    for (let index = 0; index < 66; index += 1) {
+      const started = await runtime.execute(op({ action: "start", args: ["-e", ""] }));
+      ids.push(started.jobId);
+      const status = () =>
+        runtime.execute(TerminalOperationSchema.parse({ kind: "terminal", action: "status", jobId: started.jobId }));
+      for (let waited = 0; waited < 5000 && (await status()).running === true; waited += 20) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    }
+    // The oldest finished jobs made room; the newest are still there.
+    const status = (jobId: unknown) =>
+      runtime.execute(TerminalOperationSchema.parse({ kind: "terminal", action: "status", jobId }));
+    await expect(status(ids[0])).rejects.toThrow("terminal_job_not_found");
+    await expect(status(ids.at(-1))).resolves.toMatchObject({ running: false });
+    await runtime.close();
+  }, 60_000);
+
+  it("keeps multi-byte characters whole across pipe reads", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-terminal-"));
+    roots.push(root);
+    const runtime = await TerminalRuntime.create({ root });
+    const result = await runtime.execute(
+      op({ args: ["-e", "process.stdout.write('€'.repeat(60000))"], maxOutputChars: 100_000 }),
+    );
+    expect(result.stdout).toBe("€".repeat(60000));
   });
 
   it("redacts secret-shaped output", () => {
