@@ -186,11 +186,13 @@ All notable changes are documented here. The format follows
 ### Security
 
 - A browser action other than `navigate` and `tab_new` that carries a `url` is
-  refused unless the active page is at that url (`browser_page_not_at_url`).
-  Policy shows that url to the person approving as the action's target and
-  matches grants and domain rules against it, but the runtime never read it, so
-  a click could carry one page's url and land on another. It now has to be the
-  page the action happens on, compared without query or fragment.
+  refused unless the page it acts on (the active page, or the tab `close` and
+  `tab_switch` name) is at that url when the action starts
+  (`browser_page_not_at_url`). Policy shows that url to the person approving as
+  the action's target and matches grants and domain rules against it, but the
+  runtime never read it, so a click could carry one page's url and land on
+  another. A page that navigates itself while the action waits for its target
+  can still receive it.
 
 - A `git` read that runs without approval (`diff`, `show`, `log`, `status`,
   `rev-parse`, `branch`, `tag`) no longer runs programs the repository's own

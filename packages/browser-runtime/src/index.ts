@@ -174,19 +174,27 @@ export function inputSent(error: unknown): boolean {
   return error instanceof Error && /^\s*- performing .+ action$/m.test(withoutColour(error.message));
 }
 
-/** Playwright's terminal colour codes, which mean nothing in a stored record. */
-/** A URL as policy names a browser target: no query, no fragment. */
+/**
+ * A URL as policy names a browser target, without query or fragment, with
+ * percent-escapes of ordinary characters decoded: Chrome reports `|` in a path
+ * as `%7C` where Node's URL keeps it, and the two name the same page.
+ */
 function pageAddress(url: string): string {
   try {
     const parsed = new URL(url);
     parsed.search = "";
     parsed.hash = "";
-    return parsed.toString();
+    try {
+      return decodeURI(parsed.toString());
+    } catch {
+      return parsed.toString();
+    }
   } catch {
     return url;
   }
 }
 
+/** Playwright's terminal colour codes, which mean nothing in a stored record. */
 function withoutColour(text: string): string {
   return text.replace(/\u001b\[[0-9;]*m/g, "");
 }
@@ -1087,18 +1095,22 @@ export class BrowserRuntime {
 
   private async run(operation: BrowserOperation): Promise<Record<string, unknown>> {
     const page = await this.page();
-    // Anywhere but on the way to it, a url names the page the action expects
-    // to act on. Policy shows it to the approver as the target and matches
-    // grants against it, so it has to be true: refused, before anything is
-    // sent, when the active page is elsewhere. Compared as policy shows it,
-    // without query or fragment.
-    if (
-      operation.url !== undefined &&
-      operation.action !== "navigate" &&
-      operation.action !== "tab_new" &&
-      pageAddress(page.url()) !== pageAddress(operation.url)
-    ) {
-      throw new Error("browser_page_not_at_url");
+    // Anywhere but on the way to it, a url names the page the action acts on:
+    // the active page, or for `close` and `tab_switch` the tab they name.
+    // Policy shows it to the approver as the target and matches grants against
+    // it, so the action is refused, before anything is sent, when that page is
+    // elsewhere. Compared as policy shows it, without query or fragment.
+    //
+    // ponytail: checked when the action starts. A page that navigates itself
+    // while the action waits for its target can still receive it; pinning
+    // each action to the checked document would close that.
+    if (operation.url !== undefined && operation.action !== "navigate" && operation.action !== "tab_new") {
+      const acted =
+        (operation.action === "close" || operation.action === "tab_switch") && operation.tabIndex !== undefined
+          ? (await this.ensureContext()).pages()[operation.tabIndex]
+          : page;
+      const at = acted === undefined ? "no such tab" : pageAddress(acted.url());
+      if (at !== pageAddress(operation.url)) throw new Error(`browser_page_not_at_url: the page is at ${at}`);
     }
     switch (operation.action) {
       case "navigate": {

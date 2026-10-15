@@ -66,7 +66,13 @@ class BrowserActionDecision:
             "kind": "browser",
             "action": self.action,
             **({} if self.target is None else {"target": self.target}),
-            **({} if self.url is None else {"url": self.url}),
+            # Elsewhere a url must be the page the action is on, or MELRA
+            # refuses it; a model sometimes repeats a stale one.
+            **(
+                {}
+                if self.url is None or self.action not in ("navigate", "tab_new")
+                else {"url": self.url}
+            ),
             **({} if self.value is None else {"value": self.value}),
             # MELRA refuses a list its action never reads (browser_field_unused),
             # and a model offered both on every action sometimes fills them in.

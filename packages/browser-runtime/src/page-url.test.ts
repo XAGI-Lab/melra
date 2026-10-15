@@ -56,6 +56,19 @@ describe("a url on an action that does not navigate", () => {
       // The page it names, as policy names it: query and fragment aside.
       await run({ action: "click", target: { selector: "#pay" }, url: `${origin}/shop?from=cart#top` });
       expect(await title()).toBe("paid");
+      // Spelled as Node spells it, though Chrome reports `|` escaped.
+      await run({ action: "navigate", url: `${origin}/a|b` });
+      await run({ action: "click", target: { selector: "#pay" }, url: `${origin}/a|b` });
+      // `close` and `tab_switch` act on the tab they name, so that is the page checked.
+      await run({ action: "navigate", url: `${origin}/shop` });
+      await run({ action: "tab_new", url: `${origin}/victim` });
+      await run({ action: "tab_switch", tabIndex: 0, url: `${origin}/shop` });
+      await expect(run({ action: "close", tabIndex: 1, url: `${origin}/shop` })).rejects.toThrow(
+        "browser_page_not_at_url",
+      );
+      expect(((await run({ action: "tabs" })) as { tabs: unknown[] }).tabs).toHaveLength(2);
+      await run({ action: "close", tabIndex: 1, url: `${origin}/victim` });
+      expect(((await run({ action: "tabs" })) as { tabs: unknown[] }).tabs).toHaveLength(1);
     } finally {
       await runtime.close();
     }

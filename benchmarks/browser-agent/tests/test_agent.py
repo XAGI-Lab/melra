@@ -385,3 +385,11 @@ def test_decision_sends_a_list_only_to_the_action_that_reads_it() -> None:
     assert select.operation()["values"] == ["x"]
     upload = BrowserActionDecision(goal="g", action="upload", target=target, file_paths=("a",))
     assert upload.operation()["filePaths"] == ["a"]
+
+
+def test_decision_sends_a_url_only_where_it_navigates() -> None:
+    target = {"selector": "#t"}
+    click = BrowserActionDecision(goal="g", action="click", target=target, url="https://a.test/")
+    assert "url" not in click.operation()
+    go = BrowserActionDecision(goal="g", action="navigate", url="https://a.test/")
+    assert go.operation()["url"] == "https://a.test/"
