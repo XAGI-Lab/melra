@@ -221,6 +221,9 @@ export interface MelraRuntime {
   close(): Promise<void>;
 }
 
+// How often a running runtime looks for work a crashed peer left behind.
+const RECOVERY_SWEEP_MS = 30_000;
+
 export async function createMelraRuntime(
   options: MelraRuntimeOptions,
 ): Promise<MelraRuntime> {
@@ -261,9 +264,18 @@ export async function createMelraRuntime(
   const key = await loadPayloadKey({ dataDirectory, environment });
   const cipher = new PayloadCipher(key);
   const store = new SqliteStore(join(dataDirectory, "melra.sqlite"));
+  // What this process holds open or locked. A workspace can contain the data
+  // directory (`serve` started from home), and an adapter opening and closing
+  // one of these would drop this process's POSIX locks on it: SQLite's on the
+  // database, or the one other processes read this one's liveness from.
+  const reserved = [
+    ...["", "-wal", "-shm", "-journal", "-owners"].map((suffix) => `${store.path}${suffix}`),
+    join(dataDirectory, "payload.key"),
+  ];
   const files = await FileRuntime.create({
     root: runtimeRoot,
     maxFileBytes: policy.maxFileBytes,
+    reserved,
   });
   const terminal = await TerminalRuntime.create({ root: runtimeRoot });
   const browser = new BrowserRuntime({
@@ -321,6 +333,7 @@ export async function createMelraRuntime(
     http,
   );
   const verifier = await Verifier.create(runtimeRoot, {
+      reserved: (path) => files.isReserved(path),
       ...(options.evidenceVerifiers === undefined ? {} : { verifiers: options.evidenceVerifiers }),
       // The same adapter the effects go through, so a verification request is
       // checked against the destination boundary, the allowlist, and the
@@ -340,8 +353,24 @@ export async function createMelraRuntime(
     });
   const controller = new TaskController(store, policy, router, verifier, cipher);
   const workflows = new WorkflowController(store, controller, cipher);
-  await controller.recoverInterrupted();
+  // The workflow pass runs the task pass first.
   await workflows.recoverInterrupted();
+  // Startup only sees processes that died before it. The sweep picks up work
+  // left by ones that die later, while this one keeps running.
+  let sweeping: Promise<unknown> | undefined;
+  const sweep = setInterval(() => {
+    sweeping ??= workflows
+      .recoverInterrupted({ abandonedOnly: true })
+      .catch((error: unknown) =>
+        process.emitWarning(
+          `melra recovery sweep: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      )
+      .finally(() => {
+        sweeping = undefined;
+      });
+  }, RECOVERY_SWEEP_MS);
+  sweep.unref();
   return {
     controller,
     workflows,
@@ -352,6 +381,8 @@ export async function createMelraRuntime(
     workspaceRoot,
     dataDirectory,
     async close() {
+      clearInterval(sweep);
+      await sweeping;
       await router.close();
       store.close();
     },

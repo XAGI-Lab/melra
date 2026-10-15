@@ -1,8 +1,9 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { MemoryScope, TaskRecord } from "./types.js";
 import {
@@ -116,6 +117,15 @@ function parseStored<T>(
 export class SqliteStore {
   readonly path: string;
   readonly database: DatabaseSync;
+  // Held as a field on purpose: a garbage-collected handle would drop the lock
+  // and make this live process look dead to every other one.
+  private owner?: { id: string; lock?: DatabaseSync; file?: string };
+  /**
+   * Tasks something in this process is executing or recovering through this
+   * store. Ownership is per store, so this is too: a row this store owns that
+   * is not in here was orphaned by a write that failed, and may be taken back.
+   */
+  readonly inFlight = new Set<string>();
 
   /**
    * `readOnly` is for observers (`melra tasks`, `status`, `watch`) that sit
@@ -299,6 +309,17 @@ export class SqliteStore {
         ON capability_usage(grant_id, committed_at);
     `,
     );
+    // Migration 4 records which process is running each task, so recovery can
+    // tell a live peer's work from a crashed one's. The index expression must
+    // match the status filters' text exactly for SQLite to use it.
+    this.applyMigration(
+      4,
+      `
+      ALTER TABLE tasks ADD COLUMN owner TEXT;
+      CREATE INDEX IF NOT EXISTS tasks_status
+        ON tasks(json_extract(data, '$.status'));
+    `,
+    );
   }
 
   private applyMigration(version: number, statements: string): void {
@@ -341,14 +362,110 @@ export class SqliteStore {
     }
   }
 
-  saveTask(task: TaskRecord): void {
+  /** Without `owner`, a save keeps whichever owner the row already has. */
+  saveTask(task: TaskRecord, owner?: string): void {
     this.database
       .prepare(`
-        INSERT INTO tasks(id, data, created_at, updated_at)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at
+        INSERT INTO tasks(id, data, created_at, updated_at, owner)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          data = excluded.data,
+          updated_at = excluded.updated_at,
+          owner = COALESCE(excluded.owner, tasks.owner)
       `)
-      .run(task.id, JSON.stringify(task), task.createdAt, task.updatedAt);
+      .run(task.id, JSON.stringify(task), task.createdAt, task.updatedAt, owner ?? null);
+  }
+
+  /**
+   * This store's owner id, created on first use. "Alive" means someone holds
+   * an exclusive SQLite lock on `<db>-owners/<id>`; the kernel drops that lock
+   * however the process ends, so a crash needs no clock or heartbeat to show.
+   * The lock is taken before the id is returned, so no row can ever name an
+   * owner whose lock was not yet held.
+   */
+  ownerId(): string {
+    if (this.owner !== undefined) return this.owner.id;
+    const id = randomUUID();
+    if (this.path === ":memory:") return (this.owner = { id }).id;
+    const directory = `${this.path}-owners`;
+    mkdirSync(directory, { recursive: true });
+    this.pruneOwners(directory);
+    const file = join(directory, id);
+    const lock = new DatabaseSync(file);
+    // Never open these files through node:fs in the holding process: POSIX
+    // drops all of a process's locks on an inode when any descriptor to it
+    // closes. SQLite defers its own closes, so its probes are safe, and the
+    // server reserves this directory from its file adapters. The write is
+    // synced, so no row can name a file a power cut left unreadable.
+    lock.exec(
+      "PRAGMA locking_mode = EXCLUSIVE; PRAGMA journal_mode = MEMORY; PRAGMA user_version = 1",
+    );
+    this.owner = { id, lock, file };
+    return id;
+  }
+
+  /**
+   * Deletes lock files whose process is gone, which a crash or an exit without
+   * `close()` leaves behind. Only files older than a minute: a younger one may
+   * belong to a process that has created it and not yet locked it.
+   */
+  private pruneOwners(directory: string): void {
+    for (const name of readdirSync(directory)) {
+      const file = join(directory, name);
+      try {
+        if (Date.now() - statSync(file).mtimeMs < 60_000) continue;
+        if (!this.ownerAlive(name)) rmSync(file, { force: true });
+      } catch {
+        // Gone already, or still open in a peer's probe on Windows.
+      }
+    }
+  }
+
+  private ownerAlive(id: string): boolean {
+    if (id === this.owner?.id) return true;
+    const file = join(`${this.path}-owners`, id);
+    if (!existsSync(file)) return false;
+    let probe: DatabaseSync | undefined;
+    try {
+      // node:sqlite's busy timeout is 0, so a held lock answers at once.
+      probe = new DatabaseSync(file, { readOnly: true });
+      probe.prepare("SELECT count(*) FROM sqlite_master").get();
+      return false;
+    } catch {
+      // Busy means alive. Any other failure counts as alive too: recovery never
+      // rewrites a task on a guess.
+      return true;
+    } finally {
+      probe?.close();
+    }
+  }
+
+  /**
+   * Takes over a running or verifying task whose owner is gone, or returns
+   * undefined. The compare-and-set on the owner means that of two recoverers
+   * only one gets the task, and a live owner's task is never handed out. This
+   * store's own rows count as abandoned when nothing here has them in flight.
+   */
+  claimInterruptedTask(id: string): TaskRecord | undefined {
+    const row = this.database
+      .prepare("SELECT owner FROM tasks WHERE id = ?")
+      .get(id) as { owner: string | null } | undefined;
+    const orphaned = row?.owner === this.owner?.id && !this.inFlight.has(id);
+    if (
+      row === undefined ||
+      (row.owner !== null && !orphaned && this.ownerAlive(row.owner))
+    ) {
+      return undefined;
+    }
+    const claimed = this.database
+      .prepare(`
+        UPDATE tasks SET owner = ?
+        WHERE id = ? AND owner IS ?
+          AND json_extract(data, '$.status') IN ('running', 'verifying')
+        RETURNING data
+      `)
+      .get(this.ownerId(), id, row.owner) as JsonRow | undefined;
+    return claimed === undefined ? undefined : (JSON.parse(claimed.data) as TaskRecord);
   }
 
   getTask(id: string): TaskRecord | undefined {
@@ -752,6 +869,20 @@ export class SqliteStore {
     now: string,
     expiresAt: string,
   ): boolean {
+    return this.takeWorkflowLease(workflowId, owner, now, expiresAt) !== "refused";
+  }
+
+  /**
+   * `acquireWorkflowLease`, saying whether a lease was already there. Recovery
+   * needs that: an expired lease it replaced marks a run still waiting for a
+   * repair, while a lease it created means whoever held one released it.
+   */
+  takeWorkflowLease(
+    workflowId: string,
+    owner: string,
+    now: string,
+    expiresAt: string,
+  ): "refused" | "created" | "replaced" {
     return this.transaction(() => {
       const existing = this.database
         .prepare(
@@ -766,7 +897,7 @@ export class SqliteStore {
         existing.owner !== owner &&
         existing.expiresAt > now
       ) {
-        return false;
+        return "refused";
       }
       this.database
         .prepare(`
@@ -780,7 +911,7 @@ export class SqliteStore {
             expires_at = excluded.expires_at
         `)
         .run(workflowId, owner, now, expiresAt);
-      return true;
+      return existing === undefined ? "created" : "replaced";
     });
   }
 
@@ -804,6 +935,21 @@ export class SqliteStore {
         "DELETE FROM workflow_leases WHERE workflow_id = ? AND owner = ?",
       )
       .run(workflowId, owner);
+  }
+
+  /** Gives back a claim this store holds, so any process may take the task next. */
+  releaseTaskClaim(id: string): void {
+    if (this.owner === undefined) return;
+    this.database
+      .prepare("UPDATE tasks SET owner = NULL WHERE id = ? AND owner = ?")
+      .run(id, this.owner.id);
+  }
+
+  expiredWorkflowLeases(now: string): string[] {
+    const rows = this.database
+      .prepare("SELECT workflow_id AS id FROM workflow_leases WHERE expires_at <= ?")
+      .all(now) as unknown as Array<{ id: string }>;
+    return rows.map((row) => row.id);
   }
 
   getWorkflowLease(
@@ -1208,6 +1354,15 @@ export class SqliteStore {
   }
 
   close(): void {
+    if (this.owner?.lock !== undefined) {
+      this.owner.lock.close();
+      try {
+        rmSync(this.owner.file!, { force: true });
+      } catch {
+        // On Windows a peer's probe may have it open. An unlocked file left
+        // behind still reads as a dead owner.
+      }
+    }
     this.database.close();
   }
 }

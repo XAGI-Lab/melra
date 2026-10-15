@@ -301,6 +301,12 @@ export interface VerifierOptions {
    * cannot be replaced: what `file_hash` means is not an embedder's to change.
    */
   verifiers?: ReadonlyArray<RegisteredVerifier>;
+  /**
+   * Whether a path is one no predicate may open, even inside the root: the
+   * files MELRA itself holds locked, since closing a descriptor to one drops
+   * this process's lock. The runtime passes the file runtime's own check.
+   */
+  reserved?: (path: string) => Promise<boolean>;
 }
 
 export class Verifier {
@@ -310,6 +316,7 @@ export class Verifier {
     readonly root: string,
     private readonly probe: EvidenceProbe | undefined,
     extra: ReadonlyArray<RegisteredVerifier>,
+    private readonly reserved?: (path: string) => Promise<boolean>,
   ) {
     for (const verifier of BUILT_IN) this.verifiers.set(verifier.type, verifier);
     for (const verifier of extra) {
@@ -362,7 +369,7 @@ export class Verifier {
     root: string,
     options: VerifierOptions = {},
   ): Promise<Verifier> {
-    return new Verifier(await realpath(root), options.probe, options.verifiers ?? []);
+    return new Verifier(await realpath(root), options.probe, options.verifiers ?? [], options.reserved);
   }
 
   private async filePath(input: string): Promise<string> {
@@ -373,6 +380,9 @@ export class Verifier {
     const actual = await realpath(candidate);
     if (!inside(this.root, actual)) {
       throw new Error("verification_path_outside_workspace");
+    }
+    if ((await this.reserved?.(actual)) === true) {
+      throw new Error("verification_path_reserved");
     }
     return actual;
   }

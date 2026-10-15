@@ -368,9 +368,11 @@ export class TaskController {
 
     const controller = new AbortController();
     this.active.set(task.id, controller);
+    this.store.inFlight.add(task.id);
     task.status = "running";
     task.updatedAt = now();
-    this.store.saveTask(task);
+    // Status and owner land in one write, so no running row is ever unowned.
+    this.store.saveTask(task, this.store.ownerId());
     const startedAt = now();
     const classified = classifyOperation(request.operation);
     let timeout: NodeJS.Timeout | undefined;
@@ -554,6 +556,7 @@ export class TaskController {
     } finally {
       if (timeout !== undefined) clearTimeout(timeout);
       this.active.delete(task.id);
+      this.store.inFlight.delete(task.id);
       if (rechecked.grantId !== undefined) this.reserved.get(rechecked.grantId)?.delete(task.id);
     }
   }
@@ -738,60 +741,92 @@ export class TaskController {
     return { task, receipt, certificate };
   }
 
-  async recoverInterrupted(): Promise<TaskRecord[]> {
+  /**
+   * With `failed`, each task that could not be recovered is recorded there by
+   * id instead of the first failure being thrown at the end.
+   */
+  async recoverInterrupted(failed?: Map<string, unknown>): Promise<TaskRecord[]> {
     const recovered: TaskRecord[] = [];
-    for (const task of this.store.listInterruptedTasks()) {
-      const request = this.loadRequest(task.id);
-      const classified = classifyOperation(request.operation);
-      if (
-        task.status === "verifying" &&
-        classified.effect !== "read" &&
-        request.requiredEvidence.length > 0 &&
-        request.requiredEvidence.every((predicate) =>
-          ["file_exists", "file_absent", "file_hash"].includes(
-            predicate.type,
-          ),
-        )
-      ) {
-        // What the adapter reported before the crash, when it got that far.
-        // Evidence alone is not success: a build that exited 1 beside a dist/
-        // left by an earlier one would otherwise recover as verified.
-        const sealed = this.store.getTaskResult(task.id);
-        const reported =
-          sealed === undefined
-            ? undefined
-            : (this.payloadCipher.open(sealed, `task:${task.id}:result`) as Record<string, unknown>);
-        const actionSucceeded = reported?.success !== false;
-        const verification = await this.verifier.verify(
-          request.requiredEvidence,
-          {},
-        );
-        if (actionSucceeded && verification.verified) {
-          this.resolveAsVerified(task, request, classified, verification.evidence, {
-            recovery: "independent_reobservation",
-          });
-          recovered.push(task);
-          continue;
+    const failures = failed ?? new Map<string, unknown>();
+    for (const listed of this.store.listInterruptedTasks()) {
+      // Only tasks whose owning process is gone, and only once: a live peer's
+      // work is left to finish. This process's own rows are taken too when
+      // nothing here has them in flight, so a task whose final write failed,
+      // or whose recovery threw after the claim, is retried by the next pass
+      // instead of waiting for a restart.
+      const task = this.store.claimInterruptedTask(listed.id);
+      if (task === undefined) continue;
+      this.store.inFlight.add(task.id);
+      try {
+        recovered.push(await this.recoverTask(task));
+      } catch (error) {
+        // One task that cannot be recovered must not keep the rest waiting;
+        // the failure is still reported once every task has had its turn.
+        failures.set(task.id, error);
+        // Given back rather than kept: held by this live process, no other
+        // could take it, so an advance elsewhere could never learn why its
+        // run is stuck. Whoever claims it next meets the same failure.
+        try {
+          this.store.releaseTaskClaim(task.id);
+        } catch {
+          // Still ours, then; this process retakes it on its next pass.
         }
+      } finally {
+        this.store.inFlight.delete(task.id);
       }
-      const effect = classified.effect;
-      task.status = effect === "read" ? "planned" : "recovery_required";
-      task.error =
-        effect === "read"
-          ? "interrupted_read_ready_for_retry"
-          : "interrupted_mutation_requires_reconciliation";
-      task.updatedAt = now();
-      this.store.saveTask(task);
-      // A crash mid-flight is the same unknown a dropped reply is, so a task
-      // that declared how to settle one gets asked here rather than waiting for
-      // someone to notice it. Still parked if the provider cannot answer.
-      if (task.status === "recovery_required" && request.reconciliation.length > 0) {
-        recovered.push((await this.reconcile(task.id)).task);
-        continue;
-      }
-      recovered.push(task);
     }
+    if (failed === undefined && failures.size > 0) throw failures.values().next().value;
     return recovered;
+  }
+
+  private async recoverTask(task: TaskRecord): Promise<TaskRecord> {
+    const request = this.loadRequest(task.id);
+    const classified = classifyOperation(request.operation);
+    if (
+      task.status === "verifying" &&
+      classified.effect !== "read" &&
+      request.requiredEvidence.length > 0 &&
+      request.requiredEvidence.every((predicate) =>
+        ["file_exists", "file_absent", "file_hash"].includes(
+          predicate.type,
+        ),
+      )
+    ) {
+      // What the adapter reported before the crash, when it got that far.
+      // Evidence alone is not success: a build that exited 1 beside a dist/
+      // left by an earlier one would otherwise recover as verified.
+      const sealed = this.store.getTaskResult(task.id);
+      const reported =
+        sealed === undefined
+          ? undefined
+          : (this.payloadCipher.open(sealed, `task:${task.id}:result`) as Record<string, unknown>);
+      const actionSucceeded = reported?.success !== false;
+      const verification = await this.verifier.verify(
+        request.requiredEvidence,
+        {},
+      );
+      if (actionSucceeded && verification.verified) {
+        this.resolveAsVerified(task, request, classified, verification.evidence, {
+          recovery: "independent_reobservation",
+        });
+        return task;
+      }
+    }
+    const effect = classified.effect;
+    task.status = effect === "read" ? "planned" : "recovery_required";
+    task.error =
+      effect === "read"
+        ? "interrupted_read_ready_for_retry"
+        : "interrupted_mutation_requires_reconciliation";
+    task.updatedAt = now();
+    this.store.saveTask(task);
+    // A crash mid-flight is the same unknown a dropped reply is, so a task
+    // that declared how to settle one gets asked here rather than waiting for
+    // someone to notice it. Still parked if the provider cannot answer.
+    if (task.status === "recovery_required" && request.reconciliation.length > 0) {
+      return (await this.reconcile(task.id)).task;
+    }
+    return task;
   }
 
   receipts(input: {

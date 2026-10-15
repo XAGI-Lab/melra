@@ -13,13 +13,22 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { FileOperation } from "@melra/protocol";
 
 export interface FileRuntimeOptions {
   root: string;
   maxFileBytes?: number;
   maxEntries?: number;
+  /**
+   * Files and directories no operation may reach, even inside the root: the
+   * ones MELRA itself holds open or locked. Opening and closing one of those in
+   * this process would drop this process's POSIX locks on it. Recognised by
+   * the identity of the directory holding them and a case-insensitive name,
+   * not by spelling, so a firmlink, a bind mount or a case variant of that
+   * directory still reaches the same refusal.
+   */
+  reserved?: string[];
 }
 
 function inside(root: string, candidate: string): boolean {
@@ -27,13 +36,43 @@ function inside(root: string, candidate: string): boolean {
   return rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel));
 }
 
+/**
+ * A name as a case-insensitive filesystem, or Windows' trailing-dot rule, sees
+ * it. Upper then lower is closer to the filesystem's case folding than lower
+ * alone: it takes `ſ` to `s` and the Kelvin sign to `k`, as APFS does.
+ */
+function spelling(name: string): string {
+  const lower = name.toUpperCase().toLowerCase();
+  if (process.platform !== "win32") return lower;
+  // A loop, not /[. ]+$/: that pattern backtracks quadratically on a long
+  // run of spaces, and the name is the caller's.
+  let end = lower.length;
+  while (end > 0 && (lower[end - 1] === "." || lower[end - 1] === " ")) end -= 1;
+  return lower.slice(0, end);
+}
+
+function identity(entry: { dev: bigint; ino: bigint }): string {
+  return `${entry.dev}:${entry.ino}`;
+}
+
+async function sameEntry(left: string, right: string): Promise<boolean> {
+  try {
+    const [a, b] = await Promise.all([stat(left, { bigint: true }), stat(right, { bigint: true })]);
+    return a.dev === b.dev && a.ino === b.ino;
+  } catch {
+    return false;
+  }
+}
+
 export class FileRuntime {
   readonly root: string;
   readonly maxFileBytes: number;
   readonly maxEntries: number;
+  private readonly reserved: string[];
 
   private constructor(options: FileRuntimeOptions, root: string) {
     this.root = root;
+    this.reserved = (options.reserved ?? []).map((path) => resolve(path));
     this.maxFileBytes = options.maxFileBytes ?? 10 * 1024 * 1024;
     this.maxEntries = options.maxEntries ?? 1_000;
   }
@@ -61,12 +100,14 @@ export class FileRuntime {
     }
 
     let probe = lexical;
+    let real = lexical;
     while (true) {
       try {
         const actual = await realpath(probe);
         if (!inside(this.root, actual)) {
           throw new Error("path_outside_workspace");
         }
+        real = join(actual, relative(probe, lexical));
         break;
       } catch (error) {
         if (error instanceof Error && error.message === "path_outside_workspace") {
@@ -77,7 +118,46 @@ export class FileRuntime {
         probe = parent;
       }
     }
+    if (await this.isReserved(real)) throw new Error("path_reserved");
     return lexical;
+  }
+
+  /** Whether `path` is, or is inside, one of the reserved entries. */
+  async isReserved(path: string): Promise<boolean> {
+    // A descriptor path names whatever this process has open, MELRA's locked
+    // files included, and on macOS realpath leaves it under /dev/fd.
+    if (process.platform !== "win32" && inside("/dev/fd", resolve(path))) return true;
+    for (let current = resolve(path); ; current = dirname(current)) {
+      const name = spelling(basename(current));
+      for (const entry of this.reserved) {
+        // Only a matching name costs a stat, so ordinary paths cost nothing.
+        if (spelling(basename(entry)) === name && (await sameEntry(dirname(current), dirname(entry)))) {
+          return true;
+        }
+      }
+      if (dirname(current) === current) break;
+    }
+    // The same thing under another name: a hard link, or macOS's
+    // /.vol/<dev>/<ino>, which names a file or directory by its inode alone.
+    // So the target and each directory above it are compared by identity with
+    // every reserved entry and every file inside a reserved directory.
+    const identities = new Set<string>();
+    for (const entry of this.reserved) {
+      const found = await stat(entry, { bigint: true }).catch(() => undefined);
+      if (found === undefined) continue;
+      identities.add(identity(found));
+      if (!found.isDirectory()) continue;
+      for (const name of await readdir(entry).catch(() => [])) {
+        const file = await stat(join(entry, name), { bigint: true }).catch(() => undefined);
+        if (file !== undefined) identities.add(identity(file));
+      }
+    }
+    if (identities.size === 0) return false;
+    for (let current = resolve(path); ; current = dirname(current)) {
+      const found = await stat(current, { bigint: true }).catch(() => undefined);
+      if (found !== undefined && identities.has(identity(found))) return true;
+      if (dirname(current) === current) return false;
+    }
   }
 
   async execute(operation: FileOperation): Promise<Record<string, unknown>> {

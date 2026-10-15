@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { link, mkdir, mkdtemp, open, readdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, parse } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -80,6 +80,156 @@ describe("FileRuntime", () => {
       ),
     ).rejects.toThrow();
     expect((await readdir(root)).filter((name) => name.includes(".melra-"))).toEqual([]);
+  });
+
+  it("keeps every operation away from the files MELRA holds locked", async () => {
+    // `serve` started from home has the data directory inside its workspace.
+    // Opening and closing one of these in the server's process would drop its
+    // POSIX locks on it, so even a read is refused.
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-file-")));
+    roots.push(root);
+    const data = join(root, ".melra");
+    await mkdir(join(data, "melra.sqlite-owners"), { recursive: true });
+    await writeFile(join(data, "melra.sqlite"), "db");
+    await writeFile(join(data, "melra.sqlite-owners", "owner"), "lock");
+    await writeFile(join(data, "notes.txt"), "fine");
+    await symlink(data, join(root, "alias"));
+    const runtime = await FileRuntime.create({
+      root,
+      reserved: [join(data, "melra.sqlite"), join(data, "melra.sqlite-owners")],
+    });
+    const run = (operation: Record<string, unknown>) =>
+      runtime.execute(FileOperationSchema.parse({ kind: "file", ...operation }));
+    for (const operation of [
+      { action: "read", path: ".melra/melra.sqlite" },
+      { action: "hash", path: ".melra/melra.sqlite-owners/owner" },
+      { action: "read", path: "alias/melra.sqlite" },
+      { action: "write", path: ".melra/melra.sqlite-owners/new", content: "x" },
+      { action: "move", path: ".melra/notes.txt", destination: ".melra/melra.sqlite" },
+      { action: "delete", path: ".melra/melra.sqlite-owners", recursive: true },
+    ]) {
+      await expect(run(operation)).rejects.toThrow("path_reserved");
+    }
+    expect(await readFile(join(data, "melra.sqlite"), "utf8")).toBe("db");
+    // The rest of the data directory is still an ordinary place.
+    expect((await run({ action: "read", path: ".melra/notes.txt" })).content).toBe("fine");
+  });
+
+  it("knows the reserved files by where they are, not how they are spelled", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-file-"));
+    roots.push(root);
+    // Named before the data directory exists, through the unresolved tmpdir
+    // spelling (on macOS /var, which is really /private/var).
+    const data = join(root, ".melra");
+    const runtime = await FileRuntime.create({
+      root,
+      reserved: [join(data, "melra.sqlite"), join(data, "melra.sqlite-journal")],
+    });
+    await mkdir(data);
+    await writeFile(join(data, "melra.sqlite"), "db");
+    const run = (operation: Record<string, unknown>) =>
+      runtime.execute(FileOperationSchema.parse({ kind: "file", ...operation }));
+    await expect(run({ action: "read", path: ".melra/melra.sqlite" })).rejects.toThrow("path_reserved");
+    // The same file on a case-insensitive disk, and one that does not exist yet.
+    await expect(run({ action: "read", path: ".melra/MELRA.sqlite" })).rejects.toThrow(/path_reserved|ENOENT/);
+    await expect(
+      run({ action: "write", path: ".melra/MELRA.SQLITE-JOURNAL", content: "x" }),
+    ).rejects.toThrow("path_reserved");
+  });
+
+  it.skipIf(process.platform === "win32")("sees a reserved file through this process's descriptors", async () => {
+    // On macOS realpath leaves /dev/fd/N as /dev/fd/<name>, and opening it
+    // duplicates, then closing drops the locks on, whatever the server holds.
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-file-")));
+    roots.push(root);
+    const held = join(root, "melra.sqlite");
+    await writeFile(held, "db");
+    const handle = await open(held, "r");
+    try {
+      const runtime = await FileRuntime.create({ root: "/", reserved: [held] });
+      await expect(
+        runtime.execute(
+          FileOperationSchema.parse({ kind: "file", action: "hash", path: `/dev/fd/${handle.fd}` }),
+        ),
+      ).rejects.toThrow("path_reserved");
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it("sees a reserved file under another name: a hard link, or macOS's /.vol", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-file-")));
+    roots.push(root);
+    const owners = join(root, ".melra", "melra.sqlite-owners");
+    await mkdir(owners, { recursive: true });
+    await writeFile(join(root, ".melra", "melra.sqlite"), "db");
+    await writeFile(join(owners, "lock"), "lock");
+    await link(join(root, ".melra", "melra.sqlite"), join(root, "copy.db"));
+    await link(join(owners, "lock"), join(root, "copy.lock"));
+    const runtime = await FileRuntime.create({
+      root: process.platform === "darwin" ? "/" : root,
+      reserved: [join(root, ".melra", "melra.sqlite"), owners],
+    });
+    const hash = (path: string) =>
+      runtime.execute(FileOperationSchema.parse({ kind: "file", action: "hash", path }));
+    await expect(hash(join(root, "copy.db"))).rejects.toThrow("path_reserved");
+    await expect(hash(join(root, "copy.lock"))).rejects.toThrow("path_reserved");
+    if (process.platform === "darwin") {
+      const held = await stat(join(root, ".melra", "melra.sqlite"));
+      await expect(hash(`/.vol/${held.dev}/${held.ino}`)).rejects.toThrow("path_reserved");
+      // The reserved directory by its own inode, and a file put inside it.
+      const directory = await stat(owners);
+      const byInode = `/.vol/${directory.dev}/${directory.ino}`;
+      await expect(
+        runtime.execute(
+          FileOperationSchema.parse({ kind: "file", action: "write", path: `${byInode}/planted`, content: "x" }),
+        ),
+      ).rejects.toThrow("path_reserved");
+      await expect(
+        runtime.execute(
+          FileOperationSchema.parse({ kind: "file", action: "move", path: byInode, destination: join(root, "moved") }),
+        ),
+      ).rejects.toThrow("path_reserved");
+    }
+  });
+
+  it("folds a reserved name the way a case-insensitive disk does", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-file-")));
+    roots.push(root);
+    await mkdir(join(root, ".melra"));
+    const runtime = await FileRuntime.create({
+      root,
+      reserved: [join(root, ".melra", "melra.sqlite-journal")],
+    });
+    // U+017F, the long s, is "s" to APFS but unchanged by toLowerCase.
+    await expect(
+      runtime.execute(
+        FileOperationSchema.parse({
+          kind: "file",
+          action: "write",
+          path: ".melra/melra.\u017Fqlite-journal",
+          content: "x",
+        }),
+      ),
+    ).rejects.toThrow("path_reserved");
+  });
+
+  it.skipIf(process.platform !== "darwin")("sees a reserved file through a macOS firmlink", async () => {
+    // /System/Volumes/Data/<path> is the same directory as <path>, and realpath
+    // keeps whichever spelling it was given.
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-file-")));
+    roots.push(root);
+    await writeFile(join(root, "payload.key"), "secret");
+    const runtime = await FileRuntime.create({ root: "/", reserved: [join(root, "payload.key")] });
+    await expect(
+      runtime.execute(
+        FileOperationSchema.parse({
+          kind: "file",
+          action: "read",
+          path: join("/System/Volumes/Data", root, "payload.key"),
+        }),
+      ),
+    ).rejects.toThrow("path_reserved");
   });
 
   it("blocks traversal and escaping symlinks", async () => {

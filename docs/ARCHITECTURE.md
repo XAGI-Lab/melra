@@ -298,6 +298,24 @@ Multiple MELRA server processes may share one `MELRA_HOME`. Advancing a workflow
 takes an expiring SQLite lease before any adapter runs, so a second process is
 refused with `workflow_lease_held` rather than starting duplicate side effects.
 
+Recovery touches only work whose process is gone. The process that starts a
+task records itself as the task's owner and holds an exclusive lock on a file
+named for it in `melra.sqlite-owners/`; the operating system releases that lock
+however the process ends. Recovery claims a task only when its owner's lock is
+free, with a compare-and-set so two recoverers cannot both take it, and touches
+a workflow run only under that run's lease and only once none of its tasks is
+still running. A running runtime sweeps every 30 seconds for work left by a
+process that died after it started. An advance that finds an expired lease
+recovers the run before taking it over, so it never plans again a task the dead
+advance already started. A process also retakes its own task when nothing in it
+is still working on that task, for example after the task's last write failed.
+The next process to take a lock removes the lock files that dead processes left.
+
+The file runtime and the verifier refuse MELRA's own database files, the lock
+directory, and `payload.key`, even when the workspace contains the data
+directory. On POSIX, opening and closing one of those files in the server
+process would drop that process's locks on it.
+
 ## Public interfaces
 
 MCP is one way into the kernel, not the definition of it. Every interface

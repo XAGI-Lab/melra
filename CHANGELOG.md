@@ -32,6 +32,14 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- Workflow recovery no longer reopens a parallel branch that was waiting for
+  approval beside a branch that failed. The live path counted such a node as
+  failed and began the rollback; recovery ranked the waiting branch first and
+  offered its approval again, so approving it ran a forward step on a saga
+  already being undone. A failed run whose rollback died inside a
+  compensation is also repaired before its next advance, which used to run
+  that compensation a second time. A repaired run whose rollback stalled now
+  names the compensation, as a live one does.
 - The docs said the `@melra/*` npm packages carry provenance attestations.
   None has: every release so far passed `--provenance` to `pnpm publish`,
   which did not attach it. The README, INSTALLATION, and STATUS now say so;
@@ -136,6 +144,25 @@ All notable changes are documented here. The format follows
   `docs/../.env` passed a `docs/*` grant and read `.env` without approval,
   and a move was checked only at its source, so it could put a file anywhere
   the workspace allowed.
+
+- Starting a second MELRA process on the same home (any CLI command beside a
+  running `serve`) no longer takes the first one's running task or workflow
+  run for a crashed one. Recovery marked the live task `recovery_required`, or
+  settled it from evidence and committed its idempotency key, so the process
+  actually running it then lost its own result as a duplicate. Each running
+  task now records the process that owns it, which holds a lock the operating
+  system releases on exit, and recovery claims a task only once that lock is
+  free. Workflow recovery takes the run's lease and skips runs with a task
+  still running. A running runtime sweeps every 30 seconds for work a process
+  left behind when it died, and an advance that finds an expired lease
+  recovers the run before taking it over instead of planning its tasks again.
+  Every process sharing a home must be upgraded together.
+- The file runtime and the verifier refuse MELRA's own database files, its
+  lock directory and `payload.key`, even when the workspace contains the data
+  directory (as it does for `serve` started from the home directory, or in
+  unsafe-local mode). A low-risk `file read` with no approval could read the
+  payload key. Opening and closing the database in the server process also
+  dropped its own SQLite locks on it.
 - On Windows, a differently cased spelling of the workspace (`..\\WS` for
   `ws`) is recognised as the workspace root, which file operations never
   touch. The check compared strings while the containment check ignored
