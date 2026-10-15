@@ -4,7 +4,7 @@
 import { createHash, randomUUID } from "node:crypto";
 
 const SENSITIVE_KEY =
-  /^(?:arg|authorization|constraints|content|cookie|env|goal|headers?|pass(?:word|wd)?|secret|std(?:out|err)|text|token|api[_-]?key|values?)$/i;
+  /^(?:arg|authorization|constraints|content|cookie|env|goal|headers?|input|pass(?:word|wd)?|secret|std(?:out|err)|text|token|api[_-]?key|values?)$/i;
 /**
  * Secret shapes redacted wherever MELRA persists free text: receipts and task
  * records here, memory values, and terminal output. One list, exported, because
@@ -28,7 +28,14 @@ export const SECRET_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
   [/\bgh[opurs]_[A-Za-z0-9]{20,}\b/g, "[REDACTED_GITHUB_TOKEN]"],
   [/\b(?:sk|pk|api)[-_][a-z0-9_-]{16,}\b/gi, "[REDACTED_API_KEY]"],
   [/\bBearer\s+[A-Za-z0-9._~+/-]+=*\b/gi, "Bearer [REDACTED_TOKEN]"],
-  [/\b(password|passwd|secret)\s*[:=]\s*\S+/gi, "$1=[REDACTED]"],
+  // `password=x`, and the spellings that hide the word inside a longer name or
+  // behind a quote: `DB_PASSWORD=x`, `AWS_SECRET_ACCESS_KEY: x`, `"password": "x"`.
+  [
+    /(?<![A-Za-z0-9])((?:[A-Za-z0-9]+_)*(?:password|passwd|passphrase|secret)(?:_[A-Za-z0-9]+)*)(["']?)\s*[:=]\s*["']?[^\s"',;}]+/gi,
+    "$1$2=[REDACTED]",
+  ],
+  // Userinfo in a URL or connection string anywhere in text: `postgres://app:pw@db`.
+  [/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@:]*:[^\s/@]+@/gi, "$1[REDACTED_URL_CREDENTIALS]@"],
 ];
 
 /** Every SECRET_PATTERNS match in `text` replaced, and which kinds were found. */
@@ -45,26 +52,34 @@ export function redactSecrets(text: string): { value: string; redactions: string
 
 // A flag whose value is a credential, `--token x` or `--token=x`, matched on
 // the flag's name because the value itself may have no recognisable shape.
+// The credential word may lead a longer name too: `--secret-key`,
+// `--s3-secret-access-key`, `--passphrase`.
 const SECRET_FLAG =
-  /^(--?(?:[a-z0-9]+[-_])*(?:token|password|passwd|pass|secret|api[-_]?key|apikey|auth|authorization|credentials?|cookie|private[-_]?key))(?:=([\s\S]*))?$/i;
-// `-u user:pass` / `--user user:pass` (curl, wget): only the part after the
-// colon is a secret, and `sort -u`, `git add -u` take no value at all.
-const USER_FLAG = /^(?:-u|--user)$/;
+  /^(--?(?:[a-z0-9]+[-_])*(?:token|password|passwd|passphrase|pass|secret|api[-_]?key|apikey|auth|authorization|credentials?|cookie|private[-_]?key)(?:[-_][a-z0-9]+)*)(?:=([\s\S]*))?$/i;
+// `-u user:pass` / `--user user:pass` (curl, wget), and curl's proxy forms:
+// only the part after the colon is a secret, and `sort -u`, `git add -u` take
+// no value at all.
+const USER_FLAG = /^(?:-u|--user|-U|--proxy-user)$/;
+// The same, attached: `-ualice:pw`.
+const ATTACHED_USER = /^(-u[^:\s]+):[\s\S]+$/;
 // `-pPASSWORD` (mysql and friends). Never the next argument: `mkdir -p dir`,
-// `ssh -p 22`. A remainder under three characters is read as bundled short
-// flags (`-pv`, `-pr`), not a password.
+// `ssh -p 22`. Only after a mysql-family program, because `find -print` and
+// `gcc -pthread` have the same shape. A remainder under three characters is
+// read as bundled short flags (`-pv`, `-pr`), not a password.
 const ATTACHED_PASSWORD = /^-p(.{3,})$/s;
+const MYSQL_FAMILY = /^(?:mysql[a-z]*|mariadb[a-z-]*)(?:\.exe)?$/i;
 // `NAME=value` with a credential-like name, as `env FOO_TOKEN=x cmd` passes it.
 const SECRET_ASSIGNMENT =
   /^([A-Za-z_][A-Za-z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|PASS|AUTH|CREDENTIALS?))=[\s\S]*$/i;
 // A header given as one argument, as `curl -H 'Authorization: Bearer x'` does.
 const SECRET_HEADER =
-  /^((?:proxy-)?authorization|cookie|[a-z0-9-]*(?:token|api-?key|secret))\s*:[\s\S]*$/i;
-// Credentials inside a URL or connection string: `postgres://user:pass@host`.
-const URL_CREDENTIALS = /(\/\/)[^\s/@:]+:[^\s/@]+@/g;
+  /^((?:--header=|-H)?(?:(?:proxy-)?authorization|cookie|[a-z0-9-]*(?:token|api-?key|secret)))\s*:[\s\S]*$/i;
+// Credentials inside a URL or connection string: `postgres://user:pass@host`,
+// and `redis://:pass@host`, whose username is usually empty.
+const URL_CREDENTIALS = /(\/\/)[^\s/@:]*:[^\s/@]+@/g;
 const REDACTED_ARG = "[REDACTED_SENSITIVE_ARG]";
 
-function redactOneArg(arg: string, previous: string | undefined): string {
+function redactOneArg(arg: string, previous: string | undefined, mysql: boolean): string {
   if (previous !== undefined) {
     const flag = SECRET_FLAG.exec(previous);
     if (flag !== null && flag[2] === undefined) return REDACTED_ARG;
@@ -74,7 +89,8 @@ function redactOneArg(arg: string, previous: string | undefined): string {
   }
   const flag = SECRET_FLAG.exec(arg);
   if (flag?.[2] !== undefined) return `${flag[1]}=${REDACTED_ARG}`;
-  if (ATTACHED_PASSWORD.test(arg)) return `-p${REDACTED_ARG}`;
+  if (mysql && ATTACHED_PASSWORD.test(arg)) return `-p${REDACTED_ARG}`;
+  if (ATTACHED_USER.test(arg)) return arg.replace(ATTACHED_USER, `$1:${REDACTED_ARG}`);
   if (SECRET_ASSIGNMENT.test(arg)) return arg.replace(SECRET_ASSIGNMENT, `$1=${REDACTED_ARG}`);
   if (SECRET_HEADER.test(arg)) return arg.replace(SECRET_HEADER, `$1: ${REDACTED_ARG}`);
   return arg.replace(URL_CREDENTIALS, `$1${REDACTED_ARG}@`);
@@ -87,10 +103,18 @@ function redactOneArg(arg: string, previous: string | undefined): string {
  * half of `-u user:pass`, credential-named `NAME=value` assignments, auth
  * headers, and URL userinfo. Every argument then goes through SECRET_PATTERNS.
  */
-export function redactArgv(argv: readonly string[]): { value: string[]; redactions: string[] } {
+export function redactArgv(
+  argv: readonly string[],
+  command?: string,
+): { value: string[]; redactions: string[] } {
   const redactions = new Set<string>();
+  // Unknown program: read `-pXXXX` as a password, the cautious side.
+  const program = (name: string): boolean => MYSQL_FAMILY.test(name.split(/[\\/]/).pop() ?? "");
+  let mysql = command === undefined || program(command);
   const value = argv.map((arg, index) => {
-    const out = redactOneArg(arg, index === 0 ? undefined : argv[index - 1]);
+    // `env`, `sudo` and friends put the program among the arguments.
+    if (program(arg)) mysql = true;
+    const out = redactOneArg(arg, index === 0 ? undefined : argv[index - 1], mysql);
     if (out !== arg) redactions.add(REDACTED_ARG);
     const redacted = redactSecrets(out);
     for (const kind of redacted.redactions) redactions.add(kind);
@@ -252,7 +276,7 @@ export function redactStructuredValue(value: unknown): {
     }
     return "[REDACTED_SENSITIVE_FIELD]";
   };
-  const visit = (current: unknown, key?: string): unknown => {
+  const visit = (current: unknown, key?: string, parent?: Record<string, unknown>): unknown => {
     if (key !== undefined && SENSITIVE_KEY.test(key)) {
       return redactWholeValue(current);
     }
@@ -262,7 +286,9 @@ export function redactStructuredValue(value: unknown): {
       if (!Array.isArray(current) || !current.every((item) => typeof item === "string")) {
         return redactWholeValue(current);
       }
-      const redacted = redactArgv(current);
+      // The program sits beside its arguments, as `command`.
+      const command = typeof parent?.command === "string" ? parent.command : undefined;
+      const redacted = redactArgv(current, command);
       for (const kind of redacted.redactions) redactions.add(kind);
       return redacted.value;
     }
@@ -274,7 +300,15 @@ export function redactStructuredValue(value: unknown): {
           url.search = "";
           url.hash = "";
         }
-        return url.toString();
+        if (url.username !== "" || url.password !== "") {
+          redactions.add("[REDACTED_URL_CREDENTIALS]");
+          url.username = "";
+          url.password = "";
+        }
+        // Then the shapes any string gets: a token in the path is still a token.
+        const redacted = redactSecrets(url.toString());
+        for (const kind of redacted.redactions) redactions.add(kind);
+        return redacted.value;
       } catch {
         // Non-URL strings continue through normal pattern redaction.
       }
@@ -291,7 +325,7 @@ export function redactStructuredValue(value: unknown): {
       return Object.fromEntries(
         Object.entries(current).map(([entryKey, entryValue]) => [
           entryKey,
-          visit(entryValue, entryKey),
+          visit(entryValue, entryKey, current as Record<string, unknown>),
         ]),
       );
     }

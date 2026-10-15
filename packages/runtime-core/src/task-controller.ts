@@ -33,6 +33,7 @@ import {
   createCertificate,
   createReceiptId,
   evidenceStrength,
+  redactSecrets,
   redactStructuredValue,
   sha256,
   type ActionReceipt,
@@ -821,7 +822,9 @@ export class TaskController {
         policyVersion: task.policyDecision.policyVersion,
         ...(approval === undefined ? {} : { approvalId: approval.approvalId }),
       },
-      target,
+      // The target is built from the request (a URL, a memory key) and stored
+      // as it is, so it takes the same secret shapes out as everything else.
+      target: redactSecrets(target).value,
       inputDigest: sha256(request.operation),
       startedAt,
       endedAt: now(),

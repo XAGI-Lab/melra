@@ -76,6 +76,27 @@ describe("LocalMemory", () => {
     expect(result.redactions.length).toBeGreaterThanOrEqual(2);
   });
 
+  it("redacts the key, source and tags too", () => {
+    store = new SqliteStore(":memory:");
+    const memory = new LocalMemory(store);
+    const token = ["ghp", "123456789012345678901234"].join("_");
+    memory.execute(
+      MemoryOperationSchema.parse({
+        kind: "memory",
+        action: "put",
+        id: "00000000-0000-4000-8000-000000000042",
+        scope: "workspace",
+        key: `deploy token ${token}`,
+        value: "Safe value",
+        source: `copied from GITHUB_TOKEN=${token}`,
+        tags: [token, "ops"],
+      }),
+    );
+    const persisted = store.getMemory("00000000-0000-4000-8000-000000000042");
+    expect(JSON.stringify(persisted)).not.toContain(token);
+    expect(persisted?.tags).toContain("ops");
+  });
+
   it("keeps memory isolated by scope", () => {
     store = new SqliteStore(":memory:");
     const memory = new LocalMemory(store);
