@@ -370,7 +370,8 @@ export class TaskController {
     this.active.set(task.id, controller);
     task.status = "running";
     task.updatedAt = now();
-    this.store.saveTask(task);
+    // Status and owner land in one write, so no running row is ever unowned.
+    this.store.saveTask(task, this.store.ownerId());
     const startedAt = now();
     const classified = classifyOperation(request.operation);
     let timeout: NodeJS.Timeout | undefined;
@@ -740,7 +741,11 @@ export class TaskController {
 
   async recoverInterrupted(): Promise<TaskRecord[]> {
     const recovered: TaskRecord[] = [];
-    for (const task of this.store.listInterruptedTasks()) {
+    for (const listed of this.store.listInterruptedTasks()) {
+      // Only tasks whose owning process is gone, and only once: a live peer's
+      // work, or this process's own, is left to finish.
+      const task = this.store.claimInterruptedTask(listed.id);
+      if (task === undefined) continue;
       const request = this.loadRequest(task.id);
       const classified = classifyOperation(request.operation);
       if (

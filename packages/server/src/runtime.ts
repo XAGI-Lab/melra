@@ -221,6 +221,9 @@ export interface MelraRuntime {
   close(): Promise<void>;
 }
 
+// How often a running runtime looks for work a crashed peer left behind.
+const RECOVERY_SWEEP_MS = 30_000;
+
 export async function createMelraRuntime(
   options: MelraRuntimeOptions,
 ): Promise<MelraRuntime> {
@@ -340,8 +343,24 @@ export async function createMelraRuntime(
     });
   const controller = new TaskController(store, policy, router, verifier, cipher);
   const workflows = new WorkflowController(store, controller, cipher);
-  await controller.recoverInterrupted();
+  // The workflow pass runs the task pass first.
   await workflows.recoverInterrupted();
+  // Startup only sees processes that died before it. The sweep picks up work
+  // left by ones that die later, while this one keeps running.
+  let sweeping: Promise<unknown> | undefined;
+  const sweep = setInterval(() => {
+    sweeping ??= workflows
+      .recoverInterrupted({ abandonedOnly: true })
+      .catch((error: unknown) =>
+        process.emitWarning(
+          `melra recovery sweep: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      )
+      .finally(() => {
+        sweeping = undefined;
+      });
+  }, RECOVERY_SWEEP_MS);
+  sweep.unref();
   return {
     controller,
     workflows,
@@ -352,6 +371,8 @@ export async function createMelraRuntime(
     workspaceRoot,
     dataDirectory,
     async close() {
+      clearInterval(sweep);
+      await sweeping;
       await router.close();
       store.close();
     },

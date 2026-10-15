@@ -129,6 +129,15 @@ concurrently. Across processes the same job is done by an expiring SQLite
 lease taken before any adapter runs, so a second holder is refused with
 `workflow_lease_held` rather than duplicating an effect.
 
+Recovery leaves a task alone while the process that started it is alive, which
+it learns from a lock the process holds on a file in `melra.sqlite-owners/`.
+That needs working file locks between every process sharing the database, the
+same thing SQLite's WAL mode already needs: a network filesystem, or one volume
+mounted into two kernels (a macOS host and a Docker Desktop VM), is not
+supported. Upgrade every process sharing a `MELRA_HOME` together; an older
+binary does not record owners, so its running tasks look abandoned to a newer
+one. Do not delete `melra.sqlite-owners/` while MELRA is running.
+
 ## Language interoperability
 
 Implementations in any language must preserve strict JSON contracts,

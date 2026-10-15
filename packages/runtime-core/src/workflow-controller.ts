@@ -59,12 +59,22 @@ interface TaskIdentity {
   branch: string;
 }
 
+const RECOVERABLE: WorkflowRun["status"][] = [
+  "planned",
+  "running",
+  "awaiting_approval",
+  "recovery_required",
+];
+
 export class WorkflowController {
   // In-process advances serialize on this map; competing *processes* serialize
   // on a SQLite lease (see `advance`). Both are needed: the map keeps one
   // process from racing itself without touching the disk on every call.
   private readonly advances = new Map<string, Promise<WorkflowAdvanceResult>>();
   private readonly owner = `${process.pid}:${randomUUID()}`;
+  // Distinct from `owner`, so this process's own advance in flight also keeps
+  // its recovery away from the run.
+  private readonly recoveryOwner = `${this.owner}:recovery`;
 
   constructor(
     private readonly store: SqliteStore,
@@ -179,7 +189,25 @@ export class WorkflowController {
     approvals: ApprovalResponse[],
     inputs: WorkflowInput[],
   ): Promise<WorkflowAdvanceResult> {
-    this.status(workflowId);
+    const current = this.status(workflowId);
+    // An expired lease someone else holds is an advance that died mid-flight.
+    // Taking it over would read a projection from before that advance's tasks
+    // and plan them again under keys that were never committed, so the run is
+    // recovered first. A lease left exactly as it was means a task of that
+    // advance is still running somewhere: wait, as for a live holder.
+    const left = this.store.getWorkflowLease(workflowId);
+    if (
+      left !== undefined &&
+      left.owner !== this.owner &&
+      left.expiresAt <= new Date().toISOString() &&
+      RECOVERABLE.includes(current.status)
+    ) {
+      await this.recoverInterrupted({ abandonedOnly: true });
+      const still = this.store.getWorkflowLease(workflowId);
+      if (still?.owner === left.owner && still.expiresAt === left.expiresAt) {
+        throw new Error("workflow_lease_held");
+      }
+    }
     const now = Date.now();
     if (
       !this.store.acquireWorkflowLease(
@@ -449,104 +477,152 @@ export class WorkflowController {
     };
   }
 
-  async recoverInterrupted(): Promise<WorkflowRun[]> {
+  /**
+   * Repairs runs whose advance is not coming back. A run is touched only under
+   * its lease, so a live advance in any process (this one included) keeps its
+   * run; and only when none of its tasks is still running, which after the
+   * task pass means a live process owns that task. `abandonedOnly` limits the
+   * pass to runs whose advance died holding the lease — the periodic sweep.
+   */
+  async recoverInterrupted(
+    { abandonedOnly = false }: { abandonedOnly?: boolean } = {},
+  ): Promise<WorkflowRun[]> {
     await this.tasks.recoverInterrupted();
+    const at = Date.now();
+    let runs = this.store.listWorkflowRuns(RECOVERABLE);
+    if (abandonedOnly) {
+      const expired = new Set(this.store.expiredWorkflowLeases(new Date(at).toISOString()));
+      if (expired.size === 0) return [];
+      runs = runs.filter((run) => expired.has(run.id));
+    }
+    if (runs.length === 0) return [];
     const recovered: WorkflowRun[] = [];
     const allTasks = this.store.listTasks(100_000);
-    for (const stored of this.store.listWorkflowRuns([
-      "planned",
-      "running",
-      "awaiting_approval",
-      "recovery_required",
-    ])) {
-      const replayed = this.replay(stored);
-      if (replayed.stateVersion !== stored.stateVersion) {
-        throw new Error("workflow_event_history_invalid");
-      }
+    for (const stored of runs) {
       const definition = this.loadDefinition(stored);
-      let run = this.transition(stored, (draft, emit) => {
+      const keys = new Set(
+        definition.nodes.flatMap((node) => expectedTaskKeys(stored.id, node, definition)),
+      );
+      // Skipped runs keep any abandoned lease, which is how the sweep finds
+      // them again once that task settles.
+      if (
+        allTasks.some(
+          (task) =>
+            task.idempotencyKey !== undefined &&
+            keys.has(task.idempotencyKey) &&
+            (task.status === "running" || task.status === "verifying"),
+        ) ||
+        !this.store.acquireWorkflowLease(
+          stored.id,
+          this.recoveryOwner,
+          new Date(at).toISOString(),
+          new Date(at + this.leaseDurationMs).toISOString(),
+        )
+      ) {
+        continue;
+      }
+      try {
+        // Advanced since the listing: that advance already left it straight.
+        if (this.store.getWorkflowRun(stored.id)?.stateVersion !== stored.stateVersion) {
+          continue;
+        }
+        recovered.push(this.recoverRun(stored, definition, allTasks));
+      } finally {
+        this.store.releaseWorkflowLease(stored.id, this.recoveryOwner);
+      }
+    }
+    return recovered;
+  }
+
+  private recoverRun(
+    stored: WorkflowRun,
+    definition: WorkflowDefinition,
+    allTasks: TaskRecord[],
+  ): WorkflowRun {
+    const replayed = this.replay(stored);
+    if (replayed.stateVersion !== stored.stateVersion) {
+      throw new Error("workflow_event_history_invalid");
+    }
+    return this.transition(stored, (draft, emit) => {
+      for (const node of definition.nodes) {
+        const found = expectedTaskKeys(stored.id, node, definition).map((key) =>
+          preferredTask(allTasks, key),
+        );
+        let state = recoveredNodeState(
+          node,
+          found.filter((task): task is TaskRecord => task !== undefined),
+          replayed.nodes[node.id]!,
+        );
+        // An operation behind an approval shares its task with the approval
+        // node. Waiting for the approval is that node's state; mirrored onto
+        // the operation, both were re-offered, the approval ran the effect,
+        // and the operation read the running task as failed.
+        if (
+          node.type === "operation" &&
+          state.status === "awaiting_approval" &&
+          definition.nodes.some((other) => other.type === "approval" && other.forNodeId === node.id)
+        ) {
+          state = replayed.nodes[node.id]!;
+        }
+        // A sequence whose finished steps all verified is not finished if
+        // steps remain: a crash between a loop's iterations, or between a
+        // branch's steps, recovered as complete with the rest never run.
+        // Pending, so the next advance carries on from the tasks it has.
+        if (state.status === "verified_complete" && !sequenceFinished(node, found)) {
+          state = {
+            status: "pending",
+            taskIds: state.taskIds,
+            // Whole iterations only: the loop resumes at the one in progress.
+            ...(node.type === "bounded_loop"
+              ? { iterations: Math.floor(state.taskIds.length / node.body.length) }
+              : {}),
+          };
+        }
+        if (canonicalJson(draft.nodes[node.id]) === canonicalJson(state)) {
+          continue;
+        }
+        const from = draft.nodes[node.id]!.status;
+        draft.nodes[node.id] = state;
+        emit("workflow.node_changed", {
+          nodeId: node.id,
+          from,
+          state,
+        });
+      }
+      let status = this.deriveStatus(draft, definition);
+      if (status === "verified_complete") {
         for (const node of definition.nodes) {
-          const found = expectedTaskKeys(stored.id, node, definition).map((key) =>
-            preferredTask(allTasks, key),
-          );
-          let state = recoveredNodeState(
-            node,
-            found.filter((task): task is TaskRecord => task !== undefined),
-            replayed.nodes[node.id]!,
-          );
-          // An operation behind an approval shares its task with the approval
-          // node. Waiting for the approval is that node's state; mirrored onto
-          // the operation, both were re-offered, the approval ran the effect,
-          // and the operation read the running task as failed.
-          if (
-            node.type === "operation" &&
-            state.status === "awaiting_approval" &&
-            definition.nodes.some((other) => other.type === "approval" && other.forNodeId === node.id)
-          ) {
-            state = replayed.nodes[node.id]!;
-          }
-          // A sequence whose finished steps all verified is not finished if
-          // steps remain: a crash between a loop's iterations, or between a
-          // branch's steps, recovered as complete with the rest never run.
-          // Pending, so the next advance carries on from the tasks it has.
-          if (state.status === "verified_complete" && !sequenceFinished(node, found)) {
-            state = {
-              status: "pending",
-              taskIds: state.taskIds,
-              // Whole iterations only: the loop resumes at the one in progress.
-              ...(node.type === "bounded_loop"
-                ? { iterations: Math.floor(state.taskIds.length / node.body.length) }
-                : {}),
-            };
-          }
-          if (canonicalJson(draft.nodes[node.id]) === canonicalJson(state)) {
+          const state = draft.nodes[node.id]!;
+          if (node.type !== "compensation" || state.status !== "pending") {
             continue;
           }
-          const from = draft.nodes[node.id]!.status;
-          draft.nodes[node.id] = state;
+          state.status = "skipped";
           emit("workflow.node_changed", {
             nodeId: node.id,
-            from,
+            from: "pending",
             state,
           });
         }
-        let status = this.deriveStatus(draft, definition);
-        if (status === "verified_complete") {
-          for (const node of definition.nodes) {
-            const state = draft.nodes[node.id]!;
-            if (node.type !== "compensation" || state.status !== "pending") {
-              continue;
-            }
-            state.status = "skipped";
-            emit("workflow.node_changed", {
-              nodeId: node.id,
-              from: "pending",
-              state,
-            });
-          }
-          status = this.deriveStatus(draft, definition);
-        }
-        const from = draft.status;
-        draft.status = status;
-        if (status === "recovery_required") {
-          draft.error = "workflow_contains_unreconciled_mutation";
-        } else {
-          delete draft.error;
-        }
-        emit(
-          status === "recovery_required"
-            ? "workflow.recovery_required"
-            : "workflow.recovered",
-          {
-            from,
-            to: status,
-            ...(draft.error === undefined ? {} : { error: draft.error }),
-          },
-        );
-      });
-      recovered.push(run);
-    }
-    return recovered;
+        status = this.deriveStatus(draft, definition);
+      }
+      const from = draft.status;
+      draft.status = status;
+      if (status === "recovery_required") {
+        draft.error = "workflow_contains_unreconciled_mutation";
+      } else {
+        delete draft.error;
+      }
+      emit(
+        status === "recovery_required"
+          ? "workflow.recovery_required"
+          : "workflow.recovered",
+        {
+          from,
+          to: status,
+          ...(draft.error === undefined ? {} : { error: draft.error }),
+        },
+      );
+    });
   }
 
   // Operator controls. `pause` is a soft stop an operator lifts with `resume`;

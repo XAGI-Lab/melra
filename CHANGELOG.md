@@ -136,6 +136,19 @@ All notable changes are documented here. The format follows
   `docs/../.env` passed a `docs/*` grant and read `.env` without approval,
   and a move was checked only at its source, so it could put a file anywhere
   the workspace allowed.
+
+- Starting a second MELRA process on the same home (any CLI command beside a
+  running `serve`) no longer takes the first one's running task or workflow
+  run for a crashed one. Recovery marked the live task `recovery_required`, or
+  settled it from evidence and committed its idempotency key, so the process
+  actually running it then lost its own result as a duplicate. Each running
+  task now records the process that owns it, which holds a lock the operating
+  system releases on exit, and recovery claims a task only once that lock is
+  free. Workflow recovery takes the run's lease and skips runs with a task
+  still running. A running runtime sweeps every 30 seconds for work a process
+  left behind when it died, and an advance that finds an expired lease
+  recovers the run before taking it over instead of planning its tasks again.
+  Every process sharing a home must be upgraded together.
 - On Windows, a differently cased spelling of the workspace (`..\\WS` for
   `ws`) is recognised as the workspace root, which file operations never
   touch. The check compared strings while the containment check ignored
