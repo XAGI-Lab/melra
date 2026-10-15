@@ -67,6 +67,34 @@ All notable changes are documented here. The format follows
   clients. The oldest unapproved registration makes room instead, and
   registration is refused once every slot holds an approved client.
 
+- A terminal command is classified as a read, which runs without approval,
+  only when every argument keeps it one. The classifier looked at the program
+  and subcommand alone, so these ran unapproved:
+  - `git -c core.fsmonitor=<cmd> status` and `rg --pre <cmd>` ran programs;
+  - `git log --output=<path>` wrote anywhere;
+  - `git branch -D`, `git tag -f` and `git tag -s` changed refs or signed;
+  - `npm config set`, `go env -w`, `uv tree` and `cargo tree` changed
+    configuration or wrote the lockfile, `apt-get download` wrote files, and
+    `go list -toolexec` and `go vet -vettool` ran programs;
+  - `npm ls --logs-dir <path>` created that directory and wrote into it;
+  - every `pnpm` command runs the repository's `.pnpmfile.cjs`, and every
+    `yarn` command the `yarnPath` its `.yarnrc.yml` names, so in a cloned
+    repository `pnpm ls` or `yarn info` ran the clone's code. Neither has
+    reads now;
+  - `tasklist /S <host>` queried another machine;
+  - a UNC path (`\\host\share`, `//host/share`) given to `cat`, `findstr` or
+    `rg` sent the Windows user's credentials to that host.
+
+  Git's own option parsing is now followed for `branch` and `tag`, so
+  `--color -D` is two options rather than an option and its value. Anything
+  not proven harmless needs approval.
+- A path-qualified command (`./tools/ls`, `C:\x\npm.cmd`) no longer passes the
+  allowlist by its base name. It is allowed only when an allowlist entry names
+  that exact path, and it is never a read.
+- On Windows, an argument containing `"` is refused for a `.cmd`/`.bat`
+  program rather than escaped. `cmd.exe` does not honour the escaping, so a
+  quote could end the argument and start a second command (BatBadBut).
+
 ## [0.3.0-alpha.12] - 2026-10-14
 
 ### Added

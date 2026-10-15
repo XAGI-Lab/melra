@@ -333,9 +333,102 @@ describe("Windows command spellings", () => {
     // Windows no spelling of an allowlisted command worked at all.
     expect(plan("npm").reason).not.toBe("command_not_allowlisted");
     expect(plan("npm.cmd").reason).not.toBe("command_not_allowlisted");
-    expect(plan("C:\\Program Files\\nodejs\\npm.cmd").reason).not.toBe(
-      "command_not_allowlisted",
-    );
+  });
+
+  it("allows a path-qualified command only by its exact path, never as a read", () => {
+    // A bare allowlist entry means the program on PATH. `tools/ls` is whatever
+    // file sits there, a link to `/bin/sh` included, so it is not `ls`.
+    for (const command of ["tools/ls", "./ls", "/usr/bin/git", "C:\\Program Files\\nodejs\\npm.cmd"]) {
+      expect(plan(command).reason).toBe("command_not_allowlisted");
+    }
+    const exact = evaluatePolicy(
+      "00000000-0000-4000-8000-000000000000",
+      TaskRequestSchema.parse({
+        goal: "Run a workspace script the operator allowlisted by path",
+        operation: { kind: "terminal", action: "run", command: "scripts/check.sh", args: [] },
+        requiredEvidence: [{ type: "exit_code", value: 0 }],
+      }),
+      { ...createDefaultPolicy(root), allowedCommands: ["scripts/check.sh"] },
+    ).decision;
+    expect(exact.reason).not.toBe("command_not_allowlisted");
+    expect(exact.effect).not.toBe("read");
+  });
+
+  it("classifies a read only when every argument keeps it a read", () => {
+    // Each of these ran a command, wrote outside the workspace, or changed
+    // refs or config while classified as a read, so with no approval.
+    for (const [command, args] of [
+      ["git", ["-c", "core.fsmonitor=touch pwned", "status"]],
+      ["git", ["-C", "/etc", "log"]],
+      ["git", ["log", "-1", "--output=/tmp/out"]],
+      ["git", ["diff", "--no-index", "/etc/passwd", "/dev/null"]],
+      ["git", ["branch", "-D", "main"]],
+      ["git", ["branch", "new"]],
+      ["git", ["tag", "-d", "v1"]],
+      ["git", ["tag", "v2"]],
+      ["rg", ["--pre", "node", "x", "."]],
+      ["rg", ["--hostname-bin=/tmp/x", "x"]],
+      ["rg", ["-iz", "x"]],
+      ["npm", ["config", "set", "registry", "http://example.test"]],
+      ["uv", ["lock"]],
+      // `--color`, `--column` and `--abbrev` never take the next argument, so
+      // it is still git's to act on.
+      ["git", ["branch", "--color", "-D", "--color", "main"]],
+      ["git", ["branch", "--column", "-M", "--abbrev", "a", "--color", "b"]],
+      ["git", ["branch", "--color", "--set-upstream-to=main", "--color", "x"]],
+      ["git", ["branch", "--abbrev", "new"]],
+      ["git", ["tag", "--color", "-s", "--color", "-mx", "--color", "v8"]],
+      // `--format` takes `-l` as its value, so git never lists and creates the name.
+      ["git", ["branch", "--format", "-l", "new", "HEAD~1"]],
+      ["git", ["tag", "--format", "--list", "v10"]],
+      // Before git 2.20, `branch -l` was --create-reflog: this creates `new`.
+      ["git", ["branch", "-l", "new", "HEAD~1"]],
+      // Another machine, as the logged-on user.
+      ["tasklist", ["/S", "10.0.0.5", "/U", "u", "/P", "p"]],
+      ["tasklist.exe", ["-s", "attacker.example"]],
+      ["findstr", ["/S", "/C:x", "\\\\attacker.example\\share\\*"]],
+      ["findstr", ["/G:\\\\attacker.example\\share\\p", "x"]],
+      ["cat", ["//attacker.example/share/f.txt"]],
+      ["rg", ["--ignore-file=\\\\?\\UNC\\host\\share\\x", "x"]],
+      ["npm", ["ls", "--userconfig=//host/share/npmrc"]],
+      // Package-manager "reads" that write the lockfile, run build tools, or run
+      // a program the repository names.
+      ["uv", ["tree"]],
+      ["cargo", ["tree"]],
+      ["cargo", ["metadata"]],
+      ["apt-get", ["download", "curl"]],
+      ["go", ["list", "-toolexec", "touch pwned", "./..."]],
+      ["go", ["vet", "-vettool=/tmp/x", "./..."]],
+      ["go", ["env", "-w", "GOFLAGS=-mod=mod"]],
+      ["yarn", ["info", "react"]],
+      ["pnpm", ["ls"]],
+      ["npm", ["ls", "--logs-dir", "/tmp/elsewhere"]],
+    ] as const) {
+      expect(classifyCommand(command, [...args]).read, `${command} ${args.join(" ")}`).toBe(false);
+    }
+    for (const [command, args] of [
+      ["git", ["status", "--porcelain"]],
+      ["git", ["log", "--oneline", "-5"]],
+      ["git", ["diff", "HEAD~1", "--stat"]],
+      ["git", ["branch", "-a", "-v"]],
+      ["git", ["branch", "--list", "feat/*"]],
+      ["git", ["branch", "--contains", "abc123"]],
+      ["git", ["branch", "-l"]],
+      ["git", ["branch", "--contains", "-r"]],
+      ["git", ["branch", "--color", "-v", "--sort=-committerdate"]],
+      ["git", ["branch", "--format", "%(refname)", "--list", "feat/*"]],
+      ["git", ["tag", "-l", "v*"]],
+      ["git", ["tag", "--sort", "-version:refname", "-l", "v*", "--color=always"]],
+      ["tasklist", ["/V", "/FO", "CSV"]],
+      ["findstr", ["/S", "/C:x", "src\\*"]],
+      ["git", ["show", "HEAD:README.md"]],
+      ["rg", ["-n", "TODO", "src"]],
+      ["npm", ["config", "get", "registry"]],
+      ["go", ["env", "GOPATH"]],
+      ["cargo", ["search", "serde"]],
+    ] as const) {
+      expect(classifyCommand(command, [...args]).read, `${command} ${args.join(" ")}`).toBe(true);
+    }
   });
 
   it("still denies a shell however it is spelled", () => {

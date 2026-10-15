@@ -235,15 +235,20 @@ const PACKAGE_MANAGERS: Record<
 > = {
   npm: {
     install: new Set(["install", "i", "add", "ci", "update", "up", "publish"]),
+    // `config` is a read only as `config get`/`config list`; see readOnlyCall.
     read: new Set(["ls", "list", "view", "info", "outdated", "why", "config"]),
   },
   pnpm: {
     install: new Set(["install", "i", "add", "update", "up", "publish", "dlx"]),
-    read: new Set(["ls", "list", "view", "info", "outdated", "why", "licenses"]),
+    // None: every pnpm command loads the project's .pnpmfile.cjs, which runs
+    // whatever it contains, and `list` has no option to skip it.
+    read: new Set(),
   },
   yarn: {
     install: new Set(["install", "add", "up", "upgrade", "publish", "dlx"]),
-    read: new Set(["info", "why", "list", "outdated"]),
+    // None: every yarn command first runs the `yarnPath` (or `yarn-path`) a
+    // repository's .yarnrc.yml or .yarnrc names, so in a clone it runs the clone.
+    read: new Set(),
   },
   pip: {
     install: new Set(["install", "download", "wheel"]),
@@ -255,11 +260,14 @@ const PACKAGE_MANAGERS: Record<
   },
   uv: {
     install: new Set(["add", "sync", "install", "pip", "tool", "publish"]),
-    read: new Set(["tree", "lock", "version"]),
+    // None: `tree` locks the project first, writing uv.lock and building any
+    // source package to read its metadata; `lock` and `version` write too.
+    read: new Set(),
   },
   cargo: {
     install: new Set(["install", "add", "update", "publish", "fetch"]),
-    read: new Set(["tree", "metadata", "search"]),
+    // Not `tree` or `metadata`: both write Cargo.lock when it is missing or stale.
+    read: new Set(["search"]),
   },
   gem: {
     install: new Set(["install", "update", "push"]),
@@ -275,11 +283,15 @@ const PACKAGE_MANAGERS: Record<
   },
   "apt-get": {
     install: new Set(["install", "upgrade", "dist-upgrade", "update"]),
-    read: new Set(["show", "download"]),
+    // Not `download`: it writes the package files into the working directory.
+    read: new Set(["show"]),
   },
   go: {
     install: new Set(["install", "get", "mod"]),
-    read: new Set(["list", "version", "env", "vet"]),
+    // Not `list` or `vet`: both take build flags (`-toolexec`, `-vettool`,
+    // `-mod=mod`) that run programs or rewrite go.mod. `env` only without
+    // `-w`/`-u`; see readOnlyCall.
+    read: new Set(["version", "env"]),
   },
 };
 
@@ -376,7 +388,7 @@ export function classifyCommand(
       traits.add("package-install");
       traits.add("network");
     }
-    if (manager.read.has(subcommand)) {
+    if (manager.read.has(subcommand) && readOnlyCall(command, name, subcommand, args)) {
       // A read subcommand of a package manager still queries the registry in
       // the general case, so it keeps `network` while dropping the mutation.
       return { read: true, traits: [...traits, "network"] };
@@ -396,11 +408,129 @@ export function classifyCommand(
     "where",
   ]);
   const read =
-    READ_COMMANDS.has(name) ||
-    (name === "git" &&
-      subcommand !== undefined &&
-      READ_ONLY_GIT_ACTIONS.has(subcommand));
+    (READ_COMMANDS.has(name) || name === "git") &&
+    readOnlyCall(command, name, subcommand, args);
   return { read, traits: [...traits] };
+}
+
+/**
+ * Whether a call to a read-classified program is still only a read once its
+ * arguments are taken into account.
+ *
+ * A read is the one classification that skips approval, so it is a positive
+ * claim that has to hold for the whole argument list, not just the program
+ * name or subcommand. Before this, `git -c core.fsmonitor=<cmd> status` and
+ * `rg --pre <cmd>` ran commands, `git log --output=<path>` wrote anywhere,
+ * `git branch -D` deleted refs, and `npm config set` rewrote configuration,
+ * all classified as reads and run with no approval. Anything not proven
+ * harmless here falls back to a mutation, which needs approval: the cautious
+ * answer, at the cost of an approval for an unusual but harmless spelling.
+ *
+ * Reading files outside the workspace through these tools stays the residual
+ * the threat model already names for terminal commands.
+ */
+function readOnlyCall(
+  command: string,
+  name: string,
+  subcommand: string | undefined,
+  args: readonly string[],
+): boolean {
+  // A path-qualified program is whatever file sits at that path, which the
+  // name says nothing about: `tools/ls` can be a link to `/bin/sh`.
+  if (/[\\/]/.test(command)) return false;
+  if (args.some(namesNetworkPath)) return false;
+  if (name === "git") return gitReadOnly(args);
+  if (name === "rg") return !args.some(rgRunsOrDecompresses);
+  // `/s <computer>` queries another machine, as the logged-on user.
+  if (name === "tasklist") return !args.some((arg) => /^[-/][sup](:|$)/i.test(arg));
+  // `--logs-dir <path>` creates that directory and writes npm's log into it.
+  if (name === "npm" && args.some((arg) => /^--logs-dir(=|$)/i.test(arg))) return false;
+  // `go env -w`/`-u` rewrite the user's Go configuration.
+  if (name === "go") return !args.some((arg) => /^--?[wu](=|$)/.test(arg));
+  if (subcommand === "config" && PACKAGE_MANAGERS[name] !== undefined) {
+    const action = args[args.findIndex((arg) => arg.toLowerCase() === "config") + 1];
+    return action !== undefined && ["get", "list", "ls"].includes(action.toLowerCase());
+  }
+  return true;
+}
+
+/**
+ * A Windows UNC or device path (`\\host\share`, `//host/share`, `\\?\UNC\...`),
+ * alone or as an option's value. Opening one connects to that host over SMB or
+ * WebDAV and authenticates as the logged-on user, so a "read" of it sends the
+ * user's credentials to whoever the caller named. Two leading separators of
+ * either kind count. The match also catches a URL in a search pattern
+ * (`rg https://x`), which then needs approval: the cautious side.
+ */
+function namesNetworkPath(arg: string): boolean {
+  return /(^|[=:;,])[\\/]{2}/.test(arg);
+}
+
+/** `--pre <cmd>` and `--hostname-bin <cmd>` run programs; `-z` runs decompressors. */
+function rgRunsOrDecompresses(arg: string): boolean {
+  if (/^--(pre|pre-glob|hostname-bin|search-zip)(=|$)/i.test(arg)) return true;
+  return /^-[^-]/.test(arg) && arg.slice(1).includes("z");
+}
+
+/** `diff`/`log`/`show` options that write files, run configured programs, or leave the repository. */
+const GIT_UNSAFE_OPTION = /^--(output|ext-diff|no-index|exec|upload-pack|receive-pack)(=|$)/i;
+
+/**
+ * Options of `git branch` and `git tag` that only list. Any other option
+ * creates, moves, deletes, or signs. `--color`, `--column` and `--abbrev` take
+ * a value only when it is attached (`--color=always`): git reads
+ * `--color -D x` as two options and a name, so the next argument is never theirs.
+ */
+const GIT_LISTING_FLAGS = new Set([
+  "-a", "--all", "-r", "--remotes", "-v", "-vv", "--verbose", "-n", "-i",
+  "--ignore-case", "--show-current", "--color", "--no-color", "--column",
+  "--no-column", "--abbrev", "--no-abbrev", "--omit-empty",
+]);
+/**
+ * Listing options that take a value. Unless it is attached, git takes the next
+ * argument as the value whatever it looks like (`--contains -D` asks about a
+ * commit named `-D`); only as the last argument does `--contains` and the like
+ * default to HEAD.
+ */
+const GIT_LISTING_VALUE_FLAGS = new Set([
+  "--sort", "--format", "--contains", "--no-contains", "--merged", "--no-merged",
+  "--points-at",
+]);
+
+function gitReadOnly(args: readonly string[]): boolean {
+  // Global options (`-c`, `-C`, `--exec-path`, `--git-dir`, ...) come before
+  // the subcommand and change what any subcommand does, so a read is only a
+  // call that names the subcommand first.
+  const [first, ...rest] = args;
+  if (first === undefined || first.startsWith("-")) return false;
+  const subcommand = first.toLowerCase();
+  if (!READ_ONLY_GIT_ACTIONS.has(subcommand)) return false;
+  if (rest.some((arg) => GIT_UNSAFE_OPTION.test(arg))) return false;
+  if (subcommand !== "branch" && subcommand !== "tag") return true;
+  // `git branch x` and `git tag v1` create; listing is the read. Arguments are
+  // split the way git's option parser splits them, and only then is a name
+  // allowed, as a pattern under `-l`/`--list`. Deciding "listing" from the raw
+  // list let `--format -l x` through: git takes `-l` as the format and creates x.
+  //
+  // `git tag -l` has always listed, but `git branch -l` meant --create-reflog
+  // before git 2.20 (Ubuntu 18.04 ships 2.17), so there `-l x` creates x. Only
+  // `--list` turns on listing for a branch name; a bare `-l` with no name is a
+  // listing either way.
+  let listing = false;
+  let names = 0;
+  for (let index = 0; index < rest.length; index += 1) {
+    const arg = rest[index]!;
+    const equals = arg.indexOf("=");
+    const flag = equals === -1 ? arg : arg.slice(0, equals);
+    if (arg === "--list" || (arg === "-l" && subcommand === "tag")) listing = true;
+    else if (arg === "-l" || GIT_LISTING_FLAGS.has(arg) || /^-n\d+$/.test(arg)) continue;
+    else if (equals !== -1 && /^--(color|column|abbrev)$/.test(flag)) continue;
+    else if (GIT_LISTING_VALUE_FLAGS.has(flag)) {
+      if (equals === -1) index += 1;
+    } else if (arg.startsWith("-")) return false;
+    else names += 1;
+  }
+  return listing || names === 0;
 }
 
 export function createDefaultPolicy(workspaceRoot: string): LocalPolicy {
@@ -743,6 +873,15 @@ function isCommandAllowed(operation: Operation, policy: LocalPolicy): boolean {
   // Normalized on both sides so `powershell.exe` cannot slip past a deny entry
   // written as `powershell`, and an operator's allowlist matches either spelling.
   if (ALWAYS_DENIED_COMMANDS.has(command)) return false;
+  // A bare entry (`ls`) allows the program found on PATH, never a file that
+  // happens to share its name: `tools/ls` may be a link to `/bin/sh`. A
+  // path-qualified command is allowed only by an entry naming that same path.
+  if (/[\\/]/.test(operation.command)) {
+    const spelled = operation.command.replaceAll("\\", "/");
+    return policy.allowedCommands.some(
+      (allowed) => /[\\/]/.test(allowed) && allowed.replaceAll("\\", "/") === spelled,
+    );
+  }
   return policy.allowedCommands.some(
     (allowed) => normalizeCommandName(allowed) === command,
   );

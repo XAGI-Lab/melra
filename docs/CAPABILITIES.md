@@ -77,6 +77,12 @@ Actions: `run`, `start`, `status`, `output`, `stop`, `send`.
   denied even if accidentally added to the normal allowlist.
 - Command, arguments, working directory, environment, duration, and output are
   bounded.
+- Only a read runs without approval. A read is a read-only program (`cat`,
+  `head`, `rg`, `git status`/`log`/`diff`, listing `git branch`/`tag`,
+  `npm ls`, ...) called with arguments that all keep it one: no option that
+  runs a program, writes, or names another host, and no path-qualified command.
+  Everything else is a mutation and needs approval; `melra policy test` shows
+  how a command is classified.
 - Background jobs are supervised only for the life of the server process.
 
 A job started with `interactive: true` keeps stdin open, and `send` writes a line

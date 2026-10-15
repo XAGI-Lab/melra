@@ -119,8 +119,12 @@ describe("resolveCommand", () => {
 });
 
 describe("quoteForCmd", () => {
-  it("escapes embedded quotes so the program sees them literally", () => {
-    expect(quoteForCmd('say "hi"')).toBe('"say \\"hi\\""');
+  it("refuses an embedded quote, which cmd.exe would read as the end of quoting", () => {
+    // `\"` is a literal quote to CommandLineToArgvW but not to cmd.exe, so the
+    // old escape let `a" & calc & "` run `calc` (BatBadBut).
+    for (const value of ['say "hi"', 'a" & calc & "', '"']) {
+      expect(() => quoteForCmd(value)).toThrow("terminal_windows_argument_not_quotable");
+    }
   });
 
   it("doubles a trailing backslash run before the closing quote", () => {
@@ -136,7 +140,7 @@ describe("quoteForCmd", () => {
   it("doubles a backslash run only where a quote consumes it", () => {
     // Mid-string backslashes are literal to CommandLineToArgvW; only the run
     // that a quote (or the closing quote) eats is doubled.
-    expect(quoteForCmd('a\\\\b"c')).toBe('"a\\\\b\\"c"');
+    expect(quoteForCmd("a\\\\b\\")).toBe('"a\\\\b\\\\"');
   });
 
   it("quotes a pathological backslash run without backtracking", () => {
