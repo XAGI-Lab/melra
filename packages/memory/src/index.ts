@@ -358,11 +358,14 @@ export class LocalMemory {
         const memory: MemoryRecord = {
           id: operation.id ?? randomUUID(),
           scope: operation.scope,
-          key: operation.key,
+          // Free text a caller writes, like the value: a token pasted into the
+          // key, the source or a tag is no more meant to be kept than one in
+          // the value.
+          key: redactMemoryValue(operation.key).value,
           value: redacted.value,
-          source: operation.source ?? "mcp-client",
+          source: redactMemoryValue(operation.source ?? "mcp-client").value,
           confidence: operation.confidence,
-          tags: operation.tags,
+          tags: operation.tags.map((tag) => redactMemoryValue(tag).value),
           ...(redactedSpeaker === undefined
             ? {}
             : { speaker: redactedSpeaker.value }),

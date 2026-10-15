@@ -7,6 +7,7 @@ import {
   createCertificate,
   evidenceStrength,
   redactArgv,
+  redactSecrets,
   redactStructuredValue,
   sha256,
 } from "./index.js";
@@ -104,6 +105,57 @@ describe("receipt and certificate primitives", () => {
     ]);
     // A secret with a known shape goes wherever it sits.
     expect(argv(["echo", "ghp_123456789012345678901234"])[1]).not.toContain("ghp_");
+  });
+
+  it("takes credentials out of the argument forms tools actually use", () => {
+    const R = "[REDACTED_SENSITIVE_ARG]";
+    const argv = (args: string[], command?: string) => redactArgv(args, command).value;
+    expect(argv(["-ualice:hunter2", "--proxy-user", "bob:pw", "-U", "carol:pw2"], "curl")).toEqual([
+      `-ualice:${R}`,
+      "--proxy-user",
+      `bob:${R}`,
+      "-U",
+      `carol:${R}`,
+    ]);
+    expect(argv(["--secret-key", "abc", "--s3-secret-access-key=x", "--passphrase", "xyz"])).toEqual([
+      "--secret-key",
+      R,
+      `--s3-secret-access-key=${R}`,
+      "--passphrase",
+      R,
+    ]);
+    expect(argv(["--header=Authorization: Basic dXNlcjpwYXNz"], "wget")[0]).not.toContain("dXNlcjpwYXNz");
+    expect(argv(["redis://:hunter2@cache:6379/0"], "redis-cli")[0]).not.toContain("hunter2");
+    // `-p...` is a password only after a mysql-family program.
+    const find = [".", "-name", "*.log", "-print", "-path", "./x", "-prune", "-perm", "644"];
+    expect(argv(find, "find")).toEqual(find);
+    expect(argv(["-pthread", "-pedantic", "main.c"], "gcc")).toEqual(["-pthread", "-pedantic", "main.c"]);
+    expect(argv(["-u", "root", "-phunter2"], "mysql")).toEqual(["-u", "root", `-p${R}`]);
+    expect(argv(["mysql", "-phunter2"], "env")).toEqual(["mysql", `-p${R}`]);
+  });
+
+  it("takes credentials out of URLs, prompt answers, and assignments in text", () => {
+    const stored = redactStructuredValue({
+      operation: { kind: "http", url: "https://deploy:S3cretPass@api.example.com/status" },
+    }).value as { operation: { url: string } };
+    expect(stored.operation.url).toBe("https://api.example.com/status");
+    // The stdin answer to `Password:`.
+    expect(JSON.stringify(redactStructuredValue({ operation: { action: "send", input: "hunter2" } }).value)).not.toContain(
+      "hunter2",
+    );
+    // A request's args are redacted with their own program in mind.
+    const find = redactStructuredValue({ command: "find", args: [".", "-print"] }).value as { args: string[] };
+    expect(find.args).toEqual([".", "-print"]);
+    for (const text of [
+      "export DB_PASSWORD=hunter2",
+      "MYSQL_ROOT_PASSWORD: hunter2",
+      '{"password": "hunter2"}',
+      "AWS_SECRET_ACCESS_KEY=hunter2",
+      "DATABASE_URL=postgres://app:hunter2@db/app",
+    ]) {
+      expect(redactSecrets(text).value, text).not.toContain("hunter2");
+    }
+    expect(redactSecrets("the secret ingredient is love").value).toBe("the secret ingredient is love");
   });
 
   it("redacts args in a stored request instead of blanking them", () => {

@@ -74,6 +74,21 @@ All notable changes are documented here. The format follows
   `melra serve --http` printed and refuses an approval without it. It also
   refuses framing, and on loopback the server answers only to its loopback
   names, so a rebound page gets nothing.
+
+- Secrets that reached SQLite or receipts in plaintext are redacted:
+  - the userinfo of a URL (`https://deploy:pass@host`) in the stored request
+    and the receipt target, kept even for a request policy refused;
+  - the stdin answer a terminal `send` gives a password prompt;
+  - `DB_PASSWORD=x`, `AWS_SECRET_ACCESS_KEY: x`, `"password": "x"` and
+    `postgres://app:pw@db` in memory values, terminal output and other text;
+  - `curl -ualice:pw`, `--proxy-user`/`-U`, `--secret-key`, `--passphrase`,
+    `--header=Authorization: ...` and `redis://:pw@host` in arguments;
+  - a memory entry's key, source and tags, not only its value.
+
+  `find -print` and `gcc -pthread` are no longer redacted as if they were
+  `mysql -pPASSWORD`: an attached `-p` value is a password only after a
+  mysql-family program.
+
 - An empty `MELRA_HTTP_TOKEN` (for example `MELRA_HTTP_TOKEN=${TOKEN}` with
   `TOKEN` unset) is treated as unset, so the server gets a random token. It
   used to become the token, and an empty `?token=` or `Bearer ` header then

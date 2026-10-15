@@ -565,6 +565,23 @@ describe("TaskController", () => {
     expect(JSON.stringify(store.getTask(task.id))).not.toContain("hunter2");
   });
 
+  it("keeps a URL's userinfo out of the stored task and the receipt target", async () => {
+    const { controller, store } = await setup({
+      async execute() {
+        return { success: true, status: 200 };
+      },
+    });
+    const task = controller.plan(
+      TaskRequestSchema.parse({
+        goal: "Check status",
+        operation: { kind: "http", action: "request", method: "GET", url: "https://deploy:S3cretPass@api.example.com/status" },
+      }),
+    );
+    const result = await controller.execute(task.id);
+    expect(JSON.stringify(store.getTask(task.id))).not.toContain("S3cretPass");
+    expect(result.receipt?.target).not.toContain("S3cretPass");
+  });
+
   it("shows the live caller the approval input without retaining it", async () => {
     const { controller, store } = await setup({
       async execute() {
