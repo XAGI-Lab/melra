@@ -350,19 +350,23 @@ describe("enforced mode refuses in-band approval", () => {
     const waiting = (await workflows.advance(planned.id)).run;
     const [a] = waiting.nodes.a!.taskIds;
     const [b] = waiting.nodes.b!.taskIds;
-    // Both challenges lapse, so the next advance would plan both nodes again.
-    vi.advanceTimersByTime(2_000);
+    // An operator approves `b`; then `a`'s challenge lapses, so the next wave
+    // would cancel and plan `a` again before reaching `b`.
+    vi.advanceTimersByTime(900);
+    tasks.decide(b!, tasks.approvalView(b!).renderDigest, "cli:ops");
+    vi.advanceTimersByTime(200);
     await expect(workflows.advance(planned.id, [forge(store.getTask(b!)!)])).rejects.toThrow(
       "approval_in_band_refused",
     );
     // Refused before the wave: `a` was neither cancelled nor planned again,
-    // which, with the wave's transition thrown away, would have stranded it.
+    // where refusing at `b`'s turn threw the wave away and left `a` pointing
+    // at the task it had cancelled, read as cancelled for good.
     expect(store.getTask(a!)?.status).toBe("awaiting_approval");
     expect(store.listTasks()).toHaveLength(2);
     const next = (await workflows.advance(planned.id)).run;
     expect(next.nodes.a!.status).toBe("awaiting_approval");
-    // And the next advance, with nothing sent, plans it again as it should.
     expect(next.nodes.a!.taskIds).not.toContain(a);
+    expect(next.nodes.b!.status).toBe("verified_complete");
   });
 });
 
