@@ -4,7 +4,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { TaskRequestSchema } from "@melra/protocol";
 import {
   classifyCommand,
@@ -26,19 +26,23 @@ describe("approval window", () => {
       operation: { kind: "file", action: "write", path: "a.txt", content: "x" },
       requiredEvidence: [{ type: "file_exists", path: "a.txt" }],
     });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+  // On a stopped clock, so the window is exact rather than racing a tick.
   const window = (policy: LocalPolicy) => {
-    const before = Date.now();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(0);
     const { challenge } = evaluatePolicy("t", write(), policy);
-    return Date.parse(challenge!.expiresAt) - before;
+    return Date.parse(challenge!.expiresAt);
   };
 
   it("gives an operator approving out of band longer in enforced mode", () => {
     const developer = createDefaultPolicy(root);
-    expect(window(developer)).toBeGreaterThan(4 * 60_000);
-    expect(window(developer)).toBeLessThanOrEqual(5 * 60_000);
-    expect(window({ ...developer, mode: "enforced" })).toBeGreaterThan(29 * 60_000);
+    expect(window(developer)).toBe(5 * 60_000);
+    expect(window({ ...developer, mode: "enforced" })).toBe(30 * 60_000);
     // A window the policy names is the window, in either mode.
-    expect(window({ ...developer, mode: "enforced", approvalTtlMs: 60_000 })).toBeLessThanOrEqual(60_000);
+    expect(window({ ...developer, mode: "enforced", approvalTtlMs: 60_000 })).toBe(60_000);
   });
 
   it("refuses a window that would leave every challenge expired or open for good", async () => {

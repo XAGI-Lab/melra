@@ -55,6 +55,9 @@ All notable changes are documented here. The format follows
   time. Developer mode keeps 5 minutes, and a policy file's `approvalTtlMs`
   applies in either mode. A policy file's `approvalTtlMs` must now be a whole
   number of milliseconds from 1 to 24 hours (`policy_approval_ttl_invalid`).
+  Upgrading: `melra init` and `melra setup` used to write
+  `"approvalTtlMs": 300000` into `policy.json`, which pins 5 minutes in either
+  mode; delete that key to get the new default.
 
 - `rg -L`/`--follow`, `findstr /D: /F:` and `wc --files0-from` now need
   approval and evidence. Each reads files no argument names: `rg -L` follows a
