@@ -20,7 +20,7 @@ import { principalRef } from "@melra/protocol";
 import { capabilitiesPayload, createMcpServer } from "./mcp-server.js";
 import type { MelraRuntime } from "./runtime.js";
 import { consolePage, consoleSecurityHeaders } from "./console-page.js";
-import { clientPrincipal, OAuthProvider } from "./oauth.js";
+import { clientPrincipal, CONSENT_HEADERS, OAuthProvider, requestOf } from "./oauth.js";
 
 export const DEFAULT_HTTP_PORT = 7457;
 
@@ -79,11 +79,17 @@ function json(
   response.end(text);
 }
 
-function html(response: ServerResponse, status: number, page: string): void {
+function html(
+  response: ServerResponse,
+  status: number,
+  page: string,
+  headers: Record<string, string> = {},
+): void {
   response.writeHead(status, {
     "content-type": "text/html; charset=utf-8",
     "cache-control": "no-store",
     "content-length": Buffer.byteLength(page),
+    ...headers,
   });
   response.end(page);
 }
@@ -323,6 +329,8 @@ export async function serveHttp(
   // A socket has no host or port, so its requests name plain `localhost`.
   let origin =
     socketPath === undefined ? `http://${host}:${port}` : "http://localhost";
+  /** `Host` values a loopback listener answers; unset until it is listening. */
+  let loopbackHosts: Set<string> | undefined;
 
   const server = createServer((request, response) => {
     void handle(request, response).catch((error: unknown) => {
@@ -339,6 +347,20 @@ export async function serveHttp(
     request: IncomingMessage,
     response: ServerResponse,
   ): Promise<void> {
+    // A web page can rename itself to 127.0.0.1 (DNS rebinding) and then talk
+    // to this server as its own origin, from the operator's browser. The token
+    // still stops it, but discovery, registration and consent answer without
+    // one, so on loopback only a loopback name is answered. The port is not
+    // checked: a rebound page keeps its own name whatever the port, and an SSH
+    // tunnel or forwarded port legitimately arrives on a different one.
+    const hostname = (request.headers.host ?? "").toLowerCase().replace(/:\d*$/, "");
+    if (loopbackHosts !== undefined && !loopbackHosts.has(hostname)) {
+      json(response, 421, {
+        error: "host_not_allowed",
+        detail: `Connect as ${origin}; this server answers only to its loopback names.`,
+      });
+      return;
+    }
     const url = new URL(request.url ?? "/", origin);
     if (await handleOAuth(request, response, url)) return;
     const caller = authenticate(suppliedToken(request, url));
@@ -423,11 +445,22 @@ export async function serveHttp(
         return true;
       }
       if (url.pathname === "/oauth/authorize" && method === "GET") {
-        html(response, 200, oauth.consentPage(url.searchParams));
+        html(response, 200, oauth.consentPage(url.searchParams), CONSENT_HEADERS);
         return true;
       }
       if (url.pathname === "/oauth/authorize" && method === "POST") {
-        const target = oauth.decide(new URLSearchParams(await readText(request)));
+        const form = new URLSearchParams(await readText(request));
+        // The decision is the whole gate. Without this, any process that could
+        // reach the port, or a page rebound to it, approved its own client.
+        if (
+          form.get("decision") === "approve" &&
+          !tokenMatches(token, form.get("operator_token") ?? undefined)
+        ) {
+          const page = oauth.consentPage(requestOf(form), "That is not this server's token.");
+          html(response, 403, page, CONSENT_HEADERS);
+          return true;
+        }
+        const target = oauth.decide(form);
         response.writeHead(302, { location: target, "cache-control": "no-store" });
         response.end();
         return true;
@@ -651,7 +684,11 @@ export async function serveHttp(
   const address = server.address();
   const boundPort =
     typeof address === "object" && address !== null ? address.port : port;
-  origin = `http://${host}:${boundPort}`;
+  const authority = host.includes(":") ? `[${host}]` : host;
+  origin = `http://${authority}:${boundPort}`;
+  if (isLoopback(host)) {
+    loopbackHosts = new Set([authority, "127.0.0.1", "localhost", "[::1]"]);
+  }
 
   return {
     url: `${origin}/?token=${token}`,

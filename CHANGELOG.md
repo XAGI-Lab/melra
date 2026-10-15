@@ -56,6 +56,14 @@ All notable changes are documented here. The format follows
 
 ### Security
 
+- Approving an OAuth client takes the operator's token. The consent page's
+  form was the whole gate, and anything that could reach the port could post
+  its own approval with no person involved: another OS user, a sandboxed
+  process, or a web page that re-resolved its name to `127.0.0.1`. That
+  client then held a token for every tool. The page now asks for the token
+  `melra serve --http` printed and refuses an approval without it. It also
+  refuses framing, and on loopback the server answers only to its loopback
+  names, so a rebound page gets nothing.
 - An empty `MELRA_HTTP_TOKEN` (for example `MELRA_HTTP_TOKEN=${TOKEN}` with
   `TOKEN` unset) is treated as unset, so the server gets a random token. It
   used to become the token, and an empty `?token=` or `Bearer ` header then

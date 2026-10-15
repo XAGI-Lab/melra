@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createHash } from "node:crypto";
+import { request as httpRequest } from "node:http";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -92,6 +93,30 @@ describe("melra http server", () => {
     await expect(serveHttp({ runtime, port: 0, token: "", environment: {} })).rejects.toThrow(
       "http_token_empty",
     );
+  });
+
+  it("answers only its own loopback names, so a rebound page gets nothing", async () => {
+    // What a page at attacker.example sends once its name resolves to 127.0.0.1.
+    const status = (host: string) =>
+      new Promise<number>((resolve, reject) => {
+        const call = httpRequest(
+          { host: http.host, port: http.port, path: "/.well-known/oauth-authorization-server", headers: { host } },
+          (response) => {
+            response.resume();
+            resolve(response.statusCode ?? 0);
+          },
+        );
+        call.on("error", reject);
+        call.end();
+      });
+    expect(await status(`attacker.example:${http.port}`)).toBe(421);
+    expect(await status("attacker.example")).toBe(421);
+    expect(await status(`localhost.attacker.example:${http.port}`)).toBe(421);
+    // Any port: an SSH tunnel or forwarded port arrives on its own.
+    for (const name of ["127.0.0.1", "localhost", "LOCALHOST", "[::1]", "localhost:9000", "127.0.0.1"]) {
+      const host = name.includes(":") && !name.startsWith("[") ? name : `${name}:${http.port}`;
+      expect(await status(host), host).not.toBe(421);
+    }
   });
 
   it("accepts the token in the query string, for EventSource", async () => {

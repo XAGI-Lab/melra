@@ -77,6 +77,7 @@ describe("melra oauth", () => {
       redirect_uri: REDIRECT,
       code_challenge: challenge,
       state: "xyz",
+      operator_token: "operator-token",
       decision: "approve",
     });
     expect(approved.status).toBe(302);
@@ -186,6 +187,7 @@ describe("melra oauth", () => {
         client_id: clientId,
         redirect_uri: REDIRECT,
         code_challenge: challenge,
+        operator_token: "operator-token",
         decision: "approve",
       });
       return new URL(approved.headers.get("location")!).searchParams.get(
@@ -207,6 +209,49 @@ describe("melra oauth", () => {
 
     const clean = await redeem(await code(), verifier);
     expect(clean.status).toBe(200);
+  });
+
+  it("takes the operator's token to approve, so a local process cannot approve itself", async () => {
+    const registered = await fetch(`${base}/oauth/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ client_name: "Self-approver", redirect_uris: [REDIRECT] }),
+    });
+    const clientId = ((await registered.json()) as { client_id: string }).client_id;
+    const request = {
+      client_id: clientId,
+      redirect_uri: REDIRECT,
+      code_challenge: createHash("sha256").update("v").digest("base64url"),
+      decision: "approve",
+    };
+    // What any process that can reach the port used to do: POST its own approval.
+    for (const attempt of [request, { ...request, operator_token: "guess" }]) {
+      const refused = await form(`${base}/oauth/authorize`, attempt);
+      expect(refused.status).toBe(403);
+      expect(refused.headers.get("location")).toBe(null);
+      expect(await refused.text()).toContain("not this server&#39;s token");
+    }
+    const approved = await form(`${base}/oauth/authorize`, {
+      ...request,
+      operator_token: "operator-token",
+    });
+    expect(new URL(approved.headers.get("location")!).searchParams.get("code")).not.toBe(null);
+  });
+
+  it("serves the consent page so it cannot be framed under a decoy", async () => {
+    const registered = await fetch(`${base}/oauth/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ client_name: "Framed", redirect_uris: [REDIRECT] }),
+    });
+    const clientId = ((await registered.json()) as { client_id: string }).client_id;
+    const page = await fetch(
+      `${base}/oauth/authorize?response_type=code&client_id=${clientId}` +
+        `&code_challenge_method=S256&code_challenge=${"x".repeat(43)}`,
+    );
+    expect(page.headers.get("x-frame-options")).toBe("DENY");
+    expect(page.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
+    expect(await page.text()).toContain('name="operator_token"');
   });
 
   it("turns a denial into a redirect that carries no code", async () => {

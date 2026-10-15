@@ -313,8 +313,10 @@ The two HTML surfaces — the console at `/` and the OAuth consent page at
 `EventSource` tail; the consent page names the client, its id, redirect and
 registration time, carries `client_id`, `redirect_uri`, `state` and
 `code_challenge` through to the POST, escapes a hostile client name
-(`<img src=x onerror=…>` arrives as text, not markup), and its deny button
-returns `302` to the client's redirect with `error=access_denied`. **Neither
+(`<img src=x onerror=…>` arrives as text, not markup), refuses framing,
+refuses an approval without the operator's token (`403`, no code), and its
+deny button returns `302` to the client's redirect with `error=access_denied`.
+A request whose `Host` is not one of the server's loopback names gets `421`. **Neither
 page has been rendered in a real browser here**, so layout, focus order and
 contrast are unverified; that stays part of the manual gate above.
 
@@ -345,8 +347,8 @@ findings.
 
 - Stdio, loopback HTTP, and a mode-`0600` Unix socket (not on Windows) are the
   transports. The HTTP surface, on either listener, takes the
-  operator's bearer token, or a token an OAuth 2.1 client got after a person
-  approved it in a browser; treat the operator's token as equal to shell access
+  operator's bearer token, or a token an OAuth 2.1 client got after the
+  operator approved it in a browser with that token; treat the operator's token as equal to shell access
   on the host. An approved client is named on every receipt it produces, which
   makes an effect history attributable — it does not make one client's authority
   narrower than another's.

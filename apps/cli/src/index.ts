@@ -999,8 +999,8 @@ async function main(): Promise<void> {
             `  Token:    ${endpoint.token}\n` +
             (endpoint.oauth
               ? `A client that cannot be given the token can register itself and ask\n` +
-                `you to approve it in a browser; approved clients are named on every\n` +
-                `receipt. Set MELRA_HTTP_OAUTH=0 to allow only the token above.\n`
+                `you to approve it in a browser, with the token above; approved clients\n` +
+                `are named on every receipt. Set MELRA_HTTP_OAUTH=0 to allow only the token.\n`
               : `OAuth is off, so the token above is the only way in.\n`) +
             (env.mode === "enforced"
               ? `Enforced mode: loopback only, no client can register itself, and\n` +

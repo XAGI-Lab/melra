@@ -124,6 +124,26 @@ function escapeHtml(value: string): string {
   );
 }
 
+/** The authorization request a submitted consent form came from. */
+export function requestOf(form: URLSearchParams): URLSearchParams {
+  return new URLSearchParams({
+    client_id: form.get("client_id") ?? "",
+    redirect_uri: form.get("redirect_uri") ?? "",
+    response_type: "code",
+    code_challenge_method: "S256",
+    code_challenge: form.get("code_challenge") ?? "",
+    ...(form.get("state") === null ? {} : { state: form.get("state")! }),
+  });
+}
+
+/** No framing, so nobody can lay the consent page under a decoy and collect the click. */
+export const CONSENT_HEADERS: Record<string, string> = {
+  "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'",
+  "x-frame-options": "DENY",
+  "x-content-type-options": "nosniff",
+  "referrer-policy": "no-referrer",
+};
+
 function hash(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
@@ -272,8 +292,12 @@ export class OAuthProvider {
     return { client, redirectUri, challenge };
   }
 
-  /** The consent screen. The only place a person is asked. */
-  consentPage(query: URLSearchParams): string {
+  /**
+   * The consent screen. The only place a person is asked, and approving takes
+   * the operator's token: anything that can reach this port can submit the
+   * form, and only the operator holds that.
+   */
+  consentPage(query: URLSearchParams, error?: string): string {
     const { client, redirectUri } = this.resolve(query);
     // The redirect URI the check resolved, not the raw query: a client with one
     // registered URI may leave it out, and an absent field reached `decide` as
@@ -305,7 +329,12 @@ p.warn { padding: 10px 12px; border-radius: 6px; background: #b3261e; color: #ff
 button { font: inherit; padding: 8px 18px; border-radius: 6px; border: 1px solid currentColor;
   background: transparent; color: inherit; cursor: pointer; }
 button.go { background: #b3261e; color: #fff; border-color: #b3261e; }
-form { display: flex; gap: 10px; margin-top: 20px; }
+form { display: grid; gap: 8px; margin-top: 20px; }
+form div { display: flex; gap: 10px; margin-top: 8px; }
+input[type=password] { font: inherit; padding: 6px 8px; border-radius: 6px; border: 1px solid currentColor;
+  background: transparent; color: inherit; }
+p.hint { margin: 0; opacity: .7; font-size: 13px; }
+p.error { margin: 0; color: #b3261e; font-weight: 600; }
 </style>
 </head>
 <body>
@@ -322,8 +351,15 @@ form { display: flex; gap: 10px; margin-top: 20px; }
 desktop. Policy, approvals and receipts still apply. Only approve a client you
 started yourself, and check the name above matches it.</p>
 <form method="post" action="/oauth/authorize">${fields}
+<label for="operator-token">Operator token</label>
+<input id="operator-token" type="password" name="operator_token" autocomplete="off" required autofocus />
+<p class="hint">The token <code>melra serve --http</code> printed when it started, or your
+<code>MELRA_HTTP_TOKEN</code>. It is checked here and never sent to the client.</p>
+${error === undefined ? "" : `<p class="error" role="alert">${escapeHtml(error)}</p>`}
+<div>
 <button class="go" type="submit" name="decision" value="approve">Approve ${escapeHtml(client.name)}</button>
-<button type="submit" name="decision" value="deny">Deny</button>
+<button type="submit" name="decision" value="deny" formnovalidate>Deny</button>
+</div>
 </form>
 </main>
 </body>
@@ -331,17 +367,12 @@ started yourself, and check the name above matches it.</p>
 `;
   }
 
-  /** Where the browser goes once the operator has decided. */
+  /**
+   * Where the browser goes once the operator has decided. The caller has
+   * already checked the operator token on an approval.
+   */
   decide(form: URLSearchParams): string {
-    const { client, redirectUri, challenge } = this.resolve(
-      new URLSearchParams({
-        client_id: form.get("client_id") ?? "",
-        redirect_uri: form.get("redirect_uri") ?? "",
-        response_type: "code",
-        code_challenge_method: "S256",
-        code_challenge: form.get("code_challenge") ?? "",
-      }),
-    );
+    const { client, redirectUri, challenge } = this.resolve(requestOf(form));
     const target = new URL(redirectUri);
     const state = form.get("state");
     if (state !== null) target.searchParams.set("state", state);
