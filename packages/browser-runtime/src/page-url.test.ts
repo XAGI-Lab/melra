@@ -59,6 +59,11 @@ describe("a url on an action that does not navigate", () => {
       // Spelled as Node spells it, though Chrome reports `|` escaped.
       await run({ action: "navigate", url: `${origin}/a|b` });
       await run({ action: "click", target: { selector: "#pay" }, url: `${origin}/a|b` });
+      // Two paths a server tells apart stay apart.
+      await run({ action: "navigate", url: `${origin}/p%FF` });
+      await expect(
+        run({ action: "click", target: { selector: "#pay" }, url: `${origin}/p%25FF` }),
+      ).rejects.toThrow("browser_page_not_at_url");
       // `close` and `tab_switch` act on the tab they name, so that is the page checked.
       await run({ action: "navigate", url: `${origin}/shop` });
       await run({ action: "tab_new", url: `${origin}/victim` });
