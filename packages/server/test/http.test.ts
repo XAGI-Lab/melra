@@ -95,12 +95,12 @@ describe("melra http server", () => {
     );
   });
 
-  it("answers only its own loopback names, so a rebound page gets nothing", async () => {
+  it("answers sign-in only to loopback names, so a rebound page gets nothing", async () => {
     // What a page at attacker.example sends once its name resolves to 127.0.0.1.
-    const status = (host: string) =>
+    const status = (host: string, path = "/.well-known/oauth-authorization-server") =>
       new Promise<number>((resolve, reject) => {
         const call = httpRequest(
-          { host: http.host, port: http.port, path: "/.well-known/oauth-authorization-server", headers: { host } },
+          { host: http.host, port: http.port, path, headers: { host } },
           (response) => {
             response.resume();
             resolve(response.statusCode ?? 0);
@@ -117,6 +117,11 @@ describe("melra http server", () => {
       const host = name.includes(":") && !name.startsWith("[") ? name : `${name}:${http.port}`;
       expect(await status(host), host).not.toBe(421);
     }
+    // A route that needs the token answers under any name: a container reaching
+    // the host as host.docker.internal still gets in with it, and a rebound
+    // page without it still gets a 401.
+    expect(await status("host.docker.internal:7457", "/api/capabilities?token=test-token")).toBe(200);
+    expect(await status("attacker.example", "/api/capabilities")).toBe(401);
   });
 
   it("accepts the token in the query string, for EventSource", async () => {

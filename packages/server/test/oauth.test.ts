@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createHash, randomBytes } from "node:crypto";
-import { mkdtempSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -231,9 +231,10 @@ describe("melra oauth", () => {
       expect(refused.headers.get("location")).toBe(null);
       expect(await refused.text()).toContain("not this server&#39;s token");
     }
+    // Pasted with a stray space, as tokens often are.
     const approved = await form(`${base}/oauth/authorize`, {
       ...request,
-      operator_token: "operator-token",
+      operator_token: " operator-token ",
     });
     expect(new URL(approved.headers.get("location")!).searchParams.get("code")).not.toBe(null);
   });
@@ -405,6 +406,27 @@ describe("OAuthProvider", () => {
       provider.register({ client_name: `flood ${index}`, redirect_uris: [REDIRECT] });
     }
     expect(provider.clientFor(token)?.name).toBe("approved");
+  });
+
+  it("frees a slot when a client's tokens are revoked, and only then", () => {
+    const provider = new OAuthProvider(join(home, "slots"));
+    const issued = Array.from({ length: 100 }, (_, index) => issue(provider, `client ${index}`));
+    expect(() => provider.register({ client_name: "one more", redirect_uris: [REDIRECT] })).toThrow(
+      /every client slot holds a live token/,
+    );
+    provider.revoke(issued[5]!.id);
+    provider.register({ client_name: "one more", redirect_uris: [REDIRECT] });
+    expect(provider.clientFor(issued[6]!.token)).toBeDefined();
+  });
+
+  it("clears a lock a dead process left behind", () => {
+    const directory = join(home, "stale-lock");
+    const provider = new OAuthProvider(directory);
+    const lock = join(directory, "oauth.json.lock");
+    writeFileSync(lock, "");
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(lock, old, old);
+    expect(issue(provider, "after a crash").token).not.toBe("");
   });
 
   it("approves a client whose authorization request left out its one redirect URI", () => {

@@ -347,20 +347,6 @@ export async function serveHttp(
     request: IncomingMessage,
     response: ServerResponse,
   ): Promise<void> {
-    // A web page can rename itself to 127.0.0.1 (DNS rebinding) and then talk
-    // to this server as its own origin, from the operator's browser. The token
-    // still stops it, but discovery, registration and consent answer without
-    // one, so on loopback only a loopback name is answered. The port is not
-    // checked: a rebound page keeps its own name whatever the port, and an SSH
-    // tunnel or forwarded port legitimately arrives on a different one.
-    const hostname = (request.headers.host ?? "").toLowerCase().replace(/:\d*$/, "");
-    if (loopbackHosts !== undefined && !loopbackHosts.has(hostname)) {
-      json(response, 421, {
-        error: "host_not_allowed",
-        detail: `Connect as ${origin}; this server answers only to its loopback names.`,
-      });
-      return;
-    }
     const url = new URL(request.url ?? "/", origin);
     if (await handleOAuth(request, response, url)) return;
     const caller = authenticate(suppliedToken(request, url));
@@ -427,6 +413,20 @@ export async function serveHttp(
     if (oauth === undefined) return false;
     const path = url.pathname.replace(/\/mcp$/, "");
     const method = request.method ?? "GET";
+    if (!path.startsWith("/.well-known/") && !path.startsWith("/oauth/")) return false;
+    // A web page can rename itself to 127.0.0.1 (DNS rebinding) and talk to this
+    // server as its own origin, from the operator's browser. Everything else
+    // needs the token, which such a page does not have; these routes do not, so
+    // they answer only to a loopback name. Any port: a rebound page keeps its
+    // own name whatever the port, and an SSH tunnel arrives on a different one.
+    const hostname = (request.headers.host ?? "").toLowerCase().replace(/:\d*$/, "");
+    if (loopbackHosts !== undefined && !loopbackHosts.has(hostname)) {
+      json(response, 421, {
+        error: "host_not_allowed",
+        detail: `Use ${origin}; sign-in answers only to this machine's loopback names.`,
+      });
+      return true;
+    }
     try {
       if (path === "/.well-known/oauth-protected-resource") {
         json(response, 200, oauth.resourceMetadata(origin));
@@ -454,7 +454,9 @@ export async function serveHttp(
         // reach the port, or a page rebound to it, approved its own client.
         if (
           form.get("decision") === "approve" &&
-          !tokenMatches(token, form.get("operator_token") ?? undefined)
+          // Trimmed like every other place the token is read: a pasted token
+          // often carries a stray space.
+          !tokenMatches(token, form.get("operator_token")?.trim())
         ) {
           const page = oauth.consentPage(requestOf(form), "That is not this server's token.");
           html(response, 403, page, CONSENT_HEADERS);

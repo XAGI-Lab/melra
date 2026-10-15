@@ -316,7 +316,7 @@ registration time, carries `client_id`, `redirect_uri`, `state` and
 (`<img src=x onerror=…>` arrives as text, not markup), refuses framing,
 refuses an approval without the operator's token (`403`, no code), and its
 deny button returns `302` to the client's redirect with `error=access_denied`.
-A request whose `Host` is not one of the server's loopback names gets `421`. **Neither
+A sign-in request whose `Host` is not a loopback name gets `421`. **Neither
 page has been rendered in a real browser here**, so layout, focus order and
 contrast are unverified; that stays part of the manual gate above.
 

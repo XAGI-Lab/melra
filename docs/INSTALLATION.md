@@ -591,9 +591,11 @@ the whole gate, and it takes the operator's token. The consent page asks for
 the token `melra serve --http` printed (or your `MELRA_HTTP_TOKEN`), checks it
 on the server, and never passes it to the client. Any process that can reach
 the port can submit the form, so the token is what makes the approval yours.
-The server also answers only to its loopback names (`127.0.0.1`, `localhost`,
-`[::1]` on its port), so a web page that re-resolves its own name to
-`127.0.0.1` cannot drive the flow from your browser.
+The sign-in routes (`/.well-known/*` and `/oauth/*`) also answer only when
+`Host` is a loopback name (`127.0.0.1`, `localhost`, `[::1]`, or the address
+the server is bound to), on any port, so an SSH tunnel still works but a web
+page that re-resolves its own name to `127.0.0.1` cannot drive the flow from
+your browser. Every other route needs the token, whatever the name.
 
 After that the client is a principal. It becomes `harness:<name>#<id prefix>` —
 the name it registered under, plus part of the id MELRA minted, so two clients

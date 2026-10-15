@@ -72,8 +72,10 @@ All notable changes are documented here. The format follows
   `oauth.json` once at startup, kept honouring revoked tokens, and wrote them
   back on its next change; it now reloads the file whenever it changes.
 - A flood of unauthenticated client registrations no longer evicts approved
-  clients. The oldest unapproved registration makes room instead, and
-  registration is refused once every slot holds an approved client.
+  clients. The oldest client holding no token makes room instead, and
+  registration is refused once every slot holds a client with a live token.
+  Changes to `oauth.json` are locked across processes, so a registration
+  timed against `melra clients --revoke` cannot write the revoked tokens back.
 
 - A terminal command is classified as a read, which runs without approval,
   only when every argument keeps it one. The classifier looked at the program
