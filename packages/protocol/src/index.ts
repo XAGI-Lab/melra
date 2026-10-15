@@ -1159,6 +1159,22 @@ export const TaskStatusSchema = z.enum([
 
 export type TaskStatus = z.infer<typeof TaskStatusSchema>;
 
+/**
+ * Who said yes to a challenge, through what, and to exactly what. `channel` is
+ * `out_of_band` only for a decision recorded through an operator surface while
+ * the kernel was in enforced mode, where the agent never held a credential;
+ * anything an agent could have produced itself is `in_band`. `renderDigest` is
+ * the digest of the effect contract the approver was shown.
+ */
+export interface ApprovalDecision {
+  approvalId: string;
+  taskId: string;
+  renderDigest: string;
+  channel: "in_band" | "out_of_band";
+  approver: string;
+  decidedAt: string;
+}
+
 export interface TaskRecord {
   id: string;
   request: TaskRequest;
@@ -1167,6 +1183,14 @@ export interface TaskRecord {
   idempotencyKey?: string;
   attempt?: number;
   approval?: ApprovalChallenge;
+  /** What authorised the run, written in the same save that marks it running. */
+  approvedBy?: ApprovalDecision;
+  /**
+   * The deployment mode the effect ran under, written in that same save, so a
+   * receipt or certificate written later by recovery or reconciliation in a
+   * process deployed differently still says how the effect was governed.
+   */
+  mode?: string;
   result?: Record<string, unknown>;
   error?: string;
   attempts?: number;

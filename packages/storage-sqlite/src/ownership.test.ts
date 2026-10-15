@@ -151,6 +151,23 @@ describe("task ownership", () => {
     expect(existsSync(liveFile)).toBe(true);
   });
 
+  it("records one approval decision per approval id across connections", () => {
+    const path = database();
+    const [a, b] = [open(path), open(path)];
+    const decision = {
+      approvalId: "6c1f0f8e-6c1b-4f43-9f55-6c0a3e7d0a01",
+      taskId: "8d1f0f8e-6c1b-4f43-9f55-6c0a3e7d0a01",
+      renderDigest: "a".repeat(64),
+      channel: "out_of_band" as const,
+      approver: "cli:first",
+      decidedAt: new Date().toISOString(),
+    };
+    expect(a.recordApprovalDecision(decision)).toBe(true);
+    expect(b.recordApprovalDecision({ ...decision, approver: "cli:second" })).toBe(false);
+    expect(b.getApprovalDecision(decision.approvalId)?.approver).toBe("cli:first");
+    expect(a.getApprovalDecision(decision.approvalId)).toEqual(decision);
+  });
+
   it("sees a killed process as gone", async () => {
     const path = database();
     const id = "8d1f0f8e-6c1b-4f43-9f55-6c0a3e7d0a05";

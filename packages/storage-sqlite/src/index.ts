@@ -13,6 +13,7 @@ import {
   WorkflowRunSchema,
   WorkflowSnapshotSchema,
   type EncryptedPayload,
+  type ApprovalDecision,
   type WorkflowDefinition,
   type WorkflowEvent,
   type WorkflowRun,
@@ -318,6 +319,22 @@ export class SqliteStore {
       ALTER TABLE tasks ADD COLUMN owner TEXT;
       CREATE INDEX IF NOT EXISTS tasks_status
         ON tasks(json_extract(data, '$.status'));
+    `,
+    );
+    // Migration 5 records operator approval decisions. Insert-once, and kept
+    // off TaskRecord, because a task row is a whole-record write where the
+    // last writer wins across processes; a decision must not be lost to one.
+    this.applyMigration(
+      5,
+      `
+      CREATE TABLE IF NOT EXISTS approval_decisions (
+        approval_id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL,
+        render_digest TEXT NOT NULL,
+        channel TEXT NOT NULL,
+        approver TEXT NOT NULL,
+        decided_at TEXT NOT NULL
+      );
     `,
     );
   }
@@ -1003,6 +1020,37 @@ export class SqliteStore {
    * never at plan time — so a refused, failed, or cancelled operation leaves
    * the budget where it found it.
    */
+  /** False when a decision for this approval was already recorded. */
+  recordApprovalDecision(decision: ApprovalDecision): boolean {
+    const result = this.database
+      .prepare(`
+        INSERT OR IGNORE INTO approval_decisions(
+          approval_id, task_id, render_digest, channel, approver, decided_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
+      `)
+      .run(
+        decision.approvalId,
+        decision.taskId,
+        decision.renderDigest,
+        decision.channel,
+        decision.approver,
+        decision.decidedAt,
+      );
+    return Number(result.changes) === 1;
+  }
+
+  getApprovalDecision(approvalId: string): ApprovalDecision | undefined {
+    return this.database
+      .prepare(`
+        SELECT approval_id AS approvalId, task_id AS taskId,
+          render_digest AS renderDigest, channel, approver,
+          decided_at AS decidedAt
+        FROM approval_decisions WHERE approval_id = ?
+      `)
+      .get(approvalId) as ApprovalDecision | undefined;
+  }
+
   recordCapabilityUse(
     grantId: string,
     taskId: string,

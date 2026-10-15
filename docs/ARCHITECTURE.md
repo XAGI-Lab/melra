@@ -448,6 +448,19 @@ deployed, which is the difference between "governed by the only door" and
 written at the same time as the outcome rather than left for an auditor to infer.
 See [deployment modes](INSTALLATION.md#deployment-modes).
 
+A receipt for an approved effect also says who approved it and how:
+`policyDecision.approval` holds the `channel`, the `approver`, when they decided,
+and `renderDigest`, the digest of the effect contract they were shown. An echoed
+phrase is `in_band` with approver `phrase`, because anything that knows the task
+can compute it. A decision recorded through an operator surface
+(`TaskController.decide`) is `out_of_band` only in enforced mode, and is bound
+to the render: a request that changed after it was shown cannot run on it.
+Decisions live in their own insert-once table, and one made before the
+challenge expired stays usable for a TTL after it was made. The certificate
+carries `mode` and `approvalChannel` (`not_required` for a read, `bypassed` for
+a mutation unsafe-local allowed with no challenge, otherwise the receipt's
+channel), sealed by its digest like every other field.
+
 ## Outcomes MELRA cannot observe
 
 A mutation whose reply never arrives is the case where a kernel is most tempted

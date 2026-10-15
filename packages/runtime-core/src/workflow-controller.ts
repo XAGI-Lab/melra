@@ -1131,10 +1131,15 @@ export class WorkflowController {
     // A challenge that expired before anyone answered it can never be
     // answered, and reusing it left the node unapprovable for good. Ask again:
     // the expired task is cancelled and the same request planned afresh.
+    // A challenge an approver answered in time is not asked again, however
+    // long the answer took to act on.
+    const decided =
+      task.status === "awaiting_approval" && this.tasks.approvalDecision(task) !== undefined;
     if (
       task.status === "awaiting_approval" &&
       task.approval !== undefined &&
-      Date.parse(task.approval.expiresAt) <= Date.now()
+      Date.parse(task.approval.expiresAt) <= Date.now() &&
+      !decided
     ) {
       this.tasks.cancel(task.id);
       task = this.tasks.plan(request, {
@@ -1146,7 +1151,7 @@ export class WorkflowController {
       const approval = approvals.find(
         (item) => item.approvalId === task.approval?.approvalId,
       );
-      if (approval === undefined) {
+      if (approval === undefined && !decided) {
         return {
           state: {
             status: "awaiting_approval",
