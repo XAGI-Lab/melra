@@ -231,6 +231,13 @@ export interface ActionReceipt {
     outcome: "allow" | "deny" | "confirm";
     policyVersion: string;
     approvalId?: string;
+    /** Who approved, through which channel, having been shown what. */
+    approval?: {
+      channel: string;
+      renderDigest: string;
+      approver: string;
+      decidedAt: string;
+    };
   };
   target: string;
   inputDigest: string;
@@ -253,6 +260,16 @@ export interface ExecutionCertificate {
   receiptIds: string[];
   evidence: EvidenceItem[];
   createdAt: string;
+  /** The deployment mode the task ran under, as on its receipts. */
+  mode?: string;
+  /**
+   * How the task's effect was authorised: `not_required` (a read),
+   * `bypassed` (a mutation allowed with no challenge, which only
+   * developer-mode unsafe-local permits), `in_band`, or `out_of_band`. One
+   * certificate covers one task, so this is that task's channel. Absent when
+   * nothing was authorised. Covered by `digest`, like every other field.
+   */
+  approvalChannel?: string;
   digest: string;
 }
 

@@ -3,6 +3,7 @@
 
 import { randomUUID } from "node:crypto";
 import type {
+  ApprovalDecision,
   ApprovalResponse,
   EffectContract,
   EvidencePredicate,
@@ -359,9 +360,28 @@ export class TaskController {
       ) {
         throw new Error("approval_action_digest_mismatch");
       }
-      const approvalResult = validateApproval(task.approval, approval);
-      if (!approvalResult.ok) {
-        throw new Error(approvalResult.reason);
+      // A decision an operator recorded wins over anything the caller sent.
+      const render = this.approvalRender(task, request).renderDigest;
+      const decision = this.store.getApprovalDecision(task.approval.approvalId);
+      if (decision !== undefined) {
+        if (decision.renderDigest !== render) throw new Error("approval_render_mismatch");
+        if (!this.usable(task, decision)) throw new Error("approval_expired");
+        task.approvedBy = decision;
+      } else {
+        const approvalResult = validateApproval(task.approval, approval);
+        if (!approvalResult.ok) {
+          throw new Error(approvalResult.reason);
+        }
+        // The phrase is derivable by anyone who knows the task, so an echo of
+        // it says only that something echoed it.
+        task.approvedBy = {
+          approvalId: task.approval.approvalId,
+          taskId: task.id,
+          renderDigest: render,
+          channel: "in_band",
+          approver: "phrase",
+          decidedAt: now(),
+        };
       }
     }
     task.policyDecision = rechecked.decision;
@@ -477,7 +497,6 @@ export class TaskController {
         actionSucceeded,
         result,
         evidence,
-        approval,
       );
       this.store.saveReceipt(receipt);
       task.receiptIds.push(receipt.receiptId);
@@ -545,7 +564,6 @@ export class TaskController {
         false,
         {},
         evidence,
-        approval,
         task.error,
       );
       this.store.saveReceipt(receipt);
@@ -663,7 +681,6 @@ export class TaskController {
       false,
       { reconciliation: "provider_state_denies_effect" },
       verification.evidence,
-      undefined,
       task.error,
     );
     this.store.saveReceipt(receipt);
@@ -728,9 +745,6 @@ export class TaskController {
       true,
       observed,
       evidence,
-      task.approval === undefined
-        ? undefined
-        : { approvalId: task.approval.approvalId, phrase: "recovered" },
     );
     this.store.saveReceipt(receipt);
     task.receiptIds.push(receipt.receiptId);
@@ -829,6 +843,71 @@ export class TaskController {
     return task;
   }
 
+  /**
+   * What an approver is shown: the effect contract, minus the challenge and
+   * the policy verdict, which a recheck at execution rewrites. Its digest is
+   * what a decision is bound to, so a request that changed after it was
+   * shown cannot run on that decision.
+   */
+  private approvalRender(task: TaskRecord, request: TaskRequest) {
+    const { authorization: _authorization, policy: _policy, ...contract } = effectContract(
+      { ...task, request },
+      classifyOperation(request.operation),
+    );
+    return { contract, renderDigest: sha256(contract) };
+  }
+
+  /** A pending challenge as an operator surface shows it. */
+  approvalView(taskId: string) {
+    const task = this.status(taskId);
+    if (task.status !== "awaiting_approval" || task.approval === undefined) {
+      throw new Error(`task_not_awaiting_approval:${task.status}`);
+    }
+    return { task, ...this.approvalRender(task, this.loadRequest(taskId)) };
+  }
+
+  /**
+   * Records an approver's yes to exactly the render they were shown. Never
+   * executes, and never touches the task row: the decision lives in its own
+   * insert-once table, and `execute` reads it. `out_of_band` only in enforced
+   * mode, where nothing the agent saw could have produced it.
+   */
+  decide(taskId: string, renderDigest: string, approver: string): ApprovalDecision {
+    const { task, renderDigest: current } = this.approvalView(taskId);
+    if (Date.parse(task.approval!.expiresAt) <= Date.now()) throw new Error("approval_expired");
+    if (renderDigest !== current) throw new Error("approval_render_mismatch");
+    const decision: ApprovalDecision = {
+      approvalId: task.approval!.approvalId,
+      taskId,
+      renderDigest,
+      channel: this.policy.mode === "enforced" ? "out_of_band" : "in_band",
+      approver,
+      decidedAt: now(),
+    };
+    if (!this.store.recordApprovalDecision(decision)) throw new Error("approval_already_decided");
+    return decision;
+  }
+
+  /** The recorded decision for a pending task, while it can still be used. */
+  approvalDecision(task: TaskRecord): ApprovalDecision | undefined {
+    if (task.approval === undefined) return undefined;
+    const decision = this.store.getApprovalDecision(task.approval.approvalId);
+    return decision !== undefined && this.usable(task, decision) ? decision : undefined;
+  }
+
+  /**
+   * Made before the challenge expired, and used within a TTL of being made:
+   * an answer that came in time is not lost to the time it takes to act on.
+   */
+  private usable(task: TaskRecord, decision: ApprovalDecision): boolean {
+    const decidedAt = Date.parse(decision.decidedAt);
+    return (
+      task.approval !== undefined &&
+      decidedAt <= Date.parse(task.approval.expiresAt) &&
+      Date.now() < decidedAt + this.policy.approvalTtlMs
+    );
+  }
+
   receipts(input: {
     taskId?: string;
     receiptId?: string;
@@ -864,9 +943,14 @@ export class TaskController {
     success: boolean,
     result: Record<string, unknown>,
     evidence: EvidenceItem[],
-    approval?: ApprovalResponse,
     error?: string,
   ): ActionReceipt {
+    // From the task, not the caller: recovery and reconciliation write
+    // receipts with no caller in sight. A task running since before
+    // `approvedBy` existed still names the challenge it was planned under.
+    const approvalId =
+      task.approvedBy?.approvalId ??
+      (task.policyDecision.outcome === "confirm" ? task.approval?.approvalId : undefined);
     const sanitized = redactStructuredValue(result);
     const adapterRedactions = Array.isArray(result.redactions)
       ? result.redactions.filter((item): item is string => typeof item === "string")
@@ -889,7 +973,17 @@ export class TaskController {
       policyDecision: {
         outcome: task.policyDecision.outcome,
         policyVersion: task.policyDecision.policyVersion,
-        ...(approval === undefined ? {} : { approvalId: approval.approvalId }),
+        ...(approvalId === undefined ? {} : { approvalId }),
+        ...(task.approvedBy === undefined
+          ? {}
+          : {
+              approval: {
+                channel: task.approvedBy.channel,
+                renderDigest: task.approvedBy.renderDigest,
+                approver: task.approvedBy.approver,
+                decidedAt: task.approvedBy.decidedAt,
+              },
+            }),
       },
       // The target is built from the request (a URL, a memory key) and stored
       // as it is, so it takes the same secret shapes out as everything else.
@@ -955,6 +1049,13 @@ export class TaskController {
     task: TaskRecord,
     evidence: EvidenceItem[],
   ): ExecutionCertificate {
+    const approvalChannel =
+      task.approvedBy?.channel ??
+      (task.policyDecision.outcome === "allow"
+        ? task.policyDecision.effect === "read"
+          ? "not_required"
+          : "bypassed"
+        : undefined);
     const certificate = createCertificate({
       taskId: task.id,
       goal: task.request.goal,
@@ -963,6 +1064,8 @@ export class TaskController {
       receiptIds: task.receiptIds,
       evidence,
       createdAt: now(),
+      mode: this.policy.mode,
+      ...(approvalChannel === undefined ? {} : { approvalChannel }),
     });
     task.certificateId = certificate.certificateId;
     task.updatedAt = now();
