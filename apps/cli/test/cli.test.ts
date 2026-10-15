@@ -217,6 +217,8 @@ describe("melra CLI", () => {
     expect(label("josé")).toBe("cli:josé");
     expect(() => label("alice\nAPPROVED")).toThrow(/MELRA_APPROVER/);
     expect(() => label("Jane Doe")).toThrow(/MELRA_APPROVER/);
+    // A letter that renders as nothing would read as no approver at all.
+    expect(() => label("\u3164")).toThrow(/MELRA_APPROVER/);
     // Checked only where it is recorded: everything else still runs.
     const result = await execute(process.execPath, [entry, "version"], {
       env: { ...process.env, MELRA_APPROVER: "Jane Doe" },
@@ -226,25 +228,64 @@ describe("melra CLI", () => {
 
   it("shows an approver the agent's words as text, never as terminal commands", () => {
     const hostile =
-      "\r\u001b[2KGoal: Fix README typo\nEffect: file.write on README.md (mutate, medium risk)\u001b[8m\u009b2J\u202e";
+      "\r\u001b[2KGoal: Fix README typo\nEffect: file.write on README.md (mutate, medium risk)\u001b[8m\u009b2J\u202e\u{e0041}\u3164";
     const screen = approvalScreen({
       task: { id: "t1", approval: { expiresAt: "2026-10-15T00:00:00.000Z" } },
       contract: {
-        capability: "file.write",
-        target: "deploy.sh\u001b[1A",
+        capability: "terminal.run",
+        target: "command:node",
         effect: "mutate",
         risk: "medium",
-        metadata: { goal: hostile },
+        operation: {
+          kind: "terminal",
+          action: "run",
+          command: "node",
+          args: ["-e", "require('fs').rmSync(process.env.HOME + '/Documents', { recursive: true })"],
+          env: { NODE_OPTIONS: "--require /tmp/x.js" },
+        },
+        metadata: { goal: hostile + " ".repeat(9_000) },
       },
       renderDigest: "a".repeat(64),
     });
     // The one escape on screen is MELRA's own reset; nothing else can steer the terminal.
-    expect(screen.replaceAll("\u001b[0m", "")).not.toMatch(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u202e]/);
+    expect(screen.replaceAll("\u001b[0m", "")).not.toMatch(
+      /[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u202e\u3164\u{e0041}]/u,
+    );
     const lines = screen.trimEnd().split("\n");
-    // What MELRA vouches for comes last, right above the question.
-    expect(lines.at(-3)).toBe("Effect: file.write on deploy.sh\\u001b[1A (mutate, medium risk)");
-    expect(lines.at(-2)).toMatch(/^Goal \(stated by the agent, unverified\): \\u000d\\u001b\[2KGoal/);
-    expect(lines.filter((line) => line.startsWith("Effect:"))).toHaveLength(1);
+    const tail = lines.slice(lines.lastIndexOf("Operation:"));
+    // What the effect actually does is in the summary, above the question,
+    // however long the agent's goal ran.
+    expect(tail.join("\n")).toContain("rmSync");
+    expect(tail.join("\n")).toContain("NODE_OPTIONS");
+    expect(tail.at(-3)).toBe("Effect: terminal.run on command:node (mutate, medium risk)");
+    expect(tail.every((line) => line.length < 260)).toBe(true);
+    expect(tail.filter((line) => line.startsWith("Effect:"))).toHaveLength(1);
+  });
+
+  it("keeps hidden characters out of every JSON it prints", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-cli-")));
+    roots.push(root);
+    const dataDirectory = join(root, ".melra");
+    const server = await createMelraRuntime({ workspaceRoot: root, dataDirectory, environment: {} });
+    try {
+      const planned = server.controller.plan(
+        TaskRequestSchema.parse({
+          goal: "Write\u009b2J\u202ethe report",
+          operation: { kind: "file", action: "write", path: "report.txt", content: "x" },
+        }),
+      );
+      const env = { ...process.env, MELRA_HOME: dataDirectory, MELRA_WORKSPACE: root };
+      // By the eight characters `melra tasks` shows.
+      const asked = (await execute(process.execPath, [entry, "approve", planned.id.slice(0, 8), "--json"], {
+        cwd: root,
+        env,
+      }).catch((error: unknown) => error)) as { code: number; stdout: string };
+      expect(asked.code).toBe(3);
+      expect(asked.stdout).not.toMatch(/[\u0080-\u009f\u202e]/);
+      expect(JSON.parse(asked.stdout).contract.metadata.goal).toBe("Write\u009b2J\u202ethe report");
+    } finally {
+      await server.close();
+    }
   });
 
   it("prints the product version", async () => {

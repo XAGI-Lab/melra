@@ -20,6 +20,7 @@ import { classifyOperation, loadPolicy } from "@melra/policy-core";
 import { SqliteStore } from "@melra/storage-sqlite";
 import type { CliEnvironment } from "./environment.js";
 import { isHuman, paint, table } from "./output.js";
+import { printable } from "./approval-screen.js";
 
 const DEFAULT_HTTP_PORT = 7457;
 const POLL_MS = 1_000;
@@ -120,11 +121,12 @@ export function taskTarget(task: TaskRecord): string {
   // `command:pnpm`: the stored arguments are already redacted (#122), and the
   // console shows them the same way.
   const operation = task.request.operation as { kind: string; command?: string; args?: string[] };
+  // Agent-chosen, so spelled out before it reaches a terminal.
   if (operation.kind === "terminal" && operation.command !== undefined) {
-    return [operation.command, ...(operation.args ?? [])].join(" ");
+    return printable([operation.command, ...(operation.args ?? [])].join(" "));
   }
   try {
-    return classifyOperation(task.request.operation).target;
+    return printable(classifyOperation(task.request.operation).target);
   } catch {
     return "";
   }
@@ -215,7 +217,7 @@ function describe(event: WatchEvent): string {
     `${time}  task ${shortId(event.id)}`,
     status,
     event.operation,
-    truncate(event.target, 48),
+    truncate(printable(event.target), 48),
     `${event.effect}/${event.risk}`,
   ]
     .filter((part) => part !== "")

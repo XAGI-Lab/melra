@@ -51,7 +51,7 @@ import {
   parseCliEnvironment,
   serverLaunch,
 } from "./environment.js";
-import { approvalScreen } from "./approval-screen.js";
+import { approvalScreen, printable } from "./approval-screen.js";
 import { runConformance } from "./conformance.js";
 import { statusCommand, tasksCommand, watchCommand } from "./activity.js";
 import { clientStatuses, clientsCheck, detectClients } from "./client-status.js";
@@ -189,7 +189,10 @@ async function runtime(env: CliEnvironment): Promise<MelraRuntime> {
 }
 
 function output(value: unknown): void {
-  process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+  // JSON.stringify escapes C0 controls but leaves C1, DEL and the invisible
+  // and reordering characters raw, and much of what is printed came from an
+  // agent. Spelled out, it is still valid JSON for the same values.
+  process.stdout.write(`${printable(JSON.stringify(value, null, 2), true)}\n`);
 }
 
 function argument(name: string, args: string[]): string | undefined {
@@ -747,11 +750,18 @@ async function confirmInTerminal(view: ApprovalView): Promise<boolean> {
  */
 async function approveCommand(args: string[], env: CliEnvironment): Promise<number> {
   // `--mode` is the one flag here that takes a value.
-  const taskId = args.find((value, index) => !value.startsWith("--") && args[index - 1] !== "--mode");
-  if (taskId === undefined) throw new Error("approve requires a task ID");
+  const given = args.find((value, index) => !value.startsWith("--") && args[index - 1] !== "--mode");
+  if (given === undefined) throw new Error("approve requires a task ID");
   const approver = approverLabel(env);
   const melra = await runtime(env);
   try {
+    // `melra tasks` shows the first eight characters, so a prefix naming one
+    // waiting task is enough.
+    const waiting = melra.store
+      .listTasks(500, "awaiting_approval")
+      .filter((task) => task.id.startsWith(given));
+    if (given.length < 36 && waiting.length > 1) throw new Error(`task_id_ambiguous:${given}`);
+    const taskId = given.length < 36 && waiting.length === 1 ? waiting[0]!.id : given;
     const view = melra.controller.approvalView(taskId);
     if (args.includes("--deny")) {
       melra.controller.cancel(taskId);
@@ -858,7 +868,7 @@ function clientsCommand(args: string[], env: CliEnvironment): number {
   for (const client of clients) {
     process.stdout.write(
       `${client.approvedAt === undefined ? "pending " : "approved"}  ` +
-        `${client.id}  ${client.name}\n` +
+        `${client.id}  ${printable(client.name)}\n` +
         `          ${principalRef(clientPrincipal(client))}\n`,
     );
   }

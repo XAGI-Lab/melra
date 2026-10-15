@@ -6,6 +6,7 @@
 // because importing that runs the CLI, and every piece here needs a test.
 
 import { createInterface } from "node:readline/promises";
+import { printable } from "./approval-screen.js";
 import { CLIENTS } from "./clients.js";
 import type { ClientChoice, ClientStatus } from "./client-status.js";
 import { mark, paint, table, type Status } from "./output.js";
@@ -48,8 +49,10 @@ function clientLine(status: ClientStatus): string[] {
       : status.state === "configured"
         ? mark("pass")
         : paint.dim("·");
+  // A workspace config file the agent can write names the command these
+  // describe, so they are spelled out before they reach the terminal.
   const extra = [...(status.note === undefined ? [] : [status.note]), ...status.problems];
-  return [symbol, status.client, status.state, paint.dim(extra.join("; "))];
+  return [symbol, status.client, status.state, paint.dim(printable(extra.join("; ")))];
 }
 
 // The one thing to do next, or undefined when there is nothing to fix or the
@@ -118,7 +121,7 @@ function summary(report: DoctorReport): string[] {
         ? `${mark("warn")} ${paint.bold(`Ready, with ${plural(warns, "warning")}`)}`
         : `${mark("pass")} ${paint.bold("Ready")}`;
   const next = nextStep(report);
-  return [verdict, ...(next === undefined ? [] : [`Next: ${paint.bold(next)}`])];
+  return [verdict, ...(next === undefined ? [] : [`Next: ${paint.bold(printable(next))}`])];
 }
 
 function checkRows(checks: DoctorCheck[], report: DoctorReport): string {
@@ -170,7 +173,7 @@ export function renderInit(result: InitResult): string {
       rows.push(["", "", paint.dim(`previous file saved as ${result.backup}`)]);
     }
     const next = CLIENTS[result.client]?.next ?? `Restart ${label}, then ask it to use the melra tools.`;
-    return [table(rows, { indent: 2 }), "", `Next: ${paint.bold(next)}`].join("\n");
+    return [table(rows, { indent: 2 }), "", `Next: ${paint.bold(printable(next))}`].join("\n");
   }
   const where =
     result.configPath === undefined

@@ -7,6 +7,7 @@ import { isSea } from "node:sea";
 import type { DeploymentMode } from "@melra/protocol";
 import { deploymentMode } from "@melra/protocol";
 import { unhingedFromEnvironment } from "@melra/server";
+import { printable } from "./approval-screen.js";
 
 export interface CliEnvironment {
   workspaceRoot: string;
@@ -61,7 +62,7 @@ export function serverLaunch(
 
 /** The approver as receipts record it: `cli:` and a label nothing can disguise. */
 export function approverLabel(env: CliEnvironment): string {
-  if (!/^[\p{L}\p{N}_.@-]{1,64}$/u.test(env.approver)) {
+  if (!/^[\p{L}\p{N}_.@-]{1,64}$/u.test(env.approver) || printable(env.approver) !== env.approver) {
     throw new Error("MELRA_APPROVER must be 1 to 64 letters, digits, '.', '_', '@' or '-'");
   }
   return `cli:${env.approver}`;
