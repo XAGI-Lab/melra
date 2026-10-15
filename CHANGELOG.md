@@ -67,6 +67,11 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- `melra doctor` no longer reports ready when enforced mode and unsafe-local
+  are asked for together through a policy file, which the flag check does not
+  see: its `mode` check now fails with the server's own refusal
+  (`enforced_mode_refuses_unsafe_local`) and says how to clear it.
+
 - A receipt written when reconciliation found an effect never happened kept no
   approval id, and one settled later as verified carried a made-up approval
   response. Both now carry the approval the task actually ran under.

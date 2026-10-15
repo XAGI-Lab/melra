@@ -511,15 +511,24 @@ async function doctor(env: CliEnvironment): Promise<{
       // reads as a contradiction that is not there.
       : { name: "guardrails", status: "pass", detail: "all applied" },
   );
-  // Not a `fail` either way. Developer mode is a legitimate choice and the
-  // default; what is not legitimate is a machine that cannot say which one it is.
+  // Neither mode is a `fail` on its own. Developer mode is a legitimate choice and the
+  // default; what is not legitimate is a machine that cannot say which one it is,
+  // or one asking for enforced mode and unsafe-local at once, which a policy file
+  // can do past the flag check and which the server then refuses to start.
+  let refusal: string | undefined;
+  try {
+    assertEnforceable(env.mode, env.unhinged);
+  } catch (error) {
+    refusal = error instanceof Error ? error.message : String(error);
+  }
   checks.push({
     name: "mode",
-    status: "pass",
+    status: refusal === undefined ? "pass" : "fail",
     detail:
-      env.mode === "enforced"
+      refusal ??
+      (env.mode === "enforced"
         ? "enforced: no unsafe-local, loopback or Unix socket only, no client self-registration"
-        : "developer: MELRA governs what it is asked for; the harness may have another path",
+        : "developer: MELRA governs what it is asked for; the harness may have another path"),
   });
   try {
     // A file passes access() too, and the runtime then fails to start on it.

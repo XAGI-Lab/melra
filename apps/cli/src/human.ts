@@ -81,6 +81,8 @@ export function nextStep(report: DoctorReport): string | undefined {
         return "fix or unset MELRA_SOCKET (see the socket line above)";
       case "isolation":
         return "run MELRA in the hardened container (https://github.com/XAGI-Lab/melra/blob/main/docs/INSTALLATION.md#docker), or another OS sandbox";
+      case "mode":
+        return 'drop --unsafe-local, MELRA_UNHINGED and "unhinged" in the policy file, or run in developer mode';
       case "guardrails":
         return "unset MELRA_UNHINGED and drop --unsafe-local to turn the guardrails back on";
       case "browser":
