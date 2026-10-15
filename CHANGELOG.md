@@ -79,6 +79,21 @@ All notable changes are documented here. The format follows
   report. An action that reported failure no longer recovers as verified
   because its evidence happened to hold.
 
+- A terminal `send` to a job whose program had stopped reading stdin no
+  longer crashes the server. The write's EPIPE arrived later as an unhandled
+  error event and took the whole process down; the job now refuses further
+  input with `terminal_job_stdin_closed`.
+- A terminal command runs in its own process group (on Windows, `taskkill /T`
+  reaches its tree), so a timeout, cancel or `stop` reaches what it started.
+  A run finishes when its program exits, even if a process it started holds
+  the output open; that held the run, its timeout and its cancel until that
+  process ended. A cancelled program that ignores SIGTERM is killed a second
+  later rather than left running.
+- At most 64 terminal jobs are kept; the oldest finished one makes room, so a
+  caller looping `start` no longer grows memory and processes without bound.
+- Terminal output is decoded across pipe reads, so a multi-byte character
+  split between two reads is no longer replaced with `�`.
+
 ### Security
 
 - A metered grant cannot be overdrawn by tasks running at once. Its draw was
