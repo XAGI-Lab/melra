@@ -69,7 +69,8 @@ melra doctor
 ```
 
 The command reports Node, guardrails, deployment mode, workspace,
-data-directory, SQLite, browser, computer-use adapter, and policy readiness —
+data-directory (and whether it sits inside the workspace, which enforced mode
+refuses), SQLite, browser, computer-use adapter, and policy readiness —
 plus the `MELRA_SOCKET` path when one is set, the OS isolation in effect (see
 [Docker](#docker)), and MCP clients — without exposing credentials. Unlike
 `setup`, it changes no configuration: the only thing it may create is the data
