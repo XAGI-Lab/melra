@@ -5,6 +5,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { HttpOperationSchema } from "@melra/protocol";
+import type { CredentialBroker } from "@melra/policy-core";
 import { HttpRuntime } from "./index.js";
 
 let server: Server;
@@ -34,6 +35,20 @@ beforeAll(async () => {
       // Accepts the request and never answers, which is the case MELRA must not
       // report as "the effect did not happen".
       if (req.url === "/silent") return;
+      // Did the work, started answering, and the connection closed mid-body.
+      if (req.url === "/cutoff") {
+        res.writeHead(200, { "content-length": "100" });
+        res.write("partial");
+        setTimeout(() => res.socket?.end(), 20);
+        return;
+      }
+      // Never goes quiet long enough for an idle timer, and never finishes.
+      if (req.url === "/drip") {
+        res.writeHead(200, { "content-length": "100000" });
+        const timer = setInterval(() => res.write("x"), 50);
+        res.on("close", () => clearInterval(timer));
+        return;
+      }
       res.writeHead(201, { "content-type": "application/json" });
       res.end(JSON.stringify({ created: true }));
     });
@@ -149,6 +164,41 @@ describe("http runtime", () => {
         }),
       ),
     ).rejects.toThrow("effect_outcome_unknown:http_timeout");
+  });
+
+  it("marks the outcome unknown when the answer is cut off mid-body", async () => {
+    // A 200 started arriving, so the charge may well have happened: reporting a
+    // plain failure would invite the caller to send it again.
+    await expect(
+      runtime().execute(operation({ method: "POST", url: `${origin}/cutoff`, content: "x" })),
+    ).rejects.toThrow(/effect_outcome_unknown/);
+  });
+
+  it("bounds the whole exchange by timeoutMs, not only the quiet gaps", async () => {
+    const started = Date.now();
+    await expect(
+      runtime().execute(operation({ method: "GET", url: `${origin}/drip`, timeoutMs: 300 })),
+    ).rejects.toThrow(/http_timeout|aborted/);
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+
+  it("does not send a request cancelled while its credential was being read", async () => {
+    const controller = new AbortController();
+    const before = seen;
+    const credentials = {
+      headersFor: async () => {
+        controller.abort();
+        return { headers: { authorization: "Bearer x" }, used: ["key"] };
+      },
+    } as unknown as CredentialBroker;
+    await expect(
+      new HttpRuntime({ allowedDomains: ["*"], allowLocalhost: true, credentials }).execute(
+        operation({ method: "POST", url: `${origin}/charges`, content: "x" }),
+        controller.signal,
+      ),
+    ).rejects.toThrow("task_cancelled");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(seen).toBe(before);
   });
 
   it("reports a plain failure when the request never left the machine", async () => {
