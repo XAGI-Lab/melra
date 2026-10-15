@@ -71,6 +71,17 @@ describe("http runtime", () => {
     expect(result.content).toBe('{"created":true}');
   });
 
+  it("reaches an IPv4-only server by name whichever family the resolver lists first", async () => {
+    // macOS answers `localhost` with ::1 before 127.0.0.1. Pinning only the
+    // first answer refused the connection; every checked answer is tried now.
+    const port = new URL(origin).port;
+    const result = await runtime().execute(
+      operation({ method: "GET", url: `http://localhost:${port}/hello` }),
+    );
+    expect(result.status).toBe(201);
+    expect(seen.headers.host).toBe(`localhost:${port}`);
+  });
+
   it("reports a failing status as an unsuccessful effect", async () => {
     const result = await runtime().execute(
       operation({ url: `${origin}/teapot` }),

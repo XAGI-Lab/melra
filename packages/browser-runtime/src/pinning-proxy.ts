@@ -8,7 +8,7 @@
 // resolver only has to answer public the first time and private the second, and
 // the check that passed has nothing to do with the socket that opens. Chromium
 // cannot be told to reuse our answer, so the fix is to stop it from connecting
-// at all: it talks to this proxy, and the proxy connects to the address it just
+// at all: it talks to this proxy, and the proxy connects to the addresses it just
 // checked.
 //
 // Loopback destinations bypass the proxy — Chromium does that by default and
@@ -62,16 +62,15 @@ export async function startPinningProxy(policy: NetworkPolicy): Promise<PinningP
   const server: Server = createServer((req, res) => {
     void (async () => {
       try {
-        const { url, address } = await assertSafeDestination(req.url ?? "", policy);
+        const { url, host, lookup } = await assertSafeDestination(req.url ?? "", policy);
         const upstream = httpRequest(
           {
-            host: address,
+            host,
+            lookup,
             port: url.port === "" ? 80 : Number(url.port),
             method: req.method ?? "GET",
             path: `${url.pathname}${url.search}`,
-            // The original headers carry `Host`, so a name-based virtual host
-            // still resolves correctly at the far end even though the socket
-            // was opened to a literal address.
+            // The original headers, `Host` included, exactly as the browser sent them.
             headers: req.headers,
           },
           (upstreamRes) => {
@@ -92,12 +91,12 @@ export async function startPinningProxy(policy: NetworkPolicy): Promise<PinningP
       try {
         // CONNECT carries `host:port`, not a URL. Only the authority is checked
         // because a tunnel has no path to check — the request inside it is TLS.
-        const { address, url } = await assertSafeDestination(
+        const { host, lookup, url } = await assertSafeDestination(
           `https://${req.url ?? ""}`,
           policy,
         );
         const upstream = connect(
-          { host: address, port: url.port === "" ? 443 : Number(url.port) },
+          { host, lookup, port: url.port === "" ? 443 : Number(url.port) },
           () => {
             clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
             pipeBothWays(clientSocket, upstream, head);

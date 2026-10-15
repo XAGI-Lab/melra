@@ -25,10 +25,11 @@ export interface HttpRuntimeOptions extends NetworkPolicy {
  * One governed HTTP call.
  *
  * The interesting part is which socket opens. `assertSafeDestination` resolves
- * the name and checks every answer, then this connects to the address it just
- * checked rather than to the name — the same pinning `PinningProxy` does for the
- * browser, and for the same reason: a resolver that answers public once and
- * private the second time would otherwise make the check meaningless.
+ * the name and checks every answer, then this connects through a `lookup` that
+ * answers only with those checked addresses, never by resolving the name again
+ * — the same pinning `PinningProxy` does for the browser, and for the same
+ * reason: a resolver that answers public once and private the second time
+ * would otherwise make the check meaningless. TLS still verifies the name.
  */
 export class HttpRuntime {
   constructor(private readonly options: HttpRuntimeOptions) {}
@@ -37,7 +38,7 @@ export class HttpRuntime {
     operation: HttpOperation,
     signal?: AbortSignal,
   ): Promise<Record<string, unknown>> {
-    const { url, address } = await assertSafeDestination(
+    const { url, host, lookup } = await assertSafeDestination(
       operation.url,
       this.options,
     );
@@ -47,13 +48,12 @@ export class HttpRuntime {
     if (signal?.aborted === true) throw new Error("task_cancelled");
     const secure = url.protocol === "https:";
     const send = secure ? httpsRequest : httpRequest;
-    // Brokered against the destination that was *checked*, not the one the
-    // caller wrote: pinning already collapsed the name to an address, and a
-    // credential scoped by host has to be scoped by the same host the socket
-    // will actually talk to.
+    // Brokered against the host that was *checked*: the name, or an IPv6
+    // literal without the brackets `URL.hostname` keeps, so `[::1]` and a
+    // credential scoped to `::1` are the same host.
     const { capability, target } = classifyOperation(operation);
     const brokered = await this.options.credentials?.headersFor({
-      host: url.hostname,
+      host,
       capability,
       target,
     });
@@ -71,8 +71,7 @@ export class HttpRuntime {
       // Last, so a caller cannot name the same header and have its own value
       // ride out under a credential's name.
       ...brokered?.headers,
-      // `Host` carries the name so a name-based virtual host still resolves at
-      // the far end even though the socket was opened to a literal address.
+      // The URL's authority exactly as the caller wrote it.
       host: url.host,
       ...(operation.idempotencyKey === undefined
         ? {}
@@ -85,14 +84,12 @@ export class HttpRuntime {
     return await new Promise<Record<string, unknown>>((resolve, reject) => {
       const call = send(
         {
-          host: address,
+          host,
+          lookup,
           port: url.port === "" ? (secure ? 443 : 80) : Number(url.port),
           method: operation.method,
           path: `${url.pathname}${url.search}`,
           headers,
-          // TLS is validated against the name the caller asked for, not the
-          // address the socket went to, or pinning would break every https URL.
-          ...(secure ? { servername: url.hostname } : {}),
           timeout: operation.timeoutMs,
           // A fresh connection per effect, never one from Node's keep-alive
           // pool. A pooled socket the server has already closed takes the whole
