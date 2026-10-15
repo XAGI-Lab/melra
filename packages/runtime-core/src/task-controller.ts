@@ -763,6 +763,14 @@ export class TaskController {
         // One task that cannot be recovered must not keep the rest waiting;
         // the failure is still reported once every task has had its turn.
         failures.set(task.id, error);
+        // Given back rather than kept: held by this live process, no other
+        // could take it, so an advance elsewhere could never learn why its
+        // run is stuck. Whoever claims it next meets the same failure.
+        try {
+          this.store.releaseTaskClaim(task.id);
+        } catch {
+          // Still ours, then; this process retakes it on its next pass.
+        }
       } finally {
         this.store.inFlight.delete(task.id);
       }

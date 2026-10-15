@@ -937,6 +937,14 @@ export class SqliteStore {
       .run(workflowId, owner);
   }
 
+  /** Gives back a claim this store holds, so any process may take the task next. */
+  releaseTaskClaim(id: string): void {
+    if (this.owner === undefined) return;
+    this.database
+      .prepare("UPDATE tasks SET owner = NULL WHERE id = ? AND owner = ?")
+      .run(id, this.owner.id);
+  }
+
   expiredWorkflowLeases(now: string): string[] {
     const rows = this.database
       .prepare("SELECT workflow_id AS id FROM workflow_leases WHERE expires_at <= ?")

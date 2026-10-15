@@ -237,7 +237,7 @@ describe("task recovery that does not finish", () => {
       throw new Error("database is locked");
     });
     await expect(b.tasks.recoverInterrupted()).rejects.toThrow("database is locked");
-    // Claimed by a live process, so no peer may take it: this one has to.
+    // The failed claim is given back, so the next pass, here or anywhere, retries it.
     expect(b.store.getTask(task.id)?.status).toBe("running");
     const [recovered] = await b.tasks.recoverInterrupted();
     expect(recovered).toMatchObject({ id: task.id, status: "recovery_required" });
@@ -550,6 +550,24 @@ describe("workflow recovery across processes", () => {
     await expect(b.workflows.advance(id)).rejects.toThrow("this run's own repair failed");
     // The unrelated task still cannot be recovered; this run no longer cares.
     expect((await b.workflows.advance(id)).run.nodes.write?.status).toBe("recovery_required");
+  });
+
+  it("tells an advance in one process why a peer could not recover its task", async () => {
+    const at = await home();
+    const adapter = held();
+    const dead = await side(at, adapter.execute);
+    const sweeper = await side(at);
+    const b = await side(at);
+    const { id } = await midFlight(dead, adapter);
+    dead.store.close();
+    expireLease(b.store, id);
+    b.store.deleteTaskPayload(b.workflows.status(id).nodes.write!.taskIds[0]!);
+    // A live peer's sweep meets the failure first.
+    await expect(sweeper.workflows.recoverInterrupted({ abandonedOnly: true })).rejects.toThrow(
+      "task_payload_not_found",
+    );
+
+    await expect(b.workflows.advance(id)).rejects.toThrow("task_payload_not_found");
   });
 
   it("reports why its own task cannot be recovered rather than calling it contention", async () => {

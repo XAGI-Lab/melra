@@ -554,14 +554,15 @@ export class WorkflowController {
       );
       // Skipped runs keep any abandoned lease, which is how the sweep finds
       // them again once that task settles.
-      const unsettled = allTasks.find(
+      const unsettled = allTasks.filter(
         (task) =>
           task.idempotencyKey !== undefined &&
           keys.has(task.idempotencyKey) &&
           (task.status === "running" || task.status === "verifying"),
       );
-      if (unsettled !== undefined) {
-        if (taskFailures.has(unsettled.id)) runFailures.set(stored.id, taskFailures.get(unsettled.id));
+      if (unsettled.length > 0) {
+        const failed = unsettled.find((task) => taskFailures.has(task.id));
+        if (failed !== undefined) runFailures.set(stored.id, taskFailures.get(failed.id));
         continue;
       }
       const taken = this.store.takeWorkflowLease(
