@@ -175,17 +175,20 @@ export function inputSent(error: unknown): boolean {
 }
 
 /**
- * A URL as policy names a browser target, without query or fragment. `|` is
- * the one path character Chrome escapes (as `%7C`) and Node's URL keeps, so it
- * is escaped on both sides; nothing is decoded, so no two paths a server tells
- * apart compare equal, and no escape becomes a raw character in a message.
+ * A URL as policy names a browser target, without query or fragment. Chrome
+ * escapes some path characters Node's URL keeps (`|`, and `^` on Node 22), so
+ * every character URL parsers disagree on is escaped on both sides. Nothing is
+ * decoded: no two paths a server tells apart compare equal, and no escape
+ * becomes a raw character in a message.
  */
 function pageAddress(url: string): string {
   try {
     const parsed = new URL(url);
     parsed.search = "";
     parsed.hash = "";
-    return parsed.toString().replaceAll("|", "%7C");
+    return parsed
+      .toString()
+      .replace(/[ "<>^`{|}]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
   } catch {
     return url;
   }

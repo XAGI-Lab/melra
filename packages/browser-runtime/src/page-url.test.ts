@@ -56,9 +56,11 @@ describe("a url on an action that does not navigate", () => {
       // The page it names, as policy names it: query and fragment aside.
       await run({ action: "click", target: { selector: "#pay" }, url: `${origin}/shop?from=cart#top` });
       expect(await title()).toBe("paid");
-      // Spelled as Node spells it, though Chrome reports `|` escaped.
-      await run({ action: "navigate", url: `${origin}/a|b` });
-      await run({ action: "click", target: { selector: "#pay" }, url: `${origin}/a|b` });
+      // Spelled as Node spells it, though Chrome reports these escaped.
+      for (const path of ["/a|b", "/a^b", "/a`b{c}"]) {
+        await run({ action: "navigate", url: `${origin}${path}` });
+        await run({ action: "click", target: { selector: "#pay" }, url: `${origin}${path}` });
+      }
       // Two paths a server tells apart stay apart.
       await run({ action: "navigate", url: `${origin}/p%FF` });
       await expect(
