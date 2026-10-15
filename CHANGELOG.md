@@ -94,7 +94,27 @@ All notable changes are documented here. The format follows
 - Terminal output is decoded across pipe reads, so a multi-byte character
   split between two reads is no longer replaced with `�`.
 
+- A file `hash` checks that the path is a regular file within `maxFileBytes`
+  before reading it. It read the whole file first, so hashing a 1.5 GB pack
+  file allocated 1.5 GB, and a FIFO blocked forever. The verifier's
+  `file_hash` streams the file and refuses anything but a regular file.
+- A file write whose final rename fails removes its temporary copy, which
+  otherwise stayed in the workspace with the content, one per retry.
+- Two servers starting at once on a fresh `MELRA_HOME` get the same payload
+  key. The key file appeared empty before it was filled, so a second process
+  could read it empty and refuse to start, and a crash in that moment left an
+  empty key that blocked every later start.
+
 ### Security
+
+- On Windows, a differently cased spelling of the workspace (`..\\WS` for
+  `ws`) is recognised as the workspace root, which file operations never
+  touch. The check compared strings while the containment check ignored
+  case, so a recursive delete of that spelling removed the whole workspace.
+- An `http_resource_matches` token whose value is `.` or `..` fails the
+  predicate. Percent-encoding leaves dots alone and URL parsers collapse
+  `..` (even `%2E%2E`), so a response with `{"id": ".."}` moved the probe up
+  one level and verified some other resource.
 
 - A metered grant cannot be overdrawn by tasks running at once. Its draw was
   recorded only after the work verified, so two tasks re-checked against the

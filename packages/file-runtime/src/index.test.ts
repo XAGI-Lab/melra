@@ -1,9 +1,10 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
-import { mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, parse } from "node:path";
+import { basename, join, parse } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { FileOperationSchema } from "@melra/protocol";
 import { FileRuntime } from "./index.js";
@@ -30,6 +31,55 @@ describe("FileRuntime", () => {
     expect(result.written).toBe(true);
     expect(await readFile(join(root, "artifacts/result.txt"), "utf8")).toBe("verified");
     expect(result.sha256).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it("never treats a differently cased spelling of the root as somewhere else", async () => {
+    // On Windows `..\\WS` and `ws` are the same directory. The guard compared
+    // strings, so a recursive delete of that spelling removed the workspace.
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-file-")));
+    roots.push(root);
+    const runtime = await FileRuntime.create({ root });
+    await expect(
+      runtime.execute(
+        FileOperationSchema.parse({
+          kind: "file",
+          action: "delete",
+          path: join("..", basename(root).toUpperCase()),
+          recursive: true,
+        }),
+      ),
+    ).rejects.toThrow();
+    expect((await stat(root)).isDirectory()).toBe(true);
+  });
+
+  it("hashes only a regular file", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-file-"));
+    roots.push(root);
+    const runtime = await FileRuntime.create({ root });
+    if (process.platform !== "win32") {
+      // A FIFO never ends: reading it to hash it blocked forever.
+      spawnSync("mkfifo", [join(root, "pipe")]);
+      await expect(
+        runtime.execute(FileOperationSchema.parse({ kind: "file", action: "hash", path: "pipe" })),
+      ).rejects.toThrow("file_hash_requires_regular_file");
+    }
+    await mkdir(join(root, "dir"));
+    await expect(
+      runtime.execute(FileOperationSchema.parse({ kind: "file", action: "hash", path: "dir" })),
+    ).rejects.toThrow("file_hash_requires_regular_file");
+  });
+
+  it("leaves no temporary copy behind when a write cannot land", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-file-"));
+    roots.push(root);
+    const runtime = await FileRuntime.create({ root });
+    await mkdir(join(root, "dir"));
+    await expect(
+      runtime.execute(
+        FileOperationSchema.parse({ kind: "file", action: "write", path: "dir", content: "API_KEY=secret" }),
+      ),
+    ).rejects.toThrow();
+    expect((await readdir(root)).filter((name) => name.includes(".melra-"))).toEqual([]);
   });
 
   it("blocks traversal and escaping symlinks", async () => {
