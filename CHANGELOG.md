@@ -105,6 +105,23 @@ All notable changes are documented here. The format follows
   could read it empty and refuse to start, and a crash in that moment left an
   empty key that blocked every later start.
 
+- Durable workflows keep their order, decisions and recoveries straight:
+  - an approval node is offered only once its target's other dependencies
+    are done, so an approved delete no longer runs before the backup it
+    depends on (and skips its undo when the backup fails). A definition where
+    another dependency of the target itself waits on the approval is refused,
+    as is a condition whose source is not one of its dependencies;
+  - an advance waits for every node it started before reporting one node's
+    error, instead of releasing the lease with effects still running;
+  - a condition keeps the branch it started on rather than re-evaluating a
+    live predicate into the other branch and reusing its tasks;
+  - an approval challenge that expired before anyone answered is asked again
+    instead of leaving the node unapprovable;
+  - recovery after a restart no longer fails an approved effect, and no
+    longer marks a loop or branch complete when only some of its steps ran;
+  - a run that needs recovery can be paused and resumed, and resuming it
+    reports `recovery_required` rather than `running`.
+
 ### Security
 
 - On Windows, a differently cased spelling of the workspace (`..\\WS` for
