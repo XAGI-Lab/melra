@@ -82,6 +82,15 @@ export function parseMelraToolResult(result: unknown): Record<string, unknown> {
   return JSON.parse(text) as Record<string, unknown>;
 }
 
+/** The MELRA_* variables of an environment. */
+function melraSettings(environment: NodeJS.ProcessEnv): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(environment).filter(
+      (entry): entry is [string, string] => entry[0].startsWith("MELRA_") && entry[1] !== undefined,
+    ),
+  );
+}
+
 export class MelraClient {
   private constructor(private readonly client: Client) {}
 
@@ -95,7 +104,11 @@ export class MelraClient {
               command: options.command ?? "melra",
               args: options.args ?? ["serve"],
               ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
-              ...(options.env === undefined ? {} : { env: options.env }),
+              // The SDK passes the child only HOME, PATH and a few more, so
+              // MELRA_MODE, MELRA_POLICY and MELRA_HOME set for this process
+              // were dropped and the server ran configured differently. The
+              // Python SDK passes them; so does this now.
+              env: { ...melraSettings(process.env), ...options.env },
               stderr: "pipe",
             });
     const client = new Client({

@@ -1,6 +1,9 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { WorkflowDefinitionSchema } from "@melra/protocol";
 import { MelraClient, parseMelraToolResult } from "./index.js";
@@ -196,5 +199,29 @@ describe("TypeScript workflow SDK", () => {
       "taskId or receiptId is required",
     );
     expect(callTool).not.toHaveBeenCalled();
+  });
+});
+
+describe("TypeScript SDK stdio connect", () => {
+  it("passes this process's MELRA_* settings to the server it spawns", async () => {
+    // A stand-in server that records what it was given and exits; connecting
+    // fails, which is fine, the spawn is what is under test.
+    const directory = mkdtempSync(join(tmpdir(), "melra-sdk-env-"));
+    const out = join(directory, "mode.txt");
+    const previous = process.env.MELRA_MODE;
+    process.env.MELRA_MODE = "enforced";
+    try {
+      await expect(
+        MelraClient.connect({
+          command: process.execPath,
+          args: ["-e", `require("fs").writeFileSync(${JSON.stringify(out)}, process.env.MELRA_MODE ?? "unset")`],
+        }),
+      ).rejects.toThrow();
+      expect(readFileSync(out, "utf8")).toBe("enforced");
+    } finally {
+      if (previous === undefined) delete process.env.MELRA_MODE;
+      else process.env.MELRA_MODE = previous;
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });

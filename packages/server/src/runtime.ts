@@ -233,7 +233,10 @@ export async function createMelraRuntime(
       ? "enforced"
       : "developer";
   assertEnforceable(mode, unhinged);
-  const policy: LocalPolicy = { ...loaded, unhinged, mode };
+  // The root this runtime was asked for, not one a policy file names: a shared
+  // file is read by servers for many workspaces, and the caller (the CLI
+  // settles MELRA_WORKSPACE against MELRA_POLICY) is the one that knows which.
+  const policy: LocalPolicy = { ...loaded, workspaceRoot, unhinged, mode };
   // Confinement is lifted by moving the root, not by branching inside the
   // runtimes. `maxFileBytes` stays as configured: it bounds how much one read
   // pulls into memory, and an unbounded read is a way to crash the host, not a

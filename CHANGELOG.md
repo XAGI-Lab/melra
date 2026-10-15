@@ -89,6 +89,31 @@ All notable changes are documented here. The format follows
   `mysql -pPASSWORD`: an attached `-p` value is a password only after a
   mysql-family program.
 
+- `MelraClient.connect()` in the TypeScript SDK passes this process's
+  `MELRA_*` settings (`MELRA_MODE`, `MELRA_POLICY`, `MELRA_HOME`, ...) to the
+  stdio server it spawns, as the Python SDK does. The MCP SDK forwards only
+  `HOME`, `PATH` and a few others, so the server ran configured differently.
+- `melra conformance --url` takes the console URL that `serve --http` prints
+  (`http://127.0.0.1:7457/?token=...`): it checks `/mcp` and uses the token in
+  the query when `--token` is not given. It used to post to `/?token=.../mcp`.
+- An empty `MELRA_POLICY` or `MELRA_WORKSPACE` counts as unset, as an empty
+  `MELRA_SOCKET` does, rather than naming the working directory.
+
+- A project's server is confined to that project. `melra setup` wrote the
+  first project's workspace into the shared `~/.melra/policy.json`, and the
+  file's `workspaceRoot` won over `MELRA_WORKSPACE`, so the server for every
+  later project could read and write the first one. `MELRA_WORKSPACE` now
+  wins, the shared file no longer decides the workspace, and `setup` writes
+  no workspace into it. A file named by `MELRA_POLICY` may still pin the
+  workspace when `MELRA_WORKSPACE` is unset.
+- `melra setup --write` puts the operator's `MELRA_POLICY` into the client
+  config, and refuses one that does not exist. It used to write the default
+  `~/.melra/policy.json` instead, so a client ran the permissive default
+  while `doctor` reported the operator's policy.
+- A policy file with `"unhinged": true` is reported by the startup banner,
+  `doctor` and `policy test`, as `MELRA_UNHINGED=1` is. The server already
+  applied it, but the CLI said every guardrail was on. `--mode developer` no
+  longer loosens `MELRA_MODE=enforced` or a policy file's enforced mode.
 - An empty `MELRA_HTTP_TOKEN` (for example `MELRA_HTTP_TOKEN=${TOKEN}` with
   `TOKEN` unset) is treated as unset, so the server gets a random token. It
   used to become the token, and an empty `?token=` or `Bearer ` header then

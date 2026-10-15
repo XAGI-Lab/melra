@@ -42,6 +42,7 @@ import {
   createDefaultPolicy,
   evaluatePolicy,
   loadPolicy,
+  type LocalPolicy,
 } from "@melra/policy-core";
 import {
   type CliEnvironment,
@@ -72,6 +73,40 @@ import {
   resolveClient,
   writeClientConfig,
 } from "./clients.js";
+
+/**
+ * Fold in what the policy file says, so every command describes the server it
+ * would actually start: `unhinged` if either asks for it, and the stricter
+ * `mode`, exactly as the server combines them.
+ *
+ * The workspace is MELRA_WORKSPACE when it is set, which every config `setup`
+ * writes does. Otherwise a file named by MELRA_POLICY may pin it, and otherwise
+ * it is the working directory. The shared ~/.melra/policy.json never decides
+ * it: older `setup` runs wrote their own workspace into that file, and a
+ * server for any later project was then confined to the first one instead.
+ *
+ * A file that does not parse changes nothing here; `doctor` reports it and the
+ * server refuses to start on it.
+ */
+async function settle(env: CliEnvironment): Promise<CliEnvironment> {
+  const path = await existingPolicyPath(env);
+  if (path === undefined) return env;
+  let file: LocalPolicy;
+  try {
+    file = await loadPolicy(path, env.workspaceRoot);
+  } catch {
+    return env;
+  }
+  return {
+    ...env,
+    workspaceRoot:
+      env.workspaceSet === true || env.policyPath === undefined
+        ? env.workspaceRoot
+        : file.workspaceRoot,
+    unhinged: env.unhinged || file.unhinged,
+    mode: env.mode === "enforced" || file.mode === "enforced" ? "enforced" : "developer",
+  };
+}
 
 async function existingPolicyPath(env: CliEnvironment): Promise<string | undefined> {
   if (env.policyPath !== undefined) return env.policyPath;
@@ -570,15 +605,19 @@ async function doctor(env: CliEnvironment): Promise<{
 
 async function init(args: string[], env: CliEnvironment): Promise<InitResult> {
   await mkdir(env.dataDirectory, { recursive: true });
-  const policyPath = join(env.dataDirectory, "policy.json");
+  // The operator's MELRA_POLICY when there is one: writing the default path
+  // into the client config instead quietly swapped their policy for ours.
+  const policyPath = env.policyPath ?? join(env.dataDirectory, "policy.json");
   try {
     await access(policyPath, constants.F_OK);
   } catch {
-    await writeFile(
-      policyPath,
-      `${JSON.stringify(createDefaultPolicy(env.workspaceRoot), null, 2)}\n`,
-      { flag: "wx" },
-    );
+    if (env.policyPath !== undefined) {
+      throw new Error(`MELRA_POLICY names ${policyPath}, which does not exist`);
+    }
+    // No `workspaceRoot`: this file is shared by every project's server, and
+    // each config `setup` writes names its own workspace in MELRA_WORKSPACE.
+    const { workspaceRoot: _shared, ...policy } = createDefaultPolicy(env.workspaceRoot);
+    await writeFile(policyPath, `${JSON.stringify(policy, null, 2)}\n`, { flag: "wx" });
   }
   const client = resolveClient(argument("--client", args) ?? "generic");
   const label = CLIENTS[client]?.label ?? client;
@@ -707,6 +746,7 @@ async function policyTest(args: string[], env: CliEnvironment): Promise<void> {
   // answer for a policy nobody is running.
   const policy = {
     ...(await loadPolicy(await existingPolicyPath(env), env.workspaceRoot)),
+    workspaceRoot: env.workspaceRoot,
     unhinged: env.unhinged,
     mode: env.mode,
   };
@@ -885,12 +925,16 @@ async function main(): Promise<void> {
     );
   }
   const modeFlag = argument("--mode", args);
-  const env: CliEnvironment = {
+  const env = await settle({
     ...parsed,
     unhinged:
       parsed.unhinged || deprecated || args.includes("--unsafe-local"),
-    ...(modeFlag === undefined ? {} : { mode: deploymentMode(modeFlag) }),
-  };
+    // The strictest of the flag and the variable, as for the policy file below:
+    // `--mode developer` does not undo MELRA_MODE=enforced.
+    ...(modeFlag === undefined || deploymentMode(modeFlag) === "developer"
+      ? {}
+      : { mode: "enforced" as const }),
+  });
   // Before the banner: a process that refuses to start has no guardrails to warn
   // about, and printing the unsafe-local warning first would read as if it had
   // taken effect.

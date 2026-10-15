@@ -10,6 +10,8 @@ import { unhingedFromEnvironment } from "@melra/server";
 
 export interface CliEnvironment {
   workspaceRoot: string;
+  /** MELRA_WORKSPACE was set, so no policy file's `workspaceRoot` replaces it. */
+  workspaceSet?: boolean;
   dataDirectory: string;
   unhinged: boolean;
   mode: DeploymentMode;
@@ -126,15 +128,16 @@ export function parseCliEnvironment(
     throw new Error("browser_cdp_context_requires_endpoint");
   }
   return {
-    workspaceRoot: resolve(
-      source.MELRA_WORKSPACE ?? defaults.cwd,
-    ),
+    // Empty counts as unset for these too: `MELRA_POLICY=${P}` with P unset
+    // otherwise names the working directory as the policy file.
+    workspaceRoot: resolve(source.MELRA_WORKSPACE?.trim() || defaults.cwd),
+    workspaceSet: (source.MELRA_WORKSPACE ?? "").trim() !== "",
     dataDirectory: resolve(
       source.MELRA_HOME ?? join(defaults.home, ".melra"),
     ),
     unhinged: unhingedFromEnvironment(source),
     mode: deploymentMode(source.MELRA_MODE),
-    ...(source.MELRA_POLICY === undefined
+    ...(source.MELRA_POLICY === undefined || source.MELRA_POLICY.trim() === ""
       ? {}
       : { policyPath: resolve(source.MELRA_POLICY) }),
     // Empty counts as unset, so `MELRA_SOCKET=` in a unit file turns it off

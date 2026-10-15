@@ -92,6 +92,29 @@ describe("unhinged runtime", () => {
     expect(result.task.status).not.toBe("verified_success");
   });
 
+  it("confines to the workspace it was given, not one a shared policy file names", async () => {
+    // A policy file another project's `setup` wrote, read by this project's server.
+    const other = join(base, "other");
+    await mkdir(other);
+    await writeFile(join(other, "secret.txt"), "other project", "utf8");
+    await writeFile(join(workspace, "secret.txt"), "this project", "utf8");
+    const policyPath = join(base, "policy.json");
+    await writeFile(policyPath, JSON.stringify({ workspaceRoot: other }), "utf8");
+    runtime = await createMelraRuntime({
+      workspaceRoot: workspace,
+      dataDirectory: data,
+      policyPath,
+      environment: {},
+    });
+    expect(runtime.policy.workspaceRoot).toBe(resolve(workspace));
+    const read = runtime.controller.plan(
+      request({ operation: { kind: "file", action: "read", path: "secret.txt" } }),
+    );
+    const result = await runtime.controller.execute(read.id);
+    expect(result.task.status).toBe("verified_success");
+    expect(JSON.stringify(result.output)).toContain("this project");
+  });
+
   it("reads outside the workspace and allows a shell when unhinged", async () => {
     runtime = await createMelraRuntime({
       workspaceRoot: workspace,
