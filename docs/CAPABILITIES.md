@@ -119,6 +119,11 @@ Actions: `navigate`, `back`, `forward`, `reload`, `inspect`, `wait`, `click`,
 - `back` and `forward` report `moved`, which is false only at the end of the
   history stack. A move to an entry with no HTTP response (`about:blank`, a hash
   change) reports `moved: true` with a null `status`.
+- On any action but `navigate` and `tab_new`, a `url` names the page the action
+  must happen on. Policy shows it as the action's target and matches grants
+  against it, so the runtime refuses the action, before sending anything, when
+  the active page is elsewhere (`browser_page_not_at_url`). It is compared as
+  policy shows it, without query or fragment.
 - `tab_new` accepts an optional `url` and runs the same destination checks
   `navigate` does. Every tab action returns the renumbered tab list, because
   opening, switching, and closing all shift the indices.

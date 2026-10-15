@@ -175,6 +175,18 @@ export function inputSent(error: unknown): boolean {
 }
 
 /** Playwright's terminal colour codes, which mean nothing in a stored record. */
+/** A URL as policy names a browser target: no query, no fragment. */
+function pageAddress(url: string): string {
+  try {
+    const parsed = new URL(url);
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}
+
 function withoutColour(text: string): string {
   return text.replace(/\u001b\[[0-9;]*m/g, "");
 }
@@ -1075,6 +1087,19 @@ export class BrowserRuntime {
 
   private async run(operation: BrowserOperation): Promise<Record<string, unknown>> {
     const page = await this.page();
+    // Anywhere but on the way to it, a url names the page the action expects
+    // to act on. Policy shows it to the approver as the target and matches
+    // grants against it, so it has to be true: refused, before anything is
+    // sent, when the active page is elsewhere. Compared as policy shows it,
+    // without query or fragment.
+    if (
+      operation.url !== undefined &&
+      operation.action !== "navigate" &&
+      operation.action !== "tab_new" &&
+      pageAddress(page.url()) !== pageAddress(operation.url)
+    ) {
+      throw new Error("browser_page_not_at_url");
+    }
     switch (operation.action) {
       case "navigate": {
         if (operation.url === undefined) throw new Error("browser_navigate_requires_url");
