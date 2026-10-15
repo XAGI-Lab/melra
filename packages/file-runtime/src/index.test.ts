@@ -177,6 +177,19 @@ describe("FileRuntime", () => {
     if (process.platform === "darwin") {
       const held = await stat(join(root, ".melra", "melra.sqlite"));
       await expect(hash(`/.vol/${held.dev}/${held.ino}`)).rejects.toThrow("path_reserved");
+      // The reserved directory by its own inode, and a file put inside it.
+      const directory = await stat(owners);
+      const byInode = `/.vol/${directory.dev}/${directory.ino}`;
+      await expect(
+        runtime.execute(
+          FileOperationSchema.parse({ kind: "file", action: "write", path: `${byInode}/planted`, content: "x" }),
+        ),
+      ).rejects.toThrow("path_reserved");
+      await expect(
+        runtime.execute(
+          FileOperationSchema.parse({ kind: "file", action: "move", path: byInode, destination: join(root, "moved") }),
+        ),
+      ).rejects.toThrow("path_reserved");
     }
   });
 

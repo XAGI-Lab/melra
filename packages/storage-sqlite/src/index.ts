@@ -869,6 +869,20 @@ export class SqliteStore {
     now: string,
     expiresAt: string,
   ): boolean {
+    return this.takeWorkflowLease(workflowId, owner, now, expiresAt) !== "refused";
+  }
+
+  /**
+   * `acquireWorkflowLease`, saying whether a lease was already there. Recovery
+   * needs that: an expired lease it replaced marks a run still waiting for a
+   * repair, while a lease it created means whoever held one released it.
+   */
+  takeWorkflowLease(
+    workflowId: string,
+    owner: string,
+    now: string,
+    expiresAt: string,
+  ): "refused" | "created" | "replaced" {
     return this.transaction(() => {
       const existing = this.database
         .prepare(
@@ -883,7 +897,7 @@ export class SqliteStore {
         existing.owner !== owner &&
         existing.expiresAt > now
       ) {
-        return false;
+        return "refused";
       }
       this.database
         .prepare(`
@@ -897,7 +911,7 @@ export class SqliteStore {
             expires_at = excluded.expires_at
         `)
         .run(workflowId, owner, now, expiresAt);
-      return true;
+      return existing === undefined ? "created" : "replaced";
     });
   }
 

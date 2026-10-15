@@ -213,15 +213,11 @@ export class WorkflowController {
     ) {
       // A repaired run has no lease left. One still there is a task still
       // running, a live process that got in first, or a repair that failed.
-      // Only the last is reported as itself; failures elsewhere in the pass
-      // belong to other runs or tasks and reach the sweep's warnings.
-      const failure = await this.recoverInterrupted({ abandonedOnly: true }).then(
-        () => undefined,
-        (error: unknown) => error,
-      );
-      const still = this.store.getWorkflowLease(workflowId);
-      if (still !== undefined) {
-        if (failure !== undefined && still.owner === this.recoveryOwner) throw failure;
+      // Only this run's own failure is reported as itself; the rest of the
+      // pass's belong to other runs or tasks and reach the sweep's warnings.
+      const pass = await this.recoveryPass(true);
+      if (this.store.getWorkflowLease(workflowId) !== undefined) {
+        if (pass.runFailures.has(workflowId)) throw pass.runFailures.get(workflowId);
         throw new Error("workflow_lease_held");
       }
     }
@@ -507,18 +503,33 @@ export class WorkflowController {
     { abandonedOnly = false }: { abandonedOnly?: boolean } = {},
   ): Promise<WorkflowRun[]> {
     // A task or run that cannot be recovered is reported once everything else
-    // has been: one bad record must not hold up the rest. A run with a task
-    // left unsettled is skipped below anyway.
-    const failures: unknown[] = [];
-    await this.tasks.recoverInterrupted().catch((error: unknown) => {
-      failures.push(error);
-    });
-    const recovered = this.repairRuns(abandonedOnly, failures);
-    if (failures.length > 0) throw failures[0];
-    return recovered;
+    // has been: one bad record must not hold up the rest.
+    const pass = await this.recoveryPass(abandonedOnly);
+    if (pass.failures.length > 0) throw pass.failures[0];
+    return pass.recovered;
   }
 
-  private repairRuns(abandonedOnly: boolean, failures: unknown[]): WorkflowRun[] {
+  private async recoveryPass(abandonedOnly: boolean) {
+    const taskFailures = new Map<string, unknown>();
+    const failures: unknown[] = [];
+    await this.tasks.recoverInterrupted(taskFailures).catch((error: unknown) => {
+      failures.push(error);
+    });
+    const runFailures = new Map<string, unknown>();
+    const recovered = this.repairRuns(abandonedOnly, taskFailures, runFailures);
+    failures.push(...taskFailures.values(), ...runFailures.values());
+    return { recovered, failures, runFailures };
+  }
+
+  /**
+   * Repairs each run under its lease. `runFailures` gets each run's own reason
+   * for not being repaired, including a task of its that could not be.
+   */
+  private repairRuns(
+    abandonedOnly: boolean,
+    taskFailures: ReadonlyMap<string, unknown>,
+    runFailures: Map<string, unknown>,
+  ): WorkflowRun[] {
     const at = Date.now();
     let runs = this.store.listWorkflowRuns(RECOVERABLE);
     if (abandonedOnly) {
@@ -535,7 +546,7 @@ export class WorkflowController {
       try {
         definition = this.loadDefinition(stored);
       } catch (error) {
-        failures.push(error);
+        runFailures.set(stored.id, error);
         continue;
       }
       const keys = new Set(
@@ -543,39 +554,47 @@ export class WorkflowController {
       );
       // Skipped runs keep any abandoned lease, which is how the sweep finds
       // them again once that task settles.
-      if (
-        allTasks.some(
-          (task) =>
-            task.idempotencyKey !== undefined &&
-            keys.has(task.idempotencyKey) &&
-            (task.status === "running" || task.status === "verifying"),
-        ) ||
-        !this.store.acquireWorkflowLease(
-          stored.id,
-          this.recoveryOwner,
-          new Date(at).toISOString(),
-          new Date(at + this.leaseDurationMs).toISOString(),
-        )
-      ) {
+      const unsettled = allTasks.find(
+        (task) =>
+          task.idempotencyKey !== undefined &&
+          keys.has(task.idempotencyKey) &&
+          (task.status === "running" || task.status === "verifying"),
+      );
+      if (unsettled !== undefined) {
+        if (taskFailures.has(unsettled.id)) runFailures.set(stored.id, taskFailures.get(unsettled.id));
         continue;
       }
+      const taken = this.store.takeWorkflowLease(
+        stored.id,
+        this.recoveryOwner,
+        new Date(at).toISOString(),
+        new Date(at + this.leaseDurationMs).toISOString(),
+      );
+      if (taken === "refused") continue;
       let repaired = false;
+      let failed = false;
       try {
         // Changed since the listing, by an advance or by an operator's pause,
-        // so the tasks read above may be stale: left for a later pass.
+        // so the tasks read above may be stale.
         if (this.store.getWorkflowRun(stored.id)?.stateVersion === stored.stateVersion) {
           recovered.push(this.recoverRun(stored, definition, allTasks));
           repaired = true;
         }
       } catch (error) {
-        failures.push(error);
+        failed = true;
+        runFailures.set(stored.id, error);
       } finally {
-        // Unless it was repaired, the run keeps its lease, expired rather than
-        // deleted: that lease is how the sweep and the next advance know it
-        // still needs repairing, and without it an advance would plan its
-        // tasks again. At worst a healthy run gets one more repair.
-        if (repaired) this.store.releaseWorkflowLease(stored.id, this.recoveryOwner);
-        else this.store.renewWorkflowLease(stored.id, this.recoveryOwner, new Date(0).toISOString());
+        // A run not repaired keeps a lease, expired rather than deleted, when
+        // it still needs one: its repair failed, or the lease it replaced was
+        // a dead advance's or an earlier repair's. That lease is how the sweep
+        // and the next advance know, and without it an advance would plan its
+        // tasks again. A lease this pass created replaced nothing: whoever
+        // held one last released it with the run left straight.
+        if (repaired || (!failed && taken === "created")) {
+          this.store.releaseWorkflowLease(stored.id, this.recoveryOwner);
+        } else {
+          this.store.renewWorkflowLease(stored.id, this.recoveryOwner, new Date(0).toISOString());
+        }
       }
     }
     return recovered;

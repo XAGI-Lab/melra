@@ -741,9 +741,13 @@ export class TaskController {
     return { task, receipt, certificate };
   }
 
-  async recoverInterrupted(): Promise<TaskRecord[]> {
+  /**
+   * With `failed`, each task that could not be recovered is recorded there by
+   * id instead of the first failure being thrown at the end.
+   */
+  async recoverInterrupted(failed?: Map<string, unknown>): Promise<TaskRecord[]> {
     const recovered: TaskRecord[] = [];
-    const failures: unknown[] = [];
+    const failures = failed ?? new Map<string, unknown>();
     for (const listed of this.store.listInterruptedTasks()) {
       // Only tasks whose owning process is gone, and only once: a live peer's
       // work is left to finish. This process's own rows are taken too when
@@ -758,12 +762,12 @@ export class TaskController {
       } catch (error) {
         // One task that cannot be recovered must not keep the rest waiting;
         // the failure is still reported once every task has had its turn.
-        failures.push(error);
+        failures.set(task.id, error);
       } finally {
         this.store.inFlight.delete(task.id);
       }
     }
-    if (failures.length > 0) throw failures[0];
+    if (failed === undefined && failures.size > 0) throw failures.values().next().value;
     return recovered;
   }
 

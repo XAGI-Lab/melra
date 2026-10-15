@@ -46,6 +46,10 @@ function spelling(name: string): string {
   return process.platform === "win32" ? lower.replace(/[. ]+$/, "") : lower;
 }
 
+function identity(entry: { dev: bigint; ino: bigint }): string {
+  return `${entry.dev}:${entry.ino}`;
+}
+
 async function sameEntry(left: string, right: string): Promise<boolean> {
   try {
     const [a, b] = await Promise.all([stat(left, { bigint: true }), stat(right, { bigint: true })]);
@@ -128,21 +132,27 @@ export class FileRuntime {
       }
       if (dirname(current) === current) break;
     }
-    // The same file under another name: a hard link, or macOS's
-    // /.vol/<dev>/<ino>. Inside a reserved directory, each file counts too.
-    const target = await stat(path, { bigint: true }).catch(() => undefined);
-    if (target === undefined || target.isDirectory()) return false;
+    // The same thing under another name: a hard link, or macOS's
+    // /.vol/<dev>/<ino>, which names a file or directory by its inode alone.
+    // So the target and each directory above it are compared by identity with
+    // every reserved entry and every file inside a reserved directory.
+    const identities = new Set<string>();
     for (const entry of this.reserved) {
       const found = await stat(entry, { bigint: true }).catch(() => undefined);
       if (found === undefined) continue;
-      const files = found.isDirectory()
-        ? (await readdir(entry).catch(() => [])).map((name) => join(entry, name))
-        : [entry];
-      for (const file of files) {
-        if (await sameEntry(file, path)) return true;
+      identities.add(identity(found));
+      if (!found.isDirectory()) continue;
+      for (const name of await readdir(entry).catch(() => [])) {
+        const file = await stat(join(entry, name), { bigint: true }).catch(() => undefined);
+        if (file !== undefined) identities.add(identity(file));
       }
     }
-    return false;
+    if (identities.size === 0) return false;
+    for (let current = resolve(path); ; current = dirname(current)) {
+      const found = await stat(current, { bigint: true }).catch(() => undefined);
+      if (found !== undefined && identities.has(identity(found))) return true;
+      if (dirname(current) === current) return false;
+    }
   }
 
   async execute(operation: FileOperation): Promise<Record<string, unknown>> {

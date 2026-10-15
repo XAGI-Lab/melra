@@ -11,7 +11,7 @@ import {
   type TaskRequest,
   type WorkflowRun,
 } from "@melra/protocol";
-import { createDefaultPolicy } from "@melra/policy-core";
+import { createDefaultPolicy, type LocalPolicy } from "@melra/policy-core";
 import { SqliteStore } from "@melra/storage-sqlite";
 import { Verifier, type EvidenceProbe } from "@melra/verifier-core";
 import { PayloadCipher } from "./payload-cipher.js";
@@ -58,13 +58,20 @@ async function side(
   at: { root: string; path: string },
   execute: () => Promise<Record<string, unknown>> = async () => ({ success: true, stored: true }),
   probe?: EvidenceProbe,
+  policy: Partial<LocalPolicy> = {},
 ) {
   const store = new SqliteStore(at.path);
   stores.push(store);
   const verifier = await Verifier.create(at.root, probe === undefined ? {} : { probe });
   const adapter = vi.fn(execute);
   const cipher = new PayloadCipher(Buffer.alloc(32, 41));
-  const tasks = new TaskController(store, createDefaultPolicy(at.root), { execute: adapter }, verifier, cipher);
+  const tasks = new TaskController(
+    store,
+    { ...createDefaultPolicy(at.root), ...policy },
+    { execute: adapter },
+    verifier,
+    cipher,
+  );
   return { store, verifier, adapter, tasks, workflows: new WorkflowController(store, tasks, cipher) };
 }
 
@@ -467,6 +474,41 @@ describe("workflow recovery across processes", () => {
   });
 
   it("keeps the lease when an operator pauses the run in the middle of its repair", async () => {
+    // Unsafe-local mode plans and runs a step in one advance, so a projection
+    // read from before the dead advance's task would plan that task again.
+    const at = await home();
+    const adapter = held();
+    const a = await side(at, adapter.execute, undefined, { unhinged: true });
+    const b = await side(at, undefined, undefined, { unhinged: true });
+    const run = a.workflows.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Ownership",
+        nodes: [{ id: "write", type: "operation", request: put("write") }],
+      }),
+    );
+    void a.workflows.advance(run.id).catch(() => undefined);
+    await adapter.entered.opened;
+    a.store.close();
+    expireLease(b.store, run.id);
+    // The pause lands after the pass listed the run and before it took the lease.
+    const take = b.store.takeWorkflowLease.bind(b.store);
+    vi.spyOn(b.store, "takeWorkflowLease").mockImplementationOnce((...args) => {
+      b.workflows.pause(run.id);
+      return take(...args);
+    });
+
+    expect(await b.workflows.recoverInterrupted({ abandonedOnly: true })).toEqual([]);
+    expect(b.store.getWorkflowLease(run.id)).toBeDefined();
+    b.workflows.resume(run.id);
+    const after = (await b.workflows.advance(run.id)).run;
+    expect(after.nodes.write?.status).toBe("recovery_required");
+    expect(b.adapter).not.toHaveBeenCalled();
+  });
+
+  it("leaves no lease on a run another process repaired while this one looked", async () => {
     const at = await home();
     const adapter = held();
     const a = await side(at, adapter.execute);
@@ -474,19 +516,53 @@ describe("workflow recovery across processes", () => {
     const { id } = await midFlight(a, adapter);
     a.store.close();
     expireLease(b.store, id);
-    // The pause lands after the pass listed the run and before it took the lease.
-    const acquire = b.store.acquireWorkflowLease.bind(b.store);
-    vi.spyOn(b.store, "acquireWorkflowLease").mockImplementationOnce((...args) => {
+    // Between this pass's listing and its lease, a peer repairs the run and
+    // releases: the run moves on and no lease is left.
+    const take = b.store.takeWorkflowLease.bind(b.store);
+    vi.spyOn(b.store, "takeWorkflowLease").mockImplementationOnce((...args) => {
       b.workflows.pause(id);
-      return acquire(...args);
+      b.workflows.resume(id);
+      b.store.database.prepare("DELETE FROM workflow_leases WHERE workflow_id = ?").run(id);
+      return take(...args);
     });
 
     expect(await b.workflows.recoverInterrupted({ abandonedOnly: true })).toEqual([]);
-    expect(b.store.getWorkflowLease(id)).toBeDefined();
-    b.workflows.resume(id);
-    const after = (await b.workflows.advance(id)).run;
-    expect(after.nodes.write?.status).toBe("recovery_required");
-    expect(b.adapter).not.toHaveBeenCalled();
+    // Marked again, peers would take turns repairing it on every sweep.
+    expect(b.store.getWorkflowLease(id)).toBeUndefined();
+  });
+
+  it("reports its own run's failure, not another's, when its repair fails", async () => {
+    const at = await home();
+    const adapter = held();
+    const a = await side(at, adapter.execute);
+    const b = await side(at);
+    const stuck = a.tasks.plan(put("stuck"));
+    void a.tasks.execute(stuck.id, approve(stuck)).catch(() => undefined);
+    await adapter.entered.opened;
+    const { id } = await midFlight(a, adapter);
+    a.store.close();
+    expireLease(b.store, id);
+    b.store.deleteTaskPayload(stuck.id);
+    vi.spyOn(b.store, "transitionWorkflow").mockImplementationOnce(() => {
+      throw new Error("this run's own repair failed");
+    });
+
+    await expect(b.workflows.advance(id)).rejects.toThrow("this run's own repair failed");
+    // The unrelated task still cannot be recovered; this run no longer cares.
+    expect((await b.workflows.advance(id)).run.nodes.write?.status).toBe("recovery_required");
+  });
+
+  it("reports why its own task cannot be recovered rather than calling it contention", async () => {
+    const at = await home();
+    const adapter = held();
+    const a = await side(at, adapter.execute);
+    const b = await side(at);
+    const { id } = await midFlight(a, adapter);
+    a.store.close();
+    expireLease(b.store, id);
+    b.store.deleteTaskPayload(b.workflows.status(id).nodes.write!.taskIds[0]!);
+
+    await expect(b.workflows.advance(id)).rejects.toThrow("task_payload_not_found");
   });
 
   it("reports why its own run's repair failed rather than calling it contention", async () => {
