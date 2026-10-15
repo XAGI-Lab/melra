@@ -124,7 +124,10 @@ describe("receipt and certificate primitives", () => {
       "--passphrase",
       R,
     ]);
-    expect(argv(["--header=Authorization: Basic dXNlcjpwYXNz"], "wget")[0]).not.toContain("dXNlcjpwYXNz");
+    // Built here, not written out: a literal Basic header in the source reads
+    // as a leaked credential to secret scanners.
+    const basic = Buffer.from("user:pass").toString("base64");
+    expect(argv([`--header=Authorization: Basic ${basic}`], "wget")[0]).not.toContain(basic);
     expect(argv(["redis://:hunter2@cache:6379/0"], "redis-cli")[0]).not.toContain("hunter2");
     // `-p...` is a password only after a mysql-family program.
     const find = [".", "-name", "*.log", "-print", "-path", "./x", "-prune", "-perm", "644"];
