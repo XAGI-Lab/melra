@@ -648,15 +648,22 @@ export class WorkflowController {
         // steps remain: a crash between a loop's iterations, or between a
         // branch's steps, recovered as complete with the rest never run.
         // Pending, so the next advance carries on from the tasks it has.
-        // A loop the projection already recorded as finished with these same
-        // tasks did finish: it stopped early on `until`. Reopened, `until`
-        // would be asked again of a world that has since moved on.
+        // Unless the projection recorded it finished in a way only the live
+        // path finishes one short: a loop stopped by `until` at a whole
+        // iteration, or a condition whose chosen branch is empty. Reopened,
+        // `until` or the condition would be asked again of a world that has
+        // moved on. Anything else recorded finished but short was written by
+        // a recovery that never downgraded (alpha.12), and is downgraded now.
         const recorded = replayed.nodes[node.id]!;
-        if (
-          state.status === "verified_complete" &&
-          !sequenceFinished(node, found) &&
-          !(recorded.status === "verified_complete" && canonicalJson(recorded.taskIds) === canonicalJson(state.taskIds))
-        ) {
+        const finishedShort =
+          recorded.status === "verified_complete" &&
+          canonicalJson(recorded.taskIds) === canonicalJson(state.taskIds) &&
+          ((node.type === "bounded_loop" &&
+            node.until !== undefined &&
+            state.taskIds.length > 0 &&
+            state.taskIds.length % node.body.length === 0) ||
+            (node.type === "condition" && state.taskIds.length === 0));
+        if (state.status === "verified_complete" && !sequenceFinished(node, found) && !finishedShort) {
           state = {
             status: "pending",
             taskIds: state.taskIds,
