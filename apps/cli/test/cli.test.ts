@@ -3,7 +3,7 @@
 
 import { execFile, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -497,6 +497,31 @@ describe("melra CLI", () => {
     expect(result.stdout.trim()).toBe(PRODUCT_VERSION);
   });
 
+  it("warns, or in enforced mode fails, when the workspace holds the data directory", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-cli-")));
+    roots.push(root);
+    const doctorWith = async (extra: Record<string, string>) => {
+      const result = await execute(process.execPath, [entry, "doctor"], {
+        cwd: root,
+        env: { ...process.env, MELRA_WORKSPACE: join(root, "ws"), MELRA_POLICY: "", ...extra },
+      }).catch((error: { stdout: string }) => error);
+      return JSON.parse(result.stdout) as { ready: boolean; checks: Array<{ name: string; status: string }> };
+    };
+    await mkdir(join(root, "ws"));
+    const data = (report: { checks: Array<{ name: string; status: string }> }) =>
+      report.checks.find((check) => check.name === "data-directory")?.status;
+    // Inside, spelled through a link: still inside.
+    await symlink(join(root, "ws"), join(root, "alias"));
+    const inside = await doctorWith({ MELRA_HOME: join(root, "alias", ".melra") });
+    expect(data(inside)).toBe("warn");
+    expect(inside.ready).toBe(true);
+    const enforced = await doctorWith({ MELRA_HOME: join(root, "ws", ".melra"), MELRA_MODE: "enforced" });
+    expect(data(enforced)).toBe("fail");
+    expect(enforced.ready).toBe(false);
+    // Beside the workspace, as the deploy examples lay it out.
+    expect(data(await doctorWith({ MELRA_HOME: join(root, "data") }))).toBe("pass");
+  });
+
   it("reports local readiness through doctor", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-cli-"));
     roots.push(root);
@@ -838,10 +863,12 @@ describe("melra CLI", () => {
   it("refuses to start in enforced mode with the local bypass", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-cli-"));
     roots.push(root);
+    // Data beside the workspace: enforced mode refuses it inside.
+    await mkdir(join(root, "ws"));
     const env = {
       ...process.env,
       MELRA_HOME: join(root, ".melra"),
-      MELRA_WORKSPACE: root,
+      MELRA_WORKSPACE: join(root, "ws"),
     };
     const enforced = await execute(process.execPath, [entry, "doctor"], {
       cwd: root,
