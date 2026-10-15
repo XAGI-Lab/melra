@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { MemoryScope, TaskRecord } from "./types.js";
@@ -383,16 +383,36 @@ export class SqliteStore {
     if (this.path === ":memory:") return (this.owner = { id }).id;
     const directory = `${this.path}-owners`;
     mkdirSync(directory, { recursive: true });
+    this.pruneOwners(directory);
     const file = join(directory, id);
     const lock = new DatabaseSync(file);
-    // ponytail: never open these files through node:fs in the holding process;
-    // POSIX drops all of a process's locks on an inode when any descriptor to
-    // it closes. SQLite itself defers those closes, so probes are safe.
+    // Never open these files through node:fs in the holding process: POSIX
+    // drops all of a process's locks on an inode when any descriptor to it
+    // closes. SQLite defers its own closes, so its probes are safe, and the
+    // server reserves this directory from its file adapters. The write is
+    // synced, so no row can name a file a power cut left unreadable.
     lock.exec(
-      "PRAGMA locking_mode = EXCLUSIVE; PRAGMA journal_mode = MEMORY; PRAGMA synchronous = OFF; PRAGMA user_version = 1",
+      "PRAGMA locking_mode = EXCLUSIVE; PRAGMA journal_mode = MEMORY; PRAGMA user_version = 1",
     );
     this.owner = { id, lock, file };
     return id;
+  }
+
+  /**
+   * Deletes lock files whose process is gone, which a crash or an exit without
+   * `close()` leaves behind. Only files older than a minute: a younger one may
+   * belong to a process that has created it and not yet locked it.
+   */
+  private pruneOwners(directory: string): void {
+    for (const name of readdirSync(directory)) {
+      const file = join(directory, name);
+      try {
+        if (Date.now() - statSync(file).mtimeMs < 60_000) continue;
+        if (!this.ownerAlive(name)) rmSync(file, { force: true });
+      } catch {
+        // Gone already, or still open in a peer's probe on Windows.
+      }
+    }
   }
 
   private ownerAlive(id: string): boolean {
@@ -418,12 +438,19 @@ export class SqliteStore {
    * Takes over a running or verifying task whose owner is gone, or returns
    * undefined. The compare-and-set on the owner means that of two recoverers
    * only one gets the task, and a live owner's task is never handed out.
+   * `own` also takes this store's own rows, for a caller that knows nothing in
+   * this process is still working on them.
    */
-  claimInterruptedTask(id: string): TaskRecord | undefined {
+  claimInterruptedTask(id: string, own = false): TaskRecord | undefined {
     const row = this.database
       .prepare("SELECT owner FROM tasks WHERE id = ?")
       .get(id) as { owner: string | null } | undefined;
-    if (row === undefined || (row.owner !== null && this.ownerAlive(row.owner))) {
+    if (
+      row === undefined ||
+      (row.owner !== null &&
+        !(own && row.owner === this.owner?.id) &&
+        this.ownerAlive(row.owner))
+    ) {
       return undefined;
     }
     const claimed = this.database

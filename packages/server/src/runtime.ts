@@ -264,9 +264,18 @@ export async function createMelraRuntime(
   const key = await loadPayloadKey({ dataDirectory, environment });
   const cipher = new PayloadCipher(key);
   const store = new SqliteStore(join(dataDirectory, "melra.sqlite"));
+  // What this process holds open or locked. A workspace can contain the data
+  // directory (`serve` started from home), and an adapter opening and closing
+  // one of these would drop this process's POSIX locks on it: SQLite's on the
+  // database, or the one other processes read this one's liveness from.
+  const reserved = [
+    ...["", "-wal", "-shm", "-journal", "-owners"].map((suffix) => `${store.path}${suffix}`),
+    join(dataDirectory, "payload.key"),
+  ];
   const files = await FileRuntime.create({
     root: runtimeRoot,
     maxFileBytes: policy.maxFileBytes,
+    reserved,
   });
   const terminal = await TerminalRuntime.create({ root: runtimeRoot });
   const browser = new BrowserRuntime({
@@ -324,6 +333,7 @@ export async function createMelraRuntime(
     http,
   );
   const verifier = await Verifier.create(runtimeRoot, {
+      reserved,
       ...(options.evidenceVerifiers === undefined ? {} : { verifiers: options.evidenceVerifiers }),
       // The same adapter the effects go through, so a verification request is
       // checked against the destination boundary, the allowlist, and the

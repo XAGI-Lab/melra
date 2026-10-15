@@ -92,6 +92,27 @@ describe("recovery between runtimes sharing a home", () => {
     expect(second.store.getTask(id)?.status).toBe("recovery_required");
   });
 
+  it("keeps its adapters off the files it holds locked", async () => {
+    // A data directory inside the workspace, as for `serve` started from home.
+    const root = await mkdtemp(join(tmpdir(), "melra-runtime-recovery-"));
+    roots.push(root);
+    const runtime = await createMelraRuntime({
+      workspaceRoot: root,
+      dataDirectory: join(root, ".melra"),
+      environment: {},
+    });
+    runtimes.push(runtime);
+    const owner = runtime.store.ownerId();
+    for (const path of [".melra/melra.sqlite", `.melra/melra.sqlite-owners/${owner}`, ".melra/payload.key"]) {
+      const planned = runtime.controller.plan(
+        TaskRequestSchema.parse({ goal: "Read", operation: { kind: "file", action: "read", path } }),
+      );
+      const { task } = await runtime.controller.execute(planned.id);
+      expect(task.status).toBe("failed");
+      expect(task.error).toContain("path_reserved");
+    }
+  });
+
   it("waits for a sweep in flight before closing the database under it", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-runtime-recovery-"));
     roots.push(root);

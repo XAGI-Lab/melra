@@ -2,10 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { once } from "node:events";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { TaskRequestSchema } from "@melra/protocol";
 import { SqliteStore, type TaskRecord } from "./index.js";
@@ -114,6 +115,39 @@ describe("task ownership", () => {
     expect(store.claimInterruptedTask("8d1f0f8e-6c1b-4f43-9f55-6c0a3e7d0a04")).toBeUndefined();
   });
 
+  it("takes back its own task only when asked to", () => {
+    const store = open(database());
+    const id = "8d1f0f8e-6c1b-4f43-9f55-6c0a3e7d0a07";
+    store.saveTask(task(id, "running"), store.ownerId());
+    expect(store.claimInterruptedTask(id)).toBeUndefined();
+    // The caller knows nothing in this process is still working on it.
+    expect(store.claimInterruptedTask(id, true)?.id).toBe(id);
+  });
+
+  it("clears out lock files their processes left, and only those", () => {
+    const path = database();
+    const directory = `${path}-owners`;
+    mkdirSync(directory, { recursive: true });
+    const write = (name: string) => {
+      const file = new DatabaseSync(join(directory, name));
+      file.exec("PRAGMA user_version = 1");
+      file.close();
+    };
+    const hourAgo = new Date(Date.now() - 3_600_000);
+    write("crashed");
+    utimesSync(join(directory, "crashed"), hourAgo, hourAgo);
+    // Possibly created a moment ago by a process about to lock it.
+    write("young");
+    const live = open(path);
+    const liveFile = join(directory, live.ownerId());
+    utimesSync(liveFile, hourAgo, hourAgo);
+
+    open(path).ownerId();
+    expect(existsSync(join(directory, "crashed"))).toBe(false);
+    expect(existsSync(join(directory, "young"))).toBe(true);
+    expect(existsSync(liveFile)).toBe(true);
+  });
+
   it("sees a killed process as gone", async () => {
     const path = database();
     const id = "8d1f0f8e-6c1b-4f43-9f55-6c0a3e7d0a05";
@@ -143,8 +177,14 @@ describe("task ownership", () => {
 
       child.kill("SIGKILL");
       await once(child, "exit");
-      // No clock, heartbeat or PID: the kernel released the lock with the process.
-      expect(survivor.claimInterruptedTask(id)?.id).toBe(id);
+      // No clock, heartbeat or PID: the kernel releases the lock with the
+      // process. Windows may take a moment after TerminateProcess to do so.
+      let claimed = survivor.claimInterruptedTask(id);
+      for (let attempt = 0; claimed === undefined && attempt < 50; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        claimed = survivor.claimInterruptedTask(id);
+      }
+      expect(claimed?.id).toBe(id);
     } finally {
       child.kill("SIGKILL");
     }

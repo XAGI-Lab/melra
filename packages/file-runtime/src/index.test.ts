@@ -82,6 +82,39 @@ describe("FileRuntime", () => {
     expect((await readdir(root)).filter((name) => name.includes(".melra-"))).toEqual([]);
   });
 
+  it("keeps every operation away from the files MELRA holds locked", async () => {
+    // `serve` started from home has the data directory inside its workspace.
+    // Opening and closing one of these in the server's process would drop its
+    // POSIX locks on it, so even a read is refused.
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-file-")));
+    roots.push(root);
+    const data = join(root, ".melra");
+    await mkdir(join(data, "melra.sqlite-owners"), { recursive: true });
+    await writeFile(join(data, "melra.sqlite"), "db");
+    await writeFile(join(data, "melra.sqlite-owners", "owner"), "lock");
+    await writeFile(join(data, "notes.txt"), "fine");
+    await symlink(data, join(root, "alias"));
+    const runtime = await FileRuntime.create({
+      root,
+      reserved: [join(data, "melra.sqlite"), join(data, "melra.sqlite-owners")],
+    });
+    const run = (operation: Record<string, unknown>) =>
+      runtime.execute(FileOperationSchema.parse({ kind: "file", ...operation }));
+    for (const operation of [
+      { action: "read", path: ".melra/melra.sqlite" },
+      { action: "hash", path: ".melra/melra.sqlite-owners/owner" },
+      { action: "read", path: "alias/melra.sqlite" },
+      { action: "write", path: ".melra/melra.sqlite-owners/new", content: "x" },
+      { action: "move", path: ".melra/notes.txt", destination: ".melra/melra.sqlite" },
+      { action: "delete", path: ".melra/melra.sqlite-owners", recursive: true },
+    ]) {
+      await expect(run(operation)).rejects.toThrow("path_reserved");
+    }
+    expect(await readFile(join(data, "melra.sqlite"), "utf8")).toBe("db");
+    // The rest of the data directory is still an ordinary place.
+    expect((await run({ action: "read", path: ".melra/notes.txt" })).content).toBe("fine");
+  });
+
   it("blocks traversal and escaping symlinks", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-file-"));
     const outside = await mkdtemp(join(tmpdir(), "melra-outside-"));

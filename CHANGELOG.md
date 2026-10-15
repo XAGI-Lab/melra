@@ -149,6 +149,12 @@ All notable changes are documented here. The format follows
   left behind when it died, and an advance that finds an expired lease
   recovers the run before taking it over instead of planning its tasks again.
   Every process sharing a home must be upgraded together.
+- The file runtime and the verifier refuse MELRA's own database files, its
+  lock directory and `payload.key`, even when the workspace contains the data
+  directory (as it does for `serve` started from the home directory, or in
+  unsafe-local mode). A low-risk `file read` with no approval could read the
+  payload key. Opening and closing the database in the server process also
+  dropped its own SQLite locks on it.
 - On Windows, a differently cased spelling of the workspace (`..\\WS` for
   `ws`) is recognised as the workspace root, which file operations never
   touch. The check compared strings while the containment check ignored

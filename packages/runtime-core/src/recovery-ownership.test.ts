@@ -215,6 +215,46 @@ describe("task recovery across processes", () => {
   });
 });
 
+describe("task recovery that does not finish", () => {
+  it("retries a task whose recovery failed after claiming it", async () => {
+    const at = await home();
+    const adapter = held();
+    const a = await side(at, adapter.execute);
+    const b = await side(at);
+    const task = a.tasks.plan(put("ledger"));
+    void a.tasks.execute(task.id, approve(task)).catch(() => undefined);
+    await adapter.entered.opened;
+    a.store.close();
+
+    vi.spyOn(b.store, "saveTask").mockImplementationOnce(() => {
+      throw new Error("database is locked");
+    });
+    await expect(b.tasks.recoverInterrupted()).rejects.toThrow("database is locked");
+    // Claimed by a live process, so no peer may take it: this one has to.
+    expect(b.store.getTask(task.id)?.status).toBe("running");
+    const [recovered] = await b.tasks.recoverInterrupted();
+    expect(recovered).toMatchObject({ id: task.id, status: "recovery_required" });
+  });
+
+  it("recovers its own task whose last writes failed, without a restart", async () => {
+    const at = await home();
+    const a = await side(at);
+    const b = await side(at);
+    const task = a.tasks.plan(put("ledger"));
+    const receipts = vi.spyOn(a.store, "saveReceipt").mockImplementation(() => {
+      throw new Error("disk full");
+    });
+    await expect(a.tasks.execute(task.id, approve(task))).rejects.toThrow("disk full");
+    receipts.mockRestore();
+    expect(["running", "verifying"]).toContain(a.store.getTask(task.id)?.status);
+
+    // A live process owns it, so a peer leaves it; the owner does not.
+    expect(await b.tasks.recoverInterrupted()).toEqual([]);
+    const [recovered] = await a.tasks.recoverInterrupted();
+    expect(recovered).toMatchObject({ id: task.id, status: "recovery_required" });
+  });
+});
+
 const definitionId = "33333333-3333-4333-8333-333333333333";
 
 const put = (key: string): TaskRequest =>
@@ -290,6 +330,59 @@ describe("workflow recovery across processes", () => {
     expect((await advancing).run.status).toBe("verified_complete");
   });
 
+  it("leaves a run this process is still advancing even once its lease lapsed", async () => {
+    const at = await home();
+    const a = await side(at);
+    const done = gate();
+    const release = gate();
+    // The task has finished; the advance has not, as across a laptop's sleep.
+    const execute = a.tasks.execute.bind(a.tasks);
+    vi.spyOn(a.tasks, "execute").mockImplementationOnce(async (...args) => {
+      const result = await execute(...args);
+      done.open();
+      await release.opened;
+      return result;
+    });
+    const run = a.workflows.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Ownership",
+        nodes: [{ id: "write", type: "operation", request: put("write") }],
+      }),
+    );
+    const waiting = (await a.workflows.advance(run.id)).run;
+    const advancing = a.workflows.advance(run.id, approvalsFor(waiting));
+    await done.opened;
+    expireLease(a.store, run.id);
+    const before = footprint(a.store, run.id);
+
+    expect(await a.workflows.recoverInterrupted({ abandonedOnly: true })).toEqual([]);
+    expect(footprint(a.store, run.id)).toEqual(before);
+    release.open();
+    expect((await advancing).run.status).toBe("verified_complete");
+  });
+
+  it("refuses a halted run without disturbing the lease a dead advance left", async () => {
+    const at = await home();
+    const adapter = held();
+    const a = await side(at, adapter.execute);
+    const b = await side(at);
+    const { id } = await midFlight(a, adapter);
+    a.store.close();
+    expireLease(b.store, id);
+    b.workflows.pause(id);
+
+    await expect(b.workflows.advance(id)).rejects.toThrow("workflow_halted:paused");
+    expect(b.store.getWorkflowLease(id)).toBeDefined();
+    b.workflows.resume(id);
+    const after = (await b.workflows.advance(id)).run;
+    expect(after.nodes.write?.status).toBe("recovery_required");
+    expect(a.adapter).toHaveBeenCalledTimes(1);
+    expect(b.adapter).not.toHaveBeenCalled();
+  });
+
   it("waits out a lapsed lease while its task still runs, then recovers before advancing", async () => {
     const at = await home();
     const adapter = held();
@@ -308,11 +401,9 @@ describe("workflow recovery across processes", () => {
     // A dies. Taking its lease over would read a projection from before its
     // task and plan that task again; the run is recovered first instead.
     a.store.close();
-    const after = await b.workflows.advance(id).then(
-      (result) => result.run,
-      () => b.workflows.status(id),
-    );
+    const after = (await b.workflows.advance(id)).run;
     expect(after.nodes.write?.status).toBe("recovery_required");
+    expect(b.store.getWorkflowLease(id)).toBeUndefined();
     expect(a.adapter).toHaveBeenCalledTimes(1);
     expect(b.adapter).not.toHaveBeenCalled();
   });

@@ -75,6 +75,9 @@ export class WorkflowController {
   // Distinct from `owner`, so this process's own advance in flight also keeps
   // its recovery away from the run.
   private readonly recoveryOwner = `${this.owner}:recovery`;
+  // Runs an advance in this process holds the lease for. Recovery leaves them
+  // alone even once the lease has lapsed, say across a laptop's sleep.
+  private readonly leased = new Set<string>();
 
   constructor(
     private readonly store: SqliteStore,
@@ -190,6 +193,12 @@ export class WorkflowController {
     inputs: WorkflowInput[],
   ): Promise<WorkflowAdvanceResult> {
     const current = this.status(workflowId);
+    // Refused before the lease is touched: taking it would replace, and the
+    // release then delete, an expired lease a dead advance left, which is the
+    // only sign the run still needs recovering once it is resumed.
+    if (["paused", "suspended"].includes(current.status)) {
+      throw new Error(`workflow_halted:${current.status}`);
+    }
     // An expired lease someone else holds is an advance that died mid-flight.
     // Taking it over would read a projection from before that advance's tasks
     // and plan them again under keys that were never committed, so the run is
@@ -229,9 +238,11 @@ export class WorkflowController {
       );
     }, Math.max(1_000, Math.floor(this.leaseDurationMs / 2)));
     renewal.unref();
+    this.leased.add(workflowId);
     try {
       return await this.advanceOnce(workflowId, approvals, inputs);
     } finally {
+      this.leased.delete(workflowId);
       clearInterval(renewal);
       this.store.releaseWorkflowLease(workflowId, this.owner);
     }
@@ -499,6 +510,7 @@ export class WorkflowController {
     const recovered: WorkflowRun[] = [];
     const allTasks = this.store.listTasks(100_000);
     for (const stored of runs) {
+      if (this.leased.has(stored.id)) continue;
       const definition = this.loadDefinition(stored);
       const keys = new Set(
         definition.nodes.flatMap((node) => expectedTaskKeys(stored.id, node, definition)),

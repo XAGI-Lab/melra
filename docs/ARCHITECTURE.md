@@ -307,7 +307,14 @@ a workflow run only under that run's lease and only once none of its tasks is
 still running. A running runtime sweeps every 30 seconds for work left by a
 process that died after it started. An advance that finds an expired lease
 recovers the run before taking it over, so it never plans again a task the dead
-advance already started.
+advance already started. A process also retakes its own task when nothing in it
+is still working on that task, for example after the task's last write failed.
+The next process to take a lock removes the lock files that dead processes left.
+
+The file runtime and the verifier refuse MELRA's own database files, the lock
+directory, and `payload.key`, even when the workspace contains the data
+directory. On POSIX, opening and closing one of those files in the server
+process would drop that process's locks on it.
 
 ## Public interfaces
 

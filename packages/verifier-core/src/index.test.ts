@@ -67,6 +67,19 @@ describe("Verifier", () => {
     );
   });
 
+  it("does not open a file MELRA holds locked", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-verifier-"));
+    roots.push(root);
+    await writeFile(join(root, "melra.sqlite"), "db");
+    const verifier = await Verifier.create(root, { reserved: [join(root, "melra.sqlite")] });
+    const hashed = await verifier.verify(
+      [{ type: "file_hash", path: "melra.sqlite", sha256: "0".repeat(64) }],
+      {},
+    );
+    expect(hashed.verified).toBe(false);
+    expect(hashed.evidence[0]?.summary).toBe("verification_path_reserved");
+  });
+
   it("stamps each item with how it was established", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-verifier-"));
     roots.push(root);

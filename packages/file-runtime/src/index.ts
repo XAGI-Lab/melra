@@ -13,13 +13,19 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { FileOperation } from "@melra/protocol";
 
 export interface FileRuntimeOptions {
   root: string;
   maxFileBytes?: number;
   maxEntries?: number;
+  /**
+   * Files and directories no operation may reach, even inside the root: the
+   * ones MELRA itself holds open or locked. Opening and closing one of those in
+   * this process would drop this process's POSIX locks on it.
+   */
+  reserved?: string[];
 }
 
 function inside(root: string, candidate: string): boolean {
@@ -31,9 +37,11 @@ export class FileRuntime {
   readonly root: string;
   readonly maxFileBytes: number;
   readonly maxEntries: number;
+  private readonly reserved: string[];
 
-  private constructor(options: FileRuntimeOptions, root: string) {
+  private constructor(options: FileRuntimeOptions, root: string, reserved: string[]) {
     this.root = root;
+    this.reserved = reserved;
     this.maxFileBytes = options.maxFileBytes ?? 10 * 1024 * 1024;
     this.maxEntries = options.maxEntries ?? 1_000;
   }
@@ -48,7 +56,14 @@ export class FileRuntime {
       () => false,
     );
     if (!exists) await mkdir(options.root, { recursive: true });
-    return new FileRuntime(options, await realpath(options.root));
+    // Through the real parent, so a data directory reached by a symlink is
+    // still recognised; the files themselves may not exist yet.
+    const reserved = await Promise.all(
+      (options.reserved ?? []).map(async (path) =>
+        join(await realpath(dirname(path)).catch(() => resolve(dirname(path))), basename(path)),
+      ),
+    );
+    return new FileRuntime(options, await realpath(options.root), reserved);
   }
 
   async resolvePath(input: string, allowRoot = false): Promise<string> {
@@ -61,12 +76,14 @@ export class FileRuntime {
     }
 
     let probe = lexical;
+    let real = lexical;
     while (true) {
       try {
         const actual = await realpath(probe);
         if (!inside(this.root, actual)) {
           throw new Error("path_outside_workspace");
         }
+        real = join(actual, relative(probe, lexical));
         break;
       } catch (error) {
         if (error instanceof Error && error.message === "path_outside_workspace") {
@@ -77,6 +94,7 @@ export class FileRuntime {
         probe = parent;
       }
     }
+    if (this.reserved.some((path) => inside(path, real))) throw new Error("path_reserved");
     return lexical;
   }
 
