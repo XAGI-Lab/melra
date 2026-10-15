@@ -36,6 +36,36 @@ function mappedIpv4Address(address: string): string | undefined {
   ].join(".");
 }
 
+/** The eight 16-bit groups of an IPv6 address, an embedded IPv4 tail included. */
+function ipv6Groups(address: string): number[] | undefined {
+  let text = address.toLowerCase();
+  const tail = /(\d+\.\d+\.\d+\.\d+)$/.exec(text)?.[1];
+  if (tail !== undefined) {
+    const [a, b, c, d] = tail.split(".").map(Number) as [number, number, number, number];
+    text = `${text.slice(0, -tail.length)}${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
+  }
+  const [head = "", rest] = text.split("::");
+  const left = head === "" ? [] : head.split(":");
+  const right = rest === undefined || rest === "" ? [] : rest.split(":");
+  const missing = 8 - left.length - right.length;
+  if (missing < 0 || (rest === undefined && missing !== 0)) return undefined;
+  return [...left, ...Array<string>(missing).fill("0"), ...right].map((group) => Number.parseInt(group, 16));
+}
+
+/**
+ * The IPv4 address a NAT64 address stands for, or whether it is a local-use
+ * translation (RFC 8215 `64:ff9b:1::/48`), which only ever reaches a private
+ * network. `64:ff9b::a00:5` is 10.0.0.5 on a host behind NAT64.
+ */
+function nat64(address: string): { ipv4?: string; localUse: boolean } | undefined {
+  const groups = ipv6Groups(address);
+  if (groups === undefined || groups[0] !== 0x64 || groups[1] !== 0xff9b) return undefined;
+  if (groups[2] === 1) return { localUse: true };
+  if (groups.slice(2, 6).some((group) => group !== 0)) return undefined;
+  const [high, low] = [groups[6]!, groups[7]!];
+  return { ipv4: [high >>> 8, high & 0xff, low >>> 8, low & 0xff].join("."), localUse: false };
+}
+
 export function isPrivateAddress(address: string): boolean {
   const version = isIP(address);
   if (version === 4) {
@@ -57,6 +87,10 @@ export function isPrivateAddress(address: string): boolean {
     const normalized = address.toLowerCase();
     const mapped = mappedIpv4Address(normalized);
     if (mapped !== undefined) return isPrivateAddress(mapped);
+    const translated = nat64(normalized);
+    if (translated !== undefined) {
+      return translated.localUse || isPrivateAddress(translated.ipv4!);
+    }
     return (
       normalized === "::" ||
       normalized === "::1" ||

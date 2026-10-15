@@ -116,6 +116,33 @@ All notable changes are documented here. The format follows
   `..` (even `%2E%2E`), so a response with `{"id": ".."}` moved the probe up
   one level and verified some other resource.
 
+- Browser actions take turns. One runtime serves every task, and actions
+  that arrived together (a parallel workflow node, two `melra_execute` calls)
+  shared one cancel signal, timeout and "input sent" flag: a click that
+  landed was reported as a plain failure, and one task's cancel stopped
+  another's action.
+- A dialog or popup a page raises after the action that caused it has
+  returned is reported by the next action, marked `betweenActions`, instead
+  of being accepted and dropped.
+- Typing that runs out of time after some keys reached the page is an
+  unknown outcome rather than a failure that invites typing it again.
+- A browser that relaunched after a crash or a failed start no longer leaves
+  its previous pinning proxy listening.
+- A computer `drag` to a named `target` requires its destination in pixels.
+  A normalized destination was read as pixels, so the drop landed at the
+  corner of the screen.
+
+- With an attached CDP browser, a page or frame that a redirect took to an
+  address the destination guard refuses is blanked and not read back, and
+  WebSocket connections are checked. Chromium follows redirect hops without
+  showing them to the guard, and there is no pinning proxy in that mode, so
+  an allowed page redirecting to `169.254.169.254` or a LAN address returned
+  its content. The request itself still reaches the address; the threat model
+  says so.
+- NAT64 addresses (`64:ff9b::/96`, and the local-use `64:ff9b:1::/48`) are
+  checked as the IPv4 address they translate to, so `64:ff9b::a00:5` is
+  10.0.0.5 and refused like it.
+
 - A metered grant cannot be overdrawn by tasks running at once. Its draw was
   recorded only after the work verified, so two tasks re-checked against the
   same unspent grant: two operations against `maxOperations: 1`, a parallel

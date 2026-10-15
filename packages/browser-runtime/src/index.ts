@@ -281,13 +281,20 @@ export class BrowserRuntime {
   private proxy: PinningProxy | undefined;
   private routeHandler: ((route: Route) => Promise<void>) | undefined;
   /**
-   * Dialogs raised by the action currently running, cleared by `execute`.
+   * Dialogs raised since the last action reported, emptied when one does.
    *
    * One buffer on the runtime rather than one per page because the handler is
-   * registered on the context, and because operations execute one at a time —
-   * a task owns its runtime for the length of one action.
+   * registered on the context, and because operations execute one at a time:
+   * `execute` queues them, so a task owns its runtime for one action. A dialog
+   * a page raised between actions is reported by the next one, marked
+   * `betweenActions`, rather than dropped: the transfer a late `confirm()`
+   * gated still went ahead, and the caller has to hear that it was asked.
    */
   private dialogs: Record<string, unknown>[] = [];
+  /** Whether an action is running, so a dialog or popup can say when it came. */
+  private acting = false;
+  /** The tail of the action queue; see `execute`. */
+  private queue: Promise<unknown> = Promise.resolve();
   /**
    * Windows the page opened during the action currently running, same lifetime
    * as `dialogs` and reported the same way.
@@ -399,6 +406,10 @@ export class BrowserRuntime {
     // start proxying, so the rebinding window stays open there and the option is
     // documented as the weaker path rather than silently equivalent. A replay
     // opens no sockets at all, so there is nothing to pin.
+    // A context that closed (a crash, a closed window) or failed to start left
+    // its proxy listening; a relaunch must not start a second one beside it.
+    await this.proxy?.close().catch(() => undefined);
+    this.proxy = undefined;
     const proxy =
       this.options.unhinged === true ||
       this.options.cdpEndpoint !== undefined ||
@@ -451,6 +462,26 @@ export class BrowserRuntime {
         "route",
         SETUP_TIMEOUT_MS,
       );
+      if (this.options.cdpEndpoint !== undefined && this.options.unhinged !== true) {
+        // `route` never sees a WebSocket, so page script could open one to
+        // any address. With a pinning proxy the proxy refuses it; an attached
+        // browser has none, so the guard runs here.
+        await this.call(
+          this.context.routeWebSocket(
+            () => true,
+            async (socket) => {
+              try {
+                await assertSafeUrl(socket.url().replace(/^ws/i, "http"), this.options);
+                socket.connectToServer();
+              } catch {
+                await socket.close({ code: 1008, reason: "destination blocked" });
+              }
+            },
+          ),
+          "route_websocket",
+          SETUP_TIMEOUT_MS,
+        );
+      }
       if (this.options.replayHarPath !== undefined) {
         // Registered after the destination guard so it runs first: a replayed
         // request is served from the file and never becomes a socket, and
@@ -501,6 +532,7 @@ export class BrowserRuntime {
           ...(dialog.type() === "prompt"
             ? { defaultValue: dialog.defaultValue() }
             : {}),
+          ...(this.acting ? {} : { betweenActions: true }),
         });
       }
       // The page stays blocked until this settles, and a dialog belonging to a
@@ -533,7 +565,11 @@ export class BrowserRuntime {
       // not a judgement — that stays on, like every other receipt.
       const allowed = this.options.popups === "allow" || this.options.unhinged === true;
       if (this.popups.length < MAX_POPUPS) {
-        this.popups.push({ url: opened.url(), blocked: !allowed });
+        this.popups.push({
+          url: opened.url(),
+          blocked: !allowed,
+          ...(this.acting ? {} : { betweenActions: true }),
+        });
       }
       if (allowed) return;
       // A popup that closed on its own, or whose opener navigated away first,
@@ -836,6 +872,11 @@ export class BrowserRuntime {
       await field.fill("", { timeout: operation.timeoutMs });
       this.dispatched = true;
     }
+    // Found first, then counted as sent before the first key: typing is one
+    // key per round trip, so a deadline can land after some keys (an Enter
+    // among them) reached the page, and that is not "nothing happened".
+    await field.waitFor({ state: "visible", timeout: operation.timeoutMs });
+    this.dispatched = true;
     await field.pressSequentially(value, {
       delay: operation.delayMs,
       timeout: operation.timeoutMs,
@@ -843,8 +884,38 @@ export class BrowserRuntime {
     this.dispatched = true;
   }
 
+  /**
+   * An attached CDP browser has no pinning proxy, and Chromium follows a
+   * redirect without showing the hop to the route guard, so an allowed page
+   * that redirects to 169.254.169.254 or a LAN address loads there. The request
+   * cannot be stopped from here; what can be is reading it back. A page whose
+   * address the guard refuses is blanked and the action fails, and a frame
+   * the guard refuses is left out.
+   */
+  private async refusedFrames(page: Page, frames: Frame[]): Promise<Set<Frame>> {
+    const refused = new Set<Frame>();
+    if (this.options.cdpEndpoint === undefined || this.options.unhinged === true) return refused;
+    for (const frame of frames) {
+      const url = frame.url();
+      if (!/^https?:/i.test(url)) continue;
+      try {
+        await assertSafeUrl(url, this.options);
+      } catch (error) {
+        if (frame !== page.mainFrame()) {
+          refused.add(frame);
+          continue;
+        }
+        await page.goto("about:blank").catch(() => undefined);
+        throw error;
+      }
+    }
+    return refused;
+  }
+
   private async snapshot(page: Page, maxChars: number): Promise<Record<string, unknown>> {
-    const frames = this.frames(page);
+    const all = this.frames(page);
+    const refused = await this.refusedFrames(page, all);
+    const frames = all.filter((frame) => !refused.has(frame));
     const collected = await Promise.all(
       frames.map(async (frame, index) => {
         try {
@@ -936,20 +1007,36 @@ export class BrowserRuntime {
     };
   }
 
+  /**
+   * One action at a time, in arrival order. A single runtime serves every task,
+   * and a parallel workflow node or two concurrent MCP calls used to run here
+   * at once: the second reset the first's cancel signal, timeout and
+   * `dispatched` flag mid-flight, so a click that landed was reported as a
+   * plain failure, and one task's cancel stopped another's action.
+   */
   async execute(
     operation: BrowserOperation,
     signal?: AbortSignal,
   ): Promise<Record<string, unknown>> {
+    const turn = this.queue.then(() => this.executeOne(operation, signal));
+    this.queue = turn.catch(() => undefined);
+    return await turn;
+  }
+
+  private async executeOne(
+    operation: BrowserOperation,
+    signal?: AbortSignal,
+  ): Promise<Record<string, unknown>> {
+    if (signal?.aborted === true) throw new Error("task_cancelled");
     // Every branch reports `success: true` on the way out, because a caller who
     // declared no evidence is held to exactly that field: policy derives
     // `result_equals success true` for browser mutations, and a result without
     // it verified as `partial` no matter how well the action went. Failures
     // throw, so reaching a return is what success means here.
-    this.dialogs = [];
-    this.popups = [];
     this.signal = signal;
     this.callMs = operation.timeoutMs;
     this.dispatched = false;
+    this.acting = true;
     try {
       const ran = await this.run(operation);
       await this.awaitOpenedWindows(operation.timeoutMs);
@@ -958,12 +1045,14 @@ export class BrowserRuntime {
       // action from seeing a tab this one already reported as closed.
       await this.call(Promise.all(this.closing.splice(0)), "close_popup");
       const result = { success: true, ...ran };
+      const dialogs = this.dialogs.splice(0);
+      const popups = this.popups.splice(0);
       // Only present when the page actually asked something, so a caller can
       // test for the field rather than for an empty array.
       return {
         ...result,
-        ...(this.dialogs.length === 0 ? {} : { dialogs: this.dialogs }),
-        ...(this.popups.length === 0 ? {} : { popups: this.popups }),
+        ...(dialogs.length === 0 ? {} : { dialogs }),
+        ...(popups.length === 0 ? {} : { popups }),
       };
     } catch (error) {
       // Only mutations ever set `dispatched`, and only once their effect call
@@ -979,6 +1068,8 @@ export class BrowserRuntime {
       if (error instanceof Error) error.message = withoutColour(error.message);
       if (!this.dispatched && !inputSent(error)) throw error;
       throw outcomeUnknown(error instanceof Error ? error.message : String(error));
+    } finally {
+      this.acting = false;
     }
   }
 

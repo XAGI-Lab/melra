@@ -299,6 +299,22 @@ describe("named targets", () => {
     expect(result.element).toEqual(BUTTON("Save", 300));
   });
 
+  it("drags a named element only to a destination given in pixels", async () => {
+    const adapter = new TestAdapter();
+    adapter.elements = [BUTTON("report.pdf", 300)];
+    const runtime = new ComputerRuntime({ artifactDirectory: "/tmp", adapter });
+    const drag = (extra: Record<string, unknown>) =>
+      ComputerOperationSchema.parse({ kind: "computer", action: "drag", target: { name: "report.pdf" }, ...extra });
+    // 0.8 of the screen used to arrive as 0.8 pixels: a drop at the corner.
+    await expect(runtime.execute(drag({ toX: 0.8, toY: 0.5 }))).rejects.toThrow(
+      "computer_target_drag_requires_pixel_destination",
+    );
+    expect(adapter.calls).not.toContain("drag");
+    await runtime.execute(drag({ coordinateSpace: "pixel", toX: 900, toY: 400 }));
+    const acted = adapter.operations.at(-1)!;
+    expect([acted.coordinateSpace, acted.x, acted.y, acted.toX, acted.toY]).toEqual(["pixel", 340, 50, 900, 400]);
+  });
+
   it("refuses a target the platform or the request cannot support", async () => {
     const adapter = new TestAdapter();
     const runtime = new ComputerRuntime({ artifactDirectory: "/tmp", adapter });
