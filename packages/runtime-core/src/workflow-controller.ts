@@ -687,8 +687,18 @@ export class WorkflowController {
       }
       const from = draft.status;
       draft.status = status;
+      // Named the way advanceOnce names a stalled unwind, so a run reads the
+      // same whether its process died or not.
+      const stalled = definition.nodes.find(
+        (node) =>
+          node.type === "compensation" &&
+          ["failed", "recovery_required"].includes(draft.nodes[node.id]?.status ?? ""),
+      );
       if (status === "recovery_required") {
-        draft.error = "workflow_contains_unreconciled_mutation";
+        draft.error =
+          stalled === undefined
+            ? "workflow_contains_unreconciled_mutation"
+            : `workflow_compensation_incomplete:${stalled.id}`;
       } else {
         delete draft.error;
       }
@@ -1548,6 +1558,25 @@ function recoveredNodeState(
   const taskIds = tasks.map((task) => task.id);
   const withStatus = (status: TaskRecord["status"]) =>
     tasks.find((task) => task.status === status);
+  // Ranked as aggregateNodeState ranks a live node, failed first. A parallel
+  // node with one failed branch and one awaiting approval was failed live and
+  // came back from recovery awaiting approval, reopening the waiting branch on
+  // a run whose rollback had begun.
+  const failed = tasks.find((task) =>
+    [
+      "failed",
+      "partial",
+      "budget_exhausted",
+      "policy_blocked",
+    ].includes(task.status),
+  );
+  if (failed !== undefined) {
+    return {
+      status: "failed",
+      taskIds,
+      ...(failed.error === undefined ? {} : { error: failed.error }),
+    };
+  }
   const recovery = withStatus("recovery_required");
   if (recovery !== undefined) {
     return {
@@ -1564,21 +1593,6 @@ function recoveredNodeState(
       ...(awaiting.approval === undefined
         ? {}
         : { approval: awaiting.approval }),
-    };
-  }
-  const failed = tasks.find((task) =>
-    [
-      "failed",
-      "partial",
-      "budget_exhausted",
-      "policy_blocked",
-    ].includes(task.status),
-  );
-  if (failed !== undefined) {
-    return {
-      status: "failed",
-      taskIds,
-      ...(failed.error === undefined ? {} : { error: failed.error }),
     };
   }
   if (tasks.some((task) => task.status === "planned")) {

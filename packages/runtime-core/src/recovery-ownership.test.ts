@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   TaskRequestSchema,
+  outcomeUnknown,
   WorkflowDefinitionSchema,
   type Operation,
   type TaskRequest,
@@ -709,7 +710,8 @@ describe("workflow recovery across processes", () => {
       .prepare("INSERT INTO workflow_leases(workflow_id, owner, acquired_at, expires_at) VALUES (?, ?, ?, ?)")
       .run(run.id, "dead", new Date(0).toISOString(), new Date(Date.now() - 1_000).toISOString());
     const b = await side(at, execute);
-    await b.workflows.recoverInterrupted({ abandonedOnly: true });
+    const swept = await b.workflows.recoverInterrupted({ abandonedOnly: true });
+    expect(swept.map((repairedRun) => repairedRun.id)).toEqual([run.id]);
     const repaired = b.workflows.status(run.id);
     expect(repaired.status).toBe("failed");
     expect(repaired.nodes.p?.status).toBe("failed");
@@ -717,6 +719,54 @@ describe("workflow recovery across processes", () => {
     const after = (await b.workflows.advance(run.id, approvalsFor(repaired))).run;
     expect(after.nodes["undo-q"]?.status).toBe("compensated");
     expect(b.adapter.mock.calls.map(([operation]) => (operation as { key?: string }).key)).toEqual(["undo-q"]);
+  });
+
+  it("does not reopen a failed branch's sibling when a restart repairs a stalled unwind", async () => {
+    // p fails while its other branch waits for approval, so the run fails and
+    // unwinds. The compensation's outcome is unknown, so it parks and stalls
+    // the unwind. A restart then repairs the run, and p must stay failed: the
+    // waiting branch is part of a saga already being undone.
+    const at = await home();
+    const execute = async (operation?: Operation) => {
+      if (operation?.kind === "http") throw outcomeUnknown("socket hang up");
+      if (operation?.kind === "memory" && operation.action === "search") {
+        return { success: true, found: false };
+      }
+      return { success: true, stored: true };
+    };
+    const a = await side(at, execute);
+    const look = TaskRequestSchema.parse({
+      goal: "Find x",
+      operation: { kind: "memory", action: "search", query: "x" },
+      requiredEvidence: [{ type: "result_equals", path: "found", value: true }],
+    });
+    const run = a.workflows.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Stalled",
+        nodes: [
+          { id: "q", type: "operation", request: put("q") },
+          { id: "p", type: "parallel", dependsOn: ["q"], branches: [[look], [put("p2")]] },
+          { id: "undo-q", type: "compensation", forNodeId: "q", request: charge() },
+        ],
+      }),
+    );
+    let current = (await a.workflows.advance(run.id)).run;
+    current = (await a.workflows.advance(run.id, approvalsFor(current))).run;
+    current = (await a.workflows.advance(run.id)).run;
+    expect(current.status).toBe("failed");
+    const undo = current.nodes["undo-q"]!.approval!;
+    current = (await a.workflows.advance(run.id, [{ approvalId: undo.approvalId, phrase: undo.phrase }])).run;
+    expect(current.status).toBe("recovery_required");
+    expect(current.nodes.p?.status).toBe("failed");
+
+    const restarted = new WorkflowController(a.store, a.tasks, new PayloadCipher(Buffer.alloc(32, 41)));
+    await restarted.recoverInterrupted();
+    const after = restarted.status(run.id);
+    expect(after.nodes.p?.status).toBe("failed");
+    expect(after.error).toBe("workflow_compensation_incomplete:undo-q");
   });
 
   it("waits out a lapsed lease while its task still runs, then recovers before advancing", async () => {

@@ -32,6 +32,14 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- Workflow recovery no longer reopens a parallel branch that was waiting for
+  approval beside a branch that failed. The live path counted such a node as
+  failed and began the rollback; recovery ranked the waiting branch first and
+  offered its approval again, so approving it ran a forward step on a saga
+  already being undone. A failed run whose rollback died inside a
+  compensation is also repaired before its next advance, which used to run
+  that compensation a second time. A repaired run whose rollback stalled now
+  names the compensation, as a live one does.
 - The docs said the `@melra/*` npm packages carry provenance attestations.
   None has: every release so far passed `--provenance` to `pnpm publish`,
   which did not attach it. The README, INSTALLATION, and STATUS now say so;
