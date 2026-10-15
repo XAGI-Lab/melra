@@ -4,9 +4,11 @@
 import { randomBytes } from "node:crypto";
 import { constants } from "node:fs";
 import {
+  link,
   lstat,
   mkdir,
   open,
+  rm,
   type FileHandle,
 } from "node:fs/promises";
 import { join } from "node:path";
@@ -84,17 +86,29 @@ export async function loadPayloadKey(
   const path = join(options.dataDirectory, "payload.key");
   const key = randomBytes(32);
 
+  // Written in full under a private name first, then linked into place. The
+  // key file used to appear empty and be filled afterwards: a second process
+  // starting at the same moment read "" and refused to start, and a crash in
+  // between left an empty key that blocked every later start.
+  const temporary = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
   try {
-    const handle = await open(path, "wx", 0o600);
+    const handle = await open(temporary, "wx", 0o600);
     try {
       await handle.writeFile(key.toString("base64url"), "utf8");
       await handle.sync();
     } finally {
       await handle.close();
     }
+    // A hard link appears complete or not at all, and fails rather than
+    // replace a key another process put there first.
+    await link(temporary, path);
     return key;
   } catch (error) {
     if (errorCode(error) !== "EEXIST") throw error;
-    return readKeyFile(path);
+    // Awaited here: returned bare, its rejection sat unhandled while the
+    // `finally` below awaited.
+    return await readKeyFile(path);
+  } finally {
+    await rm(temporary, { force: true });
   }
 }

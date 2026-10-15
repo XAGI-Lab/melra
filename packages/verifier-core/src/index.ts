@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createHash } from "node:crypto";
-import { lstat, readFile, realpath, stat } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { lstat, realpath, stat } from "node:fs/promises";
+import { pipeline } from "node:stream/promises";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { EvidencePredicate } from "@melra/protocol";
 import { evidenceStrength, type EvidenceItem } from "@melra/receipt-schema";
@@ -77,6 +79,10 @@ function interpolate(template: string, result: Record<string, unknown>): string 
     if (value === undefined || value === null || typeof value === "object") {
       throw new Error(`verification_token_unresolved:${path}`);
     }
+    // `.` and `..` survive percent-encoding as path segments (a URL parser
+    // reads `%2E%2E` as `..` too), so `{"id": ".."}` moved the probe up a
+    // level onto some other resource and verified that.
+    if (value === "." || value === "..") throw new Error(`verification_token_dot_segment:${path}`);
     return encodeURIComponent(String(value));
   });
 }
@@ -205,7 +211,12 @@ const fileHash: Built<"file_hash"> = {
   type: "file_hash",
   async check(predicate, _result, context) {
     const path = await context.workspacePath(predicate.path);
-    const digest = createHash("sha256").update(await readFile(path)).digest("hex");
+    // Streamed, so a large artifact is hashed in constant memory; a FIFO or a
+    // device would never end, so only a regular file is read at all.
+    if (!(await stat(path)).isFile()) throw new Error("verification_hash_requires_regular_file");
+    const hash = createHash("sha256");
+    await pipeline(createReadStream(path), hash);
+    const digest = hash.digest("hex");
     const passed = digest === predicate.sha256;
     return {
       passed,
@@ -356,7 +367,7 @@ export class Verifier {
 
   private async filePath(input: string): Promise<string> {
     const candidate = resolve(this.root, input);
-    if (!inside(this.root, candidate) || candidate === this.root) {
+    if (!inside(this.root, candidate) || relative(this.root, candidate) === "") {
       throw new Error("verification_path_outside_workspace");
     }
     const actual = await realpath(candidate);
@@ -368,7 +379,7 @@ export class Verifier {
 
   private async potentiallyAbsentFilePath(input: string): Promise<string> {
     const candidate = resolve(this.root, input);
-    if (!inside(this.root, candidate) || candidate === this.root) {
+    if (!inside(this.root, candidate) || relative(this.root, candidate) === "") {
       throw new Error("verification_path_outside_workspace");
     }
     let probe = candidate;

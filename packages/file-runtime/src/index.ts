@@ -53,7 +53,10 @@ export class FileRuntime {
 
   async resolvePath(input: string, allowRoot = false): Promise<string> {
     const lexical = resolve(this.root, input);
-    if (!inside(this.root, lexical) || (!allowRoot && lexical === this.root)) {
+    // "Is it the root" asked the way `inside` asks "is it within": through
+    // `relative`, which ignores case on Windows. A string compare let `..\\WS`
+    // past it for a root spelled `ws`, and a recursive delete took everything.
+    if (!inside(this.root, lexical) || (!allowRoot && relative(this.root, lexical) === "")) {
       throw new Error("path_outside_workspace");
     }
 
@@ -134,10 +137,12 @@ export class FileRuntime {
         };
       }
       case "hash": {
+        // Checked before reading, as `read` does: hashing a 1.5 GB pack file
+        // read it all into memory first, and a FIFO blocked forever.
+        const metadata = await stat(path);
+        if (!metadata.isFile()) throw new Error("file_hash_requires_regular_file");
+        if (metadata.size > this.maxFileBytes) throw new Error("file_size_limit_exceeded");
         const buffer = await readFile(path);
-        if (buffer.byteLength > this.maxFileBytes) {
-          throw new Error("file_size_limit_exceeded");
-        }
         return {
           path: relative(this.root, path),
           size: buffer.byteLength,
@@ -151,7 +156,15 @@ export class FileRuntime {
         await mkdir(dirname(path), { recursive: true });
         const temporary = `${path}.melra-${randomUUID()}.tmp`;
         await writeFile(temporary, buffer, { flag: "wx" });
-        await rename(temporary, path);
+        try {
+          await rename(temporary, path);
+        } catch (error) {
+          // A rename that failed (the target is a directory, or held open on
+          // Windows) would otherwise leave the content, secrets and all,
+          // beside it in the workspace, one copy per retry.
+          await rm(temporary, { force: true });
+          throw error;
+        }
         return {
           written: true,
           path: relative(this.root, path),

@@ -85,6 +85,22 @@ describe("verification through a channel that did not act", () => {
     ]);
   });
 
+  it("refuses a value that would be a dot segment of the path", async () => {
+    const verifier = await Verifier.create(root, {
+      probe: probeReturning({ state: "succeeded" }),
+    });
+    for (const id of ["..", "."]) {
+      const { verified, evidence } = await verifier.verify([predicate()], {
+        status: 201,
+        content: JSON.stringify({ id }),
+      });
+      expect(verified).toBe(false);
+      expect(evidence[0]?.summary).toBe("verification_token_dot_segment:json.id");
+    }
+    // Nothing was fetched: `/refunds/..` is `/` to a URL parser.
+    expect(asked).toEqual([]);
+  });
+
   it("fails when the token names nothing in the result", async () => {
     const verifier = await Verifier.create(root, {
       probe: probeReturning({ state: "succeeded" }),

@@ -48,6 +48,16 @@ describe("loadPayloadKey", () => {
     }
   });
 
+  it("gives two processes starting at once the same key", async () => {
+    const root = await temporaryRoot();
+    // The second used to find the key file created but still empty, and refuse.
+    const [first, second] = await Promise.all([
+      loadPayloadKey({ dataDirectory: root, environment: {} }),
+      loadPayloadKey({ dataDirectory: root, environment: {} }),
+    ]);
+    expect(first).toEqual(second);
+  });
+
   it("accepts an exact base64url environment key", async () => {
     const root = await temporaryRoot();
     const expected = Buffer.alloc(32, 13);
