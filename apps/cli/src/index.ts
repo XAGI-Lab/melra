@@ -827,7 +827,7 @@ async function approveCommand(args: string[], env: CliEnvironment): Promise<numb
     const decision = melra.controller.decide(taskId, view.renderDigest, approver);
     if (decision.channel === "in_band") {
       process.stderr.write(
-        "Recorded in band: this process is in developer mode. Set \"mode\": \"enforced\" in the policy file (or MELRA_MODE=enforced) for the server and for this command.\n",
+        "Recorded in band: this process is in developer mode. Set \"mode\": \"enforced\" in the policy file (or MELRA_MODE=enforced) for the server and for this command. An enforced server will not run on this decision; --deny and plan again.\n",
       );
     }
     output({ decision });
@@ -960,6 +960,8 @@ Usage:
   melra workflow plan --definition <workflow.json>
   melra workflow advance <workflow-id> [--approval <id>:<exact-phrase>]
                                        [--input <node-id>=<value>]
+                                       (--approval: developer mode; enforced:
+                                       melra approve <task-id>, then advance)
   melra workflow inspect <workflow-id>
   melra workflow cancel <workflow-id>
   melra workflow pause|resume|suspend <workflow-id>

@@ -4,8 +4,10 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { harnessToolsEnabled } from "./mcp-server.js";
+import { createMcpServer, harnessToolsEnabled, SERVER_INSTRUCTIONS } from "./mcp-server.js";
 import { registerHarnessTools } from "./harness-tools.js";
 import { createMelraRuntime, type MelraRuntime } from "./runtime.js";
 
@@ -110,5 +112,70 @@ describe("harness tools", () => {
     const result = await call(tools, "run_command", { command: "sh", args: ["-c", "true"] });
     expect(result.status).toBe("blocked");
     expect(result.reason).toBe("command_not_allowlisted");
+  });
+});
+
+describe("harness tools in enforced mode", () => {
+  let base: string;
+  let workspace: string;
+  let runtime: MelraRuntime;
+  let tools: Map<string, Handler>;
+
+  beforeEach(async () => {
+    base = await mkdtemp(join(tmpdir(), "melra-harness-enforced-"));
+    workspace = join(base, "workspace");
+    await mkdir(workspace, { recursive: true });
+    runtime = await createMelraRuntime({
+      workspaceRoot: workspace,
+      dataDirectory: join(base, "data"),
+      environment: { MELRA_MODE: "enforced" },
+    });
+    tools = collect(runtime);
+  });
+
+  afterEach(async () => {
+    await runtime.close();
+    await rm(base, { recursive: true, force: true });
+  });
+
+  it("hands the agent no phrase, refuses one, and runs once an operator decides", async () => {
+    const held = await call(tools, "write_file", { path: "w.txt", content: "x" });
+    expect(held.status).toBe("approval_required");
+    expect(held).not.toHaveProperty("phrase");
+    expect(held.next).toContain(`melra approve ${String(held.taskId)}`);
+    const task = runtime.controller.status(String(held.taskId));
+    await expect(
+      call(tools, "approve", { taskId: held.taskId, phrase: `APPROVE ${task.approval!.actionDigest.slice(0, 12)}` }),
+    ).rejects.toThrow("approval_in_band_refused");
+    await expect(call(tools, "approve", { taskId: held.taskId })).rejects.toThrow("approval_awaiting_operator");
+    runtime.controller.decide(task.id, runtime.controller.approvalView(task.id).renderDigest, "cli:test");
+    expect((await call(tools, "approve", { taskId: held.taskId })).status).toBe("verified_success");
+    expect(await readFile(join(workspace, "w.txt"), "utf8")).toBe("x");
+  });
+
+  it("tells the model an operator approves, and leaves developer mode's words alone", async () => {
+    const instructions = async (server: ReturnType<typeof createMcpServer>) => {
+      const [left, right] = InMemoryTransport.createLinkedPair();
+      await server.connect(right);
+      const client = new Client({ name: "t", version: "1" });
+      await client.connect(left);
+      const text = client.getInstructions();
+      await client.close();
+      return text;
+    };
+    const enforced = await instructions(createMcpServer(runtime));
+    expect(enforced?.startsWith(SERVER_INSTRUCTIONS)).toBe(true);
+    expect(enforced).toContain("melra approve <taskId>");
+    expect(enforced).toContain("approval_awaiting_operator");
+    const developer = await createMelraRuntime({
+      workspaceRoot: workspace,
+      dataDirectory: join(base, "dev-data"),
+      environment: {},
+    });
+    try {
+      expect(await instructions(createMcpServer(developer))).toBe(SERVER_INSTRUCTIONS);
+    } finally {
+      await developer.close();
+    }
   });
 });

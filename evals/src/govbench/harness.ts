@@ -273,7 +273,7 @@ async function drive(
   const approval: ApprovalResponse | undefined =
     task.approval === undefined
       ? undefined
-      : { approvalId: task.approval.approvalId, phrase: task.approval.phrase };
+      : { approvalId: task.approval.approvalId, phrase: task.approval.phrase! };
   try {
     const execution = await runtime.controller.execute(task.id, approval);
     return {
@@ -452,7 +452,7 @@ function planOrThrow(runtime: MelraRuntime, request: GovCase["request"], idempot
 
 function challengeOf(task: ReturnType<typeof planOrThrow>): ApprovalResponse {
   if (task.approval === undefined) throw new Error(`no_challenge:${task.status}`);
-  return { approvalId: task.approval.approvalId, phrase: task.approval.phrase };
+  return { approvalId: task.approval.approvalId, phrase: task.approval.phrase! };
 }
 
 async function attempt(
@@ -626,7 +626,7 @@ async function exactlyOnceCase(
           taskId,
           task.approval === undefined
             ? undefined
-            : { approvalId: task.approval.approvalId, phrase: task.approval.phrase },
+            : { approvalId: task.approval.approvalId, phrase: task.approval.phrase! },
         ),
       );
       break;
@@ -721,7 +721,7 @@ async function measureOverhead(fixture: Fixture, iterations = 40): Promise<Overh
           task.id,
           task.approval === undefined
             ? undefined
-            : { approvalId: task.approval.approvalId, phrase: task.approval.phrase },
+            : { approvalId: task.approval.approvalId, phrase: task.approval.phrase! },
         );
         const governedMs = performance.now() - governedStart;
         if (execution.task.status !== "verified_success") {

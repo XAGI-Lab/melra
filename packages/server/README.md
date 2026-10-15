@@ -66,7 +66,8 @@ something Node can set or check.
 
 Planning never executes. `melra_execute` re-evaluates policy so a stale plan
 cannot ride a since-tightened policy, validates the approval against the current
-action digest, runs the adapter under an `AbortSignal` armed with the task's
+action digest (or, in enforced mode, requires an operator's out-of-band
+decision), runs the adapter under an `AbortSignal` armed with the task's
 duration budget, then verifies. A task is `verified_success` only when the
 adapter succeeded *and* every declared evidence predicate passed — an adapter
 that claimed success with failing evidence is `partial`.

@@ -47,6 +47,7 @@ async function open(store: string): Promise<MelraRuntime> {
     workspaceRoot: root,
     dataDirectory: join(root, store),
     policyPath: join(root, "policy.json"),
+    environment: {},
   });
 }
 
@@ -122,7 +123,7 @@ async function run(runtime: MelraRuntime, request: ReturnType<typeof refund>) {
       ? undefined
       : {
           approvalId: planned.approval.approvalId,
-          phrase: planned.approval.phrase,
+          phrase: planned.approval.phrase!,
         };
   return (await runtime.controller.execute(planned.id, approval)).task;
 }
@@ -173,7 +174,7 @@ describe("a grant that runs out", () => {
             task.id,
             task.approval === undefined
               ? undefined
-              : { approvalId: task.approval.approvalId, phrase: task.approval.phrase },
+              : { approvalId: task.approval.approvalId, phrase: task.approval.phrase! },
           )
         ).task,
       ),

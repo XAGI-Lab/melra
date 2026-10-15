@@ -253,7 +253,10 @@ time**:
   <img src="docs/assets/readme/pipeline.svg" alt="The nine stages: melra_plan types, classifies, authorises, issues an approval challenge and records the task; melra_execute checks policy again, deduplicates, runs under a budget, verifies evidence and writes a receipt." width="100%" />
 </p>
 
-Here is one change from start to finish:
+Here is one change from start to finish, in developer mode. In
+[enforced mode](docs/INSTALLATION.md#deployment-modes) the challenge carries no
+phrase: you approve with `melra approve <task-id>` outside the conversation,
+and the agent's `melra_execute` sends no approval at all.
 
 ```mermaid
 sequenceDiagram
@@ -281,7 +284,7 @@ sequenceDiagram
 | 🟢 `verified_success` | It ran and every declared check passed | Done |
 | 🟡 `partial` | It ran, but the evidence did not hold | Look at the evidence, then decide |
 | 🔴 `policy_blocked` | Refused before anything ran | Read the reason; the same request will be refused again |
-| 🔵 `awaiting_approval` | A change is waiting for your exact phrase | Approve it from the agent that planned it |
+| 🔵 `awaiting_approval` | A change is waiting for your approval | Developer mode: approve it from the agent that planned it. Enforced mode: `melra approve <task-id>` |
 | 🟣 `recovery_required` | A change may or may not have happened | **Check the world first**; never re-run blindly |
 | ⚪ `failed` · `cancelled` · `budget_exhausted` | It did not complete | Safe to plan again |
 
@@ -372,7 +375,7 @@ Content-Security-Policy.
 |:--:|---|
 | 🏠 | **Local only.** stdio, loopback HTTP behind a token, or a mode-`0600` Unix socket only your OS user can open. No account and no hosted service. |
 | 📴 | **Telemetry is off.** |
-| ✍️ | **Changes need two things:** declared evidence *and* an exact, expiring, task-scoped approval phrase. |
+| ✍️ | **Changes need two things:** declared evidence *and* an exact, expiring, task-scoped approval: a phrase in developer mode, an operator's `melra approve` in enforced mode. |
 | 📁 | **Paths stay inside your workspace**, including terminal working directories; symlink escapes are refused. |
 | 🚫 | **Shells, `sudo`/`su` and arbitrary desktop key names are denied.** Terminal commands must be on the allowlist by name. |
 | 🌐 | **Private, link-local, loopback and cloud-metadata addresses are blocked** by the browser and HTTP adapters themselves, after DNS resolution, before any allowlist is consulted. |
@@ -543,6 +546,7 @@ exercises restart persistence with no daemon:
 melra workflow plan --definition examples/workflows/restart-safe.json   # save the id
 melra workflow advance <workflow-id>
 melra workflow advance <workflow-id>          # exits 3 with the write's approval challenge
+# developer mode echoes the phrase; enforced mode runs `melra approve <task-id>` instead
 melra workflow advance <workflow-id> --approval '<approval-id>:<exact phrase>'
 melra workflow advance <workflow-id>
 ```
@@ -550,7 +554,7 @@ melra workflow advance <workflow-id>
 ```text
 planned            stateVersion=2
 running            stateVersion=4   inspect=verified_complete
-awaiting_approval  stateVersion=7   phrase="APPROVE <digest prefix>"
+awaiting_approval  stateVersion=7   phrase="APPROVE <digest prefix>"   (developer mode)
 running            stateVersion=10  write=verified_complete
 verified_complete  stateVersion=14  checkpoint=verified_complete
 ```

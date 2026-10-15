@@ -278,7 +278,10 @@ domains a task actually needs — `examples/04-browser-inspection/policy.json` i
 a worked example that allows only `example.com`.
 
 Mutations default to `"confirm"`: every non-read operation returns a
-task-scoped approval phrase that must be echoed back before it runs. Set
+task-scoped approval challenge and runs only once it is approved. In developer
+mode the challenge carries a phrase to echo back; in enforced mode it carries
+none, and an operator approves with
+[`melra approve`](#approving-from-the-command-line). Set
 `"mutations": "deny"` for a read-only install. A challenge stays open for
 `approvalTtlMs`: 5 minutes by default in developer mode and 30 in enforced
 mode, where an operator approves out of band; a value the policy file sets
@@ -303,8 +306,8 @@ trait before the allowlist is consulted:
 That policy keeps `npm` usable for `npm test` and `npm run build` while refusing
 `npm install`, with the reason `trait_denied:package-install`. Denying
 `"network"` also stops browser navigation, because browsing is a network act.
-The traits are reported on every plan, so an approver sees them before echoing
-the phrase back, and `melra policy test` prints them for a request without
+The traits are reported on every plan, so an approver sees them before
+approving, and `melra policy test` prints them for a request without
 running it:
 
 ```bash
@@ -677,8 +680,9 @@ requests, in three views:
   command that advances it, and a live event tail.
 
 Views have their own URLs (`#/tasks/<id>`), so a task can be linked. The
-console only reads: it never renders an approval phrase even though the task
-API carries one, because approvals belong to the governed path. It is served
+console only reads: it never renders an approval phrase even though, in
+developer mode, the task API carries one, because approvals belong to the
+governed path. It is served
 with a Content-Security-Policy that admits only its own script and style by
 hash and only this server as a fetch target, and it refuses to be framed.
 
@@ -702,7 +706,7 @@ ID        STATUS             OPERATION     TARGET             EFFECT           U
 ca4aec7a  policy_blocked     terminal.run  command:bash       mutate/critical  3m ago
 a1285e0f  verified_success   system.info   local-system       read/low         3m ago
 
-1 waiting for approval — approve from the agent that planned them
+1 waiting for approval — approve with `melra approve <task-id>`
 ```
 
 Piped, or with `--json`, `tasks` and `status` print JSON (the task records are
@@ -712,8 +716,9 @@ Colour follows [`NO_COLOR`](https://no-color.org).
 They open the database read-only and never create it, and in WAL mode a reader
 does not block a writer, so leaving `melra watch` open beside `melra serve`
 costs the server nothing. What they print is the stored, already-redacted copy.
-Like the console, they never print an approval phrase: approvals belong to the
-agent that planned the task. `melra status` tells whether a server is up by
+Like the console, they never print an approval phrase: in developer mode
+approvals belong to the agent that planned the task, and in enforced mode to
+an operator running [`melra approve`](#approving-from-the-command-line). `melra status` tells whether a server is up by
 opening a TCP connection to `127.0.0.1:$MELRA_HTTP_PORT` (and to
 `MELRA_SOCKET`, if set) and closing it without sending anything — no token, no
 request.
@@ -755,7 +760,7 @@ closing every door it owns:
 - **A read that leaves the workspace is shown to a person first.** A
   read-only terminal command whose argument or option value names a path
   outside the workspace plans as `confirm` with reason `read_outside_workspace`
-  and runs only once its phrase is echoed back. Developer mode lets those reads
+  and runs only once an operator approves it. Developer mode lets those reads
   through, as before.
 - **An argument that only looks inside the workspace is refused if it links
   out**, with `terminal_path_outside_workspace`, approved or not.
@@ -763,6 +768,14 @@ closing every door it owns:
   data directory lets a recursive search of no path at all reach the database
   and the payload key, so the process exits with
   `enforced_mode_refuses_data_inside_workspace` instead.
+- **Only an operator approves.** A challenge carries no phrase, so the agent
+  is handed nothing to echo, and `melra_execute` refuses any approval it is
+  sent with `approval_in_band_refused`. A mutation runs only on a decision an
+  operator recorded with [`melra approve`](#approving-from-the-command-line)
+  from a process in enforced mode; until then the answer is
+  `approval_awaiting_operator`, and `approval_expired` once the challenge has
+  expired, which means plan the task again. A developer-mode `melra approve`
+  on such a task records nothing and fails with `approval_needs_enforced_mode`.
 - **Every receipt says `enforced`.** `ActionReceipt.mode` records it, and
   `melra_capabilities` publishes `policy.mode`, so an auditor never has to infer
   whether an effect was governed by the only door or by one of several.
@@ -776,10 +789,14 @@ wins, so a policy file that pinned it is not loosened by an unset variable, and 
 typo (`MELRA_MODE=enfroced`) fails loudly rather than leaving a machine in
 developer mode with a config that claims otherwise.
 
-A `melra conformance` run against an enforced endpoint keeps the same level — the
-mode does not earn checks — but its first `notProven` entry narrows from "nothing
-observable rules out a second path" to naming whose word the remaining claim
-rests on. See [CONFORMANCE.md](CONFORMANCE.md).
+A `melra conformance` run against an enforced endpoint swaps checks rather than
+earning any: one L2 check (`wrong-phrase-is-refused`) gives way to two
+(`approval-credential-withheld`, `in-band-approval-refused`), and one L3 check
+(`approval-provenance-recorded`) is added. Its L3 checks need an operator's yes,
+which the suite gives with its own `melra approve` when it spawned the server;
+against `--url` it has no approver and stops at L2. Its first `notProven` entry
+narrows from "nothing observable rules out a second path" to naming whose word
+the remaining claim rests on. See [CONFORMANCE.md](CONFORMANCE.md).
 
 ## Approving from the command line
 
@@ -801,6 +818,13 @@ without deciding. The receipt for the run records who approved it
 default), when, and the digest of what they were shown. In enforced mode the
 channel is `out_of_band`; in developer mode it is `in_band`, because there the
 agent may hold the same access. `melra run` asks the same way in a terminal.
+
+In enforced mode this is the only way a mutation gets approved: the agent is
+given no phrase, and one it sends is refused. Run `melra approve` in enforced
+mode too (`MELRA_MODE=enforced` or `--mode enforced`). A developer-mode
+`melra approve` on a task an enforced kernel planned is refused with
+`approval_needs_enforced_mode` and records nothing, because the enforced kernel
+would not run on its in-band decision and a task has only one.
 
 ## Unsafe-local mode
 
@@ -1041,6 +1065,18 @@ approved. It cannot change anything about it — the phrase is a hash of the tas
 id and the operation together, so approved arguments cannot be swapped for
 others afterwards. A policy denial comes back the same way, as a result with
 `status: "blocked"` and a reason, rather than an error.
+
+In enforced mode there is no phrase. The reply names the operator command
+instead, and `approve` takes the task id alone, once an operator has decided:
+
+```json
+{
+  "status": "approval_required",
+  "taskId": "0f0e…",
+  "expiresAt": "2026-08-08T21:09:11.204Z",
+  "next": "An operator approves this outside the conversation with `melra approve 0f0e…`; then call `approve` with this taskId and no phrase."
+}
+```
 
 Everything else stays reachable: the task id in every response is what
 `melra_receipt` takes, so the evidence and the certificate are one call away.

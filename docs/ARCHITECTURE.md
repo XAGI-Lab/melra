@@ -45,7 +45,8 @@ CAPABILITY   what this principal may reach at all
 PREFLIGHT    adapter capability discovery and cheap feasibility checks
 RECORD       durable TaskRecord written before anything runs
 POLICY       allow · deny · confirm, on effect and risk
-APPROVAL     exact task-scoped phrase bound to the action digest
+APPROVAL     task-scoped and bound to the action digest: an exact phrase in
+             developer mode, an operator's out-of-band decision in enforced mode
 CREDENTIALS  the kernel acquires what the effect needs; the caller never sees it
 IDEMPOTENCY  logical attempt key; a committed attempt is not re-run
 EXECUTION    the adapter runs under an AbortSignal and a budget
@@ -98,8 +99,8 @@ interface EffectContract {
 ```
 
 It is **derived from a persisted task, never supplied**. `melra_plan` returns it
-alongside the record it was derived from, so what a caller reads before echoing
-an approval phrase is the same object the execution path will load. A second
+alongside the record it was derived from, so what a caller reads before
+approving is the same object the execution path will load. A second
 input path that could describe an effect differently from the one about to run
 would be a way around the approval, not a convenience.
 
@@ -456,7 +457,17 @@ can compute it. A decision recorded through an operator surface
 (`TaskController.decide`) is `out_of_band` only in enforced mode, and is bound
 to the render: a request that changed after it was shown cannot run on it.
 Decisions live in their own insert-once table, and one made before the
-challenge expired stays usable for a TTL after it was made. The certificate
+challenge expired stays usable for a TTL after it was made.
+
+Enforced mode issues no phrase at all: the challenge has the approval id, the
+task id, the action digest and the expiry, and nothing the agent could echo.
+`melra_execute` refuses any approval a caller sends
+(`approval_in_band_refused`) and runs only on an `out_of_band` decision;
+without one it answers `approval_awaiting_operator`, or `approval_expired` once
+the challenge has expired. An in-band decision row counts as none there, and a
+developer-mode process asked to decide a task that has no phrase refuses
+(`approval_needs_enforced_mode`) rather than spend its one decision on a row
+the enforced kernel would ignore. The certificate
 carries `mode` and `approvalChannel` (`not_required` for a read, `bypassed` for
 a mutation unsafe-local allowed with no challenge, otherwise the receipt's
 channel), sealed by its digest like every other field.

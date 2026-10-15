@@ -14,7 +14,9 @@ npm install @melra/sdk
 ## Plan, approve, execute
 
 Planning never executes. A mutation comes back with a task-scoped approval
-challenge whose exact phrase you must echo to run it.
+challenge. In developer mode you echo its exact phrase to run it; in enforced
+mode it has no phrase, an operator approves with `melra approve <task-id>`, and
+you then execute with no approval at all (one you send is refused).
 
 ```ts
 import { MelraClient } from "@melra/sdk";
@@ -36,11 +38,13 @@ const task = await melra.plan({
 });
 
 const approval = task.approval as
-  | { approvalId: string; phrase: string }
+  | { approvalId: string; phrase?: string }
   | undefined;
 const result = await melra.execute(
   task.id as string,
-  approval && { approvalId: approval.approvalId, phrase: approval.phrase },
+  approval?.phrase === undefined
+    ? undefined
+    : { approvalId: approval.approvalId, phrase: approval.phrase },
 );
 
 console.log(result.task);

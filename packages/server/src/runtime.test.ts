@@ -332,7 +332,7 @@ describe("terminal arguments", () => {
     const approval =
       planned.approval === undefined
         ? undefined
-        : { approvalId: planned.approval.approvalId, phrase: planned.approval.phrase };
+        : { approvalId: planned.approval.approvalId, phrase: planned.approval.phrase! };
     return { planned, task: (await runtime!.controller.execute(planned.id, approval)).task };
   };
 
@@ -393,12 +393,11 @@ describe("terminal arguments", () => {
     const outside = runtime.controller.plan(terminal("cat", [join(base, "outside.txt")]));
     expect(outside.status).toBe("awaiting_approval");
     expect(outside.policyDecision.reason).toBe("read_outside_workspace");
-    await expect(runtime.controller.execute(outside.id)).rejects.toThrow(/approval_required/);
+    expect(outside.approval).not.toHaveProperty("phrase");
+    await expect(runtime.controller.execute(outside.id)).rejects.toThrow(/approval_awaiting_operator/);
     if (process.platform !== "win32") {
-      const approved = await runtime.controller.execute(outside.id, {
-        approvalId: outside.approval!.approvalId,
-        phrase: outside.approval!.phrase,
-      });
+      runtime.controller.decide(outside.id, runtime.controller.approvalView(outside.id).renderDigest, "cli:test");
+      const approved = await runtime.controller.execute(outside.id);
       expect(approved.task.status).toBe("verified_success");
     }
     // Spelled inside, so policy asked no one; the runtime sees where it leads.

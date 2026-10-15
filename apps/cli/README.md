@@ -39,7 +39,9 @@ The report says what the level does not prove as plainly as what it does.
 
 The CLI starts with a local policy that allows reads outright and gates every
 mutation: a consequential operation requires declared evidence and an exact,
-task-scoped approval phrase before it runs.
+task-scoped approval before it runs: a phrase echoed back in developer mode, or
+an operator's `melra approve <task-id>` in enforced mode, where the agent is
+given no phrase and one it sends is refused.
 
 Requires Node.js 22 or newer. Full documentation:
 [github.com/XAGI-Lab/melra](https://github.com/XAGI-Lab/melra)

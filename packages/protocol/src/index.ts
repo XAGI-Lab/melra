@@ -599,7 +599,7 @@ export const PolicyOutcomeSchema = z.enum(["allow", "deny", "confirm"]);
  * What an operation reaches for, as opposed to what it is named. `npm ls` and
  * `npm install` are the same allowlisted command; only the second one installs
  * a package and talks to a registry. Traits are what `policy.deniedTraits`
- * matches on and what a caller sees before it echoes an approval phrase.
+ * matches on and what a caller sees before it approves.
  */
 export const CapabilityTraitSchema = z.enum(["package-install", "network"]);
 
@@ -630,7 +630,7 @@ export const ApprovalChallengeSchema = z
     approvalId: z.string().uuid(),
     taskId: z.string().uuid(),
     actionDigest: z.string().regex(/^[a-f0-9]{64}$/),
-    phrase: z.string(),
+    phrase: z.string().optional(),
     expiresAt: z.string().datetime(),
   })
   .strict();

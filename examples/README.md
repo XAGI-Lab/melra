@@ -6,8 +6,8 @@ Each numbered directory contains a complete task request accepted by:
 pnpm melra run --request examples/<example>/task.json
 ```
 
-Read-only examples execute immediately. Mutation examples request an exact
-task-scoped approval phrase. Run them only in a disposable or reviewed
+Read-only examples execute immediately. Mutation examples show the effect and
+ask for your approval, in a terminal. Run them only in a disposable or reviewed
 workspace.
 
 Browsing works with the default policy, which allows any public destination and

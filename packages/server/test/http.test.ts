@@ -10,6 +10,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { TaskRequestSchema, WorkflowDefinitionSchema } from "@melra/protocol";
 import { createMelraRuntime, serveHttp } from "../src/index.js";
 import type { MelraHttpServer } from "../src/http-server.js";
 import type { MelraRuntime } from "../src/runtime.js";
@@ -333,5 +334,55 @@ describe("melra http server", () => {
     expect(first).toContain("data: ");
     expect(first).toContain("workflow.");
     await reader.cancel();
+  });
+});
+
+describe("melra http server in enforced mode", () => {
+  it("serves no approval phrase on any task or workflow route", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "melra-http-enf-ws-"));
+    const home = mkdtempSync(join(tmpdir(), "melra-http-enf-home-"));
+    const runtime = await createMelraRuntime({
+      workspaceRoot: workspace,
+      dataDirectory: home,
+      environment: { MELRA_MODE: "enforced" },
+    });
+    const http = await serveHttp({ runtime, port: 0, token: "t", environment: {} });
+    const write = (path: string) =>
+      TaskRequestSchema.parse({
+        goal: `Write ${path}`,
+        operation: { kind: "file", action: "write", path, content: "x" },
+        requiredEvidence: [{ type: "file_exists", path }],
+      });
+    try {
+      const task = runtime.controller.plan(write("w.txt"));
+      const planned = runtime.workflows.plan(
+        WorkflowDefinitionSchema.parse({
+          schemaVersion: "1.0.0",
+          id: "77777777-7777-4777-8777-777777777777",
+          version: 1,
+          name: "enforced-http",
+          nodes: [{ id: "write", type: "operation", request: write("v.txt") }],
+        }),
+      );
+      await runtime.workflows.advance(planned.id);
+      for (const path of [
+        `/api/tasks/${task.id}`,
+        "/api/tasks",
+        "/api/workflows",
+        `/api/workflows/${planned.id}`,
+        `/api/workflows/${planned.id}/events`,
+      ]) {
+        const text = await (
+          await fetch(`http://${http.host}:${http.port}${path}`, { headers: { authorization: "Bearer t" } })
+        ).text();
+        expect(text, path).toContain("approvalId");
+        expect(text, path).not.toMatch(/"phrase"|APPROVE [a-f0-9]{12}/);
+      }
+    } finally {
+      await http.close();
+      await runtime.close();
+      rmSync(workspace, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });

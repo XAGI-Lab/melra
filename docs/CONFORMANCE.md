@@ -17,6 +17,14 @@ failed check at or below it. It never reads the endpoint's disk, so it works
 against a remote endpoint: the probe effect is verified by reading it back
 *through the kernel*.
 
+One exception, in enforced mode only: the agent may not approve anything there,
+so the L3 checks need an operator's yes. When the suite spawned the server
+itself, it gives that yes by running its own
+`melra approve <task-id> --yes --mode enforced` (approver
+`cli:melra-conformance`), which writes the decision through the local data
+directory, so that run is no longer purely black-box. Against `--url` there is
+no such approver, and an enforced endpoint stops at L2.
+
 Exit code is `0` when the endpoint reaches the claimed level and `1` when it
 falls short. `--level` defaults to `3`. In a terminal it prints each check, the
 level reached, and what the suite does not prove; with `--json` or through a
@@ -48,7 +56,9 @@ did not happen.
 |---|---|
 | `mutation-is-held-for-approval` | Planning a mutation produces a task-scoped, expiring approval challenge rather than running it — and publishes `at-most-once`, so the caller knows a failure will not be retried before it approves. |
 | `no-approval-is-refused` | Executing without the approval is refused. |
-| `wrong-phrase-is-refused` | Executing with the wrong phrase is refused; the challenge is not decorative. |
+| `wrong-phrase-is-refused` | Developer mode only. Executing with the wrong phrase is refused; the challenge is not decorative. |
+| `approval-credential-withheld` | Enforced mode only. Neither the plan nor the task record carries an approval phrase, by key or by value: the agent is handed nothing to echo. |
+| `in-band-approval-refused` | Enforced mode only. Executing with the phrase a developer-mode kernel would have issued, which anyone can derive from the challenge, is refused and the task is still awaiting approval. |
 | `refused-effects-did-not-happen` | After both refusals the file they would have created does not exist. This is the one that matters: a refusal is a fact about the world, not a message. |
 | `freeform-constraints-are-denied-as-a-result` | Unenforceable prose constraints are denied as a policy result — and still denied at execute, so a stale plan cannot ride past a decision. |
 
@@ -62,6 +72,7 @@ that outlives the call.
 | `approved-mutation-verifies` | An approved mutation reaches `verified_success` with passing evidence, not merely "the adapter returned" — and every item says how it was established, with at least one the kernel re-read for itself (`strength: "state"`). |
 | `the-effect-really-happened` | The approved bytes are on disk, read back through the kernel. |
 | `the-receipt-outlives-the-call` | The receipt for a finished task is still retrievable after other tasks have run. |
+| `approval-provenance-recorded` | Enforced mode only. The receipt and the certificate both say the approval came `out_of_band`. |
 | `destructive-effects-are-gated-and-verified` | A destructive effect needs its own approval and verifies as absent afterwards. |
 
 ## What a level does not prove
@@ -82,7 +93,11 @@ result.
   (no `--unsafe-local`, loopback only, no self-registering client, and it fails
   the endpoint outright if it claims enforced mode while running with no
   guardrails), and what is left is a fact about the deployment rather than about
-  the endpoint. The level itself does not change: a mode earns no checks.
+  the endpoint. That includes approvals: `melra approve` counts as out of band
+  because it runs with OS access to the data directory, which makes it an
+  operator only if the agent has none. Enforced mode swaps checks rather than
+  earning any: 14 in developer mode, 16 in enforced (5 at L1, 6 at L2, 5 at
+  L3).
 - **That the endpoint's own policy is well chosen.** The suite checks that
   policy is consulted and obeyed, not that it says the right thing. An endpoint
   that allows everything and an endpoint with a careful allowlist both reach

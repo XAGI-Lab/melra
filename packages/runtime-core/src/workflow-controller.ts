@@ -307,7 +307,7 @@ export class WorkflowController {
     ) {
       return { run: current, tasks: [], events: [] };
     }
-    // A node parked for a human — approval phrase or supplied input — is no
+    // A node parked for a human — approval or supplied input — is no
     // longer `pending`, so `readyNodeIds` will not return it. Re-offer it here
     // or the workflow would stall forever with the answer in hand.
     const awaiting = [...graph.nodes.values()]

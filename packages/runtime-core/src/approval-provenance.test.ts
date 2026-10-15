@@ -145,7 +145,7 @@ describe("operator approval decisions", () => {
     });
     // Even with the right phrase alongside: the recorded decision governs.
     await expect(
-      tasks.execute(planned.id, { approvalId: planned.approval!.approvalId, phrase: planned.approval!.phrase }),
+      tasks.execute(planned.id, { approvalId: planned.approval!.approvalId, phrase: planned.approval!.phrase! }),
     ).rejects.toThrow("approval_render_mismatch");
   });
 
@@ -182,7 +182,7 @@ describe("operator approval decisions", () => {
     const planned = developer.tasks.plan(charge());
     await developer.tasks.execute(planned.id, {
       approvalId: planned.approval!.approvalId,
-      phrase: planned.approval!.phrase,
+      phrase: planned.approval!.phrase!,
     });
     // As a row an older version wrote: no mode on the task itself.
     const legacy = developer.store.getTask(planned.id)!;
@@ -210,7 +210,7 @@ describe("operator approval decisions", () => {
     const planned = developer.tasks.plan(charge());
     await developer.tasks.execute(planned.id, {
       approvalId: planned.approval!.approvalId,
-      phrase: planned.approval!.phrase,
+      phrase: planned.approval!.phrase!,
     });
     const settled = await enforced.execute(planned.id);
     expect(settled.task.status).toBe("verified_success");
@@ -223,7 +223,7 @@ describe("operator approval decisions", () => {
     const echoed = tasks.plan(put("echoed"));
     const done = await tasks.execute(echoed.id, {
       approvalId: echoed.approval!.approvalId,
-      phrase: echoed.approval!.phrase,
+      phrase: echoed.approval!.phrase!,
     });
     expect(done.receipt?.policyDecision.approval).toMatchObject({ channel: "in_band", approver: "phrase" });
     expect(done.certificate?.approvalChannel).toBe("in_band");
@@ -234,6 +234,101 @@ describe("operator approval decisions", () => {
     const unhinged = await setup({ unhinged: true });
     const bypassed = unhinged.tasks.plan(put("bypassed"));
     expect((await unhinged.tasks.execute(bypassed.id)).certificate?.approvalChannel).toBe("bypassed");
+  });
+});
+
+describe("enforced mode refuses in-band approval", () => {
+  const forge = (task: { approval?: { approvalId: string; actionDigest: string } }) => ({
+    approvalId: task.approval!.approvalId,
+    phrase: `APPROVE ${task.approval!.actionDigest.slice(0, 12)}`,
+  });
+
+  it("refuses anything the agent sends, and runs only on an operator's decision", async () => {
+    const { tasks, store } = await setup({ mode: "enforced" });
+    const planned = tasks.plan(put("ledger"));
+    expect(planned.approval).not.toHaveProperty("phrase");
+    expect(planned.contract.authorization).not.toHaveProperty("phrase");
+    await expect(tasks.execute(planned.id, forge(planned))).rejects.toThrow("approval_in_band_refused");
+    await expect(tasks.execute(planned.id)).rejects.toThrow("approval_awaiting_operator");
+    expect(store.getTask(planned.id)?.status).toBe("awaiting_approval");
+    tasks.decide(planned.id, tasks.approvalView(planned.id).renderDigest, "cli:test");
+    // Still refused alongside a decision: the agent sending one is the signal.
+    await expect(tasks.execute(planned.id, forge(planned))).rejects.toThrow("approval_in_band_refused");
+    const done = await tasks.execute(planned.id);
+    expect(done.task.status).toBe("verified_success");
+    expect(done.receipt?.policyDecision.approval).toMatchObject({ channel: "out_of_band", approver: "cli:test" });
+  });
+
+  it("takes no in-band decision and no phrase minted before the switch", async () => {
+    const developer = await setup();
+    const enforced = new TaskController(
+      developer.store,
+      { ...createDefaultPolicy(developer.root), mode: "enforced" },
+      { execute: async () => ({ success: true, stored: true }) },
+      await Verifier.create(developer.root),
+      developer.cipher,
+    );
+    // Planned in developer mode, so its stored challenge still has a phrase.
+    const old = developer.tasks.plan(put("old"));
+    await expect(
+      enforced.execute(old.id, { approvalId: old.approval!.approvalId, phrase: old.approval!.phrase! }),
+    ).rejects.toThrow("approval_in_band_refused");
+    // A developer-mode process deciding on the same data directory is in band.
+    developer.tasks.decide(old.id, developer.tasks.approvalView(old.id).renderDigest, "cli:dev");
+    await expect(enforced.execute(old.id)).rejects.toThrow("approval_awaiting_operator");
+    expect(enforced.approvalDecision(enforced.status(old.id))).toBeUndefined();
+    expect(developer.store.getTask(old.id)?.status).toBe("awaiting_approval");
+    // The other way round, a developer-mode yes would burn the one decision an
+    // enforced kernel's task can have, so it is refused before it is recorded.
+    const fresh = enforced.plan(put("fresh"));
+    expect(() => developer.tasks.decide(fresh.id, developer.tasks.approvalView(fresh.id).renderDigest, "cli:dev")).toThrow(
+      "approval_needs_enforced_mode",
+    );
+    expect(developer.store.getApprovalDecision(fresh.approval!.approvalId)).toBeUndefined();
+    enforced.decide(fresh.id, enforced.approvalView(fresh.id).renderDigest, "cli:ops");
+    expect((await enforced.execute(fresh.id)).task.status).toBe("verified_success");
+  });
+
+  it("stops asking the agent to wait once no operator can answer", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const { tasks } = await setup({ mode: "enforced", approvalTtlMs: 1_000 });
+    const planned = tasks.plan(put("ledger"));
+    await expect(tasks.execute(planned.id)).rejects.toThrow("approval_awaiting_operator");
+    // `decide` refuses an expired challenge, so waiting longer would never end.
+    vi.advanceTimersByTime(2_000);
+    await expect(tasks.execute(planned.id)).rejects.toThrow("approval_expired");
+  });
+
+  it("refuses an in-band workflow approval loudly and runs on the operator's", async () => {
+    const { tasks, store, cipher } = await setup({ mode: "enforced" });
+    const workflows = new WorkflowController(store, tasks, cipher);
+    const planned = workflows.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: "66666666-6666-4666-8666-666666666666",
+        version: 1,
+        name: "Enforced",
+        nodes: [
+          { id: "gate", type: "approval", forNodeId: "write" },
+          { id: "write", type: "operation", dependsOn: ["gate"], request: put("write") },
+        ],
+      }),
+    );
+    const waiting = (await workflows.advance(planned.id)).run;
+    const gate = Object.values(waiting.nodes).find((node) => node.approval !== undefined)!;
+    expect(gate.approval).not.toHaveProperty("phrase");
+    expect(JSON.stringify(workflows.events(planned.id))).not.toMatch(/APPROVE [a-f0-9]{12}|"phrase"/);
+    const [taskId] = gate.taskIds;
+    await expect(workflows.advance(planned.id, [forge(store.getTask(taskId!)!)])).rejects.toThrow(
+      "approval_in_band_refused",
+    );
+    expect(store.getTask(taskId!)?.status).toBe("awaiting_approval");
+    expect((await workflows.advance(planned.id)).run.status).toBe("awaiting_approval");
+    tasks.decide(taskId!, tasks.approvalView(taskId!).renderDigest, "cli:test");
+    let run = (await workflows.advance(planned.id)).run;
+    if (run.status !== "verified_complete") run = (await workflows.advance(planned.id)).run;
+    expect(run.status).toBe("verified_complete");
+    expect(store.getTask(taskId!)?.approvedBy?.channel).toBe("out_of_band");
   });
 });
 
@@ -270,7 +365,7 @@ describe("approval on receipts written without a caller", () => {
       probe,
     );
     const task = context.tasks.plan(charge());
-    await context.tasks.execute(task.id, { approvalId: task.approval!.approvalId, phrase: task.approval!.phrase });
+    await context.tasks.execute(task.id, { approvalId: task.approval!.approvalId, phrase: task.approval!.phrase! });
     return { ...context, task };
   }
 

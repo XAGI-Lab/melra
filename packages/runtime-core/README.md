@@ -10,8 +10,9 @@ npm install @melra/runtime-core
 
 `TaskController` owns the pipeline. `plan()` classifies the operation, evaluates
 policy, persists a `TaskRecord`, and returns any approval challenge — it never
-executes. `execute()` re-evaluates policy, validates the approval, runs the
-adapter under an `AbortSignal` armed with the duration budget, then verifies.
+executes. `execute()` re-evaluates policy, validates the approval (or, in
+enforced mode, requires an operator's out-of-band decision), runs the adapter
+under an `AbortSignal` armed with the duration budget, then verifies.
 
 Verification decides success, not the adapter. A task reaches
 `verified_success` only when the adapter succeeded *and* every declared evidence

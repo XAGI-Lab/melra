@@ -16,9 +16,12 @@ const policy = createDefaultPolicy(process.cwd());
 const { decision, challenge } = evaluatePolicy(taskId, request, policy);
 ```
 
-An `allow` runs. A `confirm` returns a `challenge` whose exact phrase must be
-echoed back before execution, bound to the task and to a digest of the operation
-— so a plan cannot be swapped for a different action after approval. A `deny`
+An `allow` runs. A `confirm` returns a `challenge` bound to the task and to a
+digest of the operation — so a plan cannot be swapped for a different action
+after approval. In developer mode its exact phrase must be echoed back before
+execution; with `mode: "enforced"` it carries no phrase, and `validateApproval`
+accepts nothing for it, because only an operator's out-of-band decision may
+approve it. A `deny`
 never reaches a runtime.
 
 ## Defaults worth knowing

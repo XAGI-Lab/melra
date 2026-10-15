@@ -63,6 +63,7 @@ beforeAll(async () => {
     workspaceRoot: root,
     dataDirectory: join(root, ".data"),
     policyPath: join(root, "policy.json"),
+    environment: {},
   });
 });
 
@@ -102,7 +103,7 @@ async function run(request: ReturnType<typeof refund>) {
       ? undefined
       : {
           approvalId: planned.approval.approvalId,
-          phrase: planned.approval.phrase,
+          phrase: planned.approval.phrase!,
         };
   return await runtime.controller.execute(planned.id, approval);
 }

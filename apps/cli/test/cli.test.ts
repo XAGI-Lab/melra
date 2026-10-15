@@ -25,6 +25,9 @@ import { taskTarget } from "../src/activity.js";
 
 const execute = promisify(execFile);
 const roots: string[] = [];
+// Every run here that wants enforced mode asks for it, so a shell in enforced
+// mode must not put the rest there too.
+delete process.env.MELRA_MODE;
 
 // `execFile` has no stdin option and leaves the pipe open, so a command that
 // reads stdin would hang until the test timeout. Promisified, it still exposes
@@ -209,6 +212,17 @@ describe("melra CLI", () => {
       const done = await server.controller.execute(planned.id);
       expect(done.task.status).toBe("verified_success");
       expect(done.receipt?.policyDecision.approval).toMatchObject({ channel: "out_of_band", approver: "cli:alice" });
+
+      // A developer-mode yes would spend the one decision this enforced task
+      // can have on a row its kernel refuses, so it is refused unrecorded.
+      const developer = plan();
+      const refused = (await execute(process.execPath, [entry, "approve", developer.id, "--yes"], {
+        cwd: root,
+        env: { ...env, MELRA_MODE: "" },
+      }).catch((error: unknown) => error)) as { code: number; stderr: string };
+      expect(refused.code).toBe(1);
+      expect(refused.stderr).toContain("approval_needs_enforced_mode");
+      expect(server.store.getApprovalDecision(developer.approval!.approvalId)).toBeUndefined();
 
       const denied = plan();
       await execute(process.execPath, [entry, "approve", denied.id, "--deny"], { cwd: root, env });
@@ -579,6 +593,11 @@ describe("melra CLI", () => {
       uncleanedProbeFile?: string;
     };
     expect(report.checks.filter((check) => !check.passed)).toEqual([]);
+    // Developer mode's checks are the ones every published 14/14 was run on.
+    expect(report.checks).toHaveLength(14);
+    for (const name of ["approval-credential-withheld", "in-band-approval-refused", "approval-provenance-recorded"]) {
+      expect(report.checks.map((check) => check.name)).not.toContain(name);
+    }
     expect(report.level).toBe(3);
     expect(report.mode).toBe("developer");
     // The caveat an operator has to read before quoting the level: in developer
@@ -604,9 +623,20 @@ describe("melra CLI", () => {
       level: number;
       mode: string;
       notProven: string[];
+      checks: Array<{ name: string; passed: boolean }>;
+      uncleanedProbeFile?: string;
     };
+    expect(strictReport.checks.filter((check) => !check.passed)).toEqual([]);
+    // No phrase to echo, the derived one refused, and an operator's yes on the
+    // receipt: the level is earned with the approver this suite spawned.
+    expect(strictReport.checks.map((check) => check.name)).toEqual(
+      expect.arrayContaining(["approval-credential-withheld", "in-band-approval-refused", "approval-provenance-recorded"]),
+    );
+    expect(strictReport.checks.map((check) => check.name)).not.toContain("wrong-phrase-is-refused");
+    expect(strictReport.checks).toHaveLength(16);
     expect(strictReport.level).toBe(3);
     expect(strictReport.mode).toBe("enforced");
+    expect(strictReport.uncleanedProbeFile).toBeUndefined();
     expect(strictReport.notProven[0]).toContain("enforced-mode claim");
 
     // Unhinged is supposed to cost the governed levels and keep the typed one.
@@ -617,9 +647,10 @@ describe("melra CLI", () => {
       { cwd: root, env: { ...env, MELRA_UNHINGED: "1" } },
     );
     expect(JSON.parse(unhinged.stdout).level).toBe(1);
-    // Three full suites, each spawning its own server: a Windows runner has
-    // taken just over the file's 20 s default for the lot.
-  }, 60_000);
+    // Three full suites, each spawning its own server, and the enforced one
+    // two `melra approve` processes besides: a Windows runner has taken just
+    // over the file's 20 s default for the lot.
+  }, 90_000);
 
   it("keeps Node's SQLite warning out of every invocation", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-cli-"));

@@ -8,8 +8,9 @@ import { createHash } from "node:crypto";
  * fetches beyond this server. It is a read-only window onto durable state —
  * planning, approving, and advancing stay on the governed MCP and CLI paths, so
  * nothing here can start work that policy has not seen. For the same reason it
- * never renders an approval phrase, even though the task API carries one: a
- * phrase on screen is one copy-paste away from an approval nobody read.
+ * never renders an approval phrase, even though, in developer mode, the task
+ * API carries one: a phrase on screen is one copy-paste away from an approval
+ * nobody read.
  */
 export function consolePage(): string {
   return `<!doctype html>
@@ -346,7 +347,8 @@ function renderOverview() {
     ["Mode", el("span", {}, badge(p.mode, { enforced: "ok", developer: "info" }), " ", el("span", { class: "muted", text:
       p.mode === "enforced" ? "MELRA is asserted to be the only path to these systems" : "the harness may have another path" }))],
     ["Guardrails", p.unhinged ? badge("off (unsafe-local)", { "off (unsafe-local)": "bad" }) : badge("all applied", { "all applied": "ok" })],
-    ["Mutations", p.mutations === "confirm" ? "require an exact approval phrase" : human(p.mutations)],
+    ["Mutations", p.mutations !== "confirm" ? human(p.mutations)
+      : p.mode === "enforced" ? "require an operator's approval (melra approve)" : "require an exact approval phrase"],
     ["Workspace", el("span", {}, mono(p.workspaceRoot), copyButton(p.workspaceRoot))],
     ["Commands allowed", chips(p.allowedCommands ?? [])],
     ["Browser domains", el("span", {}, chips(p.allowedDomains ?? []), p.allowLocalhost ? el("span", { class: "muted", text: " + localhost" }) : null)],

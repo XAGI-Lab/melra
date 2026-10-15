@@ -383,9 +383,22 @@ export class TaskController {
       ) {
         throw new Error("approval_action_digest_mismatch");
       }
+      // Enforced mode asserts the agent holds no credential, so anything it
+      // sends is refused rather than ignored, and only an operator's
+      // out-of-band decision lets the effect run.
+      if (this.policy.mode === "enforced" && approval !== undefined) {
+        throw new Error("approval_in_band_refused");
+      }
       // A decision an operator recorded wins over anything the caller sent.
       const render = this.approvalRender(task, request).renderDigest;
       const decision = this.store.getApprovalDecision(task.approval.approvalId);
+      // Waiting is only worth it while an operator could still say yes:
+      // `decide` refuses an expired challenge, so past it the task is re-planned.
+      if (this.policy.mode === "enforced" && decision?.channel !== "out_of_band") {
+        throw new Error(
+          Date.parse(task.approval.expiresAt) <= Date.now() ? "approval_expired" : "approval_awaiting_operator",
+        );
+      }
       if (decision !== undefined) {
         if (decision.renderDigest !== render) throw new Error("approval_render_mismatch");
         if (!this.usable(task, decision)) throw new Error("approval_expired");
@@ -907,6 +920,11 @@ export class TaskController {
    */
   decide(taskId: string, renderDigest: string, approver: string): ApprovalDecision {
     const { task, renderDigest: current } = this.approvalView(taskId);
+    // No phrase means an enforced kernel planned it, and would refuse this
+    // in-band decision while the insert-once row kept anyone from correcting it.
+    if (this.policy.mode !== "enforced" && task.approval!.phrase === undefined) {
+      throw new Error("approval_needs_enforced_mode");
+    }
     if (Date.parse(task.approval!.expiresAt) <= Date.now()) throw new Error("approval_expired");
     if (renderDigest !== current) throw new Error("approval_render_mismatch");
     const decision: ApprovalDecision = {
@@ -925,7 +943,11 @@ export class TaskController {
   approvalDecision(task: TaskRecord): ApprovalDecision | undefined {
     if (task.approval === undefined) return undefined;
     const decision = this.store.getApprovalDecision(task.approval.approvalId);
-    return decision !== undefined && this.usable(task, decision) ? decision : undefined;
+    if (decision === undefined || !this.usable(task, decision)) return undefined;
+    // In enforced mode an in-band row is no decision at all, so a workflow node
+    // waits for an operator and is re-planned at expiry instead of failing on
+    // every advance.
+    return this.policy.mode === "enforced" && decision.channel !== "out_of_band" ? undefined : decision;
   }
 
   /**

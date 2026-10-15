@@ -115,6 +115,7 @@ describe("one kernel underneath two harnesses", () => {
       workspaceRoot: workspace,
       dataDirectory: home,
       policyPath,
+      environment: {},
     });
     httpB = await serveHttp({
       runtime: runtimeB,

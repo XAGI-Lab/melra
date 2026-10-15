@@ -81,13 +81,19 @@ The residual risk is the assertion itself. See
 
 ## Approval properties
 
-An approval challenge contains:
+An approval challenge contains a random approval ID, the task ID, a digest of
+the exact operation, and an expiration time. Whether it also carries a phrase,
+and what lets the mutation run, depends on the
+[deployment mode](INSTALLATION.md#deployment-modes):
 
-- a random approval ID;
-- the task ID;
-- a digest of the exact operation;
-- an exact phrase;
-- an expiration time.
+| | Developer mode | Enforced mode |
+|---|---|---|
+| Phrase in the challenge | yes: `APPROVE` plus the first 12 hex digits of the action digest | none |
+| What lets a mutation run | the phrase echoed to `melra_execute`, or a decision recorded with [`melra approve`](INSTALLATION.md#approving-from-the-command-line) | only a decision recorded with `melra approve` by a process in enforced mode |
+| An approval the agent sends | checked against the phrase | refused (`approval_in_band_refused`), even when an operator has already decided |
+| No usable decision yet | `approval_required` | `approval_awaiting_operator`, or `approval_expired` once the challenge has expired |
+| Channel on the receipt | `in_band` | `out_of_band` |
+| Residual risk | anyone who knows the task can compute the phrase, so an echo shows only that something echoed it | anyone with OS access to the data directory can run `melra approve`, which is an operator only if the agent has no such access |
 
 Approvals cannot be reused for a different task or operation. Policy is
 re-evaluated after approval and immediately before execution.
