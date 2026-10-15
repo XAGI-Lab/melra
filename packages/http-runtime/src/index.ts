@@ -158,6 +158,11 @@ export class HttpRuntime {
       // `bytesWritten` is not the signal — it counts headers buffered on a
       // socket that never connected, so ECONNREFUSED reports a nonzero count.
       const failed = (error: Error): void => {
+        // When every pinned address refuses, Node reports one AggregateError
+        // with an empty message; the per-address errors say what happened.
+        if (error instanceof AggregateError && error.message === "") {
+          error = new Error(error.errors.map((inner: Error) => inner.message).join("; "));
+        }
         reject(call.writableFinished ? outcomeUnknown(error.message) : error);
       };
       // A timeout fires the event but does not end the request; without this an

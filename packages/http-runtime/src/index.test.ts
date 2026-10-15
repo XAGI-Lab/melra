@@ -167,6 +167,10 @@ describe("http runtime", () => {
     // not be parked for reconciliation.
     await expect(attempt).rejects.toThrow(/ECONNREFUSED/);
     await expect(attempt).rejects.not.toThrow(/effect_outcome_unknown/);
+    // By name, where every resolved address is tried and each one refuses.
+    await expect(
+      runtime().execute(operation({ method: "GET", url: `http://localhost:${port}/` })),
+    ).rejects.toThrow(/ECONNREFUSED/);
   });
 
   it("does not send a mutation down an idle connection the server has closed", async () => {
