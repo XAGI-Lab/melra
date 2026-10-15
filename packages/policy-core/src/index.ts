@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { readFile } from "node:fs/promises";
-import { basename, resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { hostOf } from "./network-policy.js";
 import type {
@@ -550,7 +550,12 @@ export async function loadPolicy(
   return {
     ...defaults,
     ...parsed,
-    workspaceRoot: resolve(parsed.workspaceRoot ?? workspaceRoot),
+    // A relative root is relative to the file, not to whatever directory the
+    // server happened to start in: Claude Desktop starts servers in `/`.
+    workspaceRoot:
+      parsed.workspaceRoot === undefined
+        ? resolve(workspaceRoot)
+        : resolve(dirname(path), parsed.workspaceRoot),
     allowedCommands: parsed.allowedCommands ?? defaults.allowedCommands,
     allowedDomains: parsed.allowedDomains ?? defaults.allowedDomains,
     // Spread, not replace: a file naming only `maxPerScope` should not silently

@@ -636,11 +636,21 @@ describe("melra CLI", () => {
     expect((await doctor(root, { MELRA_WORKSPACE: second })).workspace).toBe(second);
     expect((await doctor(second, {})).workspace).toBe(second);
 
-    // A file the operator names on purpose may still pin the workspace.
+    // Naming the shared file in MELRA_POLICY, as every older config does, does
+    // not let it pin the workspace either.
+    expect((await doctor(second, { MELRA_POLICY: join(home, "policy.json") })).workspace).toBe(second);
+
+    // A file the operator names on purpose may still pin the workspace, and
+    // may narrow MELRA_WORKSPACE, but never move it elsewhere.
     const pinned = join(root, "pinned.json");
     await writeFile(pinned, JSON.stringify({ workspaceRoot: first }));
     expect((await doctor(second, { MELRA_POLICY: pinned })).workspace).toBe(first);
     expect((await doctor(second, { MELRA_POLICY: pinned, MELRA_WORKSPACE: second })).workspace).toBe(second);
+    expect((await doctor(second, { MELRA_POLICY: pinned, MELRA_WORKSPACE: root })).workspace).toBe(first);
+    // Relative to the file, not to wherever the server started.
+    const relative = join(first, "relative.json");
+    await writeFile(relative, JSON.stringify({ workspaceRoot: "." }));
+    expect((await doctor(root, { MELRA_POLICY: relative })).workspace).toBe(first);
 
     // A file that switches the guardrails off is reported, not hidden.
     const loose = join(root, "loose.json");
@@ -648,6 +658,22 @@ describe("melra CLI", () => {
     const unhinged = await doctor(second, { MELRA_POLICY: loose });
     expect(unhinged.unhinged).toBe(true);
     expect(unhinged.checks.find((check) => check.name === "guardrails")?.status).toBe("warn");
+    // A file the server would refuse fails doctor too, rather than passing as JSON.
+    const typo = join(root, "typo.json");
+    await writeFile(typo, JSON.stringify({ mode: "enfroced" }));
+    expect((await doctor(second, { MELRA_POLICY: typo })).checks.find((check) => check.name === "policy")?.status).toBe(
+      "fail",
+    );
+    // An empty MELRA_HOME is unset, not the working directory.
+    const emptyHome = await execute(process.execPath, [entry, "doctor"], {
+      cwd: second,
+      env: { ...process.env, MELRA_HOME: "", MELRA_WORKSPACE: "", MELRA_POLICY: "" },
+    }).catch((error: { stdout: string }) => error);
+    expect(
+      (JSON.parse(emptyHome.stdout) as { checks: Array<{ name: string; detail: string }> }).checks.find(
+        (check) => check.name === "data-directory",
+      )?.detail,
+    ).not.toBe(second);
 
     // `setup` in projB writes projB, and a fresh shared policy names no workspace.
     const fresh = join(root, "fresh-home");
@@ -689,6 +715,11 @@ describe("melra CLI", () => {
       env: { ...env, MELRA_MODE: "enforced", MELRA_POLICY: "" },
     }).catch((error: { stdout: string }) => error);
     expect((JSON.parse(doctor.stdout) as { mode: string }).mode).toBe("enforced");
+    // A file asking for both: the server refuses, naming the file, but the
+    // CLI still answers `help`.
+    const both = join(root, "both.json");
+    await writeFile(both, JSON.stringify({ mode: "enforced", unhinged: true }));
+    await execute(process.execPath, [entry, "help"], { cwd: root, env: { ...env, MELRA_POLICY: both } });
   });
 
   it("checks a server given the console URL that serve --http prints", async () => {

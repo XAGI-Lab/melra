@@ -10,7 +10,7 @@ import {
   release,
   totalmem,
 } from "node:os";
-import { join, parse, resolve } from "node:path";
+import { isAbsolute, join, parse, relative, resolve } from "node:path";
 import type { DeploymentMode, Operation } from "@melra/protocol";
 import { deploymentMode, HttpOperationSchema } from "@melra/protocol";
 import { BrowserRuntime } from "@melra/browser-runtime";
@@ -117,8 +117,8 @@ export function assertEnforceable(mode: DeploymentMode, unhinged: boolean): void
   if (mode === "enforced" && unhinged) {
     throw new Error(
       "enforced_mode_refuses_unsafe_local: enforced mode exists so the " +
-        "boundary cannot be bypassed. Drop --unsafe-local and MELRA_UNHINGED, " +
-        "or run in developer mode.",
+        "boundary cannot be bypassed. Drop --unsafe-local, MELRA_UNHINGED and " +
+        '"unhinged" in the policy file, or run in developer mode.',
     );
   }
 }
@@ -134,6 +134,18 @@ export function assertEnforceable(mode: DeploymentMode, unhinged: boolean): void
  */
 export function unconfinedRoot(from: string): string {
   return parse(resolve(from)).root;
+}
+
+/**
+ * The root a server confines to, given the one it was started for and the one
+ * a policy file names: the file's only when it lies inside the given root, so
+ * an operator can narrow a workspace but no file can move it elsewhere. A
+ * shared ~/.melra/policy.json naming another project's root used to confine
+ * every later project's server to that one.
+ */
+export function confinedRoot(given: string, named: string): string {
+  const inside = relative(resolve(given), resolve(named));
+  return inside !== "" && !inside.startsWith("..") && !isAbsolute(inside) ? resolve(named) : resolve(given);
 }
 
 export class RuntimeRouter implements OperationExecutor {
@@ -233,10 +245,12 @@ export async function createMelraRuntime(
       ? "enforced"
       : "developer";
   assertEnforceable(mode, unhinged);
-  // The root this runtime was asked for, not one a policy file names: a shared
-  // file is read by servers for many workspaces, and the caller (the CLI
-  // settles MELRA_WORKSPACE against MELRA_POLICY) is the one that knows which.
-  const policy: LocalPolicy = { ...loaded, workspaceRoot, unhinged, mode };
+  const policy: LocalPolicy = {
+    ...loaded,
+    workspaceRoot: confinedRoot(workspaceRoot, loaded.workspaceRoot),
+    unhinged,
+    mode,
+  };
   // Confinement is lifted by moving the root, not by branching inside the
   // runtimes. `maxFileBytes` stays as configured: it bounds how much one read
   // pulls into memory, and an unbounded read is a way to crash the host, not a

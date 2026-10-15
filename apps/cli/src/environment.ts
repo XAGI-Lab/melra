@@ -132,9 +132,9 @@ export function parseCliEnvironment(
     // otherwise names the working directory as the policy file.
     workspaceRoot: resolve(source.MELRA_WORKSPACE?.trim() || defaults.cwd),
     workspaceSet: (source.MELRA_WORKSPACE ?? "").trim() !== "",
-    dataDirectory: resolve(
-      source.MELRA_HOME ?? join(defaults.home, ".melra"),
-    ),
+    // Empty is unset here too, or the database and payload key would land in
+    // the working directory, inside the workspace a confined agent can write.
+    dataDirectory: resolve(source.MELRA_HOME?.trim() || join(defaults.home, ".melra")),
     unhinged: unhingedFromEnvironment(source),
     mode: deploymentMode(source.MELRA_MODE),
     ...(source.MELRA_POLICY === undefined || source.MELRA_POLICY.trim() === ""

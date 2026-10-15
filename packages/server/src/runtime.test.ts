@@ -107,6 +107,18 @@ describe("unhinged runtime", () => {
       environment: {},
     });
     expect(runtime.policy.workspaceRoot).toBe(resolve(workspace));
+    // A file can narrow the workspace to a directory inside it.
+    const narrow = join(base, "narrow.json");
+    await mkdir(join(workspace, "app"));
+    await writeFile(narrow, JSON.stringify({ workspaceRoot: join(workspace, "app") }), "utf8");
+    const narrowed = await createMelraRuntime({
+      workspaceRoot: workspace,
+      dataDirectory: join(base, "narrow-data"),
+      policyPath: narrow,
+      environment: {},
+    });
+    expect(narrowed.policy.workspaceRoot).toBe(resolve(workspace, "app"));
+    await narrowed.close();
     const read = runtime.controller.plan(
       request({ operation: { kind: "file", action: "read", path: "secret.txt" } }),
     );

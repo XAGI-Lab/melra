@@ -93,11 +93,25 @@ All notable changes are documented here. The format follows
   `MELRA_*` settings (`MELRA_MODE`, `MELRA_POLICY`, `MELRA_HOME`, ...) to the
   stdio server it spawns, as the Python SDK does. The MCP SDK forwards only
   `HOME`, `PATH` and a few others, so the server ran configured differently.
+
+- `MelraClient.connect()` in the TypeScript SDK passes `MELRA_HOME`,
+  `MELRA_POLICY`, `MELRA_MODE` and `MELRA_PAYLOAD_KEY` to the stdio server it
+  spawns, and `MELRA_WORKSPACE` when no `cwd` is given. The MCP SDK forwards
+  only `HOME`, `PATH` and a few others, so the server ran configured
+  differently. Settings that would move it off stdio or unconfine it are
+  passed only when given in `env`.
 - `melra conformance --url` takes the console URL that `serve --http` prints
   (`http://127.0.0.1:7457/?token=...`): it checks `/mcp` and uses the token in
   the query when `--token` is not given. It used to post to `/?token=.../mcp`.
-- An empty `MELRA_POLICY` or `MELRA_WORKSPACE` counts as unset, as an empty
-  `MELRA_SOCKET` does, rather than naming the working directory.
+- An empty `MELRA_POLICY`, `MELRA_WORKSPACE` or `MELRA_HOME` counts as unset,
+  as an empty `MELRA_SOCKET` does, rather than naming the working directory;
+  an empty `MELRA_HOME` put the database and payload key inside the
+  workspace.
+- `melra doctor` checks the policy file with the server's own parser, so a
+  file the server refuses (`"mode": "enfroced"`, a malformed grant) fails
+  `doctor` instead of passing as valid JSON. An unreadable
+  `~/.melra/policy.json` fails too, rather than being skipped for the
+  built-in defaults.
 
 - A project's server is confined to that project. `melra setup` wrote the
   first project's workspace into the shared `~/.melra/policy.json`, and the
@@ -106,6 +120,19 @@ All notable changes are documented here. The format follows
   wins, the shared file no longer decides the workspace, and `setup` writes
   no workspace into it. A file named by `MELRA_POLICY` may still pin the
   workspace when `MELRA_WORKSPACE` is unset.
+
+- A policy file can no longer move a server's workspace. `melra setup` wrote
+  the first project's workspace into the shared `~/.melra/policy.json`, and
+  the file's `workspaceRoot` won over `MELRA_WORKSPACE`, so the server for
+  every later project configured per project (Claude Code's `.mcp.json`, VS
+  Code's `.vscode/mcp.json`) could read and write the first one. A policy file
+  may now only narrow `MELRA_WORKSPACE` to a directory inside it. The shared
+  file never decides the workspace, even when `MELRA_POLICY` names it, and
+  `setup` writes no workspace into it. A file the operator names in
+  `MELRA_POLICY` still pins the workspace when `MELRA_WORKSPACE` is unset, and
+  a relative `workspaceRoot` is relative to that file, not to the directory
+  the server started in (`/` under Claude Desktop). Clients with one user-wide
+  config keep the workspace `setup` ran in.
 - `melra setup --write` puts the operator's `MELRA_POLICY` into the client
   config, and refuses one that does not exist. It used to write the default
   `~/.melra/policy.json` instead, so a client ran the permissive default
