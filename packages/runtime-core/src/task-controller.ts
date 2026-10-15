@@ -181,8 +181,27 @@ export class TaskController {
    * preflight — a bound that only one of the three enforced would be a bound
    * with a way around it.
    */
-  private readonly capabilityUsage: CapabilityUsageReader = (grantId) =>
-    capabilityUsageReader(this.store)(grantId);
+  private readonly capabilityUsage: CapabilityUsageReader = (grantId) => {
+    const drawn = capabilityUsageReader(this.store)(grantId);
+    const held = [...(this.reserved.get(grantId)?.values() ?? [])];
+    return {
+      operations: drawn.operations + held.length,
+      amountToday: drawn.amountToday + held.reduce((total, amount) => total + amount, 0),
+    };
+  };
+
+  /**
+   * Draws by tasks between their re-check and their record, per grant and
+   * task. The durable draw is written only once work is verified, so without
+   * this two tasks running at once both saw the grant unspent: two operations
+   * against `maxOperations: 1`, a parallel workflow node overspending
+   * `dailyMax`.
+   *
+   * ponytail: held in this process. Two servers sharing one database can
+   * still both pass a re-check at the same moment; a durable reservation row
+   * would close that if it ever matters.
+   */
+  private readonly reserved = new Map<string, Map<string, number>>();
 
   plan(
     request: TaskRequest,
@@ -357,6 +376,11 @@ export class TaskController {
     let timeout: NodeJS.Timeout | undefined;
     let budgetExhausted = false;
     let shortCircuited = false;
+    if (rechecked.grantId !== undefined) {
+      const held = this.reserved.get(rechecked.grantId) ?? new Map<string, number>();
+      held.set(task.id, classified.spend?.amount ?? 0);
+      this.reserved.set(rechecked.grantId, held);
+    }
     try {
       const opened = this.breaker.check(classified.target);
       if (opened !== undefined) {
@@ -530,6 +554,7 @@ export class TaskController {
     } finally {
       if (timeout !== undefined) clearTimeout(timeout);
       this.active.delete(task.id);
+      if (rechecked.grantId !== undefined) this.reserved.get(rechecked.grantId)?.delete(task.id);
     }
   }
 
@@ -674,14 +699,14 @@ export class TaskController {
       );
     }
     // Read for the grant id only. The work is already done, so this is
-    // accounting rather than permission — a grant that has since run out still
-    // pays for what it authorised.
-    const { grantId } = evaluatePolicy(
-      task.id,
-      request,
-      this.policy,
-      this.capabilityUsage,
-    );
+    // accounting rather than permission: a grant that has since run out still
+    // pays for what it authorised. Asked as if nothing were drawn, because
+    // policy names no grant at all for one that is now exhausted, and the
+    // effect then went uncharged.
+    const { grantId } = evaluatePolicy(task.id, request, this.policy, () => ({
+      operations: 0,
+      amountToday: 0,
+    }));
     if (grantId !== undefined) {
       this.store.recordCapabilityUse(
         grantId,
@@ -728,11 +753,21 @@ export class TaskController {
           ),
         )
       ) {
+        // What the adapter reported before the crash. Evidence alone is not
+        // success: a build that exited 1 beside a dist/ left by an earlier one
+        // would otherwise recover as verified.
+        const sealed = this.store.getTaskResult(task.id);
+        const reported =
+          sealed === undefined
+            ? undefined
+            : (this.payloadCipher.open(sealed, `task:${task.id}:result`) as Record<string, unknown>);
+        const actionSucceeded =
+          reported !== undefined && (reported.success === undefined || reported.success === true);
         const verification = await this.verifier.verify(
           request.requiredEvidence,
           {},
         );
-        if (verification.verified) {
+        if (actionSucceeded && verification.verified) {
           this.resolveAsVerified(task, request, classified, verification.evidence, {
             recovery: "independent_reobservation",
           });

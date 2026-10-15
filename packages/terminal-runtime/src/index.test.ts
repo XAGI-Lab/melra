@@ -1,6 +1,7 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
+import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -29,6 +30,30 @@ describe("TerminalRuntime", () => {
     );
     expect(result.success).toBe(true);
     expect(result.stdout).toBe("hello; touch nope");
+  });
+
+  it("calls a run cancelled after it started an unknown outcome, not a failure", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-terminal-"));
+    roots.push(root);
+    const runtime = await TerminalRuntime.create({ root });
+    const controller = new AbortController();
+    // Does its work at once, then hangs, as a deploy script or `git push` can.
+    const running = runtime.execute(
+      TerminalOperationSchema.parse({
+        kind: "terminal",
+        action: "run",
+        command: process.execPath,
+        args: ["-e", "require('fs').writeFileSync('deployed.txt', '1'); setTimeout(() => {}, 10000)"],
+      }),
+      controller.signal,
+    );
+    const done = join(root, "deployed.txt");
+    for (let waited = 0; !existsSync(done) && waited < 5000; waited += 20) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    controller.abort(new Error("task_budget_exhausted"));
+    await expect(running).rejects.toThrow(/effect_outcome_unknown:task_budget_exhausted/);
+    expect(existsSync(done)).toBe(true);
   });
 
   it("redacts secret-shaped output", () => {
