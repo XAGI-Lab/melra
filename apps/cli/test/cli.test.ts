@@ -871,6 +871,31 @@ describe("melra CLI", () => {
     expect(stderr).toContain("MELRA_SOCKET is set, so 'serve' is on the socket below, not stdio");
   });
 
+  it("fails doctor when a policy file asks for enforced mode beside unsafe-local", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-cli-")));
+    roots.push(root);
+    await mkdir(join(root, "ws"));
+    await writeFile(join(root, "policy.json"), JSON.stringify({ mode: "enforced" }));
+    const result = (await execute(process.execPath, [entry, "doctor"], {
+      cwd: root,
+      env: {
+        ...process.env,
+        MELRA_HOME: join(root, "data"),
+        MELRA_WORKSPACE: join(root, "ws"),
+        MELRA_POLICY: join(root, "policy.json"),
+        MELRA_UNHINGED: "1",
+        MELRA_MODE: "",
+      },
+    }).catch((error: unknown) => error)) as { stdout: string };
+    const report = JSON.parse(result.stdout) as { ready: boolean; checks: Array<{ name: string; status: string; detail: string }> };
+    // The server refuses this; doctor must not call it ready.
+    expect(report.ready).toBe(false);
+    expect(report.checks.find((check) => check.name === "mode")).toMatchObject({
+      status: "fail",
+      detail: expect.stringContaining("enforced_mode_refuses_unsafe_local"),
+    });
+  });
+
   it("refuses to start in enforced mode with the local bypass", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-cli-"));
     roots.push(root);
