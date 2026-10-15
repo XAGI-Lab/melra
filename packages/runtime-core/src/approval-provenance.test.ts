@@ -108,17 +108,88 @@ describe("operator approval decisions", () => {
 
   it("honours a decision made in time for a TTL after it was made", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
-    const { tasks } = await setup({ approvalTtlMs: 60_000 });
-    const [early, late] = [tasks.plan(put("early")), tasks.plan(put("late"))];
+    const { tasks, store } = await setup({ approvalTtlMs: 60_000 });
+    const [early, late, tardy] = [tasks.plan(put("early")), tasks.plan(put("late")), tasks.plan(put("tardy"))];
     vi.advanceTimersByTime(59_000);
     tasks.decide(early.id, tasks.approvalView(early.id).renderDigest, "cli:test");
     tasks.decide(late.id, tasks.approvalView(late.id).renderDigest, "cli:test");
     // Past the challenge's expiry, within the decision's TTL.
     vi.advanceTimersByTime(31_000);
     expect((await tasks.execute(early.id)).task.status).toBe("verified_success");
-    // Past both.
-    vi.advanceTimersByTime(30_000);
+    // 119.5 s: past decidedAt + TTL (119 s), still before expiresAt + TTL
+    // (120 s), so the TTL is measured from the decision, not the expiry.
+    vi.advanceTimersByTime(29_500);
     await expect(tasks.execute(late.id)).rejects.toThrow("approval_expired");
+    // A decision recorded after the challenge expired is never usable.
+    store.recordApprovalDecision({
+      approvalId: tardy.approval!.approvalId,
+      taskId: tardy.id,
+      renderDigest: tasks.approvalView(tardy.id).renderDigest,
+      channel: "in_band",
+      approver: "cli:test",
+      decidedAt: new Date(Date.parse(tardy.approval!.expiresAt) + 1).toISOString(),
+    });
+    await expect(tasks.execute(tardy.id)).rejects.toThrow("approval_expired");
+  });
+
+  it("does not run a decision on anything but what was shown", async () => {
+    const { tasks, store } = await setup();
+    const planned = tasks.plan(put("ledger"));
+    store.recordApprovalDecision({
+      approvalId: planned.approval!.approvalId,
+      taskId: planned.id,
+      renderDigest: "f".repeat(64),
+      channel: "in_band",
+      approver: "cli:test",
+      decidedAt: new Date().toISOString(),
+    });
+    // Even with the right phrase alongside: the recorded decision governs.
+    await expect(
+      tasks.execute(planned.id, { approvalId: planned.approval!.approvalId, phrase: planned.approval!.phrase }),
+    ).rejects.toThrow("approval_render_mismatch");
+  });
+
+  it("claims out of band only where the kernel running the effect enforces it", async () => {
+    // One home, two processes: the server in developer mode, a shell in
+    // enforced mode recording the decision. Or simply a row the agent wrote.
+    const developer = await setup();
+    const enforced = new TaskController(
+      developer.store,
+      { ...createDefaultPolicy(developer.root), mode: "enforced" },
+      { execute: async () => ({ success: true, stored: true }) },
+      await Verifier.create(developer.root),
+      developer.cipher,
+    );
+    const planned = developer.tasks.plan(put("ledger"));
+    enforced.decide(planned.id, enforced.approvalView(planned.id).renderDigest, "cli:test");
+    const done = await developer.tasks.execute(planned.id);
+    expect(done.receipt?.policyDecision.approval?.channel).toBe("in_band");
+    expect(done.certificate).toMatchObject({ mode: "developer", approvalChannel: "in_band" });
+  });
+
+  it("keeps the mode an effect ran under on what is written after it", async () => {
+    // Run in developer mode, parked on an unknown outcome, settled by an
+    // enforced-mode process: the certificate describes the run, not the settler.
+    const probe = async () => ({ status: 200, content: JSON.stringify({ status: "applied" }) });
+    const developer = await setup({}, async () => {
+      throw outcomeUnknown("socket hang up");
+    });
+    const enforced = new TaskController(
+      developer.store,
+      { ...createDefaultPolicy(developer.root), mode: "enforced" },
+      { execute: async () => ({ success: true }) },
+      await Verifier.create(developer.root, { probe }),
+      developer.cipher,
+    );
+    const planned = developer.tasks.plan(charge());
+    await developer.tasks.execute(planned.id, {
+      approvalId: planned.approval!.approvalId,
+      phrase: planned.approval!.phrase,
+    });
+    const settled = await enforced.execute(planned.id);
+    expect(settled.task.status).toBe("verified_success");
+    expect(settled.receipt?.mode).toBe("developer");
+    expect(settled.certificate?.mode).toBe("developer");
   });
 
   it("names how every task was authorised", async () => {
@@ -140,6 +211,28 @@ describe("operator approval decisions", () => {
   });
 });
 
+const charge = () =>
+  TaskRequestSchema.parse({
+    goal: "Charge the customer",
+    operation: {
+      kind: "http",
+      action: "request",
+      method: "POST",
+      url: "http://localhost:9/charges",
+      idempotencyKey: "charge-1",
+    },
+    requiredEvidence: [{ type: "result_equals", path: "success", value: true }],
+    reconciliation: [
+      {
+        type: "http_resource_matches",
+        url: "http://localhost:9/charges/{{idempotencyKey}}",
+        method: "GET",
+        path: "json.status",
+        value: "applied",
+      },
+    ],
+  });
+
 describe("approval on receipts written without a caller", () => {
   /** A charge that was approved, sent, and never answered. */
   async function parked(probe: EvidenceProbe) {
@@ -150,28 +243,7 @@ describe("approval on receipts written without a caller", () => {
       },
       probe,
     );
-    const task = context.tasks.plan(
-      TaskRequestSchema.parse({
-        goal: "Charge the customer",
-        operation: {
-          kind: "http",
-          action: "request",
-          method: "POST",
-          url: "http://localhost:9/charges",
-          idempotencyKey: "charge-1",
-        },
-        requiredEvidence: [{ type: "result_equals", path: "success", value: true }],
-        reconciliation: [
-          {
-            type: "http_resource_matches",
-            url: "http://localhost:9/charges/{{idempotencyKey}}",
-            method: "GET",
-            path: "json.status",
-            value: "applied",
-          },
-        ],
-      }),
-    );
+    const task = context.tasks.plan(charge());
     await context.tasks.execute(task.id, { approvalId: task.approval!.approvalId, phrase: task.approval!.phrase });
     return { ...context, task };
   }

@@ -366,7 +366,16 @@ export class TaskController {
       if (decision !== undefined) {
         if (decision.renderDigest !== render) throw new Error("approval_render_mismatch");
         if (!this.usable(task, decision)) throw new Error("approval_expired");
-        task.approvedBy = decision;
+        // Out of band is this kernel's claim to make, not the row's: a
+        // developer-mode kernel cannot vouch that nothing the agent touched
+        // wrote it, whatever mode the process that recorded it was in.
+        task.approvedBy = {
+          ...decision,
+          channel:
+            decision.channel === "out_of_band" && this.policy.mode === "enforced"
+              ? "out_of_band"
+              : "in_band",
+        };
       } else {
         const approvalResult = validateApproval(task.approval, approval);
         if (!approvalResult.ok) {
@@ -390,6 +399,7 @@ export class TaskController {
     this.active.set(task.id, controller);
     this.store.inFlight.add(task.id);
     task.status = "running";
+    task.mode = this.policy.mode;
     task.updatedAt = now();
     // Status and owner land in one write, so no running row is ever unowned.
     this.store.saveTask(task, this.store.ownerId());
@@ -969,7 +979,7 @@ export class TaskController {
         effect,
         request.reconciliation.length > 0,
       ),
-      mode: this.policy.mode,
+      mode: task.mode ?? this.policy.mode,
       policyDecision: {
         outcome: task.policyDecision.outcome,
         policyVersion: task.policyDecision.policyVersion,
@@ -1064,7 +1074,7 @@ export class TaskController {
       receiptIds: task.receiptIds,
       evidence,
       createdAt: now(),
-      mode: this.policy.mode,
+      mode: task.mode ?? this.policy.mode,
       ...(approvalChannel === undefined ? {} : { approvalChannel }),
     });
     task.certificateId = certificate.certificateId;

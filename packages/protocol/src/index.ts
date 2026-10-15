@@ -1185,6 +1185,12 @@ export interface TaskRecord {
   approval?: ApprovalChallenge;
   /** What authorised the run, written in the same save that marks it running. */
   approvedBy?: ApprovalDecision;
+  /**
+   * The deployment mode the effect ran under, written in that same save, so a
+   * receipt or certificate written later by recovery or reconciliation in a
+   * process deployed differently still says how the effect was governed.
+   */
+  mode?: string;
   result?: Record<string, unknown>;
   error?: string;
   attempts?: number;

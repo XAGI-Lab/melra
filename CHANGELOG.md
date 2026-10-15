@@ -44,6 +44,9 @@ All notable changes are documented here. The format follows
 - A receipt written when reconciliation found an effect never happened kept no
   approval id, and one settled later as verified carried a made-up approval
   response. Both now carry the approval the task actually ran under.
+- A receipt written by recovery or reconciliation in a process deployed in a
+  different mode stamped that process's `mode`, not the one the effect ran
+  under. The mode is now recorded when the task starts running.
 - Recovery keeps a bounded loop's place. A loop waiting on a step past its
   first iteration lost its iteration count on any restart, so the next
   advance started again at iteration 0. If `until` had come true meanwhile,
