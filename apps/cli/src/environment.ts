@@ -14,9 +14,11 @@ export interface CliEnvironment {
   workspaceSet?: boolean;
   dataDirectory: string;
   /**
-   * `MELRA_APPROVER`: the name `melra approve` records as the approver, as
-   * `cli:<name>`. Receipts carry it and an agent can read receipts, so it is
-   * a label the operator chooses, never the OS account name.
+   * `MELRA_APPROVER`, as set: the name `melra approve` records as the
+   * approver, as `cli:<name>`. Receipts carry it and an agent can read
+   * receipts, so it is a label the operator chooses, never the OS account
+   * name. Checked by `approverLabel` only where it is used, so a bad value
+   * cannot stop `serve` or `help`.
    */
   approver: string;
   unhinged: boolean;
@@ -57,10 +59,12 @@ export function serverLaunch(
     : { command: "melra", args: ["serve"] };
 }
 
-function approverLabel(value: string | undefined): string {
-  const label = value?.trim() || "operator";
-  if (!/^[\w.@-]{1,64}$/.test(label)) throw new Error("approver_label_invalid");
-  return label;
+/** The approver as receipts record it: `cli:` and a label nothing can disguise. */
+export function approverLabel(env: CliEnvironment): string {
+  if (!/^[\p{L}\p{N}_.@-]{1,64}$/u.test(env.approver)) {
+    throw new Error("MELRA_APPROVER must be 1 to 64 letters, digits, '.', '_', '@' or '-'");
+  }
+  return `cli:${env.approver}`;
 }
 
 function cdpEndpoint(value: string | undefined): string | undefined {
@@ -147,7 +151,7 @@ export function parseCliEnvironment(
     // Empty is unset here too, or the database and payload key would land in
     // the working directory, inside the workspace a confined agent can write.
     dataDirectory: resolve(source.MELRA_HOME?.trim() || join(defaults.home, ".melra")),
-    approver: approverLabel(source.MELRA_APPROVER),
+    approver: source.MELRA_APPROVER?.trim() || "operator",
     unhinged: unhingedFromEnvironment(source),
     mode: deploymentMode(source.MELRA_MODE),
     ...(source.MELRA_POLICY === undefined || source.MELRA_POLICY.trim() === ""

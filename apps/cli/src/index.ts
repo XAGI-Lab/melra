@@ -47,9 +47,11 @@ import {
 } from "@melra/policy-core";
 import {
   type CliEnvironment,
+  approverLabel,
   parseCliEnvironment,
   serverLaunch,
 } from "./environment.js";
+import { approvalScreen } from "./approval-screen.js";
 import { runConformance } from "./conformance.js";
 import { statusCommand, tasksCommand, watchCommand } from "./activity.js";
 import { clientStatuses, clientsCheck, detectClients } from "./client-status.js";
@@ -712,9 +714,10 @@ async function runTask(args: string[], env: CliEnvironment): Promise<number> {
       }
       // Shown the effect and asked, rather than made to retype a phrase that
       // proves only that someone typed it.
+      const approver = approverLabel(env);
       const view = melra.controller.approvalView(task.id);
       if (!(await confirmInTerminal(view))) return 1;
-      melra.controller.decide(task.id, view.renderDigest, `cli:${env.approver}`);
+      melra.controller.decide(task.id, view.renderDigest, approver);
       const execution = await melra.controller.execute(task.id);
       output(execution);
       return execution.task.status === "verified_success" ? 0 : 2;
@@ -731,17 +734,7 @@ type ApprovalView = ReturnType<MelraRuntime["controller"]["approvalView"]>;
 
 /** The effect as an approver needs to see it, on stderr, then y/N. */
 async function confirmInTerminal(view: ApprovalView): Promise<boolean> {
-  const { contract } = view;
-  process.stderr.write(
-    [
-      `Task ${view.task.id}, waiting for approval until ${view.task.approval!.expiresAt}`,
-      `Goal (stated by the agent, unverified): ${contract.metadata.goal}`,
-      `Effect: ${contract.capability} on ${contract.target} (${contract.effect}, ${contract.risk} risk)`,
-      `Contract digest: ${view.renderDigest}`,
-      JSON.stringify(contract, null, 2),
-      "",
-    ].join("\n"),
-  );
+  process.stderr.write(approvalScreen(view));
   const prompt = createInterface({ input: process.stdin, output: process.stderr });
   const answer = (await prompt.question("Approve this effect? [y/N] ")).trim().toLowerCase();
   prompt.close();
@@ -750,19 +743,22 @@ async function confirmInTerminal(view: ApprovalView): Promise<boolean> {
 
 /**
  * Records an approval for a task another process planned, without running it:
- * the agent that planned it runs it, and in enforced mode only a decision
- * made here (never a phrase it sends) lets it.
+ * the agent that planned it runs it, and the decision lets it.
  */
 async function approveCommand(args: string[], env: CliEnvironment): Promise<number> {
   // `--mode` is the one flag here that takes a value.
   const taskId = args.find((value, index) => !value.startsWith("--") && args[index - 1] !== "--mode");
   if (taskId === undefined) throw new Error("approve requires a task ID");
+  const approver = approverLabel(env);
   const melra = await runtime(env);
   try {
     const view = melra.controller.approvalView(taskId);
     if (args.includes("--deny")) {
-      output({ task: melra.controller.cancel(taskId) });
-      return 0;
+      melra.controller.cancel(taskId);
+      // Read back: another process may have started it in the meantime.
+      const task = melra.controller.status(taskId);
+      output({ task });
+      return task.status === "cancelled" ? 0 : 1;
     }
     if (!args.includes("--yes")) {
       if (!process.stdin.isTTY || args.includes("--json")) {
@@ -779,7 +775,7 @@ async function approveCommand(args: string[], env: CliEnvironment): Promise<numb
         return 1;
       }
     }
-    const decision = melra.controller.decide(taskId, view.renderDigest, `cli:${env.approver}`);
+    const decision = melra.controller.decide(taskId, view.renderDigest, approver);
     if (decision.channel === "in_band") {
       process.stderr.write(
         "Recorded in band: this process is in developer mode. Set \"mode\": \"enforced\" in the policy file (or MELRA_MODE=enforced) for the server and for this command.\n",

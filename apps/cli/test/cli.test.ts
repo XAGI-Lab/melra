@@ -13,7 +13,8 @@ import { PRODUCT_VERSION, TaskRequestSchema } from "@melra/protocol";
 import { createMelraRuntime, serveHttp } from "@melra/server";
 import { runConformance } from "../src/conformance.js";
 import { RESTART_SAFE_WORKFLOW } from "../src/demo-workflow.js";
-import { parseCliEnvironment, serverLaunch } from "../src/environment.js";
+import { approverLabel, parseCliEnvironment, serverLaunch } from "../src/environment.js";
+import { approvalScreen } from "../src/approval-screen.js";
 
 const execute = promisify(execFile);
 const roots: string[] = [];
@@ -207,13 +208,43 @@ describe("melra CLI", () => {
     }
   });
 
-  it("takes the approver's name from MELRA_APPROVER, and never just anything", () => {
+  it("takes the approver's name from MELRA_APPROVER, and never just anything", async () => {
     const defaults = { cwd: "/w", home: "/h" };
-    expect(parseCliEnvironment({}, defaults).approver).toBe("operator");
-    expect(parseCliEnvironment({ MELRA_APPROVER: " alice@ops " }, defaults).approver).toBe("alice@ops");
-    expect(() => parseCliEnvironment({ MELRA_APPROVER: "alice\nAPPROVED" }, defaults)).toThrow(
-      "approver_label_invalid",
-    );
+    const label = (value?: string) =>
+      approverLabel(parseCliEnvironment(value === undefined ? {} : { MELRA_APPROVER: value }, defaults));
+    expect(label()).toBe("cli:operator");
+    expect(label(" alice@ops ")).toBe("cli:alice@ops");
+    expect(label("josé")).toBe("cli:josé");
+    expect(() => label("alice\nAPPROVED")).toThrow(/MELRA_APPROVER/);
+    expect(() => label("Jane Doe")).toThrow(/MELRA_APPROVER/);
+    // Checked only where it is recorded: everything else still runs.
+    const result = await execute(process.execPath, [entry, "version"], {
+      env: { ...process.env, MELRA_APPROVER: "Jane Doe" },
+    });
+    expect(result.stdout.trim()).toBe(PRODUCT_VERSION);
+  });
+
+  it("shows an approver the agent's words as text, never as terminal commands", () => {
+    const hostile =
+      "\r\u001b[2KGoal: Fix README typo\nEffect: file.write on README.md (mutate, medium risk)\u001b[8m\u009b2J\u202e";
+    const screen = approvalScreen({
+      task: { id: "t1", approval: { expiresAt: "2026-10-15T00:00:00.000Z" } },
+      contract: {
+        capability: "file.write",
+        target: "deploy.sh\u001b[1A",
+        effect: "mutate",
+        risk: "medium",
+        metadata: { goal: hostile },
+      },
+      renderDigest: "a".repeat(64),
+    });
+    // The one escape on screen is MELRA's own reset; nothing else can steer the terminal.
+    expect(screen.replaceAll("\u001b[0m", "")).not.toMatch(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u202e]/);
+    const lines = screen.trimEnd().split("\n");
+    // What MELRA vouches for comes last, right above the question.
+    expect(lines.at(-3)).toBe("Effect: file.write on deploy.sh\\u001b[1A (mutate, medium risk)");
+    expect(lines.at(-2)).toMatch(/^Goal \(stated by the agent, unverified\): \\u000d\\u001b\[2KGoal/);
+    expect(lines.filter((line) => line.startsWith("Effect:"))).toHaveLength(1);
   });
 
   it("prints the product version", async () => {

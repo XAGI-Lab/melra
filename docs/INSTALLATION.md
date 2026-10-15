@@ -204,7 +204,7 @@ MELRA uses these environment variables:
 | `MELRA_PAYLOAD_KEY` | Optional canonical base64url 256-bit payload key | private `<MELRA_HOME>/payload.key` |
 | `MELRA_UNHINGED` | Set to `1` to remove every guardrail — see below | unset (all guardrails on) |
 | `MELRA_MODE` | `developer` or `enforced` — see [deployment modes](#deployment-modes) | `developer` |
-| `MELRA_APPROVER` | The name [`melra approve`](#approving-from-the-command-line) records as the approver, as `cli:<name>`. Letters, digits, `.`, `_`, `@` and `-`, at most 64. Receipts carry it, and an agent can read receipts. | `operator` |
+| `MELRA_APPROVER` | The name [`melra approve`](#approving-from-the-command-line) records as the approver, as `cli:<name>`. Letters (any script), digits, `.`, `_`, `@` and `-`, at most 64; checked when `melra approve` or `melra run` records a decision. Receipts carry it, and an agent can read receipts. | `operator` |
 | `MELRA_HTTP_PORT` | Port for `melra serve --http` | `7457` |
 | `MELRA_HTTP_TOKEN` | Bearer token for `melra serve --http` | a fresh random token, printed at startup |
 | `MELRA_HTTP_OAUTH` | Set to `0` so that token is the only way in and no client can register itself | unset (clients may register, on loopback) |
