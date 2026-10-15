@@ -223,6 +223,200 @@ describe("workflow recovery", () => {
   });
 });
 
+describe("loops across a restart", () => {
+  const loop = (extra: unknown[] = []) =>
+    workflow([
+      {
+        id: "loop",
+        type: "bounded_loop",
+        maxIterations: 3,
+        until: { type: "file_exists", path: "done.flag" },
+        body: [put("step")],
+      },
+      ...extra,
+    ]);
+
+  it("keeps a waiting loop's place, so an approved step still runs", async () => {
+    const { controller, root, store, tasks, cipher, done } = await setup();
+    const planned = controller.plan(loop());
+    let run = (await controller.advance(planned.id)).run;
+    run = (await controller.advance(planned.id, approvalsFor(run))).run;
+    expect(run.nodes.loop).toMatchObject({ status: "awaiting_approval", iterations: 1 });
+    // The world moves on while iteration 1 waits for its approval.
+    await writeFile(join(root, "done.flag"), "x");
+    const restarted = new WorkflowController(store, tasks, cipher);
+    await restarted.recoverInterrupted();
+    // Restarted at iteration 0, the loop asked `until` of iteration 0's task,
+    // stopped there, and the approved step never ran.
+    run = (await restarted.advance(planned.id, approvalsFor(restarted.status(planned.id)))).run;
+    expect(run.status).toBe("verified_complete");
+    expect(done).toEqual(["step", "step"]);
+  });
+
+  it("keeps the place of a loop with several steps, at each step it can wait on", async () => {
+    for (const waiting of [0, 1]) {
+      const { controller, root, store, tasks, cipher, done } = await setup();
+      const planned = controller.plan(
+        workflow([
+          {
+            id: "loop",
+            type: "bounded_loop",
+            maxIterations: 3,
+            until: { type: "file_exists", path: "done.flag" },
+            body: [put("a"), put("b")],
+          },
+        ]),
+      );
+      let run = (await controller.advance(planned.id)).run;
+      // Approve through iteration 0 and up to the step under test in iteration 1.
+      for (let step = 0; step < 2 + waiting; step += 1) {
+        run = (await controller.advance(planned.id, approvalsFor(run))).run;
+      }
+      const live = run.nodes.loop!;
+      expect(live).toMatchObject({ status: "awaiting_approval", iterations: 1 });
+      await writeFile(join(root, "done.flag"), "x");
+      const restarted = new WorkflowController(store, tasks, cipher);
+      await restarted.recoverInterrupted();
+      const recovered = restarted.status(planned.id).nodes.loop!;
+      expect([recovered.iterations, recovered.taskIds]).toEqual([live.iterations, live.taskIds]);
+      run = restarted.status(planned.id);
+      for (let step = 0; step < 4 && run.status !== "verified_complete"; step += 1) {
+        run = (await restarted.advance(planned.id, approvalsFor(run))).run;
+      }
+      expect(run.status).toBe("verified_complete");
+      expect(done).toEqual(["a", "b", "a", "b"]);
+    }
+  });
+
+  it("finishes a loop that an older recovery recorded finished halfway", async () => {
+    // alpha.12's recovery recorded whatever tasks it found as a finished
+    // loop. One without `until` finishes only at maxIterations, so that record
+    // is short, and is downgraded rather than trusted.
+    const { controller, store, tasks, cipher, done } = await setup();
+    const planned = controller.plan(
+      workflow([{ id: "loop", type: "bounded_loop", maxIterations: 2, body: [put("a")] }]),
+    );
+    let run = (await controller.advance(planned.id)).run;
+    run = (await controller.advance(planned.id, approvalsFor(run))).run;
+    const [first, second] = run.nodes.loop!.taskIds;
+    // As if the process died before planning iteration 1.
+    store.database.prepare("DELETE FROM tasks WHERE id = ?").run(second!);
+    type Emit = (type: string, data: Record<string, unknown>) => void;
+    const legacy = controller as unknown as {
+      transition(run: WorkflowRun, change: (draft: WorkflowRun, emit: Emit) => void): WorkflowRun;
+    };
+    legacy.transition(run, (draft, emit) => {
+      const state = { status: "verified_complete" as const, taskIds: [first!], iterations: 1 };
+      emit("workflow.node_changed", { nodeId: "loop", from: draft.nodes.loop!.status, state });
+      draft.nodes.loop = state;
+    });
+
+    const restarted = new WorkflowController(store, tasks, cipher);
+    await restarted.recoverInterrupted();
+    expect(restarted.status(planned.id).nodes.loop?.status).toBe("pending");
+    run = restarted.status(planned.id);
+    for (let step = 0; step < 4 && run.status !== "verified_complete"; step += 1) {
+      run = (await restarted.advance(planned.id, approvalsFor(run))).run;
+    }
+    expect(run.status).toBe("verified_complete");
+    expect(done).toEqual(["a", "a"]);
+  });
+
+  it("finishes a loop with until that an older recovery recorded finished mid-iteration", async () => {
+    // The live path checks `until` only after a whole iteration, so a loop
+    // recorded finished after a0 alone came from a legacy recovery.
+    const { controller, store, tasks, cipher, done } = await setup();
+    const planned = controller.plan(
+      workflow([
+        {
+          id: "loop",
+          type: "bounded_loop",
+          maxIterations: 2,
+          until: { type: "file_exists", path: "done.flag" },
+          body: [put("a"), put("b")],
+        },
+      ]),
+    );
+    let run = (await controller.advance(planned.id)).run;
+    run = (await controller.advance(planned.id, approvalsFor(run))).run;
+    const [first, second] = run.nodes.loop!.taskIds;
+    store.database.prepare("DELETE FROM tasks WHERE id = ?").run(second!);
+    type Emit = (type: string, data: Record<string, unknown>) => void;
+    const legacy = controller as unknown as {
+      transition(run: WorkflowRun, change: (draft: WorkflowRun, emit: Emit) => void): WorkflowRun;
+    };
+    legacy.transition(run, (draft, emit) => {
+      const state = { status: "verified_complete" as const, taskIds: [first!], iterations: 1 };
+      emit("workflow.node_changed", { nodeId: "loop", from: draft.nodes.loop!.status, state });
+      draft.nodes.loop = state;
+    });
+
+    const restarted = new WorkflowController(store, tasks, cipher);
+    await restarted.recoverInterrupted();
+    run = restarted.status(planned.id);
+    for (let step = 0; step < 6 && run.status !== "verified_complete"; step += 1) {
+      run = (await restarted.advance(planned.id, approvalsFor(run))).run;
+    }
+    expect(done.slice(0, 2)).toEqual(["a", "b"]);
+  });
+
+  it("keeps a condition that chose an empty branch, whatever its predicate says now", async () => {
+    const { controller, root, store, tasks, cipher, done } = await setup();
+    const planned = controller.plan(
+      workflow([
+        { id: "inspect", type: "operation", request: read() },
+        {
+          id: "choose",
+          type: "condition",
+          dependsOn: ["inspect"],
+          sourceNodeId: "inspect",
+          predicate: { type: "file_exists", path: "flag" },
+          whenTrue: [put("taken")],
+          whenFalse: [],
+        },
+        { id: "after", type: "operation", dependsOn: ["choose"], request: put("after") },
+      ]),
+    );
+    let run = (await controller.advance(planned.id)).run;
+    for (let step = 0; step < 3 && run.nodes.after?.status !== "awaiting_approval"; step += 1) {
+      run = (await controller.advance(planned.id, approvalsFor(run))).run;
+    }
+    expect(run.nodes.choose).toMatchObject({ status: "verified_complete", taskIds: [] });
+    await writeFile(join(root, "flag"), "x");
+    const restarted = new WorkflowController(store, tasks, cipher);
+    await restarted.recoverInterrupted();
+    run = restarted.status(planned.id);
+    for (let step = 0; step < 4 && run.status !== "verified_complete"; step += 1) {
+      run = (await restarted.advance(planned.id, approvalsFor(run))).run;
+    }
+    expect(run.status).toBe("verified_complete");
+    // The branch not taken stays not taken.
+    expect(done).toEqual(["after"]);
+  });
+
+  it("does not reopen a loop that finished early on until", async () => {
+    const { controller, root, store, tasks, cipher, done } = await setup();
+    await writeFile(join(root, "done.flag"), "x");
+    const planned = controller.plan(
+      loop([{ id: "after", type: "operation", dependsOn: ["loop"], request: put("after") }]),
+    );
+    let run = (await controller.advance(planned.id)).run;
+    run = (await controller.advance(planned.id, approvalsFor(run))).run;
+    expect(run.nodes.loop).toMatchObject({ status: "verified_complete", iterations: 1 });
+    const restarted = new WorkflowController(store, tasks, cipher);
+    await restarted.recoverInterrupted();
+    expect(restarted.status(planned.id).nodes.loop?.status).toBe("verified_complete");
+    // Reopened, the loop would ask `until` again of a world that changed.
+    await unlink(join(root, "done.flag"));
+    run = restarted.status(planned.id);
+    for (let step = 0; step < 4 && run.status !== "verified_complete"; step += 1) {
+      run = (await restarted.advance(planned.id, approvalsFor(run))).run;
+    }
+    expect(run.status).toBe("verified_complete");
+    expect(done).toEqual(["step", "after"]);
+  });
+});
+
 describe("operator halts", () => {
   it("pauses a run that needs recovery and resumes it still needing it", async () => {
     const { controller, store, tasks, cipher } = await setup();
