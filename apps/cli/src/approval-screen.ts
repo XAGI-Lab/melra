@@ -54,22 +54,29 @@ function bounded(text: string, limit = 160): string {
  * Bounded so no field can push the rest off the screen, and saying so when it
  * cut something.
  */
-function operationLines(operation: unknown, limit = 12): string[] {
-  const lines: string[] = [];
+function operationLines(operation: unknown, arrayLimit = 12): string[] {
+  const scalars: string[] = [];
+  const arrays: string[] = [];
   const walk = (value: unknown, path: string): void => {
     if (Array.isArray(value)) {
-      if (value.length === 0) lines.push(`${path}: []`);
+      if (value.length === 0) scalars.push(`${path}: []`);
       value.forEach((item, index) => walk(item, `${path}[${index}]`));
     } else if (value !== null && typeof value === "object") {
       for (const [key, item] of Object.entries(value)) walk(item, path === "" ? key : `${path}.${key}`);
     } else {
-      lines.push(`${bounded(path, 60)}: ${bounded(typeof value === "string" ? JSON.stringify(value) : String(value))}`);
+      const line = `${bounded(path, 60)}: ${bounded(typeof value === "string" ? JSON.stringify(value) : String(value))}`;
+      (/\[\d+\]/.test(path) ? arrays : scalars).push(line);
     }
   };
   walk(operation, "");
-  return lines.length > limit
-    ? [...lines.slice(0, limit), `…(+${lines.length - limit} more fields, all in the JSON above)`]
-    : lines;
+  // Scalars in full and first, then arrays: no number of list items (a
+  // command's args, a request's headers) can push an effect-bearing scalar
+  // (cwd, env, a move's destination, a body) off the screen.
+  const shownArrays =
+    arrays.length > arrayLimit
+      ? [...arrays.slice(0, arrayLimit), `…(+${arrays.length - arrayLimit} more list items, all in the JSON above)`]
+      : arrays;
+  return [...scalars, ...shownArrays];
 }
 
 /**

@@ -9,12 +9,13 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
-import { PRODUCT_VERSION, TaskRequestSchema } from "@melra/protocol";
+import { PRODUCT_VERSION, TaskRequestSchema, TerminalOperationSchema } from "@melra/protocol";
 import { createMelraRuntime, serveHttp } from "@melra/server";
 import { runConformance } from "../src/conformance.js";
 import { RESTART_SAFE_WORKFLOW } from "../src/demo-workflow.js";
 import { approverLabel, parseCliEnvironment, serverLaunch } from "../src/environment.js";
 import { approvalScreen } from "../src/approval-screen.js";
+import { taskTarget } from "../src/activity.js";
 
 const execute = promisify(execFile);
 const roots: string[] = [];
@@ -262,6 +263,38 @@ describe("melra CLI", () => {
     expect(tail.filter((line) => line.startsWith("Effect:"))).toHaveLength(1);
   });
 
+  it("keeps a command's environment and directory in the summary past many arguments", () => {
+    // Schema-parsed, so fields come in the order a real request carries them:
+    // args before cwd and env. Padding the args must not cut the env.
+    const operation = TerminalOperationSchema.parse({
+      kind: "terminal",
+      action: "run",
+      command: "node",
+      args: [...Array.from({ length: 40 }, (_, index) => `--flag${index}`), "-e", "harmless()"],
+      cwd: "sub",
+      env: { NODE_OPTIONS: "--require /tmp/x.js" },
+    });
+    const screen = approvalScreen({
+      task: { id: "t1", approval: { expiresAt: "x" } },
+      contract: { capability: "terminal.run", target: "command:node", effect: "mutate", risk: "medium", operation, metadata: { goal: "g" } },
+      renderDigest: "a".repeat(64),
+    });
+    const tail = screen.slice(screen.lastIndexOf("Operation:"));
+    expect(tail).toContain("NODE_OPTIONS");
+    expect(tail).toContain('cwd: "sub"');
+    // The list is capped, and says so.
+    expect(tail).toMatch(/more list items, all in the JSON above/);
+  });
+
+  it("leaves a task's target as it is for JSON, escaping it only where it is shown", () => {
+    const raw = "notes/\u202ereport\u009b.md";
+    const task = {
+      request: { operation: { kind: "file", action: "write", path: raw, content: "x" } },
+    } as unknown as Parameters<typeof taskTarget>[0];
+    // A display escape baked in here would change the value `melra watch` emits.
+    expect(taskTarget(task)).toBe(raw);
+  });
+
   it("keeps hidden characters out of every JSON it prints", async () => {
     const root = await realpath(await mkdtemp(join(tmpdir(), "melra-cli-")));
     roots.push(root);
@@ -283,6 +316,16 @@ describe("melra CLI", () => {
       expect(asked.code).toBe(3);
       expect(asked.stdout).not.toMatch(/[\u0080-\u009f\u202e]/);
       expect(JSON.parse(asked.stdout).contract.metadata.goal).toBe("Write\u009b2J\u202ethe report");
+      // `melra tasks --json`, which the approval hint points at, too.
+      server.controller.plan(
+        TaskRequestSchema.parse({
+          goal: "Write",
+          operation: { kind: "file", action: "write", path: "a\u202eb\u009b.txt", content: "x" },
+        }),
+      );
+      const listed = await execute(process.execPath, [entry, "tasks", "--json"], { cwd: root, env });
+      expect(listed.stdout).not.toMatch(/[\u0080-\u009f\u202e]/);
+      expect(listed.stdout).toContain("a\\u202eb\\u009b.txt");
     } finally {
       await server.close();
     }

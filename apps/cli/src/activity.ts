@@ -121,12 +121,13 @@ export function taskTarget(task: TaskRecord): string {
   // `command:pnpm`: the stored arguments are already redacted (#122), and the
   // console shows them the same way.
   const operation = task.request.operation as { kind: string; command?: string; args?: string[] };
-  // Agent-chosen, so spelled out before it reaches a terminal.
+  // Raw: the JSON emitters escape the whole payload, and the human table and
+  // `watch` escape this field at the point they print it.
   if (operation.kind === "terminal" && operation.command !== undefined) {
-    return printable([operation.command, ...(operation.args ?? [])].join(" "));
+    return [operation.command, ...(operation.args ?? [])].join(" ");
   }
   try {
-    return printable(classifyOperation(task.request.operation).target);
+    return classifyOperation(task.request.operation).target;
   } catch {
     return "";
   }
@@ -153,7 +154,7 @@ export function tasksCommand(env: CliEnvironment, options: TasksOptions): number
   );
   if (!humanOutput(options.json)) {
     // The shape `/api/tasks` answers with, minus approvals.
-    write(JSON.stringify({ tasks: tasks.map(visible) }, null, 2));
+    write(printable(JSON.stringify({ tasks: tasks.map(visible) }, null, 2), true));
     return 0;
   }
   if (tasks.length === 0) {
@@ -170,7 +171,7 @@ export function tasksCommand(env: CliEnvironment, options: TasksOptions): number
     shortId(task.id),
     task.status,
     operationName(task),
-    truncate(taskTarget(task), 48),
+    truncate(printable(taskTarget(task)), 48),
     `${task.policyDecision.effect}/${task.policyDecision.risk}`,
     ago(task.updatedAt),
   ]);
@@ -240,7 +241,8 @@ export function watchCommand(env: CliEnvironment, options: { json: boolean }): P
   let store: SqliteStore | undefined;
   let primed = false;
 
-  const emit = (event: WatchEvent) => write(human ? describe(event) : JSON.stringify(event));
+  const emit = (event: WatchEvent) =>
+    write(human ? describe(event) : printable(JSON.stringify(event), true));
 
   const poll = () => {
     // The database appears with the first task; until then there is nothing to read.
@@ -437,7 +439,7 @@ export async function statusCommand(
     },
   };
   if (!humanOutput(options.json)) {
-    write(JSON.stringify(report, null, 2));
+    write(printable(JSON.stringify(report, null, 2), true));
     return 0;
   }
   const row = (label: string, value: string) => write(`  ${label.padEnd(11)} ${value}`);
