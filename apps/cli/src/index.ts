@@ -511,7 +511,7 @@ async function doctor(env: CliEnvironment): Promise<{
       // reads as a contradiction that is not there.
       : { name: "guardrails", status: "pass", detail: "all applied" },
   );
-  // Not a `fail` either way. Developer mode is a legitimate choice and the
+  // Neither mode is a `fail` on its own. Developer mode is a legitimate choice and the
   // default; what is not legitimate is a machine that cannot say which one it is,
   // or one asking for enforced mode and unsafe-local at once, which a policy file
   // can do past the flag check and which the server then refuses to start.
