@@ -18,7 +18,7 @@ migration commitments, and stable receipt verification behavior.
 
 | Component | Compatibility target | Current evidence |
 |---|---|---|
-| Node.js | 22 and 24 | CI matrix defined for Linux, macOS, and Windows; the packed `0.3.0-alpha.12` tarballs also installed and run on Node 26.8.2 (macOS arm64), see [MCP and SDK compatibility](#mcp-and-sdk-compatibility) |
+| Node.js | 22 (22.13 or newer) and 24 | CI matrix defined for Linux, macOS, and Windows; the packed `0.3.0-alpha.12` tarballs also installed and run on Node 26.8.2 (macOS arm64), see [MCP and SDK compatibility](#mcp-and-sdk-compatibility) |
 | pnpm | 9.5 for repository builds | Local and CI commands |
 | Python SDK | CPython 3.11+ | CI against live stdio, loopback HTTP, and Unix-socket servers (socket skipped on Windows): 3.11 on Linux, macOS, and Windows; 3.12, 3.13, and 3.14 on Linux; type-checked with pyright |
 | Container | Linux OCI, AMD64 and ARM64 build targets, on a Node 24 LTS base | Docker workflow; release-candidate smoke required |

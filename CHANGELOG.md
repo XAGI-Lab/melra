@@ -56,6 +56,13 @@ All notable changes are documented here. The format follows
 
 ### Changed
 
+- Node.js 22.13 is the stated and declared minimum, the first 22.x where
+  `node:sqlite` needs no flag (23.4 on the 23 line). `@melra/cli`,
+  `@melra/server`, `@melra/storage-sqlite`, and `@melra/memory` and
+  `@melra/runtime-core`, which work only with a SQLite store, declare it in
+  `engines`, so npm and pnpm warn, and Yarn 1 refuses, on an older Node; their
+  docs say 22.13 where they said 22. (#218)
+
 - The hardened deployment recipes name Docker Desktop and WSL2 as the way to
   get OS isolation on Windows, and `melra doctor`'s `isolation` line on native
   Windows says so instead of mentioning a Job Object. A Job Object limits
