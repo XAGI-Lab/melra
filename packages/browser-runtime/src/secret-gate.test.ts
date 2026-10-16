@@ -29,6 +29,7 @@ const runtime = () =>
     frameHoldsSecret(frame: unknown, ms?: number): Promise<"filled" | "clear" | "unknown" | "unread">;
     secretFieldFilled(page: unknown, ms?: number): Promise<{ state: string; read: ReadonlySet<unknown> }>;
     candidates(page: unknown, target: { selector: string }, within?: ReadonlySet<unknown>): unknown[];
+    readFirst(candidate: unknown, within: ReadonlySet<unknown>): Promise<unknown>;
   };
 const check = (target: ReturnType<typeof frame>) => runtime().frameHoldsSecret(target);
 
@@ -98,13 +99,18 @@ describe("the secret-field check on a frame", () => {
     expect(await runtime().frameHoldsSecret(committing, 2_000)).toBe("clear");
   });
 
-  it("refuses Playwright's internal selector engines in a checked read, on the selector alone", () => {
-    const page = { frames: () => [{ locator: () => undefined }] };
-    for (const selector of ['internal:text="here"', 'INTERNAL :text="here"']) {
-      expect(() => runtime().candidates(page, { selector }, new Set())).toThrow("browser_internal_selector_refused");
-      // An action that is not a checked read keeps them.
-      expect(() => runtime().candidates(page, { selector })).not.toThrow();
-    }
+  it("uses a match only when its own document is one the check read", async () => {
+    const [read, unread] = [{}, {}];
+    let disposed = 0;
+    const matching = (owner: object) => ({
+      first: () => ({
+        elementHandles: async () => [{ ownerFrame: async () => owner, dispose: async () => void (disposed += 1) }],
+      }),
+    });
+    const within = new Set([read]);
+    expect(await runtime().readFirst(matching(read), within)).toBeDefined();
+    expect(await runtime().readFirst(matching(unread), within)).toBeUndefined();
+    expect(disposed).toBe(1);
   });
 
   it("keeps a frame that keeps navigating to one budget, not one per attempt", async () => {

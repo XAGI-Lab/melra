@@ -9,6 +9,7 @@ import type {
   Browser,
   BrowserContext,
   CDPSession,
+  ElementHandle,
   Frame,
   Locator,
   Page,
@@ -70,6 +71,10 @@ export interface BrowserRuntimeOptions extends NetworkPolicy {
  * dozens; the interactive ones a caller cares about are always near the front.
  */
 const MAX_FRAMES = 20;
+
+/** Whether a page call failed because its document went away under it. */
+const navigatedAway = (error: unknown): boolean =>
+  error instanceof Error && /context was destroyed|navigat|detached/i.test(error.message);
 
 /** What a secret-field check found, and the frames it read. */
 interface SecretCheck {
@@ -832,7 +837,7 @@ export class BrowserRuntime {
           if (frame.url() === "") return "unread";
           continue;
         }
-        if (!(error instanceof Error && /context was destroyed|navigat|detached/i.test(error.message))) return "unknown";
+        if (!navigatedAway(error)) return "unknown";
         retries += 1;
         if (retries < 3) {
           await frame
@@ -865,15 +870,10 @@ export class BrowserRuntime {
    * them. Split out from `locator` because waiting and acting need the same
    * list but disagree about what to do when nothing matches yet.
    *
-   * `within` keeps a checked read to the frames its check read. Playwright's
-   * internal selector engines can carry a selector out of the frame it starts
-   * in, so such a read refuses them, on the selector alone: frames are
-   * searched here, one at a time, without them.
+   * `within` starts a checked read only in the frames its check read; where a
+   * match may end up is `readFirst`'s to judge.
    */
   private candidates(page: Page, target: BrowserTarget, within?: ReadonlySet<Frame>): Locator[] {
-    if (within !== undefined && target.selector !== undefined && /internal\s*:/i.test(target.selector)) {
-      throw new Error("browser_internal_selector_refused");
-    }
     return this.frames(page).filter((frame) => within?.has(frame) ?? true).flatMap((frame) => {
       const found: Locator[] = [];
       if (target.role !== undefined) {
@@ -913,20 +913,47 @@ export class BrowserRuntime {
    * so a `count` that times out here fails a click or a fill cleanly: nothing
    * was sent, and `execute` does not report it as an unknown outcome.
    *
-   * `within`, when given, is the frames a secret check read.
    */
   private async locator(
     page: Page,
     target: BrowserTarget | undefined,
-    within?: ReadonlySet<Frame>,
   ): Promise<Locator> {
     if (target === undefined) throw new Error("browser_action_requires_target");
-    for (const candidate of this.candidates(page, target, within)) {
+    for (const candidate of this.candidates(page, target)) {
       if ((await this.call(candidate.count(), "count")) > 0) return candidate;
     }
     throw new Error(
       `browser_target_not_found:${JSON.stringify(target)}`,
     );
+  }
+
+  /**
+   * A candidate's first match, if its own document is one a secret check
+   * read. A selector or role can lead from the frame it starts in to another,
+   * so a checked read judges the element it would use, not the route to it:
+   * a match anywhere else counts as none, and what it is makes no difference.
+   */
+  private async readFirst(candidate: Locator, within: ReadonlySet<Frame> | undefined): Promise<ElementHandle | undefined> {
+    const [element] = await this.call(candidate.first().elementHandles(), "count");
+    if (element === undefined || within === undefined) return element;
+    const frame = await this.call(element.ownerFrame(), "count");
+    if (frame !== null && within.has(frame)) return element;
+    await element.dispose().catch(() => undefined);
+    return undefined;
+  }
+
+  /** `locator` for a checked read: the element itself, from the read frames. */
+  private async readTarget(
+    page: Page,
+    target: BrowserTarget | undefined,
+    within: ReadonlySet<Frame> | undefined,
+  ): Promise<ElementHandle> {
+    if (target === undefined) throw new Error("browser_action_requires_target");
+    for (const candidate of this.candidates(page, target, within)) {
+      const element = await this.readFirst(candidate, within);
+      if (element !== undefined) return element;
+    }
+    throw new Error(`browser_target_not_found:${JSON.stringify(target)}`);
   }
 
   /**
@@ -964,13 +991,20 @@ export class BrowserRuntime {
       looked ||= secret.state === "clear";
       let reached = negated && secret.state === "clear";
       for (const candidate of secret.state === "clear" ? this.candidates(page, target, secret.read) : []) {
-        const element = candidate.first();
-        // `isVisible`/`count` report on a missing element rather than throwing,
-        // so absence is an answer here: it satisfies `hidden` and `detached`.
-        const present =
-          state === "attached" || state === "detached"
-            ? (await this.call(element.count(), "count")) > 0
-            : await this.call(element.isVisible(), "is_visible");
+        // Absence is an answer here: it satisfies `hidden` and `detached`. A
+        // document that went away mid-poll is not: the poll decides nothing.
+        let present: boolean;
+        try {
+          const element = await this.readFirst(candidate, secret.read);
+          present =
+            element !== undefined &&
+            (state === "attached" || state === "detached" || (await this.call(element.isVisible(), "is_visible")));
+          await element?.dispose().catch(() => undefined);
+        } catch (error) {
+          if (!navigatedAway(error)) throw error;
+          reached = false;
+          break;
+        }
         if (negated) {
           if (present) {
             reached = false;
@@ -1113,13 +1147,14 @@ export class BrowserRuntime {
     operation: BrowserOperation,
     within: ReadonlySet<Frame> | undefined,
   ): Promise<Record<string, unknown>> {
-    const locator = (await this.locator(page, operation.target, within)).first();
+    const element = await this.readTarget(page, operation.target, within);
     const [text, html] = await Promise.all([
-      locator.innerText({ timeout: operation.timeoutMs }),
+      this.call(element.innerText(), "inner_text", operation.timeoutMs),
       // From a copy with secret fields emptied: frameworks such as React
       // mirror what is typed into the `value` attribute, which markup carries.
-      locator.evaluate(
-        (element) => {
+      this.call(element.evaluate(
+        (node) => {
+          const element = node as Element;
           const secret = (field: Element): boolean =>
             (field instanceof HTMLInputElement && field.type === "password") ||
             ((field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement) &&
@@ -1135,10 +1170,8 @@ export class BrowserRuntime {
           });
           return copy.innerHTML;
         },
-        undefined,
-        { timeout: operation.timeoutMs },
-      ),
-    ]);
+      ), "evaluate", operation.timeoutMs),
+    ]).finally(() => element.dispose().catch(() => undefined));
     return {
       url: page.url(),
       title: await this.call(page.title(), "title"),
@@ -1451,9 +1484,10 @@ export class BrowserRuntime {
       case "scroll": {
         const direction = operation.direction ?? "down";
         if (direction === "into_view") {
-          await (await this.locator(page, operation.target, within)).first().scrollIntoViewIfNeeded({
-            timeout: operation.timeoutMs,
-          });
+          const element = await this.readTarget(page, operation.target, within);
+          await element
+            .scrollIntoViewIfNeeded({ timeout: operation.timeoutMs })
+            .finally(() => element.dispose().catch(() => undefined));
         } else {
           // A fixed ±600 was too small for a long article and too large for a
           // short scroll container, and nothing could change it.

@@ -302,16 +302,16 @@ describe("browser see/act loop", () => {
       runtime.execute(BrowserOperationSchema.parse({ kind: "browser", ...operation }));
     try {
       await run({ action: "navigate", url });
-      await expect(run({ action: "inspect", target: { selector: "#inner" } })).resolves.toMatchObject({
-        text: "inner",
-      });
+      for (const target of [{ selector: "#inner" }, { role: "paragraph" }]) {
+        await expect(run({ action: "inspect", target })).resolves.toMatchObject({ text: "inner" });
+      }
       // As if the check had read the main document only.
       (runtime as unknown as { secretFieldFilled: (page: Page) => Promise<unknown> }).secretFieldFilled = async (
         page,
       ) => ({ state: "clear", read: new Set([page.mainFrame()]) });
-      await expect(run({ action: "inspect", target: { selector: "#inner" } })).rejects.toThrow(
-        "browser_target_not_found",
-      );
+      for (const target of [{ selector: "#inner" }, { role: "paragraph" }]) {
+        await expect(run({ action: "inspect", target })).rejects.toThrow("browser_target_not_found");
+      }
       await expect(
         run({ action: "scroll", direction: "into_view", target: { selector: "#inner" } }),
       ).rejects.toThrow("browser_target_not_found");
