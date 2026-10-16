@@ -305,25 +305,16 @@ describe("approval console", () => {
       await page.locator(`[data-key="${task.id}"]`).click();
       const screen = await page.locator("pre.screen").textContent();
       expect(screen).toContain("</pre><script>alert(1)</script>\\u202e");
-      // The console ignores a click that comes within a second of the page
-      // being raised, focused, scrolled or resized, and shows Approve as not
-      // yet active meanwhile. On a busy runner another test's browser can move
-      // focus between Playwright's check that the button is active and its
-      // click, so click as an operator would: once it shows as active, and
-      // again if that click was ignored.
+      // Clicked once Approve shows as active, the way the operator is shown to.
+      // A click that starts while the button is still held makes Playwright
+      // retry, and its retries scroll the button into view even when it is in
+      // view already; that scroll starts the console's second over, so on a
+      // slow runner the press can land inside it and be ignored, as the
+      // console means it to be. Any scroll the click needs happens first.
       const approve = page.getByRole("button", { name: "Approve", exact: true });
       await approve.scrollIntoViewIfNeeded();
-      await expect
-        .poll(
-          async () => {
-            if ((await approve.getAttribute("aria-disabled")) === "false") {
-              await approve.click({ timeout: 1_000 }).catch(() => undefined);
-            }
-            return decisionFor(task.id) !== undefined;
-          },
-          { timeout: 15_000, interval: 250 },
-        )
-        .toBe(true);
+      await expect.poll(() => approve.getAttribute("aria-disabled"), { timeout: 5_000 }).toBe("false");
+      await approve.click();
       await page.getByText("Approved, out of band").waitFor();
       expect(decisionFor(task.id)).toMatchObject({ channel: "out_of_band", approver: "console:test" });
       // A reload is a new page, and only the page that spent the code is paired.
