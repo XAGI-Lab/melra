@@ -129,7 +129,8 @@ Actions: `navigate`, `back`, `forward`, `reload`, `inspect`, `wait`, `click`,
   made to depend on the secret; an untargeted `inspect` still works. A
   targeted read is also refused when some frame cannot answer
   (`browser_secret_check_unavailable`); a `wait` asks again on each poll and
-  fails that way only if no poll could look.
+  fails that way only if no poll could look. A frame with no document yet does
+  not hold a read up, and the read does not search it.
 - On any action but `navigate` and `tab_new`, a `url` names the page the action
   acts on: the active page, or the tab `close` and `tab_switch` name. Policy
   shows it as the action's target and matches grants against it, so the runtime

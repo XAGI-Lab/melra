@@ -273,7 +273,10 @@ describe("browser see/act loop", () => {
     try {
       await run({ action: "navigate", url });
       // As if some frame never answered: "unknown" is not "clear".
-      (runtime as unknown as { secretFieldFilled: () => Promise<string> }).secretFieldFilled = async () => "unknown";
+      (runtime as unknown as { secretFieldFilled: () => Promise<unknown> }).secretFieldFilled = async () => ({
+        state: "unknown",
+        read: new Set(),
+      });
       await expect(run({ action: "inspect", target: { selector: "#here" } })).rejects.toThrow(
         "browser_secret_check_unavailable",
       );

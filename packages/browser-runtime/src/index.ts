@@ -71,6 +71,12 @@ export interface BrowserRuntimeOptions extends NetworkPolicy {
  */
 const MAX_FRAMES = 20;
 
+/** What a secret-field check found, and the frames it read. */
+interface SecretCheck {
+  state: "filled" | "clear" | "unknown";
+  read: ReadonlySet<Frame>;
+}
+
 /**
  * Total elements one `inspect` reports. Each frame contributes at most 250
  * (the cap inside `collectFrame`), so the main document can never consume the
@@ -775,35 +781,39 @@ export class BrowserRuntime {
   }
 
   /**
-   * Whether any frame of the page holds a filled secret field. Every frame,
-   * not the bounded set a snapshot reads: a selector can enter any of them,
-   * including one that attached while the others were being asked, so the
-   * list is read again until it stops growing. "unknown" when some frame
-   * could not answer, which a read must not take for "clear". Each frame is
-   * given at most `ms` in all.
+   * Whether any frame of the page holds a filled secret field, and the frames
+   * it read: a targeted read searches only those, so it never looks in a frame
+   * this did not vouch for. Every frame, not the bounded set a snapshot reads:
+   * a selector can enter any of them, including one that attached while the
+   * others were being asked, so the list is read again until it stops growing.
+   * "unknown" when some frame could not answer, which a read must not take for
+   * "clear". The whole check takes at most `ms`.
    */
-  private async secretFieldFilled(page: Page, ms = this.callMs): Promise<"filled" | "clear" | "unknown"> {
+  private async secretFieldFilled(page: Page, ms = this.callMs): Promise<SecretCheck> {
+    const deadline = Date.now() + ms;
     const asked = new Set<Frame>();
-    let answer: "clear" | "unknown" = "clear";
+    const read = new Set<Frame>();
+    let state: "clear" | "unknown" = "clear";
     for (let round = 0; round < 3; round += 1) {
       const fresh = page.frames().filter((frame) => !asked.has(frame));
-      if (fresh.length === 0) return answer;
+      if (fresh.length === 0) return { state, read };
       for (const frame of fresh) asked.add(frame);
-      const answers = await Promise.all(fresh.map((frame) => this.frameHoldsSecret(frame, ms)));
-      if (answers.includes("filled")) return "filled";
-      if (answers.includes("unknown")) answer = "unknown";
+      const answers = await Promise.all(fresh.map((frame) => this.frameHoldsSecret(frame, deadline - Date.now())));
+      if (answers.includes("filled")) return { state: "filled", read };
+      if (answers.includes("unknown")) state = "unknown";
+      fresh.forEach((frame, index) => answers[index] === "clear" && read.add(frame));
     }
-    return page.frames().some((frame) => !asked.has(frame)) ? "unknown" : answer;
+    return { state: page.frames().some((frame) => !asked.has(frame)) ? "unknown" : state, read };
   }
 
   /**
    * A frame mid-navigation is asked again once its next document has loaded;
    * a detached one holds nothing. A frame with no document yet (a lazy or
-   * still-loading iframe) that does not answer holds nothing either: a
-   * selector cannot run in it any more than this check can. A cancelled task
-   * is not "unknown": it stops.
+   * still-loading iframe) that does not answer is "unread": it does not make
+   * the page unknown, and a targeted read does not search it. A cancelled task
+   * is not "unknown": it stops. Each frame is given at most `ms` in all.
    */
-  private async frameHoldsSecret(frame: Frame, ms = this.callMs): Promise<"filled" | "clear" | "unknown"> {
+  private async frameHoldsSecret(frame: Frame, ms = this.callMs): Promise<"filled" | "clear" | "unknown" | "unread"> {
     const deadline = Date.now() + ms;
     for (let attempt = 0; attempt < 3; attempt += 1) {
       if (frame.isDetached()) return "clear";
@@ -815,7 +825,7 @@ export class BrowserRuntime {
         return filled ? "filled" : "clear";
       } catch (error) {
         this.signal?.throwIfAborted();
-        if (documentless && frame.url() === "") return "clear";
+        if (documentless && frame.url() === "") return "unread";
         if (!(error instanceof Error && /context was destroyed|navigat|detached/i.test(error.message))) return "unknown";
         if (attempt < 2) {
           await frame
@@ -824,7 +834,7 @@ export class BrowserRuntime {
         }
       }
     }
-    return "unknown";
+    return frame.url() === "" ? "unread" : "unknown";
   }
 
   /**
@@ -848,8 +858,8 @@ export class BrowserRuntime {
    * them. Split out from `locator` because waiting and acting need the same
    * list but disagree about what to do when nothing matches yet.
    */
-  private candidates(page: Page, target: BrowserTarget): Locator[] {
-    return this.frames(page).flatMap((frame) => {
+  private candidates(page: Page, target: BrowserTarget, within?: ReadonlySet<Frame>): Locator[] {
+    return this.frames(page).filter((frame) => within?.has(frame) ?? true).flatMap((frame) => {
       const found: Locator[] = [];
       if (target.role !== undefined) {
         found.push(
@@ -887,13 +897,16 @@ export class BrowserRuntime {
    * Resolution only reads the page and always runs before an action's effect,
    * so a `count` that times out here fails a click or a fill cleanly: nothing
    * was sent, and `execute` does not report it as an unknown outcome.
+   *
+   * `within`, when given, is the frames a secret check read.
    */
   private async locator(
     page: Page,
     target: BrowserTarget | undefined,
+    within?: ReadonlySet<Frame>,
   ): Promise<Locator> {
     if (target === undefined) throw new Error("browser_action_requires_target");
-    for (const candidate of this.candidates(page, target)) {
+    for (const candidate of this.candidates(page, target, within)) {
       if ((await this.call(candidate.count(), "count")) > 0) return candidate;
     }
     throw new Error(
@@ -932,10 +945,10 @@ export class BrowserRuntime {
       // the last poll is not starved into "unknown".
       this.signal?.throwIfAborted();
       const secret = await this.secretFieldFilled(page, Math.max(1_000, deadline - Date.now()));
-      if (secret === "filled") throw new Error("browser_secret_field_filled");
-      looked ||= secret === "clear";
-      let reached = negated && secret === "clear";
-      for (const candidate of secret === "clear" ? this.candidates(page, target) : []) {
+      if (secret.state === "filled") throw new Error("browser_secret_field_filled");
+      looked ||= secret.state === "clear";
+      let reached = negated && secret.state === "clear";
+      for (const candidate of secret.state === "clear" ? this.candidates(page, target, secret.read) : []) {
         const element = candidate.first();
         // `isVisible`/`count` report on a missing element rather than throwing,
         // so absence is an answer here: it satisfies `hidden` and `detached`.
@@ -1083,8 +1096,9 @@ export class BrowserRuntime {
   private async extract(
     page: Page,
     operation: BrowserOperation,
+    within: ReadonlySet<Frame> | undefined,
   ): Promise<Record<string, unknown>> {
-    const locator = (await this.locator(page, operation.target)).first();
+    const locator = (await this.locator(page, operation.target, within)).first();
     const [text, html] = await Promise.all([
       locator.innerText({ timeout: operation.timeoutMs }),
       // From a copy with secret fields emptied: frameworks such as React
@@ -1217,10 +1231,12 @@ export class BrowserRuntime {
     // filled secret field a read may look at the whole page but not aim at
     // part of it. The refusal depends on the page, never on the guess.
     // `wait` asks on every poll instead, within its own deadline.
+    let within: ReadonlySet<Frame> | undefined;
     if (["inspect", "scroll", "screenshot"].includes(operation.action) && operation.target !== undefined) {
       const secret = await this.secretFieldFilled(page);
-      if (secret === "filled") throw new Error("browser_secret_field_filled");
-      if (secret === "unknown") throw new Error("browser_secret_check_unavailable");
+      if (secret.state === "filled") throw new Error("browser_secret_field_filled");
+      if (secret.state === "unknown") throw new Error("browser_secret_check_unavailable");
+      within = secret.read;
     }
     // Anywhere but on the way to it, a url names the page the action acts on:
     // the active page, or for `close` and `tab_switch` the tab they name.
@@ -1294,7 +1310,7 @@ export class BrowserRuntime {
       case "inspect":
         return operation.target === undefined
           ? await this.snapshot(page, operation.maxChars)
-          : await this.extract(page, operation);
+          : await this.extract(page, operation, within);
       /**
        * Block until the page reaches a state, instead of guessing a sleep.
        *
@@ -1420,7 +1436,7 @@ export class BrowserRuntime {
       case "scroll": {
         const direction = operation.direction ?? "down";
         if (direction === "into_view") {
-          await (await this.locator(page, operation.target)).first().scrollIntoViewIfNeeded({
+          await (await this.locator(page, operation.target, within)).first().scrollIntoViewIfNeeded({
             timeout: operation.timeoutMs,
           });
         } else {

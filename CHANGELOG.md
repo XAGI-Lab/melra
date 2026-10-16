@@ -277,19 +277,20 @@ All notable changes are documented here. The format follows
 
 ### Security
 
-- `browser.inspect` no longer returns what was typed into a secret field: a
-  password input, or one masked with CSS. Neither the field list nor a targeted inspect's markup
-  carries it, though frameworks such as React mirror input into the `value`
-  attribute. And while any frame holds a secret field with something in it,
-  live or still in its markup, a read aimed at
-  part of the page (`inspect`, `wait`, `scroll` or `screenshot` with a target)
-  is refused (`browser_secret_field_filled`), asked of every frame and again on
-  every poll of a `wait`; a single read that cannot get an answer from every
-  frame is refused too (`browser_secret_check_unavailable`), as is a `wait`
-  whose polls never got one; a frame with no document yet holds nothing: whether a target exists can be made to depend on the secret, through a mirrored value or an accessible name
-  built from the field, however the selector is spelled. These reads run
-  without approval, so in a browser someone else also types into, such as one
-  attached over CDP, a password they typed could be read back or guessed.
+- `browser.inspect` no longer returns what was typed into a secret field (a
+  password input, or one masked with CSS): neither the field list nor a
+  targeted inspect's markup carries it, even where a framework such as React
+  mirrors input into the `value` attribute. And while any frame holds a secret
+  field with something in it, live or still in its markup, a read aimed at part
+  of the page (`inspect`, `wait`, `scroll` or `screenshot` with a target) is
+  refused (`browser_secret_field_filled`), because whether a target exists can
+  be made to depend on the secret however the selector is spelled. Every frame
+  is asked, and a `wait` asks again on every poll. A read that cannot get an
+  answer from some frame is refused too (`browser_secret_check_unavailable`),
+  as is a `wait` none of whose polls got one; a frame with no document yet does
+  not hold a read up, and the read does not search it. These reads run without
+  approval, so in a browser someone else also types into, such as one attached
+  over CDP, a password they typed could be read back or guessed.
 
 - In enforced mode an approval challenge carries no phrase, so the agent is
   handed nothing to echo, and any approval it sends to `melra_execute`, the
