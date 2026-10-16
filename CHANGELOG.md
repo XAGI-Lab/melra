@@ -55,6 +55,30 @@ All notable changes are documented here. The format follows
   stayed at 0.3.0-alpha.12 through two releases. `docs/RELEASES.md` lists the
   MCP Registry publish step.
 
+### Security
+
+- `browser.inspect` no longer returns what was typed into a secret field (a
+  password input, or one masked with CSS): neither the field list nor a
+  targeted inspect's markup carries it, even where a framework such as React
+  mirrors input into the `value` attribute. And while any frame holds a secret
+  field with something in it, live or still in its markup, a read aimed at part
+  of the page (`inspect`, `wait`, `scroll` or `screenshot` with a target) is
+  refused (`browser_secret_field_filled`), because whether a target exists can
+  be made to depend on the secret however the selector is spelled. Every frame
+  is asked, before the read looks and again after, so a field filled while it
+  looks voids what it found; a read whose `url` names another page is refused
+  before any of this. A `wait` asks on every poll and looks for nothing while a field is
+  filled, so a sign-in form that stays filled while it submits holds it up but
+  does not fail it; it is refused only if a field is still filled at its end.
+  A read that cannot get an
+  answer from some frame is refused too (`browser_secret_check_unavailable`),
+  as is a `wait` whose last poll could not tell; a frame with no document yet does
+  not hold a read up, and the read does not search it. Such a read uses an
+  element only when its own document is one the check read, however its target
+  is written. These reads run without approval, so in a browser someone else
+  also types into, such as one attached over CDP, a password they typed could
+  be read back or guessed.
+
 ## [0.3.0-alpha.14] - 2026-10-16
 
 ### Fixed
