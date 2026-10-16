@@ -69,6 +69,25 @@ const PUSH_FORM = `<!doctype html><html><head><title>push-form</title></head><bo
   <input id="a" oninput="history.replaceState(null, '', '/push-form/' + this.value)"><input id="b">
   <button id="s" onclick="document.title = document.getElementById('a').value + '+' + document.getElementById('b').value">Send</button>
 </body></html>`;
+// A search field that, once cleared, rewrites the path and mounts a fresh
+// field in its place, then rewrites the path again as it is typed into.
+const REMOUNT = `<!doctype html><html><head><title>remount</title></head><body><div id="box"></div>
+  <script>
+    const mount = (value) => {
+      const field = Object.assign(document.createElement("input"), { id: "q", value });
+      field.oninput = () => {
+        document.title = field.value;
+        if (field.value === "") {
+          history.pushState(null, "", "/search");
+          mount("").focus();
+        } else history.replaceState(null, "", "/search/" + field.value);
+      };
+      document.getElementById("box").replaceChildren(field);
+      return field;
+    };
+    mount("old");
+  </script>
+</body></html>`;
 // One click, counted as the page's earliest listener sees it.
 const COUNTED = `<!doctype html><html><head><title>0</title></head><body>
   <script>addEventListener("click", (event) => { if (event.isTrusted) document.title = String(Number(document.title) + 1); }, true)</script>
@@ -179,6 +198,7 @@ describe("a url on an action that does not navigate", () => {
         "/nav-typed": NAV_TYPED,
         "/push-form": PUSH_FORM,
         "/counted": COUNTED,
+        "/remount": REMOUNT,
         "/churn": CHURN,
       };
       const inner = load === 1 ? FRAMED_FIRST : FRAMED_LATER;
@@ -269,6 +289,11 @@ describe("a url on an action that does not navigate", () => {
         url: `${origin}/push-form`,
       });
       expect(await title()).toBe("x+y");
+      // Clearing the field may re-mount it at a new path: once the action has
+      // sent input, only the document is held, so the rest goes in.
+      await run({ action: "navigate", url: `${origin}/remount` });
+      await run({ action: "type", target: { selector: "#q" }, value: "new", url: `${origin}/remount` });
+      expect(await title()).toBe("new");
       // Typing stops at the key after the page leaves: the next document,
       // whose own field takes focus, gets none of the rest.
       await run({ action: "navigate", url: `${origin}/nav-type` });

@@ -1144,12 +1144,28 @@ export class BrowserRuntime {
       await field.type("", { timeout });
       // The value gets the whole timeout once typing starts, as
       // `pressSequentially` gave it; a key still going then is not waited for.
+      // A new document shows up as Playwright's `framenavigated` for the main
+      // frame, which costs no round trip, so the document is asked about only
+      // then (a page rewriting its own path raises it too): asking before
+      // every key halved how fast a long value went in.
       const deadline = Date.now() + operation.timeoutMs;
-      for (const character of value) {
-        const left = deadline - Date.now();
-        if (left <= 0) throw new BrowserCallTimeoutError("type");
-        if (await this.moved(pin, false, left)) throw new Error("browser_page_changed");
-        await this.call(pin.page.keyboard.type(character, { delay: operation.delayMs }), "type", Math.max(1, deadline - Date.now()));
+      let navigated = false;
+      const onNavigated = (frame: Frame) => {
+        if (frame === pin.page.mainFrame()) navigated = true;
+      };
+      pin.page.on("framenavigated", onNavigated);
+      try {
+        for (const character of value) {
+          const left = deadline - Date.now();
+          if (left <= 0) throw new BrowserCallTimeoutError("type");
+          if (navigated) {
+            navigated = false;
+            if (await this.moved(pin, false, left)) throw new Error("browser_page_changed");
+          }
+          await this.call(pin.page.keyboard.type(character, { delay: operation.delayMs }), "type", Math.max(1, deadline - Date.now()));
+        }
+      } finally {
+        pin.page.off("framenavigated", onNavigated);
       }
       this.dispatched = true;
     }, ready);
@@ -1187,7 +1203,6 @@ export class BrowserRuntime {
   ): Promise<T> {
     const deadline = Date.now() + timeout;
     const left = () => Math.max(1, deadline - Date.now());
-    const address = !this.dispatched;
     let found: JSHandle | undefined;
     try {
       for (;;) {
@@ -1198,15 +1213,22 @@ export class BrowserRuntime {
           if (found === undefined) {
             found = await this.handle(element.evaluateHandle((node) => node.ownerDocument), "evaluate", left());
             for (const state of ready) await element.waitForElementState(state, { timeout: left() });
-            moved = await this.moved(pin, address, left());
+            moved = await this.moved(pin, !this.dispatched, left());
           } else {
-            if (!(await this.call(element.evaluate((node, first) => node.ownerDocument === first, found), "evaluate", left()).catch(() => false))) {
+            const same = await this.call(element.evaluate((node, first) => node.ownerDocument === first, found), "evaluate", left()).catch(
+              (error: unknown) => {
+                // No answer is not a different document.
+                if (timedOut(error) || this.signal?.aborted === true) throw error;
+                return false;
+              },
+            );
+            if (!same) {
               throw new Error("browser_page_changed: the target's frame is now at another document");
             }
             // Still in the document it was found in, so the page has not
             // navigated either: a navigation takes its frames' documents with
             // it. Only the address is left, and that needs no round trip.
-            moved = address && pin.address !== undefined && pageAddress(pin.page.url()) !== pin.address;
+            moved = !this.dispatched && pin.address !== undefined && pageAddress(pin.page.url()) !== pin.address;
           }
           if (!moved) return await act(element, left());
         } catch (error) {
@@ -1221,7 +1243,7 @@ export class BrowserRuntime {
           // events that did not reach the element, which is why its locator
           // retries this too.
           if (detached(error) && found !== undefined) continue;
-          if (!(await this.moved(pin, address, left()))) {
+          if (!(await this.moved(pin, !this.dispatched, left()))) {
             if (detached(error)) continue;
             throw error;
           }

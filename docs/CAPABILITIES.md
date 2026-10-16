@@ -152,12 +152,16 @@ Actions: `navigate`, `back`, `forward`, `reload`, `inspect`, `wait`, `click`,
   its address are checked again after the target is waited for, as the action
   would wait for it (visible, enabled and stable for a click), sending
   nothing, just before the input. Once the action has sent input, only its
-  document is checked, before each key and before each of a form's fields:
-  a page may rewrite its own path as it is typed into. What this does not
-  cover: a navigation that commits in the
-  instant Playwright dispatches can still receive that one click or key, keys
-  go wherever the page has put focus, a frame inside it included, and the
-  check reads the top-level page, not the content of its frames. `close` and
+  document is checked, before each of a form's fields and, while it types,
+  whenever the page reports a new document, at the next key: a page may
+  rewrite its own path as it is typed into. What this does not cover: a
+  navigation that commits in the instant Playwright dispatches can still
+  receive that one click or key; the address is not checked again during
+  Playwright's own waits after the check (for a target found again after a
+  re-render, or its hit-target retries), so a same-document path change then
+  is not caught; keys go wherever the page has put focus, a frame inside it
+  included; and the check reads the top-level page, not the content of its
+  frames. `close` and
   `tab_switch` are checked when they start. In enforced mode these actions,
   `close` and `tab_switch` must name a `url` (`browser_action_requires_url`);
   for those two it names the tab, so `about:blank` and pages off the

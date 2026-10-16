@@ -107,13 +107,16 @@ All notable changes are documented here. The format follows
   page or frame that navigates itself while the action waits for its target,
   even to the same address, gets nothing: the action is refused with
   `browser_page_changed`. The page, and its address until the action's first
-  input, are checked again after the target is waited for (as the action
-  would wait for it, sending nothing), just before the input, and typing
-  confirms the document before each key: a page may rewrite its own path as
-  it is typed into, or between a form's fields. What is left: a navigation that commits in the
-  instant Playwright dispatches can still receive that one click or key, keys
-  go wherever the page has put focus, a frame inside it included, and the
-  checks read the top-level page, not a frame's content. (#196)
+  input, are checked again after the target is first waited for (as the
+  action would wait for it, sending nothing), just before the input, and
+  typing stops at the first key after the page reports a new document: a page
+  may rewrite its own path as it is typed into, or between a form's fields.
+  What is left: a navigation that commits in the instant Playwright
+  dispatches can still receive that one click or key; the address is not
+  checked again during Playwright's own waits after that check (for a target
+  found again after a re-render, or its hit-target retries); keys go wherever
+  the page has put focus, a frame inside it included; and the checks read the
+  top-level page, not a frame's content. (#196)
 
 - `browser.inspect` no longer returns what was typed into a secret field (a
   password input, or one masked with CSS): neither the field list nor a
