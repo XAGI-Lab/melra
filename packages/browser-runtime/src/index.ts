@@ -776,28 +776,52 @@ export class BrowserRuntime {
 
   /**
    * Whether any frame of the page holds a filled secret field. Every frame,
-   * not the bounded set a snapshot reads: a selector can enter any of them.
-   * "unknown" when some frame could not answer, which a read must not take
-   * for "clear". Each frame is given at most `ms`.
+   * not the bounded set a snapshot reads: a selector can enter any of them,
+   * including one that attached while the others were being asked, so the
+   * list is read again until it stops growing. "unknown" when some frame
+   * could not answer, which a read must not take for "clear". Each frame is
+   * given at most `ms` in all.
    */
   private async secretFieldFilled(page: Page, ms = this.callMs): Promise<"filled" | "clear" | "unknown"> {
-    const answers = await Promise.all(page.frames().map((frame) => this.frameHoldsSecret(frame, ms)));
-    return answers.includes("filled") ? "filled" : answers.includes("unknown") ? "unknown" : "clear";
+    const asked = new Set<Frame>();
+    let answer: "clear" | "unknown" = "clear";
+    for (let round = 0; round < 3; round += 1) {
+      const fresh = page.frames().filter((frame) => !asked.has(frame));
+      if (fresh.length === 0) return answer;
+      for (const frame of fresh) asked.add(frame);
+      const answers = await Promise.all(fresh.map((frame) => this.frameHoldsSecret(frame, ms)));
+      if (answers.includes("filled")) return "filled";
+      if (answers.includes("unknown")) answer = "unknown";
+    }
+    return page.frames().some((frame) => !asked.has(frame)) ? "unknown" : answer;
   }
 
   /**
    * A frame mid-navigation is asked again once its next document has loaded;
-   * a detached one holds nothing. A cancelled task is not "unknown": it stops.
+   * a detached one holds nothing. A frame with no document yet (a lazy or
+   * still-loading iframe) that does not answer holds nothing either: a
+   * selector cannot run in it any more than this check can. A cancelled task
+   * is not "unknown": it stops.
    */
   private async frameHoldsSecret(frame: Frame, ms = this.callMs): Promise<"filled" | "clear" | "unknown"> {
+    const deadline = Date.now() + ms;
     for (let attempt = 0; attempt < 3; attempt += 1) {
       if (frame.isDetached()) return "clear";
+      const documentless = frame.url() === "";
+      const left = deadline - Date.now();
+      if (left <= 0) break;
       try {
-        return (await this.call(frame.evaluate(filledSecretField), "secret_check", ms)) ? "filled" : "clear";
+        const filled = await this.call(frame.evaluate(filledSecretField), "secret_check", documentless ? Math.min(left, 250) : left);
+        return filled ? "filled" : "clear";
       } catch (error) {
         this.signal?.throwIfAborted();
+        if (documentless && frame.url() === "") return "clear";
         if (!(error instanceof Error && /context was destroyed|navigat|detached/i.test(error.message))) return "unknown";
-        await frame.waitForLoadState("domcontentloaded", { timeout: Math.min(2_000, ms) }).catch(() => undefined);
+        if (attempt < 2) {
+          await frame
+            .waitForLoadState("domcontentloaded", { timeout: Math.max(1, Math.min(2_000, deadline - Date.now())) })
+            .catch(() => undefined);
+        }
       }
     }
     return "unknown";

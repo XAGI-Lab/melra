@@ -315,6 +315,60 @@ describe("browser see/act loop", () => {
     }
   }, 120_000);
 
+  it("reads past iframes that have no page yet, and refuses only when a page cannot answer", async () => {
+    const executablePath = await detectBrowserExecutable();
+    if (executablePath === undefined) return;
+    // "/" embeds an iframe whose source never answers and a lazy one far below
+    // the fold; "/busy" embeds, from another site, a page that never yields.
+    const server = createServer((request, response) => {
+      if (request.url === "/never") return;
+      const body =
+        request.url === "/spin"
+          ? "<script>for (;;) {}</script>"
+          : request.url === "/busy"
+            ? `<p id="here">here</p><iframe src="http://localhost:${(server.address() as { port: number }).port}/spin"></iframe>`
+            : `<p id="here">here</p><iframe src="/never"></iframe><div style="height: 9000px"></div><iframe loading="lazy" src="/x"></iframe>`;
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(`<!doctype html><html><body>${body}</body></html>`);
+    });
+    servers.push(server);
+    await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+    const origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+    const root = await mkdtemp(join(tmpdir(), "melra-see-act-"));
+    roots.push(root);
+    const runtime = new BrowserRuntime({
+      workspaceRoot: root,
+      artifactDirectory: join(root, "artifacts"),
+      executablePath,
+      allowedDomains: ["127.0.0.1", "localhost"],
+      allowLocalhost: true,
+    });
+    const run = (operation: Record<string, unknown>) =>
+      runtime.execute(BrowserOperationSchema.parse({ kind: "browser", ...operation }));
+    try {
+      await run({ action: "navigate", url: origin, timeoutMs: 5_000 });
+      // The check passes those frames by at once; what follows a successful
+      // wait (its snapshot) still waits them out, as it always has.
+      let started = Date.now();
+      await run({ action: "inspect", target: { selector: "#here" }, timeoutMs: 4_000 });
+      expect(Date.now() - started).toBeLessThan(3_000);
+      await run({ action: "wait", target: { selector: "#here" }, state: "visible", timeoutMs: 4_000 });
+      await run({ action: "navigate", url: `${origin}/busy`, timeoutMs: 5_000 }).catch(() => undefined);
+      started = Date.now();
+      await expect(run({ action: "inspect", target: { selector: "#here" }, timeoutMs: 2_000 })).rejects.toThrow(
+        "browser_secret_check_unavailable",
+      );
+      await expect(
+        run({ action: "wait", target: { selector: "#here" }, state: "visible", timeoutMs: 2_000 }),
+      ).rejects.toThrow("browser_secret_check_unavailable");
+      // Each within about its own timeout, not twice it.
+      expect(Date.now() - started).toBeLessThan(9_000);
+    } finally {
+      await runtime.close();
+      server.closeAllConnections();
+    }
+  }, 120_000);
+
   it("matches text through surrounding whitespace instead of failing exact", async () => {
     const context = await fixture();
     if (context === undefined) return;

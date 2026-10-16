@@ -285,8 +285,8 @@ All notable changes are documented here. The format follows
   part of the page (`inspect`, `wait`, `scroll` or `screenshot` with a target)
   is refused (`browser_secret_field_filled`), asked of every frame and again on
   every poll of a `wait`; a single read that cannot get an answer from every
-  frame is refused too (`browser_secret_check_unavailable`), while a `wait`
-  simply polls again: whether a target exists can be made to depend on the secret, through a mirrored value or an accessible name
+  frame is refused too (`browser_secret_check_unavailable`), as is a `wait`
+  whose polls never got one; a frame with no document yet holds nothing: whether a target exists can be made to depend on the secret, through a mirrored value or an accessible name
   built from the field, however the selector is spelled. These reads run
   without approval, so in a browser someone else also types into, such as one
   attached over CDP, a password they typed could be read back or guessed.
