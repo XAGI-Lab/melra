@@ -680,6 +680,10 @@ describe("enforced-mode browser actions", () => {
         expect(plan({ action, tabIndex: 1, url }, tight), `${action} ${url}`).not.toBe("destination_domain_not_allowed");
       }
     }
+    // So in developer mode too.
+    expect(plan({ action: "close", tabIndex: 1, url: "about:blank" }, createDefaultPolicy(root))).not.toBe(
+      "destination_domain_not_allowed",
+    );
     // A page an input action names is still a destination.
     expect(plan({ action: "click", target, url: "about:blank" })).toBe("destination_domain_not_allowed");
   });

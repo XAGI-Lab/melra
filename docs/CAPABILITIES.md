@@ -149,10 +149,12 @@ Actions: `navigate`, `back`, `forward`, `reload`, `inspect`, `wait`, `click`,
   only in the same document if the page re-renders it, so a page or frame that
   navigates itself while the action waits, even to the same address, gets
   nothing, and the action is refused with `browser_page_changed`. The page and
-  its address are checked again after the action's own wait (a trial click,
-  for a click), just before the input; typing confirms the document, not the
-  address, before each key, since a page may rewrite its own path as it is
-  typed into. What this does not cover: a navigation that commits in the
+  its address are checked again after the target is waited for, as the action
+  would wait for it (visible, enabled and stable for a click), sending
+  nothing, just before the input. Once the action has sent input, only its
+  document is checked, before each key and before each of a form's fields:
+  a page may rewrite its own path as it is typed into. What this does not
+  cover: a navigation that commits in the
   instant Playwright dispatches can still receive that one click or key, keys
   go wherever the page has put focus, a frame inside it included, and the
   check reads the top-level page, not the content of its frames. `close` and

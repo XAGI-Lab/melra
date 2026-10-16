@@ -62,9 +62,9 @@ All notable changes are documented here. The format follows
   `browser_action_requires_url`, ahead of any grant check. The operator
   approving it always sees which page it lands on, and a grant always has a
   page to match. The harness tools `browser_click` and `browser_type` take a
-  `url` for it. For `close` and `tab_switch` the url names the tab, which can
-  be `about:blank` or off the allowlist, since neither loads anything.
-  Developer mode is unchanged. (#196)
+  `url` for it. Developer mode does not require one. In every mode, the url
+  of `close` and `tab_switch` names the tab, which can be `about:blank` or off
+  the allowlist, since neither loads anything. (#196)
 
 - The hardened deployment recipes name Docker Desktop and WSL2 as the way to
   get OS isolation on Windows, and `melra doctor`'s `isolation` line on native
@@ -106,9 +106,11 @@ All notable changes are documented here. The format follows
   that element, and the target is found again only in the same document, so a
   page or frame that navigates itself while the action waits for its target,
   even to the same address, gets nothing: the action is refused with
-  `browser_page_changed`. The page and its address are checked again after
-  the action's own wait, just before the input, and typing confirms the
-  document before each key. What is left: a navigation that commits in the
+  `browser_page_changed`. The page, and its address until the action's first
+  input, are checked again after the target is waited for (as the action
+  would wait for it, sending nothing), just before the input, and typing
+  confirms the document before each key: a page may rewrite its own path as
+  it is typed into, or between a form's fields. What is left: a navigation that commits in the
   instant Playwright dispatches can still receive that one click or key, keys
   go wherever the page has put focus, a frame inside it included, and the
   checks read the top-level page, not a frame's content. (#196)

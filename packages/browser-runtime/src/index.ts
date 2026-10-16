@@ -205,9 +205,16 @@ const INPUT_ACTIONS: ReadonlySet<BrowserOperation["action"]> = new Set([
   "download",
 ]);
 
+/** A Playwright wait, or one of ours, that ran out. */
+const timedOut = (error: unknown): boolean =>
+  error instanceof BrowserCallTimeoutError || (error instanceof Error && error.name === "TimeoutError");
+
 /** Playwright's word for an element its document no longer holds. */
 const detached = (error: unknown): boolean =>
   error instanceof Error && error.message.includes("Element is not attached to the DOM");
+
+/** What a click waits for, short of the hit-target check only the click itself makes. */
+const CLICKABLE = ["visible", "enabled", "stable"] as const;
 
 /** The document an input action was checked against, and the address, if it named one. */
 interface Pin {
@@ -1116,6 +1123,7 @@ export class BrowserRuntime {
    * reliably no matter what is in it.
    */
   private async typeInto(pin: Pin, locator: Locator, value: string, operation: BrowserOperation): Promise<void> {
+    const ready = operation.clearFirst ? (["visible", "editable"] as const) : (["visible"] as const);
     await this.actOn(pin, locator, operation.timeoutMs, async (field, timeout) => {
       if (operation.clearFirst) {
         await field.fill("", { timeout });
@@ -1130,7 +1138,7 @@ export class BrowserRuntime {
       // that), then typed as it types, one key at a time, each only while the
       // page is still the checked document: keys go wherever focus is, so a
       // page that navigates midway would otherwise get the rest. Its address
-      // was checked before the first key; a page may rewrite its own path as
+      // was checked before the first input; a page may rewrite its own path as
       // it is typed into. Once the keys start, nothing here fails on the field
       // going away.
       await field.type("", { timeout });
@@ -1144,7 +1152,7 @@ export class BrowserRuntime {
         await this.call(pin.page.keyboard.type(character, { delay: operation.delayMs }), "type", Math.max(1, deadline - Date.now()));
       }
       this.dispatched = true;
-    });
+    }, ready);
   }
 
   /**
@@ -1155,43 +1163,54 @@ export class BrowserRuntime {
    * itself while the action waits (for the element to show, say) fails the
    * action rather than having the target found, and acted on, in the new
    * document. The target is found again only in the document it was found
-   * in, and only before any input reached it. `ready` waits the way the
-   * action would (a trial click, say) without acting, so that the check after
-   * it is the last thing before the input, address included.
+   * in, and only before any input reached it.
    *
-   * ponytail: Playwright then re-checks the hit target and dispatches, so a
-   * navigation that commits in that instant can still receive the one click
-   * or key; closing it needs input that names its document, which CDP lacks.
+   * The element is first waited for as the action would wait (`ready`: the
+   * states named, which sends the page nothing), so the check after that is
+   * the last thing before the input, the address it named included. Once the
+   * action has sent input (an earlier field of a form, say), only its
+   * document is held: a page may rewrite its own path in answer, as it may
+   * while it is typed into. A target found again after a re-render is not
+   * waited for twice, so one re-rendered faster than that can still be hit.
+   *
+   * ponytail: Playwright's own hit-target check and dispatch come after this,
+   * so a navigation that commits in that instant can still receive the one
+   * click or key; closing it needs input that names its document, which CDP
+   * lacks.
    */
   private async actOn<T>(
     pin: Pin,
     locator: Locator,
     timeout: number,
     act: (element: ElementHandle, timeout: number) => Promise<T>,
-    ready?: (element: ElementHandle, timeout: number) => Promise<unknown>,
+    ready: readonly ("visible" | "enabled" | "editable" | "stable")[] = [],
   ): Promise<T> {
     const deadline = Date.now() + timeout;
     const left = () => Math.max(1, deadline - Date.now());
+    const address = !this.dispatched;
     let found: JSHandle | undefined;
     try {
       for (;;) {
         // Bounded by its own timeout; the call only adds the cancel.
         const element = await this.handle(locator.first().elementHandle({ timeout: left() }), "count", Infinity);
         try {
-          if (found === undefined) found = await this.handle(element.evaluateHandle((node) => node.ownerDocument), "evaluate");
-          else if (!(await this.call(element.evaluate((node, first) => node.ownerDocument === first, found), "evaluate").catch(() => false))) {
+          if (found === undefined) {
+            found = await this.handle(element.evaluateHandle((node) => node.ownerDocument), "evaluate", left());
+            for (const state of ready) await element.waitForElementState(state, { timeout: left() });
+          } else if (!(await this.call(element.evaluate((node, first) => node.ownerDocument === first, found), "evaluate", left()).catch(() => false))) {
             throw new Error("browser_page_changed: the target's frame is now at another document");
           }
-          if (ready !== undefined) await ready(element, left());
-          if (!(await this.moved(pin))) return await act(element, left());
+          if (!(await this.moved(pin, address, left()))) return await act(element, left());
         } catch (error) {
           // Replaced below, so what `execute` reads from it is kept here.
           if (inputSent(error)) this.dispatched = true;
-          if (!(await this.moved(pin))) {
+          // A wait that ran out is the answer; the page is not asked again.
+          if (timedOut(error) || Date.now() >= deadline) throw error;
+          if (!(await this.moved(pin, address, left()))) {
             // Re-rendered, or its frame reloaded, before any input reached it:
             // found again, as Playwright's own locator would, in the same
             // document or not at all.
-            if (detached(error) && !inputSent(error) && Date.now() < deadline) continue;
+            if (detached(error) && !inputSent(error)) continue;
             throw error;
           }
         } finally {
@@ -1644,7 +1663,7 @@ export class BrowserRuntime {
           await this.locator(page, operation.target),
           operation.timeoutMs,
           (element, timeout) => element.click({ timeout }),
-          (element, timeout) => element.click({ trial: true, timeout }),
+          CLICKABLE,
         );
         // Set after the click returns, not before: Playwright's own timeout
         // mostly fires while it waits for the element to become clickable,
@@ -1688,7 +1707,7 @@ export class BrowserRuntime {
             await this.locator(page, operation.target),
             operation.timeoutMs,
             (element, timeout) => element.click({ timeout }),
-            (element, timeout) => element.click({ trial: true, timeout }),
+            CLICKABLE,
           );
           this.dispatched = true;
         }
@@ -1706,10 +1725,7 @@ export class BrowserRuntime {
           await this.locator(page, operation.target),
           operation.timeoutMs,
           (element, timeout) => element.selectOption(values, { timeout }),
-          async (element, timeout) => {
-            await element.waitForElementState("visible", { timeout });
-            await element.waitForElementState("enabled", { timeout });
-          },
+          ["visible", "enabled"],
         );
         this.dispatched = true;
         return {
@@ -1816,7 +1832,7 @@ export class BrowserRuntime {
           await this.locator(page, operation.target),
           operation.timeoutMs,
           (element, timeout) => element.click({ timeout }),
-          (element, timeout) => element.click({ trial: true, timeout }),
+          CLICKABLE,
         );
         this.dispatched = true;
         const download = await downloadPromise;
