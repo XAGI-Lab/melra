@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createHash } from "node:crypto";
+import { APPROVAL_SURFACE } from "@melra/browser-runtime";
 
 /**
  * The Community console: one self-contained page, no build step, no network
@@ -11,15 +12,22 @@ import { createHash } from "node:crypto";
  * never renders an approval phrase, even though, in developer mode, the task
  * API carries one: a phrase on screen is one copy-paste away from an approval
  * nobody read.
+ *
+ * `approvals` is the same page as `melra console` serves it, where an operator
+ * can approve or deny a pending task. Its marker tells a browser runtime
+ * attached to the same browser never to drive it, and the page's own script
+ * reads the marker to pair instead of reading a token from the URL. The CSP
+ * below lets no other script run on it, so nothing can take the marker off.
  */
-export function consolePage(): string {
+export function consolePage(approvals = false): string {
+  const name = approvals ? "MELRA approval console" : "MELRA console";
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <meta name="referrer" content="no-referrer" />
-<title>MELRA console</title>
+${approvals ? `<meta name="${APPROVAL_SURFACE}" content="operator-only" />\n` : ""}<title>${name}</title>
 <style>${CONSOLE_STYLE}</style>
 </head>
 <body>
@@ -27,7 +35,7 @@ export function consolePage(): string {
 <header class="top">
   <div class="brand">
     <span class="mark" aria-hidden="true"></span>
-    <h1>MELRA console</h1>
+    <h1>${name}</h1>
     <span id="version" class="muted"></span>
   </div>
   <nav role="tablist" aria-label="Views">
@@ -192,12 +200,40 @@ details summary { cursor: pointer; color: var(--muted); margin-top: 16px; }
  * by hash.
  */
 const CONSOLE_SCRIPT = String.raw`
-// The page itself is served behind this token, so it has to stay in the URL:
-// without it a reload would come back 401.
-const token = new URL(location.href).searchParams.get("token") ?? "";
+// The approval console (melra console) carries this marker. Its token is a
+// session this page gets by pairing, held in this document's memory only: not
+// in storage, the DOM or a URL. Anywhere else the page is served behind the
+// token in its URL, so it has to stay there: without it a reload would come
+// back 401.
+const approvals = document.querySelector('meta[name="melra-approval-surface"]') !== null;
+let paired = approvals ? await pair() : {};
+const token = approvals ? paired.session ?? "" : new URL(location.href).searchParams.get("token") ?? "";
+
+// The code rides in the fragment, which no request line, log or Referer
+// carries, and leaves the address bar before it is spent. The server spends it
+// once, so the document that spent it is the only one ever paired: any other
+// page in this tab, this one reloaded or come back to included, is not. That
+// is what keeps a click aimed at another page from landing here when that page
+// sends the tab back to this console mid-click.
+async function pair() {
+  const code = new URLSearchParams(location.hash.slice(1)).get("pair");
+  if (code === null) return { error: "not_paired" };
+  history.replaceState(null, "", location.pathname);
+  const response = await fetch("/pair", { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ code }) }).catch(() => null);
+  const body = response ? await response.json().catch(() => ({})) : {};
+  return response?.ok ? body : { error: body.error ?? "console_unreachable" };
+}
+const clock = (iso) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
 const auth = { headers: { authorization: "Bearer " + token } };
 const view = document.getElementById("view");
+// Leaving ends the pairing, before a back/forward cache could keep it.
+if (approvals) addEventListener("pagehide", () => {
+  auth.headers.authorization = "";
+  paired = { error: "left" };
+  renderUnauthorized();
+});
 const state = { caps: null, tasks: [], workflows: [], filter: "all", query: "", stream: null, streamId: null, events: [], sig: "" };
 
 const TASK_TONE = {
@@ -286,7 +322,7 @@ async function refresh() {
   try {
     const [caps, tasks, runs] = await Promise.all([get("/api/capabilities"), get("/api/tasks?limit=500"), get("/api/workflows")]);
     state.caps = caps; state.tasks = tasks.tasks; state.workflows = runs.workflows;
-    setLive(true, "Live · updated " + new Date().toLocaleTimeString());
+    setLive(true, "Live · updated " + new Date().toLocaleTimeString() + (paired.pairedAt ? " · paired at " + clock(paired.pairedAt) : ""));
     document.getElementById("version").textContent = "v" + caps.version + " · " + caps.policy.mode + " mode";
     document.getElementById("count-tasks").textContent = String(state.tasks.length || "");
     document.getElementById("count-workflows").textContent = String(state.workflows.length || "");
@@ -322,6 +358,16 @@ function render() {
 }
 
 function renderUnauthorized() {
+  if (approvals) {
+    const taken = paired.error === "console_already_paired";
+    view.replaceChildren(el("div", { class: "card empty" },
+      el("h3", { text: taken ? "Another tab already paired with this console" : "This page is not paired with a running approval console" }),
+      el("p", {}, taken ? "If that was not you, stop the console with Ctrl-C now. " : "",
+        "Run ", el("code", { text: "melra console" }), " in a terminal: it opens a page paired with it, and only that page can approve. ",
+        "Leaving or reloading that page ends its pairing."),
+    ));
+    return;
+  }
   view.replaceChildren(el("div", { class: "card empty" },
     el("h3", { text: "This console needs its access token" }),
     el("p", {}, "Start the server with ", el("code", { text: "melra serve --http --open" }),
@@ -418,10 +464,12 @@ async function renderTaskDetail(id, into) {
   ];
   if (task.status === "awaiting_approval") {
     const left = task.approval?.expiresAt ? until(task.approval.expiresAt) : undefined;
-    parts.push(el("div", { class: "callout" }, left === "expired"
+    if (approvals && left !== "expired") parts.push(await approvalPanel(task.id));
+    else parts.push(el("div", { class: "callout" }, left === "expired"
       ? "The approval window for this task has closed. Plan it again to get a fresh challenge."
       : ["Waiting for an approval" + (left ? " — expires in " + left : "") + ". Approve it with ",
-        el("code", { text: "melra approve " + task.id }), " in a terminal. The console is read-only and never shows the phrase."]));
+        el("code", { text: "melra approve " + task.id }), " or in ", el("code", { text: "melra console" }),
+        ", in a terminal. This console is read-only and never shows the phrase."]));
   }
   if (task.error) parts.push(el("div", { class: "callout bad", text: task.error }));
   parts.push(el("div", { class: "section" }, el("h2", { text: "Request" }), kv([
@@ -458,6 +506,39 @@ async function renderTaskDetail(id, into) {
   const { approval: _approval, ...stored } = task;
   parts.push(el("details", {}, el("summary", { text: "Stored record (redacted)" }), el("pre", { text: JSON.stringify(stored, null, 2) })));
   if (route().id === id) into.replaceChildren(...parts);
+}
+
+/**
+ * What the task would do, exactly as the CLI's approval screen shows it, and
+ * the two answers. The digest posted is the one that came with the screen
+ * shown, so a request that changed in between is refused, not approved unseen.
+ */
+async function approvalPanel(id) {
+  const path = "/api/tasks/" + encodeURIComponent(id) + "/";
+  let pending;
+  try { pending = await get(path + "approval"); }
+  catch { return el("div", { class: "callout bad", text: "Could not load what this task would do." }); }
+  const status = el("p", { role: "status" });
+  const answer = async (action, body) => {
+    for (const button of buttons) button.disabled = true;
+    const response = await fetch(path + action, { method: "POST",
+      headers: { ...auth.headers, "content-type": "application/json" }, body: JSON.stringify(body ?? {}) });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) for (const button of buttons) button.disabled = false;
+    status.textContent = !response.ok ? "Refused: " + (result.error ?? response.status)
+      : action === "deny" ? "Denied; the task is cancelled."
+      : "Approved, " + human(result.decision.channel) + ". The agent's next call runs it.";
+  };
+  const buttons = pending.decision ? [] : [
+    el("button", { type: "button", class: "filter", text: "Approve", onclick: () => answer("approve", { renderDigest: pending.renderDigest }) }),
+    el("button", { type: "button", class: "filter", text: "Deny", onclick: () => answer("deny") }),
+  ];
+  return el("div", { class: "section" }, el("h2", { text: "Approve this effect?" }),
+    pending.mode === "enforced" ? null : el("div", { class: "callout", text: "Developer mode: this records an in-band decision, which an enforced server will not act on." }),
+    el("pre", { text: pending.screen }),
+    pending.decision ? el("p", { text: "Approved by " + pending.decision.approver + " " + ago(pending.decision.decidedAt) + "." })
+      : el("p", {}, buttons[0], " ", buttons[1]),
+    status);
 }
 
 function renderWorkflows(id) {
@@ -504,7 +585,9 @@ async function renderWorkflowDetail(id, into) {
     el("div", { class: "section" }, el("h2", { text: "Nodes" }), el("div", { class: "scroll-x" }, nodeTable(run))),
     el("div", { class: "section" }, el("h2", { text: "Events" }), events),
   ].filter(Boolean));
-  if (state.streamId === id && state.stream) return;
+  // The approval console's session goes in a header, never a URL, and
+  // EventSource can only send a URL.
+  if (approvals || (state.streamId === id && state.stream)) return;
   closeStream();
   state.streamId = id;
   // Live tail. Every frame is one appended event, so the console never has to
@@ -530,7 +613,7 @@ for (const tab of document.querySelectorAll("[role=tab]")) {
 }
 window.addEventListener("hashchange", render);
 
-if (!token) { renderUnauthorized(); setLive(false, "No token"); }
+if (!token) { renderUnauthorized(); setLive(false, approvals ? "Not paired" : "No token"); }
 else if (await refresh()) render();
 const signature = () => JSON.stringify([state.tasks.map((t) => [t.id, t.status, t.updatedAt]), state.workflows.map((w) => [w.id, w.status, w.updatedAt])]);
 state.sig = signature();

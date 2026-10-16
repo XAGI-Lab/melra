@@ -89,14 +89,51 @@ and what lets the mutation run, depends on the
 | | Developer mode | Enforced mode |
 |---|---|---|
 | Phrase in the challenge | yes: `APPROVE` plus the first 12 hex digits of the action digest | none |
-| What lets a mutation run | the phrase echoed to `melra_execute`, or a decision recorded with [`melra approve`](INSTALLATION.md#approving-from-the-command-line) | only an operator's decision recorded by a process in enforced mode (`melra approve`, or `melra run`'s prompt in a terminal) |
+| What lets a mutation run | the phrase echoed to `melra_execute`, or a decision recorded with [`melra approve`](INSTALLATION.md#approving-from-the-command-line) or [`melra console`](INSTALLATION.md#approving-in-a-browser) | only an operator's decision recorded by a process in enforced mode (`melra approve`, `melra console`, or `melra run`'s prompt in a terminal) |
 | An approval the agent sends | checked against the phrase | refused (`approval_in_band_refused`), even when an operator has already decided |
 | No usable decision yet | `approval_required` | `approval_awaiting_operator`, or `approval_expired` once the challenge has expired |
 | Channel on the receipt | `in_band` | `out_of_band` |
-| Residual risk | anyone who knows the task can compute the phrase, so an echo shows only that something echoed it | anyone with OS access to the data directory can run `melra approve`, which is an operator only if the agent has no such access |
+| Residual risk | anyone who knows the task can compute the phrase, so an echo shows only that something echoed it | anyone with OS access to the data directory can run `melra approve` or `melra console`, or write `melra.sqlite` directly, which is an operator only if the agent has no such access; see [the approval console](#the-approval-console) for that path's own residuals |
 
 Approvals cannot be reused for a different task or operation. Policy is
 re-evaluated after approval and immediately before execution.
+
+### The approval console
+
+`melra console` is an operator path beside `melra approve`, with the same
+authority. It is a separate process: a loopback server with no MCP endpoint and
+no client registration, which refuses to start without a terminal and never
+prints its pairing code. It pairs once, with the tab it opened, and that page
+holds its session in memory only; a decision is a JSON POST from the console's
+own origin, bound to the digest of the screen shown. MELRA's browser runtime
+refuses every action that drives the console page
+(`browser_refuses_approval_surface`), in every mode. The server an agent
+connects to has no approval route, and no MELRA operation that runs without
+approval can produce a console approval. That is the claim; it is not a claim
+that the agent cannot approve. What remains:
+
+- **Same-user writes.** Anything running as the operator's OS user against the
+  data directory can approve with `melra approve --yes`, which needs no
+  terminal, or write `melra.sqlite` directly. Both were true before the console
+  and still are.
+- **Computer actions as a confused deputy.** MELRA cannot tell which page a
+  `computer.click` or `computer.type` lands on. Approving one approves whatever
+  is on screen when it runs, the console's Approve button included.
+- **A pairing race.** Until the page spends it, the code is on the browser
+  opener's command line, in browser history, and, in a browser the agent's
+  runtime is attached to over CDP, in a `tabs` read. Whatever reads it there
+  can pair first. The operator sees that: their tab says another tab already
+  paired, and the terminal prints a pairing time they did not cause. A tab the
+  agent's browser paired is one that runtime refuses to drive, a process that
+  read the command line or history could already run `melra approve --yes`,
+  and a spent code is worthless.
+- **Same-user memory reads.** A process that can read the console's memory or
+  the browser's (a debugger, `ptrace`) can take the session.
+- **Social engineering.** An agent can ask the operator to approve something in
+  the console. The console shows what the effect is, and a misleading but
+  accurately displayed operation can still be approved.
+- **A harness that gives the agent a terminal** breaks enforced mode's premise,
+  whatever the console does: that terminal can run `melra approve --yes`.
 
 ## Network policy
 

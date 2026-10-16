@@ -23,6 +23,7 @@ import {
 } from "./browser-connection.js";
 import {
   assertSafeUrl,
+  classifyOperation,
   type NetworkPolicy,
 } from "@melra/policy-core";
 import { startPinningProxy, type PinningProxy } from "./pinning-proxy.js";
@@ -290,6 +291,12 @@ function collectFrame(limit: number) {
     elements,
   };
 }
+
+/**
+ * The `<meta>` name of a page only an operator may act on: `melra console`
+ * serves its approval page with it, and its CSP lets no script take it off.
+ */
+export const APPROVAL_SURFACE = "melra-approval-surface";
 
 export class BrowserRuntime {
   private browser: Browser | undefined;
@@ -1102,13 +1109,25 @@ export class BrowserRuntime {
     // ponytail: checked when the action starts. A page that navigates itself
     // while the action waits for its target can still receive it; pinning
     // each action to the checked document would close that.
+    const acted =
+      (operation.action === "close" || operation.action === "tab_switch") && operation.tabIndex !== undefined
+        ? (await this.ensureContext()).pages()[operation.tabIndex]
+        : page;
     if (operation.url !== undefined && operation.action !== "navigate" && operation.action !== "tab_new") {
-      const acted =
-        (operation.action === "close" || operation.action === "tab_switch") && operation.tabIndex !== undefined
-          ? (await this.ensureContext()).pages()[operation.tabIndex]
-          : page;
       const at = acted === undefined ? "no such tab" : pageAddress(acted.url());
       if (at !== pageAddress(operation.url)) throw new Error(`browser_page_not_at_url: the page is at ${at}`);
+    }
+    // An approval console open in a browser this runtime is attached to is a
+    // read or two away (`tab_switch`, `back`), and an action without a url acts
+    // on whatever page is active. So nothing that drives a page acts on one,
+    // whatever approved the action and in every mode: an approval there is
+    // the operator's act alone. Same ponytail as above: checked at the start.
+    if (
+      classifyOperation(operation).effect !== "read" &&
+      acted !== undefined &&
+      (await this.call(acted.locator(`meta[name="${APPROVAL_SURFACE}"]`).count(), "count")) > 0
+    ) {
+      throw new Error("browser_refuses_approval_surface");
     }
     switch (operation.action) {
       case "navigate": {

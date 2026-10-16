@@ -35,8 +35,9 @@ pipeline, so the approval column below says exactly what it says above:
 
 A tool needing approval returns the phrase rather than failing; `approve` takes
 that task id and phrase and runs the operation that was approved. In enforced
-mode no phrase is issued: an operator approves with `melra approve <task-id>`,
-and `approve` then takes the task id alone. A policy
+mode no phrase is issued: an operator approves with `melra approve <task-id>`
+or in [`melra console`](INSTALLATION.md#approving-in-a-browser), and `approve`
+then takes the task id alone. A policy
 denial comes back as a result with `status: "blocked"` and a reason.
 
 ## Durable workflows
@@ -128,6 +129,14 @@ Actions: `navigate`, `back`, `forward`, `reload`, `inspect`, `wait`, `click`,
   (`browser_page_not_at_url`). It is compared as policy shows it, without query
   or fragment. The check is made when the action starts: a page that navigates
   itself while the action waits for its target can still receive it.
+- A page carrying `<meta name="melra-approval-surface">`, which is how
+  [`melra console`](INSTALLATION.md#approving-in-a-browser) serves its approval
+  page, is never driven: `click`, `type`, `fill_form`, `select`, `press`,
+  `upload`, `download` and `close` on it are refused with
+  `browser_refuses_approval_surface`, in every mode and whatever approved the
+  action, a `url` naming the page included. Reads on it still work. This
+  matters when the runtime is attached over CDP to a browser the operator also
+  uses. The check is made when the action starts, like the `url` check above.
 - `tab_new` accepts an optional `url` and runs the same destination checks
   `navigate` does. Every tab action returns the renumbered tab list, because
   opening, switching, and closing all shift the indices.
@@ -418,6 +427,11 @@ Mutations and destructive operations have one execution attempt.
 - Supported over loopback HTTP: OAuth 2.1 client registration, browser approval,
   and per-client identity — an approved client is named at the head of the
   delegation chain on every receipt. `MELRA_HTTP_OAUTH=0` turns it off.
+- `melra console`: an operator's approval console, a separate loopback HTTP
+  server with no MCP endpoint, paired with the one browser tab it opens. It
+  needs a terminal (`console_needs_a_terminal`) and a browser opener
+  (`console_needs_a_browser`), and is never served on a socket or off loopback
+  (`approval_console_loopback_only`).
 - Packaged: source, portable Node artifact, Python SDK artifact, Docker image.
 - Not supported in `0.3`: transports bound to a non-loopback interface,
   multi-tenant hosting.

@@ -124,13 +124,14 @@ function operationLines(operation: unknown, fieldLimit = 8): string[] {
  * The approval screen, ending with what MELRA itself vouches for: the full
  * contract first, so however long the agent's content runs it cannot push the
  * effect off the screen, then the operation and the summary, each line
- * bounded, right above the question.
+ * bounded, right above the question. `terminal` adds a reset after the
+ * contract, which only a terminal has any use for.
  */
-export function approvalScreen(view: ApprovalScreenView): string {
+export function approvalScreen(view: ApprovalScreenView, terminal = false): string {
   const { contract } = view;
   return [
     printable(JSON.stringify(contract, null, 2), true),
-    "\u001b[0m",
+    ...(terminal ? ["\u001b[0m"] : []),
     `Task ${view.task.id}, waiting for approval until ${view.task.approval?.expiresAt ?? "unknown"}`,
     "Operation:",
     ...operationLines(contract.operation).map((line) => `  ${line}`),

@@ -689,7 +689,7 @@ unless you opt in.
 | Serve (stdio / HTTP / socket) | `melra serve` · `--http --open` · `--socket <path>` |
 | See activity | `melra tasks` · `watch` · `status` |
 | Run one task | `melra run --request task.json` |
-| Approve a task an agent planned | `melra approve <task-id>` |
+| Approve a task an agent planned | `melra approve <task-id>` · in a browser: `melra console` |
 | Inspect a receipt | `melra inspect <task-id>` |
 | Test a policy | `melra policy test --request task.json` |
 | Check conformance | `melra conformance` |

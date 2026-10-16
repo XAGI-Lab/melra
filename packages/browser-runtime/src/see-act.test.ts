@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BrowserOperationSchema } from "@melra/protocol";
 import { afterEach, describe, expect, it } from "vitest";
-import { BrowserRuntime, detectBrowserExecutable } from "./index.js";
+import { APPROVAL_SURFACE, BrowserRuntime, detectBrowserExecutable } from "./index.js";
 
 /**
  * The see/act loop is the thing that was broken: a caller could read a snapshot
@@ -53,12 +53,12 @@ interface Element {
   testId: string | null;
 }
 
-async function fixture(): Promise<{ runtime: BrowserRuntime; url: string } | undefined> {
+async function fixture(page = PAGE): Promise<{ runtime: BrowserRuntime; url: string } | undefined> {
   const executablePath = await detectBrowserExecutable();
   if (executablePath === undefined) return undefined;
   const server = createServer((_request, response) => {
     response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-    response.end(PAGE);
+    response.end(page);
   });
   servers.push(server);
   await new Promise<void>((done) => {
@@ -121,6 +121,32 @@ describe("browser see/act loop", () => {
         | (Element & { value: string })
         | undefined;
       expect(after?.value).toBe("user@example.com");
+    } finally {
+      await runtime.close();
+    }
+  }, 120_000);
+
+  it("looks at a page marked as an approval surface and acts on nothing in it", async () => {
+    const context = await fixture(`<!doctype html><html><head><meta name="${APPROVAL_SURFACE}" content="operator-only">
+      <title>untouched</title></head><body><input name="note"><button onclick="document.title = 'clicked'">Approve</button></body></html>`);
+    if (context === undefined) return;
+    const { runtime, url } = context;
+    const run = (operation: Record<string, unknown>) =>
+      runtime.execute(BrowserOperationSchema.parse({ kind: "browser", ...operation }));
+    try {
+      await run({ action: "navigate", url });
+      for (const operation of [
+        { action: "click", target: { role: "button", name: "Approve" } },
+        // A url naming the page changes nothing: it is the page that is refused.
+        { action: "click", url, target: { role: "button", name: "Approve" } },
+        { action: "press", key: "Enter" },
+        { action: "type", target: { selector: 'input[name="note"]' }, value: "x" },
+      ]) {
+        await expect(run(operation), operation.action).rejects.toThrow("browser_refuses_approval_surface");
+      }
+      // Reads still work, and show nothing was done.
+      const seen = await run({ action: "inspect" });
+      expect(seen.title).toBe("untouched");
     } finally {
       await runtime.close();
     }

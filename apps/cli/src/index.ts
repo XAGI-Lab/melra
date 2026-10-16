@@ -24,12 +24,14 @@ import {
   type WorkflowRun,
 } from "@melra/protocol";
 import {
+  approvalScreen,
   assertEnforceable,
   confinedRoot,
   createMelraRuntime,
   serveHttp,
   OAuthProvider,
   clientPrincipal,
+  printable,
   serveStdio,
   unconfinedRoot,
   workspaceHoldsData,
@@ -52,7 +54,7 @@ import {
   parseCliEnvironment,
   serverLaunch,
 } from "./environment.js";
-import { approvalScreen, printable } from "./approval-screen.js";
+import { approvalConsole, assertConsoleTerminal } from "./approval-console.js";
 import { runConformance } from "./conformance.js";
 import { statusCommand, tasksCommand, watchCommand } from "./activity.js";
 import { clientStatuses, clientsCheck, detectClients } from "./client-status.js";
@@ -601,13 +603,24 @@ async function doctor(env: CliEnvironment): Promise<{
     });
   }
   const browser = env.browserExecutablePath ?? (await detectBrowserExecutable());
-  checks.push({
-    name: "browser",
-    status: browser === undefined ? "warn" : "pass",
-    detail:
-      browser ??
-      "Chrome, Chromium, or Edge not found; non-browser capabilities remain available",
-  });
+  checks.push(
+    // An attached browser may be the one the operator browses and approves in.
+    env.browserCdpEndpoint !== undefined
+      ? {
+          name: "browser",
+          status: "warn",
+          detail:
+            `attached over CDP to ${env.browserCdpEndpoint}: any tab open there, signed-in sites included, ` +
+            "is a tab_switch away from the agent; attach to a browser you do not use yourself",
+        }
+      : {
+          name: "browser",
+          status: browser === undefined ? "warn" : "pass",
+          detail:
+            browser ??
+            "Chrome, Chromium, or Edge not found; non-browser capabilities remain available",
+        },
+  );
   const computer = await createSystemComputerAdapter().capabilities();
   checks.push({
     name: "computer",
@@ -776,7 +789,7 @@ type ApprovalView = ReturnType<MelraRuntime["controller"]["approvalView"]>;
 
 /** The effect as an approver needs to see it, on stderr, then y/N. */
 async function confirmInTerminal(view: ApprovalView): Promise<boolean> {
-  process.stderr.write(approvalScreen(view));
+  process.stderr.write(approvalScreen(view, true));
   const prompt = createInterface({ input: process.stdin, output: process.stderr });
   const answer = (await prompt.question("Approve this effect? [y/N] ")).trim().toLowerCase();
   prompt.close();
@@ -919,14 +932,16 @@ function clientsCommand(args: string[], env: CliEnvironment): number {
 }
 
 /**
- * Hands the console URL to whatever opens links here.
+ * Hands the console URL to whatever opens links here, and says whether anything
+ * took it: the helper ran and, if it finished within a few seconds, succeeded.
  *
  * The URL carries the token, so this is the difference between copying a secret
- * out of a terminal and the console simply being open. Failure is silent on
- * purpose: the URL is already on screen, and a server that refused to start
- * because a desktop helper is missing would be worse than one you click into.
+ * out of a terminal and the console simply being open. `serve --open` ignores a
+ * failure on purpose: the URL is already on screen, and a server that refused
+ * to start because a desktop helper is missing would be worse than one you
+ * click into. `melra console` prints no URL, so it has to know.
  */
-function openInBrowser(url: string): void {
+function openInBrowser(url: string): Promise<boolean> {
   const [command, ...prefix] =
     process.platform === "darwin"
       ? ["open"]
@@ -937,8 +952,18 @@ function openInBrowser(url: string): void {
     stdio: "ignore",
     detached: true,
   });
-  child.on("error", () => {});
   child.unref();
+  return new Promise((resolveOpened) => {
+    // ponytail: a helper still running after 3s is taken to have handed the URL
+    // on; some xdg-open fallbacks only return when the browser closes.
+    const handedOn = setTimeout(() => resolveOpened(true), 3_000);
+    handedOn.unref();
+    child.once("error", () => resolveOpened(false));
+    child.once("exit", (code) => {
+      clearTimeout(handedOn);
+      resolveOpened(code === 0);
+    });
+  });
 }
 
 function help(): void {
@@ -953,6 +978,7 @@ Usage:
   melra serve --socket <path>
   melra run --request <task.json>
   melra approve <task-id> [--yes] [--deny] [--json]
+  melra console
   melra inspect <task-id>
   melra tasks [--limit <n>] [--status <status>] [--json]
   melra watch [--json]
@@ -969,6 +995,12 @@ Usage:
   melra clients [--revoke <client-id|all>]
   melra policy test --request <task.json>
   melra version [--json]
+
+'melra console', run by you in a terminal, opens an approval console in your
+browser: a page paired with that one tab, on a server of its own with no MCP
+endpoint, that approves or denies as 'melra approve' does. Its pairing code
+goes to the browser only, and reloading or leaving the page ends the pairing.
+Without a terminal or a browser to open, it refuses to start.
 
 In a terminal, doctor, setup, init, and version print a readable report, and
 'melra setup' with no --client asks which detected client to set up. Piped or
@@ -1016,7 +1048,8 @@ Environment:
   MELRA_POLICY     Optional local policy JSON
   MELRA_UNHINGED   Set to 1 to disable every guardrail (see --unsafe-local)
   MELRA_MODE       developer (default) or enforced (see --mode)
-  MELRA_APPROVER   Name 'melra approve' records as the approver (default: operator)
+  MELRA_APPROVER   Name 'melra approve' and 'melra console' record as the
+                   approver (default: operator)
   MELRA_HTTP_PORT  Port for 'serve --http' (default: 7457)
   MELRA_HTTP_TOKEN Fixed bearer token for 'serve --http' (default: random)
   MELRA_HTTP_OAUTH Set to 0 so only that token gets in; no client can register
@@ -1166,7 +1199,7 @@ async function main(): Promise<void> {
               : "") +
             `Loopback only. Anyone who can read this token can drive this machine.\n`,
         );
-        if (args.includes("--open")) openInBrowser(endpoint.url);
+        if (args.includes("--open")) void openInBrowser(endpoint.url);
       }
       const close = async () => {
         await server?.close();
@@ -1181,6 +1214,28 @@ async function main(): Promise<void> {
       rejectUnknownFlags(args, ["--request"]);
       process.exitCode = await runTask(args, env);
       return;
+    case "console": {
+      rejectUnknownFlags(args, []);
+      const interactive = process.stdin.isTTY === true && process.stderr.isTTY === true;
+      // Before the runtime, which would open, and could create, the database.
+      assertConsoleTerminal(interactive);
+      const melra = await runtime(env);
+      const endpoint = await approvalConsole(env, melra, {
+        interactive,
+        open: openInBrowser,
+        say: (text) => process.stderr.write(text),
+      }).catch(async (error: unknown) => {
+        await melra.close();
+        throw error;
+      });
+      const close = async () => {
+        await endpoint.close();
+        await melra.close();
+      };
+      process.once("SIGINT", () => void close().finally(() => process.exit(0)));
+      process.once("SIGTERM", () => void close().finally(() => process.exit(0)));
+      return;
+    }
     case "approve":
       rejectUnknownFlags(args, ["--yes", "--deny", "--json"]);
       process.exitCode = await approveCommand(args, env);

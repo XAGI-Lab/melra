@@ -16,11 +16,11 @@ import {
   TaskRequestSchema,
   TerminalOperationSchema,
 } from "@melra/protocol";
-import { createMelraRuntime, serveHttp } from "@melra/server";
+import { approvalScreen, createMelraRuntime, serveHttp } from "@melra/server";
 import { runConformance } from "../src/conformance.js";
 import { RESTART_SAFE_WORKFLOW } from "../src/demo-workflow.js";
 import { approverLabel, parseCliEnvironment, serverLaunch } from "../src/environment.js";
-import { approvalScreen } from "../src/approval-screen.js";
+import { approvalConsole, type ConsoleTerminal } from "../src/approval-console.js";
 import { taskTarget } from "../src/activity.js";
 
 const execute = promisify(execFile);
@@ -248,6 +248,156 @@ describe("melra CLI", () => {
       env: { ...process.env, MELRA_APPROVER: "Jane Doe" },
     });
     expect(result.stdout.trim()).toBe(PRODUCT_VERSION);
+  });
+
+  it("starts an approval console only in a terminal, and prints nothing that opens it", async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), "melra-cli-")));
+    roots.push(base);
+    await mkdir(join(base, "workspace"));
+    // Piped, as a harness that spawned it would read it.
+    const failed = (await execute(process.execPath, [entry, "console"], {
+      cwd: join(base, "workspace"),
+      env: { ...process.env, MELRA_HOME: join(base, "data"), MELRA_WORKSPACE: join(base, "workspace"), MELRA_MODE: "enforced" },
+    }).catch((error: unknown) => error)) as { code: number; stdout: string; stderr: string };
+    expect(failed.code).not.toBe(0);
+    expect(failed.stderr).toContain("console_needs_a_terminal");
+    // Refused before anything was opened: no database was made on the way.
+    expect(await readdir(join(base, "data")).catch(() => [])).not.toContain("melra.sqlite");
+    expect(failed.stdout + failed.stderr).not.toMatch(/https?:|[a-f0-9]{32}/);
+  });
+
+  describe("approval console", () => {
+    const start = async () => {
+      const base = await realpath(await mkdtemp(join(tmpdir(), "melra-cli-")));
+      roots.push(base);
+      const root = join(base, "workspace");
+      await mkdir(root);
+      const env = parseCliEnvironment(
+        {
+          MELRA_HOME: join(base, "data"),
+          MELRA_WORKSPACE: root,
+          MELRA_MODE: "enforced",
+          MELRA_APPROVER: "alice",
+          MELRA_HTTP_TOKEN: "agent-token",
+        },
+        { cwd: root, home: base },
+      );
+      const melra = await createMelraRuntime({
+        workspaceRoot: root,
+        dataDirectory: env.dataDirectory,
+        environment: { MELRA_MODE: "enforced" },
+      });
+      const seen = { said: "", opened: [] as string[], browser: true };
+      const terminal: ConsoleTerminal = {
+        interactive: true,
+        open: async (url) => {
+          seen.opened.push(url);
+          return seen.browser;
+        },
+        say: (text) => {
+          seen.said += text;
+        },
+      };
+      return { env, melra, terminal, seen };
+    };
+    const call = (url: URL, path: string, init: { body?: unknown; token?: string } = {}) =>
+      new Promise<{ status: number; json: Record<string, unknown> }>((resolveCall, reject) => {
+        const text = init.body === undefined ? "" : JSON.stringify(init.body);
+        const request = httpRequest(
+          {
+            host: url.hostname,
+            port: url.port,
+            path,
+            method: init.body === undefined ? "GET" : "POST",
+            headers: {
+              ...(init.token === undefined ? {} : { authorization: `Bearer ${init.token}` }),
+              origin: url.origin,
+              "content-type": "application/json",
+              "content-length": String(Buffer.byteLength(text)),
+            },
+          },
+          (response) => {
+            let data = "";
+            response.on("data", (chunk) => (data += chunk));
+            response.on("end", () => resolveCall({ status: response.statusCode ?? 0, json: JSON.parse(data) }));
+          },
+        );
+        request.on("error", reject);
+        request.end(text);
+      });
+
+    it("hands its pairing code to the browser and nothing else, and records console approvals", async () => {
+      const { env, melra, terminal, seen } = await start();
+      const endpoint = await approvalConsole(env, melra, terminal);
+      try {
+        expect(seen.opened).toHaveLength(1);
+        const url = new URL(seen.opened[0]!);
+        expect(url.hostname).toBe("127.0.0.1");
+        expect(url.search).toBe("");
+        expect(seen.opened[0]).not.toContain("&");
+        const code = /^#pair=([a-f0-9]{32})$/.exec(url.hash)?.[1] ?? "";
+        expect(code).not.toBe("");
+        expect(seen.said).not.toMatch(/Paired/);
+        const paired = await call(url, "/pair", { body: { code } });
+        const session = paired.json.session as string;
+        expect(seen.said).toMatch(/Paired with a browser tab at \d\d:\d\d/);
+        const task = melra.controller.plan(
+          TaskRequestSchema.parse({
+            goal: "Write the report",
+            operation: { kind: "file", action: "write", path: "report.txt", content: "x" },
+          }),
+        );
+        const shown = await call(url, `/api/tasks/${task.id}/approval`, { token: session });
+        const decided = await call(url, `/api/tasks/${task.id}/approve`, {
+          token: session,
+          body: { renderDigest: shown.json.renderDigest },
+        });
+        expect(decided.json.decision).toMatchObject({ channel: "out_of_band", approver: "console:alice" });
+        expect((await melra.controller.execute(task.id)).task.status).toBe("verified_success");
+        // What the operator's terminal shows names the console, never a way in.
+        expect(seen.said).toContain(`http://127.0.0.1:${url.port}`);
+        expect(seen.said).not.toContain(code);
+        expect(seen.said).not.toContain(session);
+      } finally {
+        await endpoint.close();
+        await melra.close();
+      }
+    });
+
+    it("refuses without a terminal or a browser, and leaves nothing listening", async () => {
+      const { env, melra, terminal, seen } = await start();
+      try {
+        await expect(approvalConsole(env, melra, { ...terminal, interactive: false })).rejects.toThrow(
+          "console_needs_a_terminal",
+        );
+        expect(seen.opened).toHaveLength(0);
+        seen.browser = false;
+        await expect(approvalConsole(env, melra, terminal)).rejects.toThrow("console_needs_a_browser");
+        expect(seen.said).toBe("");
+        const offered = new URL(seen.opened[0]!);
+        await expect(fetch(`${offered.origin}/`)).rejects.toThrow();
+      } finally {
+        await melra.close();
+      }
+    });
+  });
+
+  it("warns when the agent's browser is one attached over CDP", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-cli-")));
+    roots.push(root);
+    const result = await execute(process.execPath, [entry, "doctor"], {
+      cwd: root,
+      env: {
+        ...process.env,
+        MELRA_HOME: join(root, ".melra"),
+        MELRA_WORKSPACE: root,
+        MELRA_BROWSER_CDP_ENDPOINT: "http://127.0.0.1:9",
+      },
+    });
+    const report = JSON.parse(result.stdout) as { checks: Array<{ name: string; status: string; detail: string }> };
+    const browser = report.checks.find((check) => check.name === "browser");
+    expect(browser?.status).toBe("warn");
+    expect(browser?.detail).toContain("attached over CDP");
   });
 
   it("shows an approver the agent's words as text, never as terminal commands", () => {

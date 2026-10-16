@@ -6,7 +6,7 @@
 // because importing that runs the CLI, and every piece here needs a test.
 
 import { createInterface } from "node:readline/promises";
-import { printable } from "./approval-screen.js";
+import { printable } from "@melra/server";
 import { CLIENTS } from "./clients.js";
 import type { ClientChoice, ClientStatus } from "./client-status.js";
 import { mark, paint, table, type Status } from "./output.js";
