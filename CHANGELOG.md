@@ -73,19 +73,21 @@ All notable changes are documented here. The format follows
 ### Fixed
 
 - In a browser the runtime is attached to over CDP, it no longer closes tabs it
-  did not open between its actions: a tab that appears then is the operator's
-  (one they opened, or a console `melra console` opened), left open and not
-  reported as a popup, unless it is the runtime's. The runtime's are the tabs
-  it opened, every window one of those opened, down any chain, and what the
-  tab it is driving opens: a tab it picked up becomes its own only once it
-  navigates it or sends it input, and stops being so when it moves on. That
-  is decided when Chromium creates the window, from the opener it names, or
-  for a tab a link opens, which has none, from the page's request just
-  before it. A link in a frame from another site that opens a new tab is not
-  seen that way: its tab is left open and not reported, though it is still in
-  `tabs` and the destination checks still apply to it. A tab that appears
-  while an action runs is still closed and reported, so open the console
-  while the agent is idle, or use `melra approve`. (#203)
+  did not open between its actions: a tab Chromium creates then is the
+  operator's (one they opened, or a console `melra console` opened), left
+  open and not reported as a popup, unless it is the runtime's. The
+  runtime's are the tabs it opened, every window one of those opened, down
+  any chain, and what the tab it is driving opens: a tab it picked up becomes
+  its own only once it navigates it or sends it input, and stops being so
+  when it moves on. That is decided when Chromium creates the window, from
+  the opener it names, and holds even when Playwright hands the window over
+  during the next action. A tab a link opens with a modifier or middle click
+  has no opener, so between actions it counts as the operator's whoever
+  clicked; it is still listed by `tabs`, and its loads are still checked. A
+  tab created while an action runs is still closed and reported, so open the
+  console while the agent is idle, or use `melra approve`. A reported popup's
+  URL no longer carries its fragment, where a console keeps its one-time
+  pairing code until its page has read it. (#203)
 
 - A release run that fails after publishing to npm can be re-run: packages
   already on the registry at that version are skipped instead of stopping the

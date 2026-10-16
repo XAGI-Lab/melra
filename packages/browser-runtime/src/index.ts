@@ -128,13 +128,6 @@ const WINDOW_POLL_MS = 25;
 const SETUP_TIMEOUT_MS = 30_000;
 
 /**
- * How long after a page of the runtime's asks, through a link, for a tab of
- * its own that the tab Chromium then creates is taken for its answer. The two
- * arrive tens of milliseconds apart.
- */
-const TAB_REQUEST_MS = 2_000;
-
-/**
  * Bound on each teardown call in `close()`. Shutdown has no action to take a
  * deadline from, and a browser that stopped answering must not keep the server
  * from exiting.
@@ -214,6 +207,12 @@ const DRIVING_ACTIONS: ReadonlySet<BrowserOperation["action"]> = new Set([
   "upload",
   "download",
 ]);
+
+/** A URL without its fragment. */
+function withoutFragment(url: string): string {
+  const hash = url.indexOf("#");
+  return hash === -1 ? url : url.slice(0, hash);
+}
 
 /**
  * A URL as policy names a browser target, without query or fragment. Chrome
@@ -404,11 +403,18 @@ export class BrowserRuntime {
   /**
    * The windows this runtime owns, by CDP target id: tabs it opened, and every
    * window one it owns or the tab it is driving opened. Decided when Chromium
-   * creates the window: from the opener it names then (Playwright's `opener()`
-   * comes later, and is null by then if the opener has closed), or for a tab a
-   * link opened, which has no opener, from the page's request just before it
-   * (`watch`). In a browser this runtime is attached to, the rest belong to
-   * someone else, the operator above all.
+   * creates the window, from the opener it names then: Playwright's `opener()`
+   * comes later, and is null by then if the opener has closed. In a browser
+   * this runtime is attached to, the rest belong to someone else, the
+   * operator above all.
+   *
+   * ponytail: a tab a link opens with a modifier or middle click has no
+   * opener at all, so between actions it counts as the operator's whichever
+   * page clicked it. A page's request for one (`Page.frameRequestedNavigation`)
+   * cannot be tied to the tab that follows: a refused request leaves nothing
+   * to match, and claiming the next opener-less tab would let a page have the
+   * operator's tabs, a console's among them, closed. Closing that gap needs a
+   * signal Chromium does not give.
    */
   private ownTargets = new Set<string>();
   /**
@@ -419,10 +425,11 @@ export class BrowserRuntime {
   private drivenTarget: string | undefined;
   /** Target ids already looked up; a page keeps its id across navigations. */
   private targetIds = new WeakMap<Page, string>();
-  /** Sessions listening on the runtime's pages for a link asking for a tab. */
-  private watched = new WeakMap<Page, CDPSession>();
-  /** When pages of the runtime's asked for a tab not yet created. */
-  private tabRequests: number[] = [];
+  /**
+   * Windows Chromium created while an action was running: that action's
+   * popups, whenever Playwright gets round to handing them over.
+   */
+  private createdActing = new Set<string>();
   /**
    * Browser-level session that hears about a new window the moment Chromium
    * creates it, which is what lets an action wait for a popup it knows exists
@@ -689,23 +696,26 @@ export class BrowserRuntime {
         const allowed = this.options.popups === "allow" || this.options.unhinged === true;
         if (this.popups.length < MAX_POPUPS) {
           this.popups.push({
-            url: opened.url(),
+            // Without its fragment: a console opened by the operator carries
+            // its one-time pairing code there until its first script runs.
+            url: withoutFragment(opened.url()),
             blocked: !allowed,
             ...(acting ? {} : { betweenActions: true }),
           });
         }
-        // One that stays may open more of its own, through a link too.
-        if (allowed) return this.watch(opened).catch(() => undefined);
+        if (allowed) return;
         // A popup that closed on its own, or whose opener navigated away
         // first, must not turn into the action's error.
         return opened.close().catch(() => undefined);
       };
-      // In a browser this runtime is attached to, a tab that appears between
-      // its actions is the operator's (one they opened, a console `melra
-      // console` opened) unless it is one of this runtime's (`ownTargets`):
-      // that tab is left alone and not reported.
-      if (this.options.cdpEndpoint !== undefined && !acting && this.targets !== undefined) {
-        this.closing.push(this.owned(opened).then((owned) => (owned ? adopt() : undefined)));
+      // In a browser this runtime is attached to, a tab Chromium created
+      // between its actions is the operator's (one they opened, a console
+      // `melra console` opened) unless it is one of this runtime's
+      // (`ownTargets`): that tab is left alone and not reported. Judged by when
+      // it was created, not by when Playwright hands it over, which for a slow
+      // first response can be during the next action.
+      if (this.options.cdpEndpoint !== undefined && this.targets !== undefined) {
+        this.closing.push(this.adoptable(opened, acting).then((adoptable) => (adoptable ? adopt() : undefined)));
         return;
       }
       const closing = adopt();
@@ -735,8 +745,7 @@ export class BrowserRuntime {
     this.ownTargets = new Set();
     this.drivenTarget = undefined;
     this.targetIds = new WeakMap();
-    this.watched = new WeakMap();
-    this.tabRequests = [];
+    this.createdActing = new Set();
     // A session left from a context that closed under us would count into the
     // fresh map below and make every action wait for windows that never come.
     if (this.targets !== undefined) {
@@ -755,22 +764,15 @@ export class BrowserRuntime {
         if (targetInfo.type !== "page" || targetInfo.subtype !== undefined) return;
         const id = targetInfo.browserContextId ?? "";
         this.windowsCreated.set(id, (this.windowsCreated.get(id) ?? 0) + 1);
+        if (this.acting) this.createdActing.add(targetInfo.targetId);
         const opener = targetInfo.openerId;
-        if (opener !== undefined) {
-          if (this.ownTargets.has(opener) || opener === this.drivenTarget) this.ownTargets.add(targetInfo.targetId);
-          return;
-        }
-        // No opener: a link's tab answers a request one of the runtime's
-        // pages just made; a tab the browser itself opens starts blank.
-        const now = Date.now();
-        this.tabRequests = this.tabRequests.filter((at) => now - at < TAB_REQUEST_MS);
-        if (this.tabRequests.length > 0 && targetInfo.url !== "about:blank") {
-          this.tabRequests.shift();
+        if (opener !== undefined && (this.ownTargets.has(opener) || opener === this.drivenTarget)) {
           this.ownTargets.add(targetInfo.targetId);
         }
       });
       targets.on("Target.targetDestroyed", ({ targetId }) => {
         this.ownTargets.delete(targetId);
+        this.createdActing.delete(targetId);
         if (this.drivenTarget === targetId) this.drivenTarget = undefined;
       });
       await this.call(
@@ -851,10 +853,7 @@ export class BrowserRuntime {
     } finally {
       this.openingTab = false;
     }
-    if (this.options.cdpEndpoint !== undefined) {
-      this.ownTargets.add(await this.targetOf(opened));
-      await this.watch(opened);
-    }
+    if (this.options.cdpEndpoint !== undefined) this.ownTargets.add(await this.targetOf(opened));
     return opened;
   }
 
@@ -876,47 +875,22 @@ export class BrowserRuntime {
   }
 
   /**
-   * Whether a window that appeared between actions is this runtime's, asked
-   * twice before giving up. One that closed before it could be asked is
-   * reported, as everywhere else; one still open that cannot be asked is left
-   * alone, since it may be the operator's.
+   * Whether to treat a new window as this runtime's, in a browser it is
+   * attached to: one created while an action ran, or one of `ownTargets`.
+   * Asked twice before giving up. One that closed before it could be asked is
+   * reported, as everywhere else; one still open that cannot be asked counts
+   * by when Playwright handed it over.
    */
-  private async owned(page: Page): Promise<boolean> {
+  private async adoptable(page: Page, acting: boolean): Promise<boolean> {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
-        return this.ownTargets.has(await this.targetOf(page));
+        const id = await this.targetOf(page);
+        return this.createdActing.has(id) || this.ownTargets.has(id);
       } catch {
         if (page.isClosed()) return true;
       }
     }
-    return false;
-  }
-
-  /**
-   * Listens on a page of this runtime's for a link asking for a tab of its
-   * own, a modifier or middle click: Chromium gives that tab no opener, so the
-   * request just before it is the only sign whose it is. A frame from another
-   * site runs in its own process, and its requests are not heard here.
-   */
-  private async watch(page: Page): Promise<void> {
-    if (this.options.cdpEndpoint === undefined || this.watched.has(page) || page.isClosed()) return;
-    const id = await this.targetOf(page);
-    const session = await bounded(page.context().newCDPSession(page), SETUP_TIMEOUT_MS, "cdp_session");
-    this.watched.set(page, session);
-    session.on("Page.frameRequestedNavigation", ({ disposition }) => {
-      if (disposition !== "newTab" && disposition !== "newWindow") return;
-      if (this.ownTargets.has(id) || this.drivenTarget === id) this.tabRequests.push(Date.now());
-    });
-    await bounded(session.send("Page.enable"), SETUP_TIMEOUT_MS, "cdp:Page.enable");
-  }
-
-  /** Stops listening on a page that is no longer this runtime's. */
-  private async unwatch(page: Page): Promise<void> {
-    const session = this.watched.get(page);
-    const id = this.targetIds.get(page);
-    if (session === undefined || (id !== undefined && this.ownTargets.has(id))) return;
-    this.watched.delete(page);
-    await bounded(session.detach(), SETUP_TIMEOUT_MS, "cdp_detach").catch(() => undefined);
+    return acting;
   }
 
   /**
@@ -924,11 +898,9 @@ export class BrowserRuntime {
    * tab of the operator's the runtime only picked up, and what it opens stays
    * theirs until the runtime navigates it or sends it input (`drive`).
    */
-  private async activate(page: Page | undefined): Promise<void> {
-    const previous = this.activePage;
+  private activate(page: Page | undefined): void {
     this.activePage = page;
     this.drivenTarget = undefined;
-    if (previous !== undefined && previous !== page) await this.unwatch(previous);
   }
 
   /**
@@ -939,9 +911,7 @@ export class BrowserRuntime {
   private async drive(page: Page): Promise<void> {
     if (this.options.cdpEndpoint === undefined) return;
     const id = await this.targetOf(page);
-    if (this.activePage !== page) return;
-    this.drivenTarget = id;
-    await this.watch(page);
+    if (this.activePage === page) this.drivenTarget = id;
   }
 
   private async page(): Promise<Page> {
@@ -950,7 +920,7 @@ export class BrowserRuntime {
       return this.activePage;
     }
     const page = context.pages()[0] ?? (await this.openPage(context));
-    await this.activate(page);
+    this.activate(page);
     return page;
   }
 
@@ -1882,7 +1852,7 @@ export class BrowserRuntime {
       case "tab_new": {
         const context = await this.ensureContext();
         const opened = await this.openPage(context);
-        await this.activate(opened);
+        this.activate(opened);
         if (operation.url !== undefined) {
           await assertSafeUrl(operation.url, this.options);
           await opened.goto(operation.url, {
@@ -1908,7 +1878,7 @@ export class BrowserRuntime {
         // would actually see; a background page still renders, but modal and
         // focus behaviour differ.
         await this.call(target.bringToFront(), "bring_to_front");
-        await this.activate(target);
+        this.activate(target);
         return {
           switched: true,
           index: (await this.ensureContext()).pages().indexOf(target),
@@ -1927,7 +1897,7 @@ export class BrowserRuntime {
         // bound running out cannot say whether the tab went away.
         this.dispatched = true;
         await this.call(target.close(), "close");
-        await this.activate(context.pages().at(-1));
+        this.activate(context.pages().at(-1));
         return { closed: true, url, tabs: await this.describeTabs(context) };
       }
     }
