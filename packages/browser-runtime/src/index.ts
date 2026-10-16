@@ -1194,23 +1194,35 @@ export class BrowserRuntime {
         // Bounded by its own timeout; the call only adds the cancel.
         const element = await this.handle(locator.first().elementHandle({ timeout: left() }), "count", Infinity);
         try {
+          let moved: boolean;
           if (found === undefined) {
             found = await this.handle(element.evaluateHandle((node) => node.ownerDocument), "evaluate", left());
             for (const state of ready) await element.waitForElementState(state, { timeout: left() });
-          } else if (!(await this.call(element.evaluate((node, first) => node.ownerDocument === first, found), "evaluate", left()).catch(() => false))) {
-            throw new Error("browser_page_changed: the target's frame is now at another document");
+            moved = await this.moved(pin, address, left());
+          } else {
+            if (!(await this.call(element.evaluate((node, first) => node.ownerDocument === first, found), "evaluate", left()).catch(() => false))) {
+              throw new Error("browser_page_changed: the target's frame is now at another document");
+            }
+            // Still in the document it was found in, so the page has not
+            // navigated either: a navigation takes its frames' documents with
+            // it. Only the address is left, and that needs no round trip.
+            moved = address && pin.address !== undefined && pageAddress(pin.page.url()) !== pin.address;
           }
-          if (!(await this.moved(pin, address, left()))) return await act(element, left());
+          if (!moved) return await act(element, left());
         } catch (error) {
           // Replaced below, so what `execute` reads from it is kept here.
           if (inputSent(error)) this.dispatched = true;
           // A wait that ran out is the answer; the page is not asked again.
           if (timedOut(error) || Date.now() >= deadline) throw error;
+          // Re-rendered, or its frame reloaded: found again, as Playwright's
+          // own locator would, in the same document or not at all, which the
+          // next pass checks before it acts. That holds even after Playwright
+          // logged the click as performed: its hit-target guard stops the
+          // events that did not reach the element, which is why its locator
+          // retries this too.
+          if (detached(error) && found !== undefined) continue;
           if (!(await this.moved(pin, address, left()))) {
-            // Re-rendered, or its frame reloaded, before any input reached it:
-            // found again, as Playwright's own locator would, in the same
-            // document or not at all.
-            if (detached(error) && !inputSent(error)) continue;
+            if (detached(error)) continue;
             throw error;
           }
         } finally {
