@@ -63,5 +63,10 @@ for (const lock of ["sdk-py/uv.lock", "benchmarks/browser-agent/uv.lock"]) {
 
 // The MCP Registry metadata names the release and the npm package it installs.
 await edit("server.json", (text) => text.replace(/("version":\s*)"[^"]*"/g, `$1"${next}"`));
+// The prose that names the current release (CURRENT_RELEASE_PROSE in
+// check-versions.mjs); dated evidence elsewhere keeps the version it was for.
+await edit("docs/CAPABILITIES.md", (text) => text.replace(/^This document describes `[^`]*`\./m, `This document describes \`${next}\`.`));
+await edit("docs/COMPATIBILITY.md", (text) => text.replace(/^`[^`]*` is pre-stable\./m, `\`${next}\` is pre-stable.`));
+await edit("README.md", (text) => text.replace(/^MELRA \S+ {2}developer mode$/m, `MELRA ${next}  developer mode`));
 
 process.stdout.write(`${next}\n${written.map((p) => `  ${p}`).join("\n")}\n`);

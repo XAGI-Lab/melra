@@ -52,6 +52,15 @@ for (const pkg of server.packages ?? []) {
 }
 if (cli.mcpName !== server.name) failures.push(`apps/cli/package.json: mcpName ${cli.mcpName} != server.json name ${server.name}`);
 
+// CURRENT_RELEASE_PROSE: the sentences that say which release the docs describe.
+for (const [path, sentence] of [
+  ["docs/CAPABILITIES.md", `This document describes \`${expected}\`.`],
+  ["docs/COMPATIBILITY.md", `\`${expected}\` is pre-stable.`],
+  ["README.md", `MELRA ${expected}  developer mode`],
+]) {
+  if (!(await readFile(path, "utf8")).includes(sentence)) failures.push(`${path}: does not name ${expected} as the current release`);
+}
+
 if (failures.length > 0) {
   process.stderr.write(`${failures.join("\n")}\n`);
   process.exitCode = 1;

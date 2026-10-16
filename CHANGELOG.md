@@ -42,7 +42,11 @@ All notable changes are documented here. The format follows
   run, when the package's trusted publisher may not move dist-tags.
 - `pnpm versions:set` moves `server.json`'s versions too, and `pnpm
   versions:check` fails when they, or the CLI's `mcpName` and `server.json`'s
-  name, disagree.
+  name, disagree. Both also cover the three sentences that name the current
+  release (the top of `docs/CAPABILITIES.md`, the pre-stable note in
+  `docs/COMPATIBILITY.md`, and the README's `melra version` sample), which had
+  stayed at 0.3.0-alpha.12 through two releases. `docs/RELEASES.md` lists the
+  MCP Registry publish step.
 
 ## [0.3.0-alpha.14] - 2026-10-16
 

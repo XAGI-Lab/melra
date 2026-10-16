@@ -20,6 +20,11 @@
 5. Record the supported OS and named-client results in `VALIDATION.md`.
 6. Review `SECURITY.md`, the threat model, compatibility notes, and changelog.
 7. Create a signed, protected `v*` tag only from an approved main-branch commit.
+8. Once the tag's npm packages are out, publish the MCP Registry listing from
+   the tagged checkout: `mcp-publisher login github`, then `mcp-publisher
+   publish`. The Registry checks `server.json`'s name against the CLI's
+   `mcpName`, case and all, and installs the version `server.json` names, so
+   both come from `pnpm versions:set`, never by hand.
 
 ## Automated artifacts
 
