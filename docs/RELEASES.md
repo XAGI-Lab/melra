@@ -68,7 +68,16 @@ node scripts/npm-trust.mjs
 ```
 
 The script skips packages that already trust the workflow, so rerunning it is
-harmless. A **brand-new** package cannot be trusted until it exists on the
+harmless. Moving the `latest` dist-tag needs one more setting the script does
+not grant: in each package's trusted-publisher settings on npmjs.com, enable
+**Allow npm dist-tag**. Without it the release still publishes and the GitHub
+release is still created, but `latest` stays where it was and the run warns
+with the command to move it by hand.
+
+**A failed release run can be re-run.** Packages already on the registry at the
+tag's version are skipped, so a re-run continues with the provenance check,
+the GitHub release and the install smoke. A re-run uses the workflow as it was
+at the tag, so this applies to tags cut after this change. A **brand-new** package cannot be trusted until it exists on the
 registry: publish its first version by hand as an owner, then run the script.
 
 Once a release has published this way, set each package to *Require two-factor

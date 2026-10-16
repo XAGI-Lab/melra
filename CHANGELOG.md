@@ -31,12 +31,26 @@ All notable changes are documented here. The format follows
   passes `--socket "$MELRA_SOCKET"` instead. The stderr warning `serve` printed
   in that case is gone with it. (#105)
 
+### Fixed
+
+- A release run that fails after publishing to npm can be re-run: packages
+  already on the registry at that version are skipped instead of stopping the
+  run. The provenance check waits up to 15 minutes per package for the
+  registry to show the attestation (0.3.0-alpha.14 stopped after 2.5 minutes,
+  with every attestation present minutes later), and the GitHub release is
+  created before `latest` is moved, which now warns, rather than failing the
+  run, when the package's trusted publisher may not move dist-tags.
+- `pnpm versions:set` moves `server.json`'s versions too, and `pnpm
+  versions:check` fails when they, or the CLI's `mcpName` and `server.json`'s
+  name, disagree.
+
 ## [0.3.0-alpha.14] - 2026-10-16
 
 ### Fixed
 
 - The MCP Registry listing uses the exact `XAGI-Lab` GitHub owner casing in
   both the package manifest and server metadata.
+
 ## [0.3.0-alpha.13] - 2026-10-16
 
 ### Added

@@ -40,6 +40,18 @@ for (const lock of ["sdk-py/uv.lock", "benchmarks/browser-agent/uv.lock"]) {
   }
 }
 
+// The Registry checks the npm package's `mcpName` against `server.json`'s name,
+// case and all, and installs the version server.json names.
+const server = JSON.parse(await readFile("server.json", "utf8"));
+const cli = JSON.parse(await readFile("apps/cli/package.json", "utf8"));
+if (server.version !== expected) failures.push(`server.json: version ${server.version} != ${expected}`);
+for (const pkg of server.packages ?? []) {
+  if (pkg.identifier === cli.name && pkg.version !== expected) {
+    failures.push(`server.json: ${pkg.identifier} ${pkg.version} != ${expected}`);
+  }
+}
+if (cli.mcpName !== server.name) failures.push(`apps/cli/package.json: mcpName ${cli.mcpName} != server.json name ${server.name}`);
+
 if (failures.length > 0) {
   process.stderr.write(`${failures.join("\n")}\n`);
   process.exitCode = 1;

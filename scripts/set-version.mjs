@@ -61,4 +61,7 @@ for (const lock of ["sdk-py/uv.lock", "benchmarks/browser-agent/uv.lock"]) {
   );
 }
 
+// The MCP Registry metadata names the release and the npm package it installs.
+await edit("server.json", (text) => text.replace(/("version":\s*)"[^"]*"/g, `$1"${next}"`));
+
 process.stdout.write(`${next}\n${written.map((p) => `  ${p}`).join("\n")}\n`);
