@@ -1236,14 +1236,16 @@ export class BrowserRuntime {
           if (inputSent(error)) this.dispatched = true;
           // A wait that ran out is the answer; the page is not asked again.
           if (timedOut(error) || Date.now() >= deadline) throw error;
-          // Re-rendered, or its frame reloaded: found again, as Playwright's
-          // own locator would, in the same document or not at all, which the
-          // next pass checks before it acts. That holds even after Playwright
-          // logged the click as performed: its hit-target guard stops the
-          // events that did not reach the element, which is why its locator
-          // retries this too.
-          if (detached(error) && found !== undefined) continue;
           if (!(await this.moved(pin, !this.dispatched, left()))) {
+            // Re-rendered, or its frame reloaded, while the page stayed: found
+            // again, as Playwright's own locator would, in the same document
+            // or not at all, which the next pass checks before it acts. That
+            // holds even after Playwright logged the click as performed: its
+            // hit-target guard stops the events that did not reach the
+            // element, which is why its locator retries this too. The page is
+            // asked first every time, so one that navigated is refused at
+            // once, and a target first found in a document that came in after
+            // the checks is never acted on.
             if (detached(error)) continue;
             throw error;
           }

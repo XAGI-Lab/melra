@@ -69,6 +69,12 @@ const PUSH_FORM = `<!doctype html><html><head><title>push-form</title></head><bo
   <input id="a" oninput="history.replaceState(null, '', '/push-form/' + this.value)"><input id="b">
   <button id="s" onclick="document.title = document.getElementById('a').value + '+' + document.getElementById('b').value">Send</button>
 </body></html>`;
+// A page whose target is hidden until it leaves, when released, for one that
+// has no such target at all.
+const LEAVES = `<!doctype html><html><head><title>leaves</title></head><body>
+  <button id="go" hidden>Go</button>
+  <script>fetch("/release").then(() => { location.href = "/landed"; })</script>
+</body></html>`;
 // A search field that, once cleared, rewrites the path and mounts a fresh
 // field in its place, then rewrites the path again as it is typed into.
 const REMOUNT = `<!doctype html><html><head><title>remount</title></head><body><div id="box"></div>
@@ -93,9 +99,10 @@ const COUNTED = `<!doctype html><html><head><title>0</title></head><body>
   <script>addEventListener("click", (event) => { if (event.isTrusted) document.title = String(Number(document.title) + 1); }, true)</script>
   <button id="go">Go</button>
 </body></html>`;
-// A button re-rendered every 50 ms, as some frameworks do.
+// A button re-rendered every 53 ms, as some frameworks do: off the frame
+// clock, so no page load locks the re-render into the same phase.
 const CHURN = `<!doctype html><html><head><title>churn</title></head><body><div id="box"></div>
-  <script>setInterval(() => { document.getElementById("box").innerHTML = '<button id="go" onclick="document.title = \\'clicked\\'">Go</button>'; }, 50)</script>
+  <script>setInterval(() => { document.getElementById("box").innerHTML = '<button id="go" onclick="document.title = \\'clicked\\'">Go</button>'; }, 53)</script>
 </body></html>`;
 
 const roots: string[] = [];
@@ -199,6 +206,7 @@ describe("a url on an action that does not navigate", () => {
         "/push-form": PUSH_FORM,
         "/counted": COUNTED,
         "/remount": REMOUNT,
+        "/leaves": LEAVES,
         "/churn": CHURN,
       };
       const inner = load === 1 ? FRAMED_FIRST : FRAMED_LATER;
@@ -260,6 +268,14 @@ describe("a url on an action that does not navigate", () => {
       await run({ action: "navigate", url: `${origin}/counted` });
       await run({ action: "click", target: { selector: "#go" }, url: `${origin}/counted` });
       expect(await title()).toBe("1");
+      // A page that leaves for one without the target is refused at once, not
+      // waited on until the action's timeout.
+      await run({ action: "navigate", url: `${origin}/leaves` });
+      const started = Date.now();
+      await expect(meanwhile({ action: "click", target: { selector: "#go" }, timeoutMs: 15_000 })).rejects.toThrow(
+        "browser_page_changed",
+      );
+      expect(Date.now() - started).toBeLessThan(8_000);
       // A target in a frame is held to the frame's document it was found in:
       // the frame reloading into one where it shows gets nothing either.
       await run({ action: "navigate", url: `${origin}/framed` });
