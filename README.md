@@ -193,6 +193,12 @@ every install path, environment variable, and the hardened Docker invocation.
 > `@melra/cli` is the CLI. Install from that scope, from this repository, or from the
 > official [releases](https://github.com/XAGI-Lab/melra/releases).
 
+If MELRA helps, [star the repository](https://github.com/XAGI-Lab/melra) so other
+agent builders can find it. Trying it in Cursor or another client? Share the client
+and its version, your OS, and your MELRA version (`npx @melra/cli@alpha version`) in
+[issue #184](https://github.com/XAGI-Lab/melra/issues/184); partial test results are
+useful too.
+
 ---
 
 ## Works with your agent
