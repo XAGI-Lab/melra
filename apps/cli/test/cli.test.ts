@@ -819,7 +819,7 @@ describe("melra CLI", () => {
     expect(JSON.parse(deprecated.stdout).unhinged).toBe(true);
   });
 
-  it("serves on MELRA_SOCKET, and doctor reports the socket's mode", async () => {
+  it("serves on a socket only with --socket, and doctor reports the socket's mode", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-cli-"));
     roots.push(root);
     // Short: a socket path has a ~104-byte ceiling on macOS.
@@ -848,8 +848,35 @@ describe("melra CLI", () => {
     // One transport per process: a socket and a port together is a mistake to
     // name, not one to resolve quietly.
     await expect(
-      execute(process.execPath, [entry, "serve", "--http"], { cwd: root, env }),
+      execute(process.execPath, [entry, "serve", "--socket", socketPath, "--http"], { cwd: root, env }),
     ).rejects.toThrow(/replaces --http/);
+
+    // MELRA_SOCKET alone leaves serve on stdio: a stdio client launched from a
+    // shell that exported it still gets its reply.
+    const stdio = spawn(process.execPath, [entry, "serve"], { cwd: root, env, stdio: ["pipe", "pipe", "ignore"] });
+    try {
+      const replied = new Promise<string>((resolveReply) => {
+        let out = "";
+        stdio.stdout.on("data", (chunk: Buffer) => {
+          out += chunk.toString();
+          if (out.includes('"id":1')) resolveReply(out);
+        });
+      });
+      stdio.stdin.write(
+        `${JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "cli-test", version: "1" } },
+        })}\n`,
+      );
+      expect(await replied).toContain('"serverInfo"');
+      expect(existsSync(socketPath)).toBe(false);
+    } finally {
+      const exited = new Promise((resolveExit) => stdio.once("exit", resolveExit));
+      stdio.kill("SIGTERM");
+      await exited;
+    }
 
     if (process.platform === "win32") {
       expect((await socketReport(env))?.status).toBe("fail");
@@ -859,7 +886,7 @@ describe("melra CLI", () => {
       .toMatchObject({ status: "fail", detail: expect.stringContaining("parent directory missing") });
     expect((await socketReport(env))?.detail).toContain("not listening");
 
-    const server = spawn(process.execPath, [entry, "serve"], {
+    const server = spawn(process.execPath, [entry, "serve", "--socket", socketPath], {
       cwd: root,
       env,
       stdio: ["ignore", "ignore", "pipe"],
@@ -897,9 +924,7 @@ describe("melra CLI", () => {
     }
     // A clean shutdown takes the socket with it.
     expect(existsSync(socketPath)).toBe(false);
-    // A stdio client spawned under an exported MELRA_SOCKET would hang, so the
-    // variable is named where such a client logs.
-    expect(stderr).toContain("MELRA_SOCKET is set, so 'serve' is on the socket below, not stdio");
+    expect(stderr).toContain(`listening on Unix socket ${socketPath}`);
   });
 
   it("fails doctor when a policy file asks for enforced mode beside unsafe-local", async () => {

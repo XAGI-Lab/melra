@@ -208,7 +208,7 @@ MELRA uses these environment variables:
 | `MELRA_HTTP_PORT` | Port for `melra serve --http` | `7457` |
 | `MELRA_HTTP_TOKEN` | Bearer token for `melra serve --http` | a fresh random token, printed at startup |
 | `MELRA_HTTP_OAUTH` | Set to `0` so that token is the only way in and no client can register itself | unset (clients may register, on loopback) |
-| `MELRA_SOCKET` | Unix socket path: `melra serve` listens there, mode `0600`, instead of on stdio — see [over a Unix socket](#over-a-unix-socket). Not on Windows | unset (stdio) |
+| `MELRA_SOCKET` | Unix socket path that `melra doctor` checks and `melra status` probes. It does not move `melra serve` off stdio; pass `--socket <path>` for that — see [over a Unix socket](#over-a-unix-socket). Not on Windows | unset |
 | `MELRA_HARNESS_TOOLS` | Set to `1` (or `true`, `yes`, `on`) to add thirteen plainly named tools such as `read_file` and `run_command` alongside the eleven `melra_*` tools — see [ordinary tool names](#ordinary-tool-names) | unset (only the `melra_*` tools) |
 
 Back up `payload.key` with the SQLite files. Changing or losing it makes
@@ -534,7 +534,7 @@ that stands between them and the kernel. A Unix-domain socket can be narrower
 than that, and the operating system enforces it:
 
 ```bash
-melra serve --socket "$XDG_RUNTIME_DIR/melra.sock"   # or MELRA_SOCKET=<path> melra serve
+melra serve --socket "$XDG_RUNTIME_DIR/melra.sock"
 curl --unix-socket "$XDG_RUNTIME_DIR/melra.sock" \
   -H "Authorization: Bearer $MELRA_HTTP_TOKEN" http://localhost/api/capabilities
 ```
@@ -565,16 +565,17 @@ and [sdk-py/README.md](../sdk-py/README.md).
   A live server's socket fails with `socket_in_use`; a regular file, directory,
   symlink, or another user's socket at the path fails with `socket_path_exists`
   and is left alone. A clean shutdown removes the socket.
-- **One transport per process.** `--socket` (or `MELRA_SOCKET`) together with
-  `--http`, `--port`, or `--open` is an error rather than a guess. Setting
-  `MELRA_SOCKET` switches `melra serve` off stdio, so do not export it in a
-  shell that also launches stdio MCP clients.
+- **One transport per process.** `--socket` together with `--http`, `--port`,
+  or `--open` is an error rather than a guess. Only the flag moves `melra
+  serve` off stdio: an exported `MELRA_SOCKET` names the socket for `melra
+  doctor` and `melra status`, and a stdio MCP client launched from the same
+  shell still gets stdio.
 
 Put the socket in a directory only you can write — `$XDG_RUNTIME_DIR` on Linux
 is `0700` for exactly this. The socket's own mode keeps other users from
 connecting; the directory's mode keeps them from replacing the socket with one
-of their own before a client connects. `melra doctor` reports, when
-`MELRA_SOCKET` is set, whether its parent directory exists and whether a socket
+of their own before a client connects. Set `MELRA_SOCKET` to the same path and
+`melra doctor` reports whether its parent directory exists and whether a socket
 already there is owner-only.
 
 **Not on Windows.** Node can listen on a named pipe (`\\.\pipe\name`) through

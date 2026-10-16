@@ -14,6 +14,14 @@ All notable changes are documented here. The format follows
   processes and memory but not file access, so no native Windows recipe is
   offered. (#52)
 
+- **Breaking:** only `melra serve --socket <path>` moves `serve` off stdio.
+  `MELRA_SOCKET` no longer does: exported in a shell profile, it moved every
+  stdio MCP client launched from that shell onto a socket it never connects
+  to, and the client hung waiting for a reply. It still names the socket
+  `melra doctor` checks and `melra status` probes. A service that relied on it
+  passes `--socket "$MELRA_SOCKET"` instead. The stderr warning `serve` printed
+  in that case is gone with it. (#105)
+
 ## [0.3.0-alpha.14] - 2026-10-16
 
 ### Fixed
