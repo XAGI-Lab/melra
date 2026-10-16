@@ -121,6 +121,10 @@ Actions: `navigate`, `back`, `forward`, `reload`, `inspect`, `wait`, `click`,
 - `back` and `forward` report `moved`, which is false only at the end of the
   history stack. A move to an entry with no HTTP response (`about:blank`, a hash
   change) reports `moved: true` with a null `status`.
+- Reads never return what was typed into a secret field (a password input, one
+  marked as a password or one-time code, or one masked with CSS), in the
+  element list or in a target's markup, and a read whose target selector tests
+  the `value` attribute is refused (`browser_value_selector_refused`).
 - On any action but `navigate` and `tab_new`, a `url` names the page the action
   acts on: the active page, or the tab `close` and `tab_switch` name. Policy
   shows it as the action's target and matches grants against it, so the runtime

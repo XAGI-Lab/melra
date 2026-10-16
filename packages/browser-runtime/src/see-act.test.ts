@@ -53,12 +53,12 @@ interface Element {
   testId: string | null;
 }
 
-async function fixture(): Promise<{ runtime: BrowserRuntime; url: string } | undefined> {
+async function fixture(page = PAGE): Promise<{ runtime: BrowserRuntime; url: string } | undefined> {
   const executablePath = await detectBrowserExecutable();
   if (executablePath === undefined) return undefined;
   const server = createServer((_request, response) => {
     response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-    response.end(PAGE);
+    response.end(page);
   });
   servers.push(server);
   await new Promise<void>((done) => {
@@ -126,22 +126,43 @@ describe("browser see/act loop", () => {
     }
   }, 120_000);
 
-  it("never reads back what was typed into a password field", async () => {
-    const context = await fixture();
+  it("never reads back what was typed into a secret field", async () => {
+    // Fields that hold secrets, on a page that mirrors each keystroke into the
+    // `value` attribute the way React's controlled inputs do.
+    const context = await fixture(`<!doctype html><html><body><form id="login">
+      <input name="password" type="password">
+      <input name="pin" type="text" style="-webkit-text-security: disc">
+      <input name="code" type="text" autocomplete="one-time-code">
+      <input name="user">
+    </form><script>
+      for (const input of document.querySelectorAll("input")) {
+        input.addEventListener("input", () => { input.defaultValue = input.value; });
+      }
+    </script></body></html>`);
     if (context === undefined) return;
     const { runtime, url } = context;
+    const run = (operation: Record<string, unknown>) =>
+      runtime.execute(BrowserOperationSchema.parse({ kind: "browser", ...operation }));
     try {
-      await runtime.execute(BrowserOperationSchema.parse({ kind: "browser", action: "navigate", url }));
-      await runtime.execute(
-        BrowserOperationSchema.parse({
-          kind: "browser",
-          action: "type",
-          target: { selector: 'input[name="password"]' },
-          value: "s3cret-typed-by-someone",
-        }),
-      );
-      const inspected = await runtime.execute(BrowserOperationSchema.parse({ kind: "browser", action: "inspect" }));
-      expect(JSON.stringify(inspected)).not.toContain("s3cret-typed-by-someone");
+      await run({ action: "navigate", url });
+      for (const [name, value] of [["password", "s3cret-pw"], ["pin", "s3cret-pin"], ["code", "s3cret-code"], ["user", "alice"]]) {
+        await run({ action: "type", target: { selector: `input[name="${name}"]` }, value });
+      }
+      const whole = JSON.stringify(await run({ action: "inspect" }));
+      const form = JSON.stringify(await run({ action: "inspect", target: { selector: "#login" } }));
+      for (const seen of [whole, form]) {
+        expect(seen).not.toMatch(/s3cret/);
+        // An ordinary field still reads back.
+        expect(seen).toContain("alice");
+      }
+      // A read reports whether its target exists, so a selector testing the
+      // value would guess the secret a prefix at a time.
+      for (const selector of ['input[value^="s3"]', "#login:has(input[VALUE^='s'])", "//input[@value]"]) {
+        await expect(run({ action: "inspect", target: { selector } })).rejects.toThrow("browser_value_selector_refused");
+        await expect(run({ action: "wait", target: { selector }, state: "attached" })).rejects.toThrow(
+          "browser_value_selector_refused",
+        );
+      }
     } finally {
       await runtime.close();
     }

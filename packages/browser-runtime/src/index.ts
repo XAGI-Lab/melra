@@ -192,6 +192,11 @@ export function pageAddress(url: string): string {
   }
 }
 
+/** Whether a selector tests an element's `value` attribute: CSS, XPath, or Playwright's attribute engine. */
+function testsValue(selector: string | undefined): boolean {
+  return selector !== undefined && /\[\s*(?:[\w*-]*\|)?value\b|@value\b/i.test(selector);
+}
+
 /** Playwright's terminal colour codes, which mean nothing in a stored record. */
 function withoutColour(text: string): string {
   return text.replace(/\u001b\[[0-9;]*m/g, "");
@@ -206,6 +211,14 @@ function withoutColour(text: string): string {
  */
 function collectFrame(limit: number) {
   const text = document.body?.innerText ?? "";
+  // A field holding a secret: a password input, one the page marks as a
+  // password or one-time code, or one masked on screen with CSS. Kept in here:
+  // this function runs in the page, where nothing outside it exists.
+  const secret = (element: Element): boolean =>
+    (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) &&
+    ((element instanceof HTMLInputElement && element.type === "password") ||
+      /\b(current-password|new-password|one-time-code)\b/.test(element.autocomplete) ||
+      !["", "none"].includes(getComputedStyle(element).getPropertyValue("-webkit-text-security")));
   /**
    * Walk up from the element recording the position of each ancestor, and
    * stop at the first one the page has labelled. The selector string is
@@ -268,12 +281,13 @@ function collectFrame(limit: number) {
       attributeName: element.getAttribute("name"),
       placeholder: element.getAttribute("placeholder"),
       href: element.getAttribute("href"),
-      // Never a password field's: in a browser someone else also types into,
+      // Never a secret field's: in a browser someone else also types into,
       // that is their secret, and this is a read anything may ask for.
       value:
-        (element instanceof HTMLInputElement && element.type !== "password") ||
-        element instanceof HTMLTextAreaElement ||
-        element instanceof HTMLSelectElement
+        (element instanceof HTMLInputElement ||
+          element instanceof HTMLTextAreaElement ||
+          element instanceof HTMLSelectElement) &&
+        !secret(element)
           ? element.value.slice(0, 200)
           : null,
       disabled:
@@ -993,7 +1007,28 @@ export class BrowserRuntime {
     const locator = (await this.locator(page, operation.target)).first();
     const [text, html] = await Promise.all([
       locator.innerText({ timeout: operation.timeoutMs }),
-      locator.innerHTML({ timeout: operation.timeoutMs }),
+      // From a copy with secret fields emptied: frameworks such as React
+      // mirror what is typed into the `value` attribute, which markup carries.
+      locator.evaluate(
+        (element) => {
+          const secret = (field: Element): boolean =>
+            (field instanceof HTMLInputElement && field.type === "password") ||
+            ((field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement) &&
+              (/\b(current-password|new-password|one-time-code)\b/.test(field.autocomplete) ||
+                !["", "none"].includes(getComputedStyle(field).getPropertyValue("-webkit-text-security"))));
+          const live = [...element.querySelectorAll("input, textarea")];
+          const copy = element.cloneNode(true) as Element;
+          const copies = [...copy.querySelectorAll("input, textarea")];
+          live.forEach((field, index) => {
+            if (!secret(field)) return;
+            copies[index]!.removeAttribute("value");
+            copies[index]!.textContent = "";
+          });
+          return copy.innerHTML;
+        },
+        undefined,
+        { timeout: operation.timeoutMs },
+      ),
     ]);
     return {
       url: page.url(),
@@ -1095,6 +1130,12 @@ export class BrowserRuntime {
 
   private async run(operation: BrowserOperation): Promise<Record<string, unknown>> {
     const page = await this.page();
+    // A read says whether its target exists, so one whose selector tests an
+    // input's `value` attribute would let anything allowed to read guess a
+    // secret a page mirrors there, a prefix at a time, with no approval.
+    if (["inspect", "wait", "scroll", "screenshot"].includes(operation.action) && testsValue(operation.target?.selector)) {
+      throw new Error("browser_value_selector_refused");
+    }
     // Anywhere but on the way to it, a url names the page the action acts on:
     // the active page, or for `close` and `tab_switch` the tab they name.
     // Policy shows it to the approver as the target and matches grants against
