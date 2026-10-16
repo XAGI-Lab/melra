@@ -130,7 +130,9 @@ Actions: `navigate`, `back`, `forward`, `reload`, `inspect`, `wait`, `click`,
   targeted read is also refused when some frame cannot answer
   (`browser_secret_check_unavailable`); a `wait` asks again on each poll and
   fails that way only if no poll could look. A frame with no document yet does
-  not hold a read up, and the read does not search it.
+  not hold a read up, and the read does not search it. Such a read searches
+  only the frames the check read, so its selector may not use Playwright's
+  internal engines (`browser_internal_selector_refused`).
 - On any action but `navigate` and `tab_new`, a `url` names the page the action
   acts on: the active page, or the tab `close` and `tab_switch` name. Policy
   shows it as the action's target and matches grants against it, so the runtime

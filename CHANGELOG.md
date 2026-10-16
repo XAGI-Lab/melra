@@ -288,7 +288,9 @@ All notable changes are documented here. The format follows
   is asked, and a `wait` asks again on every poll. A read that cannot get an
   answer from some frame is refused too (`browser_secret_check_unavailable`),
   as is a `wait` none of whose polls got one; a frame with no document yet does
-  not hold a read up, and the read does not search it. These reads run without
+  not hold a read up, and the read does not search it. Such a read searches
+  only the frames the check read, so its selector may not use Playwright's
+  internal engines (`browser_internal_selector_refused`). These reads run without
   approval, so in a browser someone else also types into, such as one attached
   over CDP, a password they typed could be read back or guessed.
 

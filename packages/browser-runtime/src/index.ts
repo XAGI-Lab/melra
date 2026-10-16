@@ -811,11 +811,14 @@ export class BrowserRuntime {
    * a detached one holds nothing. A frame with no document yet (a lazy or
    * still-loading iframe) that does not answer is "unread": it does not make
    * the page unknown, and a targeted read does not search it. A cancelled task
-   * is not "unknown": it stops. Each frame is given at most `ms` in all.
+   * is not "unknown": it stops. Each frame is given at most `ms` in all, and
+   * one that gets its document while being asked is asked again with what is
+   * left, which is not one of its retries.
    */
   private async frameHoldsSecret(frame: Frame, ms = this.callMs): Promise<"filled" | "clear" | "unknown" | "unread"> {
     const deadline = Date.now() + ms;
-    for (let attempt = 0; attempt < 3; attempt += 1) {
+    let retries = 0;
+    while (retries < 3) {
       if (frame.isDetached()) return "clear";
       const documentless = frame.url() === "";
       const left = deadline - Date.now();
@@ -825,9 +828,13 @@ export class BrowserRuntime {
         return filled ? "filled" : "clear";
       } catch (error) {
         this.signal?.throwIfAborted();
-        if (documentless && frame.url() === "") return "unread";
+        if (documentless) {
+          if (frame.url() === "") return "unread";
+          continue;
+        }
         if (!(error instanceof Error && /context was destroyed|navigat|detached/i.test(error.message))) return "unknown";
-        if (attempt < 2) {
+        retries += 1;
+        if (retries < 3) {
           await frame
             .waitForLoadState("domcontentloaded", { timeout: Math.max(1, Math.min(2_000, deadline - Date.now())) })
             .catch(() => undefined);
@@ -857,8 +864,16 @@ export class BrowserRuntime {
    * Every way the caller gave us to find the element, in the order we trust
    * them. Split out from `locator` because waiting and acting need the same
    * list but disagree about what to do when nothing matches yet.
+   *
+   * `within` keeps a checked read to the frames its check read. Playwright's
+   * internal selector engines can carry a selector out of the frame it starts
+   * in, so such a read refuses them, on the selector alone: frames are
+   * searched here, one at a time, without them.
    */
   private candidates(page: Page, target: BrowserTarget, within?: ReadonlySet<Frame>): Locator[] {
+    if (within !== undefined && target.selector !== undefined && /internal\s*:/i.test(target.selector)) {
+      throw new Error("browser_internal_selector_refused");
+    }
     return this.frames(page).filter((frame) => within?.has(frame) ?? true).flatMap((frame) => {
       const found: Locator[] = [];
       if (target.role !== undefined) {

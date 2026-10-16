@@ -84,6 +84,29 @@ describe("the secret-field check on a frame", () => {
     expect(searched).toEqual(["read"]);
   });
 
+  it("asks a frame that gets its document while being asked again, with the time left", async () => {
+    let url = "";
+    const committing = {
+      ...frame([]),
+      url: () => url,
+      evaluate: async () => {
+        if (url !== "") return false;
+        setTimeout(() => (url = "https://page.example/"), 100);
+        return new Promise<never>(() => undefined);
+      },
+    };
+    expect(await runtime().frameHoldsSecret(committing, 2_000)).toBe("clear");
+  });
+
+  it("refuses Playwright's internal selector engines in a checked read, on the selector alone", () => {
+    const page = { frames: () => [{ locator: () => undefined }] };
+    for (const selector of ['internal:text="here"', 'INTERNAL :text="here"']) {
+      expect(() => runtime().candidates(page, { selector }, new Set())).toThrow("browser_internal_selector_refused");
+      // An action that is not a checked read keeps them.
+      expect(() => runtime().candidates(page, { selector })).not.toThrow();
+    }
+  });
+
   it("keeps a frame that keeps navigating to one budget, not one per attempt", async () => {
     const navigating = new Error("Execution context was destroyed");
     const started = Date.now();

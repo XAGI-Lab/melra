@@ -6,6 +6,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BrowserOperationSchema } from "@melra/protocol";
+import type { Page } from "playwright-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { BrowserRuntime, detectBrowserExecutable } from "./index.js";
 
@@ -286,6 +287,37 @@ describe("browser see/act loop", () => {
         run({ action: "wait", target: { selector: "#gone" }, state: "hidden", timeoutMs: 800 }),
       ).rejects.toThrow("browser_secret_check_unavailable");
       expect(Date.now() - started).toBeLessThan(5_000);
+    } finally {
+      await runtime.close();
+    }
+  }, 120_000);
+
+  it("looks for a checked read's target only in the frames its check read", async () => {
+    const context = await fixture(
+      `<!doctype html><html><body><iframe srcdoc="<p id='inner'>inner</p>"></iframe></body></html>`,
+    );
+    if (context === undefined) return;
+    const { runtime, url } = context;
+    const run = (operation: Record<string, unknown>) =>
+      runtime.execute(BrowserOperationSchema.parse({ kind: "browser", ...operation }));
+    try {
+      await run({ action: "navigate", url });
+      await expect(run({ action: "inspect", target: { selector: "#inner" } })).resolves.toMatchObject({
+        text: "inner",
+      });
+      // As if the check had read the main document only.
+      (runtime as unknown as { secretFieldFilled: (page: Page) => Promise<unknown> }).secretFieldFilled = async (
+        page,
+      ) => ({ state: "clear", read: new Set([page.mainFrame()]) });
+      await expect(run({ action: "inspect", target: { selector: "#inner" } })).rejects.toThrow(
+        "browser_target_not_found",
+      );
+      await expect(
+        run({ action: "scroll", direction: "into_view", target: { selector: "#inner" } }),
+      ).rejects.toThrow("browser_target_not_found");
+      await expect(
+        run({ action: "wait", target: { selector: "#inner" }, state: "attached", timeoutMs: 800 }),
+      ).rejects.toThrow("browser_wait_timeout");
     } finally {
       await runtime.close();
     }
