@@ -42,12 +42,18 @@ export async function approvalConsole(
   // the address, so the terminal reads address, then pairing; if the opener
   // then fails, the pairing is reported with what it approved, since nothing
   // the operator opened made it.
+  // Every approval is printed as it happens too, so however the console ends,
+  // a Ctrl-C after a pairing race included, the terminal names what to cancel.
   let pairedAt: Date | undefined;
   let addressed = false;
   const approved: string[] = [];
   const pairedLine = (at: Date) =>
     `Paired with a browser tab at ${at.toTimeString().slice(0, 5)}. ` +
     `If no console tab just opened for you, press Ctrl-C now.\n`;
+  const approvedLine = (taskId: string, at: Date) =>
+    `Approved ${taskId} at ${at.toTimeString().slice(0, 5)} in the paired tab. ` +
+    `If that was not you, run 'melra approve ${taskId} --deny' before the agent runs it.\n`;
+  const heldApprovals: string[] = [];
   const endpoint = await serveHttp({
     runtime: melra,
     port: 0,
@@ -56,7 +62,12 @@ export async function approvalConsole(
       pairedAt = at;
       if (addressed) terminal.say(pairedLine(at));
     },
-    onApproved: (taskId) => void approved.push(taskId),
+    onApproved: (taskId) => {
+      approved.push(taskId);
+      const line = approvedLine(taskId, new Date());
+      if (addressed) terminal.say(line);
+      else heldApprovals.push(line);
+    },
   });
   // What the operator must hear when the console closes after a tab paired
   // that no opener of theirs is known to have made.
@@ -86,13 +97,16 @@ export async function approvalConsole(
   }
   terminal.say(
     `Approval console on http://${endpoint.host}:${endpoint.port}, opened in your browser.\n` +
-      `Only the page it opened can pair with it, and reloading or leaving that page\n` +
-      `ends the pairing: run 'melra console' again then. Ctrl-C closes the console.\n` +
+      `One page can pair with it, the first to use its code, which should be the one it\n` +
+      `opened: if yours says another tab already paired, press Ctrl-C and cancel what\n` +
+      `the lines below say it approved. Reloading or leaving the page ends the pairing:\n` +
+      `run 'melra console' again then. Ctrl-C closes the console.\n` +
       (melra.policy.mode === "enforced"
         ? ""
         : `Developer mode: approvals here are recorded in band, and an enforced server will not act on them.\n`),
   );
   addressed = true;
   if (pairedAt !== undefined) terminal.say(pairedLine(pairedAt));
+  for (const line of heldApprovals) terminal.say(line);
   return endpoint;
 }

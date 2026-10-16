@@ -904,7 +904,11 @@ opens:
 3. The terminal prints the console's address, then
    `Paired with a browser tab at HH:MM`, and the page shows `paired at HH:MM`.
    If the terminal says paired and no tab opened for you, press Ctrl-C. If your
-   tab says another tab already paired, stop the console and run it again.
+   tab says another tab already paired, press Ctrl-C too: every approval that
+   tab made is on the terminal as `Approved <task-id> at HH:MM`, still pending
+   until the agent runs it, so cancel each you did not make with
+   `melra approve <task-id> --deny`, then run `melra console` again (it shows
+   them as approved under *Needs attention*).
 
 **Reloading or leaving the page ends the pairing**, and so does anything else
 moving its URL, such as a link to another fragment, back or forward; run

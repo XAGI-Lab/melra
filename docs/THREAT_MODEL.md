@@ -142,10 +142,11 @@ that the agent cannot approve. What remains:
   check binds browsers only) to approve whatever is pending, and to read every
   task, receipt and workflow event the console serves, until the console
   stops. The operator's cue is their own tab saying another tab already
-  paired; the terminal's pairing line alone looks like a normal start. If the
-  browser opener reports failure after a tab paired, the console closes and
-  its error names every task that tab approved, to cancel with `melra approve
-  <task-id> --deny`. Who can read the code decides what that costs. A tab
+  paired; the terminal's pairing line alone looks like a normal start. Every
+  approval is printed on the terminal as it is made, and if the browser opener
+  reports failure after a tab paired, the console closes with an error naming
+  them, so the operator can cancel each with `melra approve <task-id> --deny`
+  before the agent runs it; one already run cannot be taken back. Who can read the code decides what that costs. A tab
   the agent's browser paired gets no input from that runtime. An
   unsandboxed process of the operator's own user could already run
   `melra approve --yes`. But another OS user, or a sandboxed process that can

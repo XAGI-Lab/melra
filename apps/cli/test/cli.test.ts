@@ -419,6 +419,9 @@ describe("melra CLI", () => {
           body: { taskId: task.id, renderDigest: shown.json.renderDigest },
         });
         expect(decided.json.decision).toMatchObject({ channel: "out_of_band", approver: "console:alice" });
+        // Named on the terminal as it happens, whatever ends the console later.
+        expect(seen.said).toContain(`Approved ${task.id} at `);
+        expect(seen.said).toContain(`melra approve ${task.id} --deny`);
         expect((await melra.controller.execute(task.id)).task.status).toBe("verified_success");
         // What the operator's terminal shows names the console, never a way in.
         expect(seen.said).toContain(`http://127.0.0.1:${url.port}`);
