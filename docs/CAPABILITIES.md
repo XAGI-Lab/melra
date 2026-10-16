@@ -122,6 +122,21 @@ Actions: `navigate`, `back`, `forward`, `reload`, `inspect`, `wait`, `click`,
 - `back` and `forward` report `moved`, which is false only at the end of the
   history stack. A move to an entry with no HTTP response (`about:blank`, a hash
   change) reports `moved: true` with a null `status`.
+- Reads never return what was typed into a secret field (a password input, or
+  one masked with CSS), in the element list or in a target's markup. While any
+  frame holds a secret field with something in it, live or still in its markup,
+  a read aimed at part of the page is refused
+  (`browser_secret_field_filled`), since whether its target exists could be
+  made to depend on the secret; an untargeted `inspect` still works. The page
+  is asked again once the read has looked, and a field filled meanwhile voids
+  what it found. A
+  targeted read is also refused when some frame cannot answer
+  (`browser_secret_check_unavailable`). A `wait` asks on each poll and looks
+  for nothing while a field is filled or some frame cannot answer; it is
+  refused only if its last poll still found a field filled, or could not tell. A frame with no document yet does
+  not hold a read up, and the read does not search it. Such a read uses an
+  element only when its own document is one the check read, however its target
+  is written.
 - On any action but `navigate` and `tab_new`, a `url` names the page the action
   acts on: the active page, or the tab `close` and `tab_switch` name. Policy
   shows it as the action's target and matches grants against it, so the runtime
