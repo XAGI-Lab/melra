@@ -12,7 +12,18 @@ permissions:
   contents: read
 
 jobs:
+  # The single executable for each platform, built and smoke-tested by the
+  # same workflow every pull request runs. Read-only: the artifacts job below
+  # checksums, attests and publishes what it uploads.
+  binaries:
+    uses: ./.github/workflows/single-executable.yml
+    with:
+      release: true
+    permissions:
+      contents: read
+
   artifacts:
+    needs: binaries
     runs-on: ubuntu-latest
     permissions:
       contents: write # the GitHub release
@@ -63,6 +74,13 @@ jobs:
           rmdir release/python
           git archive --format=tar.gz --prefix="melra-${version}/" \
             --output="release/melra-source-${version}.tar.gz" HEAD
+      # Into release/ before the checksums, so SHA256SUMS and the attestation
+      # below cover the binaries too.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: melra-binary-*
+          path: release
+          merge-multiple: true
       - name: Generate SPDX SBOM
         uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
@@ -148,7 +166,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          assets=(release/*.tar.gz release/*.whl release/*.json release/SHA256SUMS)
+          assets=(release/*.tar.gz release/*.whl release/*.json release/melra-[0-9]* release/SHA256SUMS)
           if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
             # Re-run after a later step failed: keep the release, refresh its assets.
             gh release upload "${GITHUB_REF_NAME}" "${assets[@]}" --clobber

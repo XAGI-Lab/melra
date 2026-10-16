@@ -1,11 +1,19 @@
 name: Single executable
 
-# Builds `melra` with Node inside (#76) on each OS and runs it with only the
-# system directories on PATH: version, doctor, and conformance, which spawns
-# the binary again as its own MCP server. Not a release step yet; signing and
-# notarization are still open on the issue.
+# Builds `melra` with Node inside (#76) on each platform and runs it with only
+# the system directories on PATH: version, doctor, and conformance, which
+# spawns the binary again as its own MCP server. The release workflow calls
+# this same workflow, so the binaries a release attaches are built and checked
+# exactly as every pull request builds and checks them. Unsigned beyond an
+# ad-hoc macOS signature.
 
 on:
+  workflow_call:
+    inputs:
+      release:
+        description: Built for a release, so no caches shape it.
+        type: boolean
+        default: false
   pull_request:
     paths:
       - "apps/**"
@@ -32,15 +40,16 @@ permissions:
 
 jobs:
   build:
-    name: ${{ matrix.os }}
+    name: ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os:
-          - ubuntu-latest
-          - macos-latest
-          - windows-latest
+        include:
+          - { os: ubuntu-latest, target: linux-x64 }
+          - { os: ubuntu-24.04-arm, target: linux-arm64 }
+          - { os: macos-latest, target: darwin-arm64 }
+          - { os: windows-latest, target: win-x64 }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -53,7 +62,26 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 26
-          cache: pnpm
+          # A release build restores no cache: other workflows write caches,
+          # and one restored here would let them shape a published binary.
+          cache: ${{ !inputs.release && 'pnpm' || '' }}
+          package-manager-cache: ${{ !inputs.release }}
       - run: pnpm install --frozen-lockfile
       - run: pnpm build:sea
       - run: node scripts/sea-smoke.mjs
+      - name: Name the binary for its platform
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          ext=""
+          if [ "${RUNNER_OS}" = "Windows" ]; then ext=".exe"; fi
+          mkdir -p binary
+          cp "dist-sea/melra${ext}" "binary/melra-${version}-${TARGET}${ext}"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: melra-binary-${{ matrix.target }}
+          path: binary/
+          if-no-files-found: error
+          retention-days: 3
