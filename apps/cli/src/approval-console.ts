@@ -44,16 +44,24 @@ export async function confirmInTerminal(
   showApprovalScreen(view, output);
   const prompt = createInterface({ input, output });
   try {
-    // Input that ends before an answer (Ctrl-D on an empty line, say) is a
-    // no: the question would otherwise stay open and the command exit 0
-    // without a word.
+    // Input that ends before an answer (Ctrl-D or Ctrl-C, or the end of a
+    // stdin that is not a terminal) is a no, never a question left open.
+    let answered = false;
     const answer = await Promise.race([
-      prompt.question("Approve this effect? [y/N] ").catch(() => ""),
+      prompt.question("Approve this effect? [y/N] ").then(
+        (said) => {
+          answered = true;
+          return said;
+        },
+        () => "",
+      ),
       once(prompt, "close").then(
         () => "",
         () => "",
       ),
     ]);
+    // Nothing was typed to end the line, so end it here.
+    if (!answered) output.write("\n");
     const said = answer.trim().toLowerCase();
     return said === "y" || said === "yes";
   } finally {

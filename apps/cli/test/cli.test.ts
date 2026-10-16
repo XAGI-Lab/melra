@@ -616,7 +616,12 @@ describe("melra CLI", () => {
     for (const [said, approved] of [["\n", false], ["nope\n", false], ["q\n", false], ["yes!\n", false], [" YES \n", true], ["Y\n", true]] as const) {
       expect(await confirmInTerminal(view, Readable.from([said]), new PassThrough()), JSON.stringify(said)).toBe(approved);
     }
-    expect(await confirmInTerminal(view, Readable.from([]), new PassThrough())).toBe(false);
+    const ended = new PassThrough();
+    let rest = "";
+    ended.on("data", (chunk: Buffer) => (rest += chunk.toString()));
+    expect(await confirmInTerminal(view, Readable.from([]), ended)).toBe(false);
+    // Ending the question's line, so whatever comes next starts its own.
+    expect(rest.endsWith(question + "\n")).toBe(true);
     // By default, the operator's: stderr, at stderr's width.
     const columns = Object.getOwnPropertyDescriptor(process.stderr, "columns");
     Object.defineProperty(process.stderr, "columns", { value: 40, configurable: true, writable: true });

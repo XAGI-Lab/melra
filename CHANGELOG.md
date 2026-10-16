@@ -73,9 +73,10 @@ All notable changes are documented here. The format follows
 ### Fixed
 
 - The y/N question `melra approve` and `melra run` ask in a terminal takes
-  input that ends before an answer (Ctrl-D on an empty line) as a no: both
-  exit 1, `melra approve` saying `Not approved.`, where they could exit 0
-  without a word.
+  input that ends before an answer as a no: both say `Not approved.` and exit
+  1. Ctrl-D or Ctrl-C there used to stop with `melra: Aborted with Ctrl+D`;
+  with stderr redirected, or on Node before 22.15, the end of input left the
+  question open and the command exited 0 without a word.
 
 - A release run that fails after publishing to npm can be re-run: packages
   already on the registry at that version are skipped instead of stopping the

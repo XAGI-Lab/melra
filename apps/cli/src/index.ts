@@ -769,7 +769,10 @@ async function runTask(args: string[], env: CliEnvironment): Promise<number> {
       // proves only that someone typed it.
       const approver = approverLabel(env);
       const view = melra.controller.approvalView(task.id);
-      if (!(await confirmInTerminal(view))) return 1;
+      if (!(await confirmInTerminal(view))) {
+        process.stderr.write("Not approved.\n");
+        return 1;
+      }
       melra.controller.decide(task.id, view.renderDigest, approver);
       const execution = await melra.controller.execute(task.id);
       output(execution);
