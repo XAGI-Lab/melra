@@ -304,7 +304,7 @@ const FILTERS = [
 // override, a zero-width character or a stack of combining marks in it would
 // otherwise reorder, hide or draw over what it shows. The agent's own console
 // approves nothing and shows its text as it is.
-const HIDDEN = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u034f\u115f\u1160\u17b4\u17b5\u180b-\u180f\u3164\ufe00-\ufe0f\uffa0\u{e0100}-\u{e01ef}]/gu;
+const HIDDEN = /[\p{Cc}\p{Cf}\p{Cn}\p{Zl}\p{Zp}\u034f\u115f\u1160\u17b4\u17b5\u180b-\u180f\u3164\ufe00-\ufe0f\uffa0\u{e0100}-\u{e01ef}]/gu;
 const STACKED = /(?<=[\p{Mn}\p{Me}]{2})[\p{Mn}\p{Me}]/gu;
 const spelled = (character) => Array.from({ length: character.length }, (_, i) => "\\u" + character.charCodeAt(i).toString(16).padStart(4, "0")).join("");
 const printable = (text) => !approvals ? String(text)

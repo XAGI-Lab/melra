@@ -417,10 +417,14 @@ describe("melra CLI", () => {
           args: ["-e", "require('fs').rmSync(process.env.HOME + '/Documents', { recursive: true })"],
           env: { NODE_OPTIONS: "--require /tmp/x.js" },
         },
-        metadata: { goal: hostile + " ".repeat(9_000) },
+        metadata: { goal: hostile + "e\u0301\u0302\u0303\u0304\ufff0\u0305\u0306\u0307" + " ".repeat(9_000) },
       },
       renderDigest: "a".repeat(64),
     });
+    // Nor draw over the lines around it: no character carries more than two
+    // combining marks, even with an unassigned code point between them.
+    expect(screen).not.toMatch(/[\p{Mn}\p{Me}]{3}/u);
+    expect(screen).toContain("e\u0301\u0302\\u0303\\u0304\\ufff0");
     // The one escape on screen is MELRA's own reset; nothing else can steer the terminal.
     expect(screen.replaceAll("\u001b[0m", "")).not.toMatch(
       /[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u202e\u3164\u{e0041}]/u,

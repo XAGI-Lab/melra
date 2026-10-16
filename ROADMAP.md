@@ -208,9 +208,9 @@ them as promises was the wrong call:
   would be a viewer with an installer, a signing pipeline, and a per-platform
   release matrix behind it. The one thing it could add that a tab cannot is an
   operating-system notification when something is waiting on a person — which
-  is worth building when approvals are answerable from an operator surface at
-  all, and today they are answerable only where policy can see them, on the MCP
-  and CLI paths.
+  is worth building now that approvals are answerable from an operator
+  surface: besides the MCP and CLI paths, `melra console` approves in a browser
+  tab of its own.
 
 ## v0.3 — Durable Core Alpha
 

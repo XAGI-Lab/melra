@@ -6,7 +6,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BrowserOperationSchema } from "@melra/protocol";
-import { chromium } from "playwright-core";
+import { chromium, type Page } from "playwright-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { APPROVAL_SURFACE, BrowserRuntime, detectBrowserExecutable } from "./index.js";
 
@@ -225,6 +225,32 @@ describe("browser see/act loop", () => {
     }
   }, 120_000);
 
+  it("switches to the tab it checked, even if a tab before it closes meanwhile", async () => {
+    // ?busy stops answering for a while, so its check is slow; ?console is marked.
+    const context = await fixture(`<!doctype html><html><head><script>
+      if (location.search === "?console") document.head.insertAdjacentHTML("beforeend", '<meta name="${APPROVAL_SURFACE}" content="operator-only">');
+      if (location.search === "?busy") setTimeout(() => { const until = Date.now() + 3_000; while (Date.now() < until); }, 1_500);
+    </script></head><body>tab</body></html>`);
+    if (context === undefined) return;
+    const { runtime, url } = context;
+    const run = (operation: Record<string, unknown>) =>
+      runtime.execute(BrowserOperationSchema.parse({ kind: "browser", ...operation }));
+    try {
+      await run({ action: "navigate", url });
+      const opened = Date.now();
+      await run({ action: "tab_new", url: `${url}/?busy` });
+      await run({ action: "tab_new", url: `${url}/?console` });
+      await new Promise((done) => setTimeout(done, Math.max(0, opened + 1_800 - Date.now())));
+      // Tab 1's check waits on its page; tab 0 goes away while it does.
+      const pages = (runtime as unknown as { context: { pages: () => Page[] } }).context.pages();
+      setTimeout(() => void pages[0]!.close(), 300);
+      const switched = await run({ action: "tab_switch", tabIndex: 1 });
+      expect(switched.url).toContain("?busy");
+    } finally {
+      await runtime.close();
+    }
+  }, 120_000);
+
   it("closes its tabs freely in a browser it launched, where no operator's console can be", async () => {
     const context = await fixture(`<!doctype html><html><head><meta name="${APPROVAL_SURFACE}" content="operator-only">
       <title>marked</title></head><body></body></html>`);
@@ -245,14 +271,15 @@ describe("browser see/act loop", () => {
   }, 120_000);
 
   it("closes a tab whose page no longer answers", async () => {
-    const context = await fixture(`<!doctype html><title>hung</title><script>setTimeout(() => { for (;;) {} }, 300)</script>`);
+    // It hangs well after navigate has read it, so only the close meets it hung.
+    const context = await fixture(`<!doctype html><title>hung</title><script>setTimeout(() => { for (;;) {} }, 1_500)</script>`);
     if (context === undefined) return;
     const { runtime, url } = context;
     const run = (operation: Record<string, unknown>) =>
       runtime.execute(BrowserOperationSchema.parse({ kind: "browser", ...operation }));
     try {
       await run({ action: "navigate", url });
-      await new Promise((done) => setTimeout(done, 800));
+      await new Promise((done) => setTimeout(done, 2_000));
       // Closing is how an agent gets rid of a wedged tab, so it asks the page nothing.
       expect(await run({ action: "close", timeoutMs: 3_000 })).toMatchObject({ closed: true });
     } finally {

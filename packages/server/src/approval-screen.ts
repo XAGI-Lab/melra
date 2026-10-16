@@ -4,16 +4,19 @@
 /**
  * Characters a terminal does not show as themselves: controls (C0, C1, DEL),
  * format characters (bidi overrides, zero-width, soft hyphen, tag characters),
- * line and paragraph separators, and the ones that render as nothing at all
- * (variation selectors, Hangul fillers, the grapheme joiner).
+ * line and paragraph separators, the ones that render as nothing at all
+ * (variation selectors, Hangul fillers, the grapheme joiner), and unassigned
+ * code points, which a renderer may draw as nothing too.
  */
 const HIDDEN =
-  /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u034f\u115f\u1160\u17b4\u17b5\u180b-\u180f\u3164\ufe00-\ufe0f\uffa0\u{e0100}-\u{e01ef}]/gu;
+  /[\p{Cc}\p{Cf}\p{Cn}\p{Zl}\p{Zp}\u034f\u115f\u1160\u17b4\u17b5\u180b-\u180f\u3164\ufe00-\ufe0f\uffa0\u{e0100}-\u{e01ef}]/gu;
 
 /**
  * Combining marks past the second on one character: a long run of them draws
  * outside its own line, over the lines around it, the effect line included.
- * Two are as many as ordinary accented and Indic text stacks.
+ * Only an approval screen spells them out, since it is the one place where
+ * what sits around the agent's text must stay legible; elsewhere scripts that
+ * stack more, such as Tibetan or pointed Hebrew, show as written.
  */
 const STACKED = /(?<=[\p{Mn}\p{Me}]{2})[\p{Mn}\p{Me}]/gu;
 
@@ -30,9 +33,12 @@ const spelled = (character: string): string =>
  * `\uXXXX` per UTF-16 unit, which inside JSON is also a valid escape for it.
  */
 export function printable(text: string, keepNewlines = false): string {
-  return text
-    .replace(HIDDEN, (character) => (keepNewlines && character === "\n" ? character : spelled(character)))
-    .replace(STACKED, spelled);
+  return text.replace(HIDDEN, (character) => (keepNewlines && character === "\n" ? character : spelled(character)));
+}
+
+/** `printable` for an approval screen: stacked combining marks spelled out too. */
+function screened(text: string, keepNewlines = false): string {
+  return printable(text, keepNewlines).replace(STACKED, spelled);
 }
 
 export interface ApprovalScreenView {
@@ -50,7 +56,7 @@ export interface ApprovalScreenView {
 
 /** At most `limit` characters, saying how many more there were. */
 function bounded(text: string, limit = 160): string {
-  const shown = printable(text);
+  const shown = screened(text);
   return shown.length > limit ? `${shown.slice(0, limit)}…(+${shown.length - limit} chars)` : shown;
 }
 
@@ -154,7 +160,7 @@ export function approvalSummary(view: ApprovalScreenView): string {
  */
 export function approvalScreen(view: ApprovalScreenView, terminal = false): string {
   return [
-    printable(JSON.stringify(view.contract, null, 2), true),
+    screened(JSON.stringify(view.contract, null, 2), true),
     ...(terminal ? ["\u001b[0m"] : []),
     approvalSummary(view),
   ].join("\n");

@@ -1147,13 +1147,11 @@ export class BrowserRuntime {
     // not answer within a second could be a console too busy to, so it holds
     // the others open the same way, under its own reason naming its tab; it
     // can be closed itself unless another tab also does not answer. One closed
-    // meanwhile holds nothing. Every context of the browser, not only this
-    // runtime's: closing its last tab closes its window, and the system then
-    // raises another, which can hold a console.
+    // meanwhile holds nothing. Attached over CDP, every page of the browser is
+    // in this one context.
     if (operation.action === "close" && this.options.cdpEndpoint !== undefined) {
       if (operation.tabIndex !== undefined && acted === undefined) throw new Error("browser_tab_not_found");
-      const own = (await this.ensureContext()).pages();
-      const pages = this.browser?.contexts().flatMap((context) => context.pages()) ?? own;
+      const pages = (await this.ensureContext()).pages();
       const marks = await Promise.all(
         pages.map((other) =>
           other === acted
@@ -1164,11 +1162,9 @@ export class BrowserRuntime {
         ),
       );
       if (marks.some((count) => count > 0)) throw new Error("browser_refuses_approval_surface");
-      const silent = pages.flatMap((other, index) =>
-        (marks[index] ?? 0) >= 0 ? [] : [own.includes(other) ? `tab ${own.indexOf(other)}` : "a tab in another context"],
-      );
+      const silent = marks.flatMap((count, index) => (count < 0 ? [index] : []));
       if (silent.length > 0) {
-        throw new Error(`browser_approval_surface_check_unavailable: ${silent.join(", ")} did not answer`);
+        throw new Error(`browser_approval_surface_check_unavailable: tab ${silent.join(", ")} did not answer`);
       }
     }
     switch (operation.action) {
@@ -1479,8 +1475,9 @@ export class BrowserRuntime {
         if (operation.tabIndex === undefined) {
           throw new Error("browser_tab_switch_requires_tab_index");
         }
-        const target = context.pages()[operation.tabIndex];
-        if (target === undefined) throw new Error("browser_tab_not_found");
+        // The page checked above, not whichever holds its index by now.
+        const target = acted;
+        if (target === undefined || target.isClosed()) throw new Error("browser_tab_not_found");
         // Bring the tab to the front so a screenshot of it is what the user
         // would actually see; a background page still renders, but modal and
         // focus behaviour differ.
@@ -1495,12 +1492,9 @@ export class BrowserRuntime {
       }
       case "close": {
         const context = await this.ensureContext();
-        const pages = context.pages();
-        const target =
-          operation.tabIndex === undefined
-            ? page
-            : pages[operation.tabIndex];
-        if (target === undefined) throw new Error("browser_tab_not_found");
+        // The page checked above, not whichever holds its index by now.
+        const target = acted;
+        if (target === undefined || target.isClosed()) throw new Error("browser_tab_not_found");
         const url = target.url();
         // Set before the close, unlike the other mutations: this call is the
         // effect and has no wait-for-ready phase, so once it is in flight a
