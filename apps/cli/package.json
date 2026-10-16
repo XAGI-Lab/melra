@@ -2,6 +2,18 @@
   "name": "@melra/cli",
   "version": "0.3.0-alpha.14",
   "description": "MELRA autonomy kernel and command-line interface.",
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "ai-agents",
+    "agent-runtime",
+    "agent-security",
+    "tool-execution",
+    "local-first",
+    "durable-execution",
+    "verification"
+  ],
   "mcpName": "io.github.XAGI-Lab/melra",
   "license": "Apache-2.0",
   "repository": {
