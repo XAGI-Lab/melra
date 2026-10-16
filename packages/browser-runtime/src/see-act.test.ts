@@ -277,6 +277,7 @@ describe("browser see/act loop", () => {
       if (location.search === "?opens") later("/?popup#pair=secret");
       if (location.search === "?chain") later("/?p1");
       if (location.search === "?p1") window.open(location.origin + "/?p2");
+      if (location.search === "?pre1") window.open(location.origin + "/?pre2");
       if (location.search === "?noopener") later("/?np", "noopener");
       if (location.search === "?busy") { later("/?busypop"); setInterval(() => document.body.append("."), 50); }
       // Windows that close themselves as soon as they load.
@@ -384,19 +385,13 @@ describe("browser see/act loop", () => {
       }
       return popups;
     };
-    // Reported as opened between actions, and closed. A window that closed
-    // before the runtime could look it up is marked by when Playwright handed
-    // it over, which `between: false` leaves unchecked.
-    const reported = async (searches: string[], between = true) => {
+    // Reported as opened between actions, and closed.
+    const reported = async (searches: string[]) => {
       const popups = await gather(searches);
       expect(popups).toEqual(
         expect.arrayContaining(
           searches.map((search) =>
-            expect.objectContaining({
-              url: expect.stringContaining(search),
-              blocked: true,
-              ...(between ? { betweenActions: true } : {}),
-            }),
+            expect.objectContaining({ url: expect.stringContaining(search), blocked: true, betweenActions: true }),
           ),
         ),
       );
@@ -405,9 +400,17 @@ describe("browser see/act loop", () => {
       return popups;
     };
     try {
+      // Tabs the operator opened before the runtime attached, one from
+      // another, stay theirs, and so does what they open afterwards.
+      await first.evaluate((url) => window.open(url), `${origin}/?pre1`);
+      await requested("?pre2");
       // A read lands on the operator's tab, which does not make it the
       // runtime's: what the operator opens from it stays theirs.
       await run({ action: "tabs" });
+      await until("?pre2 open", () => operator.pages().some((page) => page.url().includes("?pre2")));
+      const pre2 = operator.pages().find((page) => page.url().includes("?pre2"))!;
+      await pre2.evaluate((url) => window.open(url), `${origin}/?prechild`);
+      await leftAlone("?prechild");
       await first.evaluate((url) => window.open(url), `${origin}/?fromread`);
       await leftAlone("?fromread");
       // Nor does an action on it that is refused, or whose target is never
@@ -416,6 +419,10 @@ describe("browser see/act loop", () => {
       await expect(run({ action: "click", target: { selector: "#nothing" }, timeoutMs: 500 })).rejects.toThrow();
       await first.evaluate((url) => window.open(url), `${origin}/?afterrefusal`);
       await leftAlone("?afterrefusal");
+      // So does a step back refused before it was sent.
+      await expect(run({ action: "back", url: `${origin}/elsewhere` })).rejects.toThrow("browser_page_not_at_url");
+      await first.evaluate((url) => window.open(url), `${origin}/?afterback`);
+      await leftAlone("?afterback");
       await run({ action: "tab_new", url: origin });
       // A tab the operator opens between the runtime's actions is theirs.
       const mine = await operator.newPage();
@@ -439,11 +446,19 @@ describe("browser see/act loop", () => {
         const popups = await reported(windows);
         expect(JSON.stringify(popups)).not.toContain("#");
       }
-      // Windows that close themselves as soon as they load are still reported.
+      // Windows that close themselves as soon as they load are still reported,
+      // all ten: one that closed before its first page committed has no
+      // address to report, so they are counted rather than named.
       await run({ action: "navigate", url: `${origin}/?selfclose` });
       await release();
       await requested("?closes9");
-      await reported(Array.from({ length: 10 }, (_, i) => `?closes${i}`), false);
+      const closing: unknown[] = [];
+      await until("ten self-closing windows reported", async () => {
+        closing.push(...(((await run({ action: "inspect" })).popups as unknown[] | undefined) ?? []));
+        return closing.length >= 10;
+      });
+      expect(closing).toHaveLength(10);
+      expect(closing).toEqual(Array.from({ length: 10 }, () => expect.objectContaining({ blocked: true })));
       // A window whose page is busy as it loads holds up nothing.
       await run({ action: "navigate", url: `${origin}/?busy=${encodeURIComponent(heavyUrl)}` });
       const busy = await run({ action: "click", target: { selector: "#busy" }, timeoutMs: 2_500 });

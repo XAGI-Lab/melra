@@ -434,6 +434,8 @@ export class BrowserRuntime {
   private actions = 0;
   /** The page the running action acts on, once it has one. */
   private actingOn: Page | undefined;
+  /** Whether the running action has sent its step back or forward. */
+  private stepped = false;
   /**
    * Browser-level session that hears about a new window the moment Chromium
    * creates it, which is what lets an action wait for a popup it knows exists
@@ -765,11 +767,15 @@ export class BrowserRuntime {
         "cdp_session",
         SETUP_TIMEOUT_MS,
       );
+      // Set once Chromium has announced the windows that were already there:
+      // those are no action's popups, and no window of theirs is the runtime's.
+      let announced = false;
       targets.on("Target.targetCreated", ({ targetInfo }) => {
         // `browser_ui`, workers, and prerenders never become Playwright pages.
         if (targetInfo.type !== "page" || targetInfo.subtype !== undefined) return;
         const id = targetInfo.browserContextId ?? "";
         this.windowsCreated.set(id, (this.windowsCreated.get(id) ?? 0) + 1);
+        if (!announced) return;
         if (this.acting) this.createdActing.set(targetInfo.targetId, this.actions);
         // A window an action's popup opens, before that popup is even judged,
         // is the runtime's like the popup.
@@ -798,8 +804,7 @@ export class BrowserRuntime {
       // Playwright had them before the `page` handler did, so they are owed no
       // event here.
       this.windowsCreated.clear();
-      // Nor are they an action's popups: they were there before it.
-      this.createdActing.clear();
+      announced = true;
       this.targets = targets;
     } catch {
       this.targets = undefined;
@@ -1459,6 +1464,7 @@ export class BrowserRuntime {
     this.callMs = operation.timeoutMs;
     this.dispatched = false;
     this.actingOn = undefined;
+    this.stepped = false;
     // Chromium reports a window's creation on the browser-level session,
     // ahead of any later reply there; one round trip before the action
     // starts takes every window created until now as created between
@@ -1507,7 +1513,7 @@ export class BrowserRuntime {
       // So did one that failed after its input went out, or a step back or
       // forward that may have moved before it ran out of time. A `close`
       // drives nothing, whatever page it leaves active.
-      if (DRIVING_ACTIONS.has(operation.action) && (sent || operation.action === "back" || operation.action === "forward")) {
+      if (DRIVING_ACTIONS.has(operation.action) && (sent || this.stepped)) {
         await this.drive(this.actingOn).catch(() => undefined);
       }
       if (!sent) throw error;
@@ -1615,6 +1621,7 @@ export class BrowserRuntime {
       case "back":
       case "forward": {
         const before = page.url();
+        this.stepped = true;
         const moved =
           operation.action === "back"
             ? await page.goBack({
