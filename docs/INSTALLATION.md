@@ -1124,7 +1124,9 @@ the container:
 
 `pnpm docker:smoke` requires all five, so the recipe above and what `doctor`
 reports stay in step. Outside Linux, `doctor` cannot see a macOS sandbox
-profile or a Windows Job Object and says so. With `MELRA_MODE=enforced`, it
+profile and says so; on native Windows, where MELRA has no isolation recipe of
+its own, it points to Docker or WSL2 instead (see
+[the deployment recipes](../examples/deploy/README.md)). With `MELRA_MODE=enforced`, it
 warns when it finds no restriction at all, or when it cannot read any.
 
 ## Python SDK

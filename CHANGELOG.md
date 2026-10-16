@@ -6,6 +6,14 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- The hardened deployment recipes name Docker Desktop and WSL2 as the way to
+  get OS isolation on Windows, and `melra doctor`'s `isolation` line on native
+  Windows says so instead of mentioning a Job Object. A Job Object limits
+  processes and memory but not file access, so no native Windows recipe is
+  offered. (#52)
+
 ## [0.3.0-alpha.14] - 2026-10-16
 
 ### Fixed

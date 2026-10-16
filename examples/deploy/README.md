@@ -21,4 +21,11 @@ It does not cover the browser adapter: Chrome brings its own sandbox and will
 not start inside another one. `melra doctor` cannot see a sandbox profile from
 inside, so its `isolation` line on macOS says so rather than guessing.
 
-Still open on #52: a Windows Job Object equivalent.
+**On Windows**, run MELRA inside one of the recipes above: Docker Desktop with
+the Docker recipe, or WSL2 with the systemd unit (WSL2 runs systemd when
+`systemd=true` is set under `[boot]` in `/etc/wsl.conf`). There is no native
+Windows recipe. A Job Object limits processes and memory, not file access, so
+it would not confine writes the way the recipes above do; that needs a
+low-privilege account with NTFS ACLs, or an AppContainer, and a CI check that
+a write outside the workspace is refused. `melra doctor` on native Windows
+says so on its `isolation` line.

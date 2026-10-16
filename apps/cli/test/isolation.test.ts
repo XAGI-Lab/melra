@@ -45,5 +45,9 @@ describe("doctor isolation check", () => {
       detail: expect.stringContaining("not visible"),
     });
     expect(isolationCheck(undefined, "developer").status).toBe("pass");
+    // Native Windows gets no recipe of its own; doctor names the ones that work.
+    if (process.platform === "win32") {
+      expect(isolationCheck(undefined, "developer").detail).toContain("WSL2");
+    }
   });
 });

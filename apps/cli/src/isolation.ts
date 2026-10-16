@@ -77,7 +77,10 @@ export function isolationCheck(
     return {
       name,
       status: unbacked,
-      detail: `not visible on ${process.platform}; a macOS sandbox profile or a Windows Job Object cannot be read from inside`,
+      detail:
+        process.platform === "win32"
+          ? "not visible on win32, and MELRA has no native Windows recipe; run it under Docker or WSL2 for OS isolation (examples/deploy)"
+          : `not visible on ${process.platform}; a sandbox profile cannot be read from inside`,
     };
   }
   const active = [
