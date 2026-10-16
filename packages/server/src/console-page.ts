@@ -662,8 +662,13 @@ async function renderWorkflowDetail(id, into) {
   let run;
   try { run = await get("/api/workflows/" + encodeURIComponent(id)); }
   catch { into.replaceChildren(el("div", { class: "empty" }, el("p", { text: "Workflow " + id + " was not found." }))); return; }
-  // Rebuilt from state so a re-render never drops what the stream already delivered.
-  const events = el("div", { class: "events", "aria-live": "polite" }, state.streamId === id ? state.events.map(eventLine).reverse() : []);
+  // Rebuilt from state so a re-render never drops what the stream already
+  // delivered. The approval console has no stream (below), so it reads the
+  // events afresh on each render, with its session in a header.
+  const listed = approvals
+    ? ((await get("/api/workflows/" + encodeURIComponent(id) + "/events").catch(() => null))?.events ?? [])
+    : state.streamId === id ? state.events : [];
+  const events = el("div", { class: "events", "aria-live": "polite" }, listed.map(eventLine).reverse());
   into.replaceChildren(...[
     el("div", { class: "head" }, el("h3", { class: "mono", text: run.id }), badge(run.status, RUN_TONE),
       el("span", { class: "muted", text: "state v" + run.stateVersion })),

@@ -25,9 +25,10 @@ All notable changes are documented here. The format follows
 - `melra console` approves in a browser, with the same authority as
   `melra approve`. Run in a terminal, it starts a loopback server of its own,
   with no MCP endpoint and no client registration, that ignores
-  `MELRA_HTTP_TOKEN`, and opens a page that pairs with it once through a
-  one-time code in the URL fragment. The code is never printed, and the
-  session it buys is held in memory only, by the console and that page, so
+  `MELRA_HTTP_TOKEN`, and opens a page; the first page to use the one-time
+  code in its URL fragment, normally that one, pairs with it once. The code is
+  never printed, and the session it buys is held in memory only, by the
+  console and that page, so
   reloading or leaving the page ends the pairing, as does any change to its
   URL the page did not make: it picks the task from the operator's clicks,
   never from the URL. The page hands the session back as it goes, and the
@@ -118,9 +119,10 @@ All notable changes are documented here. The format follows
   console under the operator's own pointer, which the console cannot see in
   an attached browser, where Playwright's focus emulation makes every page
   report itself visible and focused: `tab_switch` onto a marked tab, `scroll`
-  on a marked page, and, in a browser it is attached to, `close` of any tab
-  while another marked page is open there, whatever the closed tab carries,
-  since the browser then raises a neighbour. A runtime attached over CDP to
+  on a marked page, and, in a browser it is attached to, `close` of any tab,
+  and `tab_switch` to any, while another marked page is open there, whatever
+  the tab acted on carries, since the browser then raises a neighbour or a
+  split view's partner. A runtime attached over CDP to
   the browser an operator approves in could otherwise reach the console tab
   with reads and aim a click at it. Other reads still work. In an attached
   browser, a page that does not answer within a second could be a busy

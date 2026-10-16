@@ -83,7 +83,8 @@ async function fixture(page = PAGE): Promise<{ runtime: BrowserRuntime; url: str
   };
 }
 
-describe("browser see/act loop", () => {  it("emits a selector that addresses the element it was reported for", async () => {
+describe("browser see/act loop", () => {
+  it("emits a selector that addresses the element it was reported for", async () => {
     const context = await fixture();
     if (context === undefined) return;
     const { runtime, url } = context;
@@ -197,6 +198,9 @@ describe("browser see/act loop", () => {  it("emits a selector that addresses th
       expect(await run({ action: "tab_new" })).toMatchObject({ opened: true, index: 1 });
       await expect(run({ action: "close" })).rejects.toThrow("browser_refuses_approval_surface");
       await expect(run({ action: "close", tabIndex: 1 })).rejects.toThrow("browser_refuses_approval_surface");
+      // Nor switch tabs, onto its own either: a split view raises the switched
+      // tab's partner with it, and CDP does not say which tab that is.
+      await expect(run({ action: "tab_switch", tabIndex: 1 })).rejects.toThrow("browser_refuses_approval_surface");
       // A tab that is not there is just not there.
       await expect(run({ action: "close", tabIndex: 9 })).rejects.toThrow("browser_tab_not_found");
       // Carrying the marker itself buys a tab nothing: any page can carry it.
@@ -207,7 +211,10 @@ describe("browser see/act loop", () => {  it("emits a selector that addresses th
       expect(await run({ action: "close" })).toMatchObject({ closed: true });
       // A page that cannot say whether it is a console holds the others open,
       // within a second or so, but can be closed itself.
-      expect(await run({ action: "tab_new" })).toMatchObject({ opened: true });
+      const own = (await run({ action: "tab_new" })) as { opened: boolean; index: number };
+      expect(own.opened).toBe(true);
+      // With no console left, tabs switch again.
+      expect(await run({ action: "tab_switch", tabIndex: own.index })).toMatchObject({ index: own.index });
       const silent = await operatorContext.newPage();
       await silent.setContent(`<script>setTimeout(() => { for (;;) {} }, 300)</script>`);
       await new Promise((done) => setTimeout(done, 800));
@@ -216,6 +223,9 @@ describe("browser see/act loop", () => {  it("emits a selector that addresses th
       expect(Date.now() - started).toBeLessThan(5_000);
       const named = /^browser_approval_surface_check_unavailable: tab (\d+) did not answer$/.exec(refusal);
       expect(named, refusal).not.toBeNull();
+      await expect(run({ action: "tab_switch", tabIndex: own.index })).rejects.toThrow(
+        "browser_approval_surface_check_unavailable",
+      );
       expect(await run({ action: "close", tabIndex: Number(named![1]) })).toMatchObject({ closed: true });
       expect(await run({ action: "close" })).toMatchObject({ closed: true });
     } finally {

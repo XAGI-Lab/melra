@@ -111,8 +111,9 @@ browser runtime refuses every action that sends the console page input
 (`browser_refuses_approval_surface`), in every mode, and each action of its
 own that could raise or move the page under the operator's pointer:
 `tab_switch` onto its tab, `scroll` on it, and, in a browser it is attached
-to, `close` of any tab while another console is open there, since the browser
-then raises a neighbour; a tab that does not answer within a second counts as
+to, `close` of any tab and `tab_switch` to any while another console is open
+there, since the browser then raises a neighbour or, in a split view, the
+switched tab's partner; a tab that does not answer within a second counts as
 one, since a console too busy to answer is still a console. Its
 other reads can still move the page (navigate, back, forward), but the page
 takes the task it approves from the operator's clicks, never from its URL, and

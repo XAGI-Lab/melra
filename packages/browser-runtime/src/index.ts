@@ -1365,17 +1365,18 @@ export class BrowserRuntime {
       throw new Error("browser_refuses_approval_surface");
     }
     // Closing a tab lets the browser raise a neighbour, which can be a
-    // console. So in a browser this runtime is attached to, where an operator
-    // can have one open, `close` is refused while any other page here carries
-    // the marker, whatever the closed tab carries itself: any page can carry
-    // it. A marked tab of the agent's can be navigated away first. A browser
+    // console, and switching to a tab raises its split-view partner with it,
+    // which CDP does not say. So in a browser this runtime is attached to,
+    // where an operator can have one open, `close` and `tab_switch` are
+    // refused while any other page here carries the marker, whatever the tab
+    // acted on carries itself: any page can carry it. A marked tab of the agent's can be navigated away first. A browser
     // this runtime launched has no operator's console in it. A page that does
     // not answer within a second could be a console too busy to, so it holds
     // the others open the same way, under its own reason naming its tab; it
     // can be closed itself unless another tab also does not answer. One closed
     // meanwhile holds nothing. Attached over CDP, every page of the browser is
     // in this one context.
-    if (operation.action === "close" && this.options.cdpEndpoint !== undefined) {
+    if ((operation.action === "close" || operation.action === "tab_switch") && this.options.cdpEndpoint !== undefined) {
       if (operation.tabIndex !== undefined && acted === undefined) throw new Error("browser_tab_not_found");
       const pages = (await this.ensureContext()).pages();
       const marks = await Promise.all(

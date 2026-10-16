@@ -961,8 +961,9 @@ browser runtime refuses every action that sends input to a page carrying it
 (`browser_refuses_approval_surface`), in every mode, whatever approved the
 action. It also refuses each action of its own that could raise or move the
 console under your pointer: `tab_switch` onto the console's tab, `scroll` on
-it, and, in a browser it is attached to, `close` of any tab while another
-console is open there, because the browser then raises a neighbouring tab; a
+it, and, in a browser it is attached to, `close` of any tab and `tab_switch`
+to any while another console is open there, because the browser then raises
+a neighbouring tab, or a split view's other half; a
 tab that does not answer within a second counts as one, so two such tabs hold
 each other open until you close one. Other reads still work there: the agent
 can see the page and move its tab (navigate it away or to another fragment,

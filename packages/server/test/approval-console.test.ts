@@ -550,6 +550,18 @@ describe("approval console", () => {
       const dates = (await page.locator(".row time").allTextContents()).join(" ");
       expect(dates).toContain("‏");
       expect(dates).not.toContain("\\u200f");
+      // And in the approval console, which spells out what the agent sent but
+      // not what the browser's own locale writes.
+      const { server } = await open();
+      const paired = await browser.newPage({ locale: "ar" });
+      await paired.clock.setFixedTime(Date.now() + 3 * 86_400_000);
+      await paired.goto(server.url);
+      await paired.getByText(/paired at/).waitFor();
+      await paired.getByRole("tab", { name: /^Tasks/ }).click();
+      await paired.locator(".row time").first().waitFor();
+      const consoleDates = (await paired.locator(".row time").allTextContents()).join(" ");
+      expect(consoleDates).toContain("‏");
+      expect(consoleDates).not.toContain("\\u200f");
     } finally {
       await browser.close();
     }
@@ -585,6 +597,45 @@ describe("approval console", () => {
       await link.click({ modifiers: ["ControlOrMeta"] });
       expect((await opened).url()).toContain("#/tasks/");
       expect(page.url()).toBe(url);
+    } finally {
+      await browser.close();
+    }
+  }, 60_000);
+
+  it("shows a workflow's events in the approval console, which has no stream", async () => {
+    const executablePath = await detectBrowserExecutable();
+    if (executablePath === undefined) return;
+    const { server } = await open();
+    const run = runtime.workflows.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: randomUUID(),
+        version: 1,
+        name: "console-events",
+        nodes: [
+          {
+            id: "write",
+            type: "operation",
+            request: TaskRequestSchema.parse({
+              goal: "Write e.txt",
+              operation: { kind: "file", action: "write", path: "e.txt", content: "x" },
+              requiredEvidence: [{ type: "file_exists", path: "e.txt" }],
+            }),
+          },
+        ],
+      }),
+    );
+    await runtime.workflows.advance(run.id);
+    expect(runtime.workflows.events(run.id, 0).length).toBeGreaterThan(0);
+    const browser = await chromium.launch({ executablePath, headless: true });
+    try {
+      const page = await browser.newPage();
+      await page.goto(server.url);
+      await page.getByText(/paired at \d/).waitFor();
+      await page.getByRole("tab", { name: /^Workflows/ }).click();
+      await page.locator(`[data-key="${run.id}"]`).click();
+      await page.locator(".events div").first().waitFor();
+      expect(await page.locator(".events div").count()).toBeGreaterThan(0);
     } finally {
       await browser.close();
     }

@@ -152,9 +152,9 @@ Actions: `navigate`, `back`, `forward`, `reload`, `inspect`, `wait`, `click`,
   action, a `url` naming the page included. So are the actions that could
   raise or move it under the operator's pointer: `scroll` on it, `tab_switch`
   onto its tab, and, in a browser the runtime is attached to over CDP, `close`
-  of any tab while another marked page is open there, whatever the closed tab
-  carries (any page can carry the marker), since the browser then raises a
-  neighbour. In an attached browser, Playwright's focus emulation makes every
+  of any tab and `tab_switch` to any while another marked page is open there,
+  whatever the tab acted on carries (any page can carry the marker), since the
+  browser then raises a neighbour, or the switched tab's split-view partner. In an attached browser, Playwright's focus emulation makes every
   page report itself visible and focused, so the page cannot see being raised.
   Other reads on it still work; moving it ends the console's pairing. In an
   attached browser, a page that does not answer within a second holds `close`
