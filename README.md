@@ -102,8 +102,9 @@ holds: the file exists, the exit code is 0, the page says what it should.
 
 ### 🔁 What if it crashes?
 
-Every action is **recorded before it runs** and runs **at most once**. After a crash,
-MELRA settles what happened instead of blindly repeating it.
+Every change is **recorded before it runs** and runs **at most once**. After a crash,
+MELRA settles it from its evidence or the provider; what it cannot settle waits in
+`recovery_required`, and is never replayed.
 
 </td>
 <td width="25%" valign="top">
