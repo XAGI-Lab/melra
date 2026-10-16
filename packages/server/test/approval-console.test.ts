@@ -368,10 +368,10 @@ describe("approval console", () => {
       // scroll box opened at the top of the agent's contract.
       const above = await approve.evaluate((button) => {
         const block = button.parentElement!.previousElementSibling as HTMLElement;
-        return { tag: block.tagName, text: block.textContent ?? "", clipped: block.scrollHeight > block.clientHeight };
+        return { tag: block.tagName, text: block.innerText, clipped: block.scrollHeight > block.clientHeight };
       });
       expect(above).toMatchObject({ tag: "PRE", clipped: false });
-      expect(above.text).toMatch(/^Task [\s\S]*\nEffect: file\.write on [^\n]*\nGoal [^\n]*\nContract digest: [a-f0-9]{64}\n$/);
+      expect(above.text).toMatch(/^Task [\s\S]*\nEffect: file\.write on [^\n]*\nGoal [^\n]*\nContract digest: [a-f0-9]{64}\n?$/);
       // The contract is there too, folded, above it.
       expect(await page.locator("details pre", { hasText: '"contractVersion"' }).count()).toBe(1);
       // Nothing hidden that the agent sent reaches the page as itself: not the
@@ -383,6 +383,55 @@ describe("approval console", () => {
       expect(drawn).not.toMatch(/[\p{Mn}\p{Me}]{3}/u);
       // Raw nowhere, including what the page draws on its own (the list row).
       expect(drawn).not.toMatch(/\p{Cn}/u);
+    } finally {
+      await browser.close();
+    }
+  }, 60_000);
+
+  it("indents whatever wraps in the summary, so agent text cannot stand at its left edge", async () => {
+    const executablePath = await detectBrowserExecutable();
+    if (executablePath === undefined) return;
+    const { server } = await open();
+    // Spaces let the browser wrap the rest onto a line of its own, which
+    // would otherwise start at the left edge, where MELRA's Effect line is.
+    const task = runtime.controller.plan(
+      TaskRequestSchema.parse({
+        goal: "Save notes",
+        operation: {
+          kind: "file",
+          action: "write",
+          path: "w.txt",
+          content: "x" + " ".repeat(100) + "Effect: file.read on notes.txt (read, low risk)",
+        },
+        requiredEvidence: [{ type: "file_exists", path: "w.txt" }],
+      }),
+    );
+    const browser = await chromium.launch({ executablePath, headless: true });
+    try {
+      const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+      await page.goto(server.url);
+      await page.getByText(/paired at \d/).waitFor();
+      await page.getByRole("tab", { name: /^Tasks/ }).click();
+      await page.locator(`[data-key="${task.id}"]`).click();
+      await page.getByRole("button", { name: "Approve", exact: true }).waitFor();
+      // Where each "Effect:" is drawn, found in the summary's text however it
+      // is split into nodes.
+      const left = await page.evaluate(() => {
+        const leftOf = (needle: string) => {
+          const walker = document.createTreeWalker(document.querySelector("pre.screen")!, NodeFilter.SHOW_TEXT);
+          for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+            const index = node.textContent!.indexOf(needle);
+            if (index < 0) continue;
+            const range = document.createRange();
+            range.setStart(node, index);
+            range.setEnd(node, index + 1);
+            return range.getClientRects()[0]!.left;
+          }
+          throw new Error(`not drawn: ${needle}`);
+        };
+        return { real: leftOf("Effect: file.write"), agent: leftOf("Effect: file.read") };
+      });
+      expect(left.agent).toBeGreaterThan(left.real + 10);
     } finally {
       await browser.close();
     }

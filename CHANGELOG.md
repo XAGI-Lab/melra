@@ -126,8 +126,8 @@ All notable changes are documented here. The format follows
   the browser an operator approves in could otherwise reach the console tab
   with reads and aim a click at it. Other reads still work. In an attached
   browser, a page that does not answer within a second could be a busy
-  console, so it holds `close` of the others the same way
-  (`browser_approval_surface_check_unavailable`, naming its tab); it can be
+  console, so it holds `close` of the others, and every `tab_switch`, the same
+  way (`browser_approval_surface_check_unavailable`, naming its tab); it can be
   closed itself unless another tab does not answer either. `tab_switch` and
   `close` act on the very tab they checked, even if tabs before it close
   meanwhile. The check is made when the action starts. `melra doctor` now warns when
