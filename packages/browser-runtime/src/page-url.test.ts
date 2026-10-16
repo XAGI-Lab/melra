@@ -35,6 +35,27 @@ const RERENDER = `<!doctype html><html><head><title>rerender</title></head><body
   }, 3_000)</script>
 </body></html>`;
 
+// A frame whose first document holds its target hidden and reloads itself,
+// and whose later ones show it, recording a click in the page around it.
+const FRAMED = `<!doctype html><html><head><title>framed</title></head><body>
+  <iframe id="f" src="/framed-inner"></iframe>
+</body></html>`;
+const FRAMED_FIRST = `<!doctype html><button id="inframe" hidden>Go</button>
+  <script>setTimeout(() => location.reload(), 3_000)</script>`;
+const FRAMED_LATER = `<!doctype html><button id="inframe" onclick="parent.document.title = 'clicked'">Go</button>`;
+// A page that rewrites its own path as it is typed into, and one that does
+// so while a click waits for its button.
+const PUSHED = `<!doctype html><html><head><title>push</title></head><body>
+  <input id="field" oninput="history.pushState(null, '', '/pushed/' + this.value); document.title = this.value">
+</body></html>`;
+const PUSH_CLICK = `<!doctype html><html><head><title>push-click</title></head><body>
+  <button id="go" disabled onclick="document.title = 'clicked'">Go</button>
+  <script>setTimeout(() => {
+    history.pushState(null, "", "/elsewhere");
+    document.getElementById("go").disabled = false;
+  }, 3_000)</script>
+</body></html>`;
+
 const roots: string[] = [];
 const servers: Server[] = [];
 
@@ -119,7 +140,9 @@ describe("a url on an action that does not navigate", () => {
       const load = (loads.get(request.url ?? "") ?? 0) + 1;
       loads.set(request.url ?? "", load);
       response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      response.end(request.url === "/rerender" ? RERENDER : load === 1 ? FIRST : LATER);
+      const fixed: Record<string, string> = { "/rerender": RERENDER, "/framed": FRAMED, "/pushed": PUSHED, "/push-click": PUSH_CLICK };
+      const inner = load === 1 ? FRAMED_FIRST : FRAMED_LATER;
+      response.end(request.url === "/framed-inner" ? inner : (fixed[request.url ?? ""] ?? (load === 1 ? FIRST : LATER)));
     });
     servers.push(server);
     await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
@@ -161,6 +184,23 @@ describe("a url on an action that does not navigate", () => {
       await run({ action: "navigate", url: `${origin}/rerender` });
       await run({ action: "click", target: { selector: "#go" }, url: `${origin}/rerender` });
       expect(await title()).toBe("clicked");
+      // A target in a frame is held to the frame's document it was found in:
+      // the frame reloading into one where it shows gets nothing either.
+      await run({ action: "navigate", url: `${origin}/framed` });
+      await expect(run({ action: "click", target: { selector: "#inframe" }, url: `${origin}/framed` })).rejects.toThrow(
+        "browser_page_changed",
+      );
+      expect(await title()).toBe("framed");
+      // The address is checked after the click's own wait, right before the
+      // click; once typing starts, a page may rewrite its own path.
+      await run({ action: "navigate", url: `${origin}/push-click` });
+      await expect(run({ action: "click", target: { selector: "#go" }, url: `${origin}/push-click` })).rejects.toThrow(
+        "browser_page_changed",
+      );
+      expect(await title()).toBe("push-click");
+      await run({ action: "navigate", url: `${origin}/pushed` });
+      await run({ action: "type", target: { selector: "#field" }, value: "abc", url: `${origin}/pushed` });
+      expect(await title()).toBe("abc");
     } finally {
       await runtime.close();
     }

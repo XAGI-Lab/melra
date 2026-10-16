@@ -915,6 +915,9 @@ function domainAllowed(operation: Operation, policy: LocalPolicy): boolean {
       ? operation.url
       : undefined;
   if (raw === undefined) return true;
+  // `close` and `tab_switch` go nowhere: their url names the tab they act on,
+  // which can be `about:blank` or a page that redirected off the allowlist.
+  if (operation.kind === "browser" && (operation.action === "close" || operation.action === "tab_switch")) return true;
   const url = new URL(raw);
   if (!["http:", "https:"].includes(url.protocol)) return false;
   const host = hostOf(url);
@@ -1199,6 +1202,21 @@ export function evaluatePolicy(
     return { decision: decide("allow", "unhinged_mode_no_guardrails") };
   }
 
+  // In enforced mode every action that drives a page names the page, so the
+  // person approving it sees where it lands and a grant always has a page to
+  // match; the runtime then holds the action to that page. A rule about the
+  // request's shape, published for every caller, so it comes before grants:
+  // a url-less request would otherwise be refused as ungranted by a grant
+  // scoped to pages.
+  if (
+    policy.mode === "enforced" &&
+    request.operation.kind === "browser" &&
+    PAGE_DRIVING.has(request.operation.action) &&
+    request.operation.url === undefined
+  ) {
+    return { decision: decide("deny", "browser_action_requires_url") };
+  }
+
   // Authority before rules: a caller that was never granted this effect is
   // refused without consulting the allowlists, which describe what the grant
   // holder may do, not whether they hold one.
@@ -1233,18 +1251,6 @@ export function evaluatePolicy(
     return {
       decision: decide("deny", "destination_domain_not_allowed", "high"),
     };
-  }
-
-  // In enforced mode every action that drives a page names the page, so the
-  // person approving it sees where it lands and a grant always has a page to
-  // match; the runtime then holds the action to that page.
-  if (
-    policy.mode === "enforced" &&
-    request.operation.kind === "browser" &&
-    PAGE_DRIVING.has(request.operation.action) &&
-    request.operation.url === undefined
-  ) {
-    return { decision: decide("deny", "browser_action_requires_url") };
   }
 
   if (classified.effect !== "read" && request.requiredEvidence.length === 0) {

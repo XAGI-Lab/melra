@@ -786,7 +786,8 @@ closing every door it owns:
   `fill_form`, `select`, `press`, `upload`, `download`, `close` and
   `tab_switch` without a `url` are refused at planning with
   `browser_action_requires_url`, so the person approving one sees which page
-  it lands on, and the runtime refuses it on any other page.
+  it lands on, and the runtime refuses it on any other page. The harness
+  tools `browser_click` and `browser_type` take that `url` as an argument.
 - **`MELRA_HOME` must sit outside `MELRA_WORKSPACE`.** A workspace holding the
   data directory lets a recursive search of no path at all reach the database
   and the payload key, so the process exits with

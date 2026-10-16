@@ -661,6 +661,28 @@ describe("enforced-mode browser actions", () => {
       expect(plan(operation), String(operation.action)).not.toBe("browser_action_requires_url");
     }
   });
+
+  it("says so before a grant scoped to pages could refuse the request as ungranted", () => {
+    const scoped = {
+      ...enforced,
+      capabilities: [
+        { id: "g1", capability: "browser.click", effects: ["mutate"], target: "https://example.com/*", principal: "*" },
+      ] as never,
+    };
+    expect(plan({ action: "click", target }, scoped)).toBe("browser_action_requires_url");
+    expect(plan({ action: "click", target, url: "https://example.com/pay" }, scoped)).toBe("explicit_approval_required");
+  });
+
+  it("takes the url of `close` and `tab_switch` for the tab, not a destination", () => {
+    for (const action of ["close", "tab_switch"]) {
+      for (const url of ["about:blank", "http://10.0.0.1/", "https://elsewhere.example/"]) {
+        const tight = { ...enforced, allowedDomains: ["example.com"] };
+        expect(plan({ action, tabIndex: 1, url }, tight), `${action} ${url}`).not.toBe("destination_domain_not_allowed");
+      }
+    }
+    // A page an input action names is still a destination.
+    expect(plan({ action: "click", target, url: "about:blank" })).toBe("destination_domain_not_allowed");
+  });
 });
 
 describe("interactive terminal input", () => {

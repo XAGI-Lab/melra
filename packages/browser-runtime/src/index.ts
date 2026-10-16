@@ -1117,7 +1117,6 @@ export class BrowserRuntime {
    */
   private async typeInto(pin: Pin, locator: Locator, value: string, operation: BrowserOperation): Promise<void> {
     await this.actOn(pin, locator, operation.timeoutMs, async (field, timeout) => {
-      const deadline = Date.now() + timeout;
       if (operation.clearFirst) {
         await field.fill("", { timeout });
         this.dispatched = true;
@@ -1130,69 +1129,104 @@ export class BrowserRuntime {
       // Focused as `pressSequentially` focuses it (typing nothing does just
       // that), then typed as it types, one key at a time, each only while the
       // page is still the checked document: keys go wherever focus is, so a
-      // page that navigates midway would otherwise get the rest. Once the
-      // keys start, nothing here fails on the field going away.
+      // page that navigates midway would otherwise get the rest. Its address
+      // was checked before the first key; a page may rewrite its own path as
+      // it is typed into. Once the keys start, nothing here fails on the field
+      // going away.
       await field.type("", { timeout });
-      // The whole value within the action's timeout, as `pressSequentially`
-      // bounds it: a key still going when it runs out is not waited for.
+      // The value gets the whole timeout once typing starts, as
+      // `pressSequentially` gave it; a key still going then is not waited for.
+      const deadline = Date.now() + operation.timeoutMs;
       for (const character of value) {
-        if (Date.now() >= deadline) throw new BrowserCallTimeoutError("type");
-        if (await this.moved(pin)) throw new Error("browser_page_changed");
-        await this.call(pin.page.keyboard.type(character, { delay: operation.delayMs }), "type", deadline - Date.now());
+        const left = deadline - Date.now();
+        if (left <= 0) throw new BrowserCallTimeoutError("type");
+        if (await this.moved(pin, false, left)) throw new Error("browser_page_changed");
+        await this.call(pin.page.keyboard.type(character, { delay: operation.delayMs }), "type", Math.max(1, deadline - Date.now()));
       }
       this.dispatched = true;
     });
   }
 
   /**
-   * An input action on its target's element in the document the action was
-   * checked on. The input goes through the element, which a navigation takes
-   * away, so a page that navigates itself while the action waits (for the
-   * element to show, say) fails the action rather than having the target
-   * found, and acted on, in the new document. The target is found again only
-   * in the checked document, and only before any input reached it.
+   * An input action on its target's element, held to the documents it was
+   * checked on: the page's, and the one the target was first found in, which
+   * for a target inside a frame is that frame's. The input goes through the
+   * element, which a navigation takes away, so a page or frame that navigates
+   * itself while the action waits (for the element to show, say) fails the
+   * action rather than having the target found, and acted on, in the new
+   * document. The target is found again only in the document it was found
+   * in, and only before any input reached it. `ready` waits the way the
+   * action would (a trial click, say) without acting, so that the check after
+   * it is the last thing before the input, address included.
+   *
+   * ponytail: Playwright then re-checks the hit target and dispatches, so a
+   * navigation that commits in that instant can still receive the one click
+   * or key; closing it needs input that names its document, which CDP lacks.
    */
   private async actOn<T>(
     pin: Pin,
     locator: Locator,
     timeout: number,
     act: (element: ElementHandle, timeout: number) => Promise<T>,
+    ready?: (element: ElementHandle, timeout: number) => Promise<unknown>,
   ): Promise<T> {
     const deadline = Date.now() + timeout;
-    for (;;) {
-      const left = Math.max(1, deadline - Date.now());
-      // Bounded by its own timeout; the call only adds the cancel.
-      const element = await this.call(locator.first().elementHandle({ timeout: left }), "count", Infinity);
-      try {
-        if (!(await this.moved(pin))) return await act(element, left);
-      } catch (error) {
-        // Replaced below, so what `execute` reads from it is kept here.
-        if (inputSent(error)) this.dispatched = true;
-        if (!(await this.moved(pin))) {
-          // Re-rendered in the same document before any input reached it:
-          // found again there, as Playwright's own locator would.
-          if (detached(error) && !inputSent(error) && Date.now() < deadline) continue;
-          throw error;
+    const left = () => Math.max(1, deadline - Date.now());
+    let found: JSHandle | undefined;
+    try {
+      for (;;) {
+        // Bounded by its own timeout; the call only adds the cancel.
+        const element = await this.handle(locator.first().elementHandle({ timeout: left() }), "count", Infinity);
+        try {
+          if (found === undefined) found = await this.handle(element.evaluateHandle((node) => node.ownerDocument), "evaluate");
+          else if (!(await this.call(element.evaluate((node, first) => node.ownerDocument === first, found), "evaluate").catch(() => false))) {
+            throw new Error("browser_page_changed: the target's frame is now at another document");
+          }
+          if (ready !== undefined) await ready(element, left());
+          if (!(await this.moved(pin))) return await act(element, left());
+        } catch (error) {
+          // Replaced below, so what `execute` reads from it is kept here.
+          if (inputSent(error)) this.dispatched = true;
+          if (!(await this.moved(pin))) {
+            // Re-rendered, or its frame reloaded, before any input reached it:
+            // found again, as Playwright's own locator would, in the same
+            // document or not at all.
+            if (detached(error) && !inputSent(error) && Date.now() < deadline) continue;
+            throw error;
+          }
+        } finally {
+          await element.dispose().catch(() => undefined);
         }
-      } finally {
-        await element.dispose().catch(() => undefined);
+        throw new Error(`browser_page_changed: the page is now at ${pageAddress(pin.page.url())}`);
       }
-      throw new Error(`browser_page_changed: the page is now at ${pageAddress(pin.page.url())}`);
+    } finally {
+      void found?.dispose().catch(() => undefined);
     }
+  }
+
+  /** `call` for a handle: one that arrives after the bound or a cancel is released, not left in the page. */
+  private handle<H extends JSHandle>(pending: Promise<H>, what: string, ms?: number): Promise<H> {
+    return this.call(pending, what, ms).catch((error: unknown) => {
+      void pending.then(
+        (late) => late.dispose().catch(() => undefined),
+        () => undefined,
+      );
+      throw error;
+    });
   }
 
   /**
    * Whether the page has left the document an input action was checked on,
-   * or the address it named. A navigation destroys the old document's
-   * context, so asking its handle fails. A call that timed out or was
-   * cancelled is no answer either way and is passed on, and a closed page
+   * or, with `address`, the address it named. A navigation destroys the old
+   * document's context, so asking its handle fails. A call that timed out or
+   * was cancelled is no answer either way and is passed on, and a closed page
    * has not moved anywhere: the action's own error says what happened.
    */
-  private async moved(pin: Pin): Promise<boolean> {
+  private async moved(pin: Pin, address = true, ms = this.callMs): Promise<boolean> {
     if (pin.page.isClosed()) return false;
-    if (pin.address !== undefined && pageAddress(pin.page.url()) !== pin.address) return true;
+    if (address && pin.address !== undefined && pageAddress(pin.page.url()) !== pin.address) return true;
     try {
-      return !(await this.call(pin.document.evaluate((checked) => checked === document), "evaluate"));
+      return !(await this.call(pin.document.evaluate((checked) => checked === document), "evaluate", ms));
     } catch (error) {
       if (error instanceof BrowserCallTimeoutError || this.signal?.aborted === true) throw error;
       return true;
@@ -1416,7 +1450,7 @@ export class BrowserRuntime {
     const pin = INPUT_ACTIONS.has(operation.action)
       ? {
           page,
-          document: await this.call(page.evaluateHandle(() => document), "evaluate"),
+          document: await this.handle(page.evaluateHandle(() => document), "evaluate"),
           address: operation.url === undefined ? undefined : pageAddress(operation.url),
         }
       : undefined;
@@ -1605,8 +1639,12 @@ export class BrowserRuntime {
         };
       }
       case "click": {
-        await this.actOn(pin!, await this.locator(page, operation.target), operation.timeoutMs, (element, timeout) =>
-          element.click({ timeout }),
+        await this.actOn(
+          pin!,
+          await this.locator(page, operation.target),
+          operation.timeoutMs,
+          (element, timeout) => element.click({ timeout }),
+          (element, timeout) => element.click({ trial: true, timeout }),
         );
         // Set after the click returns, not before: Playwright's own timeout
         // mostly fires while it waits for the element to become clickable,
@@ -1645,8 +1683,12 @@ export class BrowserRuntime {
         }
         const submitted = operation.target !== undefined;
         if (submitted) {
-          await this.actOn(pin!, await this.locator(page, operation.target), operation.timeoutMs, (element, timeout) =>
-            element.click({ timeout }),
+          await this.actOn(
+            pin!,
+            await this.locator(page, operation.target),
+            operation.timeoutMs,
+            (element, timeout) => element.click({ timeout }),
+            (element, timeout) => element.click({ trial: true, timeout }),
           );
           this.dispatched = true;
         }
@@ -1659,8 +1701,15 @@ export class BrowserRuntime {
       case "select": {
         if (operation.values === undefined) throw new Error("browser_select_requires_values");
         const values = operation.values;
-        const selected = await this.actOn(pin!, await this.locator(page, operation.target), operation.timeoutMs, (element, timeout) =>
-          element.selectOption(values, { timeout }),
+        const selected = await this.actOn(
+          pin!,
+          await this.locator(page, operation.target),
+          operation.timeoutMs,
+          (element, timeout) => element.selectOption(values, { timeout }),
+          async (element, timeout) => {
+            await element.waitForElementState("visible", { timeout });
+            await element.waitForElementState("enabled", { timeout });
+          },
         );
         this.dispatched = true;
         return {
@@ -1762,8 +1811,12 @@ export class BrowserRuntime {
         // download wait, and its own timeout would surface as an unhandled
         // rejection long after this action failed.
         downloadPromise.catch(() => undefined);
-        await this.actOn(pin!, await this.locator(page, operation.target), operation.timeoutMs, (element, timeout) =>
-          element.click({ timeout }),
+        await this.actOn(
+          pin!,
+          await this.locator(page, operation.target),
+          operation.timeoutMs,
+          (element, timeout) => element.click({ timeout }),
+          (element, timeout) => element.click({ trial: true, timeout }),
         );
         this.dispatched = true;
         const download = await downloadPromise;
