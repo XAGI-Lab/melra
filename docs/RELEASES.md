@@ -19,8 +19,13 @@
 4. Run dependency, secret, license, and public-content scans.
 5. Record the supported OS and named-client results in `VALIDATION.md`.
 6. Review `SECURITY.md`, the threat model, compatibility notes, and changelog.
-7. Create a signed, protected `v*` tag only from an approved main-branch commit.
-8. Once the tag's npm packages are out, publish the MCP Registry listing from
+7. Run the release dry run on the commit to be tagged (`gh workflow run
+   release-dry-run.yml --ref main`, or open the Actions tab) and wait for it to
+   pass: it builds the binaries and every release file through the same steps
+   the tag release uses, checks the versions, `npm publish --dry-run`s every
+   package and checks the release's asset list, all without publishing.
+8. Create a signed, protected `v*` tag only from an approved main-branch commit.
+9. Once the tag's npm packages are out, publish the MCP Registry listing from
    the tagged checkout: `mcp-publisher login github`, then `mcp-publisher
    publish`. The Registry checks `server.json`'s name against the CLI's
    `mcpName`, case and all, and installs the version `server.json` names, so
