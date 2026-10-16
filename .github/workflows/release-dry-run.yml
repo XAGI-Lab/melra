@@ -1,0 +1,88 @@
+# Everything a v* tag release does short of publishing: build the binaries
+# and every release file through the same steps (the release-artifacts
+# action), check the versions, pack each npm package and `npm publish
+# --dry-run` it, and check the GitHub release's asset list. Read-only: no job
+# here can publish, attest, or write a release (#204).
+name: Release dry run
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
+      - ".github/workflows/release-dry-run.yml"
+      - ".github/workflows/single-executable.yml"
+      - ".github/actions/release-artifacts/**"
+      - "scripts/set-version.mjs"
+      - "scripts/check-versions.mjs"
+      - "server.json"
+
+permissions:
+  contents: read
+
+jobs:
+  binaries:
+    uses: ./.github/workflows/single-executable.yml
+    with:
+      release: true
+    permissions:
+      contents: read
+
+  dry-run:
+    needs: binaries
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 9.5.0
+      # No caches, as in the release it rehearses.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          python-version: "3.11"
+          enable-cache: false
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm versions:check
+      - uses: ./.github/actions/release-artifacts
+      - name: Pack and dry-run publish every npm package
+        shell: bash
+        run: |
+          mkdir -p "${RUNNER_TEMP}/npm"
+          node -e 'const fs=require("node:fs");for(const p of fs.globSync("{apps,packages}/*/package.json")){const m=JSON.parse(fs.readFileSync(p,"utf8"));if(!m.private)console.log(require("node:path").dirname(p))}' \
+            | while read -r dir; do
+                (cd "${dir}" && pnpm pack --pack-destination "${RUNNER_TEMP}/npm" >/dev/null)
+              done
+          for tarball in "${RUNNER_TEMP}"/npm/*.tgz; do
+            npm publish "${tarball}" --dry-run --tag alpha --access public
+          done
+      - name: Check the GitHub release asset list
+        shell: bash
+        run: |
+          # The same list 'Publish GitHub release' uploads.
+          assets=(release/*.tar.gz release/*.whl release/*.json release/melra-[0-9]* release/SHA256SUMS)
+          printf '%s\n' "${assets[@]}"
+          version="$(node -p "require('./package.json').version")"
+          for expected in \
+            "release/melra-node-${version}.tar.gz" "release/melra-source-${version}.tar.gz" \
+            "release/melra.spdx.json" "release/SHA256SUMS" \
+            "release/melra-${version}-linux-x64" "release/melra-${version}-linux-arm64" \
+            "release/melra-${version}-darwin-arm64" "release/melra-${version}-win-x64.exe"; do
+            [ -f "${expected}" ] || { echo "::error::missing ${expected}"; exit 1; }
+          done
+          ls release/*.whl >/dev/null
+          # Every asset is in SHA256SUMS, and every checksum matches.
+          (cd release && sha256sum --check SHA256SUMS)
+          for asset in "${assets[@]}"; do
+            [ "${asset}" = release/SHA256SUMS ] && continue
+            grep -q " \./$(basename "${asset}")$" release/SHA256SUMS || { echo "::error::${asset} not in SHA256SUMS"; exit 1; }
+          done

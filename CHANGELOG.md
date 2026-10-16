@@ -15,6 +15,13 @@ All notable changes are documented here. The format follows
   code-signed: macOS quarantines a downloaded copy and Windows SmartScreen
   warns, and `docs/INSTALLATION.md` shows how to verify one first. (#76)
 
+- A release dry run (`.github/workflows/release-dry-run.yml`): on demand, and
+  on any pull request that touches the release files, it builds the binaries
+  and every release file through the same steps a `v*` tag runs (now one
+  shared `release-artifacts` action), checks the versions, `npm publish
+  --dry-run`s every package and checks the GitHub release's asset list and
+  checksums, with read-only permissions throughout. (#204)
+
 ### Changed
 
 - The hardened deployment recipes name Docker Desktop and WSL2 as the way to
