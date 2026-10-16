@@ -786,12 +786,28 @@ export class BrowserRuntime {
    *
    * Ad and analytics pages can attach dozens of frames, so the list is bounded.
    */
-  /** Whether any frame of the page holds a filled secret field; a frame that cannot answer counts as one. */
+  /** Whether any frame of the page holds a filled secret field. */
   private async secretFieldFilled(page: Page): Promise<boolean> {
-    const answers = await Promise.all(
-      this.frames(page).map((frame) => this.call(frame.evaluate(filledSecretField), "secret_check").catch(() => true)),
-    );
+    const answers = await Promise.all(this.frames(page).map((frame) => this.frameHoldsSecret(frame)));
     return answers.some(Boolean);
+  }
+
+  /**
+   * A frame mid-navigation is asked again once its next document has loaded,
+   * and a detached one holds nothing; any other failure to answer counts as
+   * holding a secret, so the read is refused rather than let through.
+   */
+  private async frameHoldsSecret(frame: Frame): Promise<boolean> {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      if (frame.isDetached()) return false;
+      try {
+        return await this.call(frame.evaluate(filledSecretField), "secret_check");
+      } catch (error) {
+        if (!(error instanceof Error && /context was destroyed|navigat|detached/i.test(error.message))) return true;
+        await frame.waitForLoadState("domcontentloaded", { timeout: 2_000 }).catch(() => undefined);
+      }
+    }
+    return true;
   }
 
   private frames(page: Page): Frame[] {
@@ -880,6 +896,8 @@ export class BrowserRuntime {
     const negated = state === "hidden" || state === "detached";
     const deadline = Date.now() + timeoutMs;
     for (;;) {
+      // Asked on every poll: someone can fill a secret field while this waits.
+      if (await this.secretFieldFilled(page)) throw new Error("browser_secret_field_filled");
       let reached = negated;
       for (const candidate of this.candidates(page, target)) {
         const element = candidate.first();

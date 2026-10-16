@@ -283,8 +283,8 @@ All notable changes are documented here. The format follows
   carries it, though frameworks such as React mirror input into the `value`
   attribute. And while any frame holds a filled secret field, a read aimed at
   part of the page (`inspect`, `wait`, `scroll` or `screenshot` with a target)
-  is refused (`browser_secret_field_filled`): whether a target exists can be
-  made to depend on the secret, through a mirrored value or an accessible name
+  is refused (`browser_secret_field_filled`), asked again on every poll of a
+  `wait`: whether a target exists can be made to depend on the secret, through a mirrored value or an accessible name
   built from the field, however the selector is spelled. These reads run
   without approval, so in a browser someone else also types into, such as one
   attached over CDP, a password they typed could be read back or guessed.

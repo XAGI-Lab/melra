@@ -53,12 +53,15 @@ interface Element {
   testId: string | null;
 }
 
-async function fixture(page = PAGE): Promise<{ runtime: BrowserRuntime; url: string } | undefined> {
+async function fixture(page = PAGE, slowQueryMs = 0): Promise<{ runtime: BrowserRuntime; url: string } | undefined> {
   const executablePath = await detectBrowserExecutable();
   if (executablePath === undefined) return undefined;
   const server = createServer((_request, response) => {
-    response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-    response.end(page);
+    // A request with a query is answered late, as a slow redirect target is.
+    setTimeout(() => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(page);
+    }, _request.url?.includes("?") === true ? slowQueryMs : 0);
   });
   servers.push(server);
   await new Promise<void>((done) => {
@@ -167,6 +170,10 @@ describe("browser see/act loop", () => {
       ]) {
         await expect(run({ action: "inspect", target })).rejects.toThrow("browser_secret_field_filled");
         await expect(run({ action: "wait", target, state: "attached" })).rejects.toThrow("browser_secret_field_filled");
+        await expect(run({ action: "scroll", direction: "into_view", target })).rejects.toThrow(
+          "browser_secret_field_filled",
+        );
+        await expect(run({ action: "screenshot", target })).rejects.toThrow("browser_secret_field_filled");
       }
       // Every secret field emptied again, targeted reads come back.
       for (const [name, tag] of fields.slice(0, 3)) {
@@ -175,6 +182,71 @@ describe("browser see/act loop", () => {
       await expect(run({ action: "inspect", target: { selector: "#login" } })).rejects.toThrow("browser_secret_field_filled");
       await run({ action: "type", target: { selector: 'textarea[name="phrase"]' }, value: "" });
       expect(JSON.stringify(await run({ action: "inspect", target: { selector: "#login" } }))).toContain("alice");
+    } finally {
+      await runtime.close();
+    }
+  }, 120_000);
+
+  it("leaves a secret out of markup that still carries it after the field was cleared", async () => {
+    // Values rendered by the server, then cleared through the property only:
+    // nothing is typed, so reads are allowed, and the markup still holds them.
+    const context = await fixture(`<!doctype html><html><body><form id="login">
+      <input name="password" type="password" value="s3cret-rendered">
+      <textarea name="phrase" style="-webkit-text-security: disc">s3cret-text</textarea>
+    </form><script>
+      for (const field of document.querySelectorAll("input, textarea")) field.value = "";
+    </script></body></html>`);
+    if (context === undefined) return;
+    const { runtime, url } = context;
+    const run = (operation: Record<string, unknown>) =>
+      runtime.execute(BrowserOperationSchema.parse({ kind: "browser", ...operation }));
+    try {
+      await run({ action: "navigate", url });
+      for (const selector of ["#login", 'textarea[name="phrase"]', 'input[name="password"]']) {
+        expect(JSON.stringify(await run({ action: "inspect", target: { selector } }))).not.toMatch(/s3cret/);
+      }
+    } finally {
+      await runtime.close();
+    }
+  }, 120_000);
+
+  it("waits through a page that navigates itself, where no secret is filled", async () => {
+    const context = await fixture(`<!doctype html><html><body><script>
+      if (location.search === "") setTimeout(() => { location.search = "?next"; }, 150);
+      else document.body.insertAdjacentHTML("beforeend", '<p id="next">here</p>');
+    </script></body></html>`, 400);
+    if (context === undefined) return;
+    const { runtime, url } = context;
+    try {
+      await runtime.execute(BrowserOperationSchema.parse({ kind: "browser", action: "navigate", url }));
+      const waited = await runtime.execute(
+        BrowserOperationSchema.parse({ kind: "browser", action: "wait", target: { selector: "#next" }, state: "attached" }),
+      );
+      expect(waited.success).toBe(true);
+    } finally {
+      await runtime.close();
+    }
+  }, 120_000);
+
+  it("stops a targeted wait once a secret field is filled under it", async () => {
+    const context = await fixture(`<!doctype html><html><body><input name="password" type="password"><script>
+      setTimeout(() => { document.querySelector("input").value = "s3cret-late"; }, 400);
+    </script></body></html>`);
+    if (context === undefined) return;
+    const { runtime, url } = context;
+    try {
+      await runtime.execute(BrowserOperationSchema.parse({ kind: "browser", action: "navigate", url }));
+      await expect(
+        runtime.execute(
+          BrowserOperationSchema.parse({
+            kind: "browser",
+            action: "wait",
+            target: { selector: "#never" },
+            state: "attached",
+            timeoutMs: 5_000,
+          }),
+        ),
+      ).rejects.toThrow("browser_secret_field_filled");
     } finally {
       await runtime.close();
     }
