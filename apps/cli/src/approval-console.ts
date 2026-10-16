@@ -74,7 +74,7 @@ export async function approvalConsole(
       : `; a browser tab paired at ${pairedAt.toTimeString().slice(0, 5)} while the opener ran, and ` +
         (approved.length === 0
           ? "approved nothing before the console closed"
-          : `approved ${approved.join(", ")}: cancel any you did not approve with 'melra approve <task-id> --deny'`);
+          : `approved ${approved.join(", ")}: cancel any you did not approve with 'melra approve <task-id> --deny', with this console's MELRA_HOME`);
   let opened: boolean;
   try {
     opened = await terminal.open(endpoint.url);
@@ -95,9 +95,9 @@ export async function approvalConsole(
   terminal.say(
     `Approval console on http://${endpoint.host}:${endpoint.port}, opened in your browser.\n` +
       `One page can pair with it, the first to use its code, which should be the one it\n` +
-      `opened: if yours says another tab already paired, press Ctrl-C and cancel what\n` +
-      `the lines below say it approved. Reloading or leaving the page ends the pairing:\n` +
-      `run 'melra console' again then. Ctrl-C closes the console.\n` +
+      `opened: if yours says another tab already paired, press Ctrl-C and cancel each\n` +
+      `task this terminal lists as approved. Reloading or leaving the page ends the\n` +
+      `pairing: run 'melra console' again then. Ctrl-C closes the console.\n` +
       (melra.policy.mode === "enforced"
         ? ""
         : `Developer mode: approvals here are recorded in band, and an enforced server will not act on them.\n`),

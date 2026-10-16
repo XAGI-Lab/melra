@@ -892,8 +892,8 @@ that runs without approval can produce a console approval. The console is a
 server of its own: it listens on a fresh loopback port, serves no MCP endpoint
 and no client registration, and ignores `MELRA_HTTP_TOKEN`.
 
-**Pairing.** The console has no standing token. It pairs with the one tab it
-opens:
+**Pairing.** The console has no standing token. It pairs once, with the first
+page to use its one-time code, normally the tab it opens:
 
 1. It hands your browser `http://127.0.0.1:<port>/#pair=<code>`, a one-time
    code in the fragment, which no request line, log or `Referer` carries. It

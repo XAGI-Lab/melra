@@ -103,7 +103,8 @@ re-evaluated after approval and immediately before execution.
 `melra console` is an operator path beside `melra approve`, with the same
 authority. It is a separate process: a loopback server with no MCP endpoint and
 no client registration, which refuses to start without a terminal and never
-prints its pairing code. It pairs once, with the tab it opened, and that page
+prints its pairing code. It pairs once, with the first page to use its one-time
+code, normally the tab it opened (see the pairing race below), and that page
 holds its session in memory only; a decision is a JSON POST from the console's
 own origin, bound to the task and the digest of the screen shown. MELRA's
 browser runtime refuses every action that sends the console page input
