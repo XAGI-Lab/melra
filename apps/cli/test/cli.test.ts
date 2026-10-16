@@ -603,19 +603,22 @@ describe("melra CLI", () => {
     };
     const screen = approvalScreen(view, true, 40);
     expect(screen).not.toBe(approvalScreen(view, true));
-    // Given a terminal: the screen goes to it, wrapped to its width.
+    const question = "Approve this effect? [y/N] ";
+    // Given a terminal: the screen and then the question go to it, the screen
+    // wrapped to its width, and nothing but a yes approves.
     const output = Object.assign(new PassThrough(), { columns: 40 });
     let shown = "";
     output.on("data", (chunk: Buffer) => (shown += chunk.toString()));
     expect(await confirmInTerminal(view, Readable.from(["y\n"]), output)).toBe(true);
-    expect(shown.startsWith(screen)).toBe(true);
+    expect(shown).toBe(screen + question);
+    expect(await confirmInTerminal(view, Readable.from(["\n"]), new PassThrough())).toBe(false);
     // By default, the operator's: stderr, at stderr's width.
     const columns = Object.getOwnPropertyDescriptor(process.stderr, "columns");
     Object.defineProperty(process.stderr, "columns", { value: 40, configurable: true, writable: true });
     const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     try {
       expect(await confirmInTerminal(view, Readable.from(["n\n"]))).toBe(false);
-      expect(String(write.mock.calls[0]?.[0])).toBe(screen);
+      expect(write.mock.calls.map((call) => String(call[0]))).toEqual([screen, question]);
     } finally {
       write.mockRestore();
       if (columns === undefined) delete (process.stderr as { columns?: number }).columns;
