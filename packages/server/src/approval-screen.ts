@@ -178,8 +178,9 @@ export function approvalScreen(view: ApprovalScreenView, terminal = false, colum
  * the terminal was when it was printed. Below 20 columns nothing is wrapped:
  * there is no room to indent.
  */
-export function wrapToColumns(text: string, columns: number, indent = 4): string {
+function wrapToColumns(text: string, columns: number): string {
   if (!Number.isInteger(columns) || columns < 20) return text;
+  const indent = 4;
   const limit = columns - 1;
   const pad = " ".repeat(indent);
   return text

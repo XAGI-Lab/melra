@@ -96,7 +96,8 @@ All notable changes are documented here. The format follows
   padded to the right length, at column 0, where it read like a line MELRA
   wrote, its `Effect:` line included. A terminal narrower than 20 columns, or
   one narrowed after the screen is printed, still wraps it; piped output is
-  unchanged. (#210)
+  unchanged. `approvalScreen` takes the terminal's width as a third
+  argument. (#210)
 
 - `browser.inspect` no longer returns what was typed into a secret field (a
   password input, or one masked with CSS): neither the field list nor a

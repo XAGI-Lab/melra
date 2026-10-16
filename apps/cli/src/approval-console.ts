@@ -1,7 +1,13 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
-import { serveHttp, type MelraHttpServer, type MelraRuntime } from "@melra/server";
+import {
+  approvalScreen,
+  serveHttp,
+  type ApprovalScreenView,
+  type MelraHttpServer,
+  type MelraRuntime,
+} from "@melra/server";
 import { approverLabel, type CliEnvironment } from "./environment.js";
 
 /** What `melra console` needs from the terminal it was started in. */
@@ -12,6 +18,18 @@ export interface ConsoleTerminal {
   open(url: string): Promise<boolean>;
   /** Writes to the operator, on stderr. */
   say(text: string): void;
+}
+
+/**
+ * The approval screen on the terminal it is written to, wrapped to that
+ * terminal's width: taken from any other stream, a piped stdout say, the
+ * width is missing and the terminal wraps the screen itself (#210).
+ */
+export function showApprovalScreen(
+  view: ApprovalScreenView,
+  terminal: { columns?: number; write(text: string): unknown } = process.stderr,
+): void {
+  terminal.write(approvalScreen(view, true, terminal.columns));
 }
 
 /** Refuses anywhere but an operator's terminal, before anything is opened. */

@@ -24,7 +24,6 @@ import {
   type WorkflowRun,
 } from "@melra/protocol";
 import {
-  approvalScreen,
   assertEnforceable,
   confinedRoot,
   createMelraRuntime,
@@ -54,7 +53,7 @@ import {
   parseCliEnvironment,
   serverLaunch,
 } from "./environment.js";
-import { approvalConsole, assertConsoleTerminal } from "./approval-console.js";
+import { approvalConsole, assertConsoleTerminal, showApprovalScreen } from "./approval-console.js";
 import { runConformance } from "./conformance.js";
 import { statusCommand, tasksCommand, watchCommand } from "./activity.js";
 import { clientStatuses, clientsCheck, detectClients } from "./client-status.js";
@@ -789,7 +788,7 @@ type ApprovalView = ReturnType<MelraRuntime["controller"]["approvalView"]>;
 
 /** The effect as an approver needs to see it, on stderr, then y/N. */
 async function confirmInTerminal(view: ApprovalView): Promise<boolean> {
-  process.stderr.write(approvalScreen(view, true, process.stderr.columns));
+  showApprovalScreen(view);
   const prompt = createInterface({ input: process.stdin, output: process.stderr });
   const answer = (await prompt.question("Approve this effect? [y/N] ")).trim().toLowerCase();
   prompt.close();

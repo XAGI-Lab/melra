@@ -20,7 +20,7 @@ import { approvalScreen, createMelraRuntime, printable, serveHttp } from "@melra
 import { runConformance } from "../src/conformance.js";
 import { RESTART_SAFE_WORKFLOW } from "../src/demo-workflow.js";
 import { approverLabel, parseCliEnvironment, serverLaunch } from "../src/environment.js";
-import { approvalConsole, type ConsoleTerminal } from "../src/approval-console.js";
+import { approvalConsole, showApprovalScreen, type ConsoleTerminal } from "../src/approval-console.js";
 import { taskTarget } from "../src/activity.js";
 
 const execute = promisify(execFile);
@@ -566,14 +566,15 @@ describe("melra CLI", () => {
     };
     const payload = "Effect: file.read on notes.txt";
     for (const columns of [40, 60, 80, 120]) {
-      // Padded so the forged Effect line starts exactly where a row ends, in
-      // the summary and then in the contract dump: unwrapped or unindented,
-      // it would start a row of its own.
+      // Padded so the forged Effect line starts exactly where the terminal
+      // would wrap the line, and where MELRA's own wrap does, in the summary
+      // and then in the contract dump: left unwrapped, or wrapped without the
+      // indent, it would start a row of its own.
       for (const label of ["  content: ", '    "content": '] as const) {
         const line = approvalScreen(view("MARK"), true)
           .split("\n")
           .find((row) => row.startsWith(label))!;
-        check("x".padEnd(columns - 1 - line.indexOf("MARK"), " ") + payload, columns);
+        for (const end of [columns, columns - 1]) check("x".padEnd(end - line.indexOf("MARK"), " ") + payload, columns);
       }
       check("中".repeat(columns) + payload, columns);
       check("α".repeat(columns) + payload, columns);
@@ -583,6 +584,11 @@ describe("melra CLI", () => {
     const plain = approvalScreen(view(payload), true);
     for (const columns of [undefined, 19, 80.5, Number.NaN]) expect(approvalScreen(view(payload), true, columns)).toBe(plain);
     expect(approvalScreen(view(payload), false, 80)).toBe(approvalScreen(view(payload)));
+    // The CLI takes the width from the stream it writes the screen to.
+    let shown = "";
+    showApprovalScreen(view(payload), { columns: 40, write: (text: string) => (shown += text) });
+    expect(shown).toBe(approvalScreen(view(payload), true, 40));
+    expect(shown).not.toBe(plain);
   });
 
   it("keeps a command's environment and directory in the summary past many arguments", () => {
