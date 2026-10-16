@@ -170,11 +170,13 @@ export function approvalScreen(view: ApprovalScreenView, terminal = false, colum
 
 /**
  * Every line wrapped to `columns` here, each continuation indented, so the
- * terminal never wraps one itself: its wrap would start the rest at column 0,
+ * terminal has none to wrap itself: its wrap would start the rest at column 0,
  * where agent text padded to the right length reads like a line MELRA wrote,
- * the Effect line included. A character from U+1100 up counts as two columns
- * (some are one), so a row only ever comes out shorter than the terminal.
- * Below 20 columns nothing is wrapped: there is no room to indent.
+ * the Effect line included. Anything past ASCII counts as two columns, the
+ * most a terminal draws one in (one set to draw ambiguous-width characters
+ * wide draws even Greek or Cyrillic in two), so no row comes out wider than
+ * the terminal was when it was printed. Below 20 columns nothing is wrapped:
+ * there is no room to indent.
  */
 export function wrapToColumns(text: string, columns: number, indent = 4): string {
   if (!Number.isInteger(columns) || columns < 20) return text;
@@ -187,7 +189,7 @@ export function wrapToColumns(text: string, columns: number, indent = 4): string
       let row = "";
       let width = 0;
       for (const character of line) {
-        const cells = character.codePointAt(0)! < 0x1100 ? 1 : 2;
+        const cells = character.codePointAt(0)! < 0x80 ? 1 : 2;
         if (width + cells > limit) {
           rows.push(row);
           row = pad;

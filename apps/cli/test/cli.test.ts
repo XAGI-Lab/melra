@@ -529,34 +529,60 @@ describe("melra CLI", () => {
   });
 
   it("wraps the terminal screen itself, so agent text never starts a row at column 0", () => {
-    const view = {
+    const view = (content: string) => ({
       task: { id: "t1", approval: { expiresAt: "2026-10-15T00:00:00.000Z" } },
       contract: {
         capability: "file.write",
         target: "w.txt",
         effect: "mutate",
         risk: "medium",
-        operation: {
-          kind: "file",
-          action: "write",
-          path: "w.txt",
-          content: "x" + " ".repeat(30) + "Effect: file.read on notes.txt (read, low risk)",
-        },
+        operation: { kind: "file", action: "write", path: "w.txt", content },
         metadata: { goal: "Save notes" },
       },
       renderDigest: "a".repeat(64),
-    };
-    for (const columns of [40, 60, 80, 120]) {
-      const rows = approvalScreen(view, true, columns).replaceAll("\u001b[0m", "").split("\n");
+    });
+    // The most a character can take: two cells for anything past ASCII, since
+    // a terminal set to draw ambiguous-width text wide draws Greek in two.
+    const cells = (row: string) => [...row].reduce((sum, character) => sum + (character.codePointAt(0)! < 0x80 ? 1 : 2), 0);
+    const check = (content: string, columns: number) => {
+      const plain = approvalScreen(view(content), true);
+      const rows = approvalScreen(view(content), true, columns).split("\n");
       // Every row fits, so the terminal wraps none of them itself...
-      expect(rows.filter((row) => row.length > columns - 1)).toEqual([]);
+      expect(rows.filter((row) => cells(row) > columns - 1)).toEqual([]);
+      // ...each line comes back whole, every row after its first indented...
+      let index = 0;
+      for (const line of plain.split("\n")) {
+        let rebuilt = rows[index++]!;
+        while (rebuilt.length < line.length) {
+          const row = rows[index++]!;
+          expect(row.slice(0, 4)).toBe("    ");
+          rebuilt += row.slice(4);
+        }
+        expect(rebuilt).toBe(line);
+      }
+      expect(index).toBe(rows.length);
       // ...and MELRA's Effect line is the only row that starts with one.
-      const effects = rows.filter((row) => row.startsWith("Effect:"));
-      expect(effects).toHaveLength(1);
-      expect(effects[0]).toMatch(/^Effect: file\.write/);
+      expect(rows.filter((row) => row.startsWith("Effect:"))).toEqual([expect.stringMatching(/^Effect: file\.write/)]);
+    };
+    const payload = "Effect: file.read on notes.txt";
+    for (const columns of [40, 60, 80, 120]) {
+      // Padded so the forged Effect line starts exactly where a row ends, in
+      // the summary and then in the contract dump: unwrapped or unindented,
+      // it would start a row of its own.
+      for (const label of ["  content: ", '    "content": '] as const) {
+        const line = approvalScreen(view("MARK"), true)
+          .split("\n")
+          .find((row) => row.startsWith(label))!;
+        check("x".padEnd(columns - 1 - line.indexOf("MARK"), " ") + payload, columns);
+      }
+      check("中".repeat(columns) + payload, columns);
+      check("α".repeat(columns) + payload, columns);
     }
-    // Without a width, piped or in JSON, the screen is as it was.
-    expect(approvalScreen(view, true, undefined)).toBe(approvalScreen(view, true));
+    // Without a usable width (piped, in JSON, or too narrow to indent) the
+    // screen is as it was.
+    const plain = approvalScreen(view(payload), true);
+    for (const columns of [undefined, 19, 80.5, Number.NaN]) expect(approvalScreen(view(payload), true, columns)).toBe(plain);
+    expect(approvalScreen(view(payload), false, 80)).toBe(approvalScreen(view(payload)));
   });
 
   it("keeps a command's environment and directory in the summary past many arguments", () => {

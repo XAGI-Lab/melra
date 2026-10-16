@@ -90,10 +90,13 @@ All notable changes are documented here. The format follows
 ### Security
 
 - The terminal approval screen (`melra approve`, `melra run`'s prompt) wraps
-  every line to the terminal's width itself, indenting each continuation, so
-  the terminal never wraps one: its wrap could start agent text, padded to the
-  right length, at column 0, where it read like a line MELRA wrote, its
-  `Effect:` line included. Piped output is unchanged. (#210)
+  every line to the terminal's width when it is printed, indenting each
+  continuation and counting anything past ASCII as two columns, so the
+  terminal has no line of its own to wrap: its wrap could start agent text,
+  padded to the right length, at column 0, where it read like a line MELRA
+  wrote, its `Effect:` line included. A terminal narrower than 20 columns, or
+  one narrowed after the screen is printed, still wraps it; piped output is
+  unchanged. (#210)
 
 - `browser.inspect` no longer returns what was typed into a secret field (a
   password input, or one masked with CSS): neither the field list nor a
