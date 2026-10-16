@@ -56,6 +56,13 @@ All notable changes are documented here. The format follows
 
 ### Changed
 
+- In enforced mode, a browser action that drives a page (`click`, `type`,
+  `fill_form`, `select`, `press`, `upload`, `download`, `close`, `tab_switch`)
+  must name it with `url`, or it is refused at planning with
+  `browser_action_requires_url`. The operator approving it always sees which
+  page it lands on, and a grant always has a page to match. Developer mode is
+  unchanged. (#196)
+
 - The hardened deployment recipes name Docker Desktop and WSL2 as the way to
   get OS isolation on Windows, and `melra doctor`'s `isolation` line on native
   Windows says so instead of mentioning a Job Object. A Job Object limits
@@ -88,6 +95,15 @@ All notable changes are documented here. The format follows
   MCP Registry publish step.
 
 ### Security
+
+- A browser input action (`click`, `type`, `fill_form`, `select`, `press`,
+  `upload`, `download`) is held to the document its checks read: the `url` it
+  names and the approval-surface marker. Its target is found in that document,
+  and found again only there if the page re-renders it, and the input goes
+  through that element, so a page that navigates itself, even to the same
+  address, while the action waits for its target gets nothing, and the action
+  is refused with `browser_page_changed`. Typing confirms the document before
+  each key. (#196)
 
 - `browser.inspect` no longer returns what was typed into a secret field (a
   password input, or one masked with CSS): neither the field list nor a

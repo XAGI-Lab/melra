@@ -620,6 +620,49 @@ describe("enforced-mode reads that leave the workspace", () => {
   });
 });
 
+describe("enforced-mode browser actions", () => {
+  const enforced = { ...createDefaultPolicy(root), mode: "enforced" as const };
+  const target = { selector: "#go" };
+  const driving: Array<Record<string, unknown>> = [
+    { action: "click", target },
+    { action: "type", target, value: "x" },
+    { action: "fill_form", fields: [{ target, value: "x" }] },
+    { action: "select", target, values: ["a"] },
+    { action: "press", key: "Enter" },
+    { action: "upload", target, filePaths: ["a.txt"] },
+    { action: "download", target },
+    { action: "close", tabIndex: 1 },
+    { action: "tab_switch", tabIndex: 1 },
+  ];
+  const plan = (operation: Record<string, unknown>, policy: LocalPolicy = enforced) =>
+    evaluatePolicy(
+      "00000000-0000-4000-8000-000000000000",
+      TaskRequestSchema.parse({
+        goal: "Drive a page",
+        operation: { kind: "browser", ...operation },
+        requiredEvidence: [{ type: "result_equals", path: "clicked", value: true }],
+      }),
+      policy,
+    ).decision.reason;
+
+  it("refuses an action that drives a page without naming it", () => {
+    for (const operation of driving) {
+      expect(plan(operation), String(operation.action)).toBe("browser_action_requires_url");
+      expect(plan({ ...operation, url: "https://example.com/" }), String(operation.action)).not.toBe(
+        "browser_action_requires_url",
+      );
+      // Developer mode is as it was.
+      expect(plan(operation, createDefaultPolicy(root)), String(operation.action)).not.toBe(
+        "browser_action_requires_url",
+      );
+    }
+    // Reads that drive nothing need no url.
+    for (const operation of [{ action: "inspect" }, { action: "scroll" }, { action: "tabs" }]) {
+      expect(plan(operation), String(operation.action)).not.toBe("browser_action_requires_url");
+    }
+  });
+});
+
 describe("interactive terminal input", () => {
   const send = (jobId?: string) =>
     evaluatePolicy(

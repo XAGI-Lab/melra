@@ -192,9 +192,10 @@ describe("stalled browser calls", () => {
           op({ action: "click", target: { selector: "#go" }, timeoutMs: BOUND_MS }),
         ),
       );
-      // Resolving the target timed out, so nothing was clicked: a plain
-      // failure, which the page confirms once it answers again.
-      expect(message).toBe("browser_call_timeout:count");
+      // Taking hold of the page's document, before the target is even
+      // resolved, timed out, so nothing was clicked: a plain failure, which
+      // the page confirms once it answers again.
+      expect(message).toBe("browser_call_timeout:evaluate");
       expect(ms).toBeLessThan(STALL_MS - 500);
       await stalled;
       expect(await status(runtime)).toBe("idle");

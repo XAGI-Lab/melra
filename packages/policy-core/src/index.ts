@@ -1143,6 +1143,19 @@ export function capabilityRefusal(
   return capabilityCheck(classified, identity, policy, usage).refusal;
 }
 
+/** Browser actions that send a page input or act on a tab. */
+const PAGE_DRIVING: ReadonlySet<string> = new Set([
+  "click",
+  "type",
+  "fill_form",
+  "select",
+  "press",
+  "upload",
+  "download",
+  "close",
+  "tab_switch",
+]);
+
 export function evaluatePolicy(
   taskId: string,
   request: TaskRequest,
@@ -1220,6 +1233,18 @@ export function evaluatePolicy(
     return {
       decision: decide("deny", "destination_domain_not_allowed", "high"),
     };
+  }
+
+  // In enforced mode every action that drives a page names the page, so the
+  // person approving it sees where it lands and a grant always has a page to
+  // match; the runtime then holds the action to that page.
+  if (
+    policy.mode === "enforced" &&
+    request.operation.kind === "browser" &&
+    PAGE_DRIVING.has(request.operation.action) &&
+    request.operation.url === undefined
+  ) {
+    return { decision: decide("deny", "browser_action_requires_url") };
   }
 
   if (classified.effect !== "read" && request.requiredEvidence.length === 0) {

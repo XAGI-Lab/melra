@@ -142,8 +142,15 @@ Actions: `navigate`, `back`, `forward`, `reload`, `inspect`, `wait`, `click`,
   shows it as the action's target and matches grants against it, so the runtime
   refuses the action, before sending anything, when that page is elsewhere
   (`browser_page_not_at_url`). It is compared as policy shows it, without query
-  or fragment. The check is made when the action starts: a page that navigates
-  itself while the action waits for its target can still receive it.
+  or fragment. An input action (`click`, `type`, `fill_form`, `select`,
+  `press`, `upload`, `download`) is then held to the document this check read:
+  its target is found there, and found again only there if the page
+  re-renders it, and the input goes through that element, so a page that
+  navigates itself while the action waits, even to the same address, gets
+  nothing, and the action is refused with `browser_page_changed`.
+  Typing confirms the document before each key. In enforced mode these
+  actions, `close` and `tab_switch` must name a `url`
+  (`browser_action_requires_url`).
 - A page carrying `<meta name="melra-approval-surface">`, which is how
   [`melra console`](INSTALLATION.md#approving-in-a-browser) serves its approval
   page, is sent no input: `click`, `type`, `fill_form`, `select`, `press`,
@@ -162,7 +169,8 @@ Actions: `navigate`, `back`, `forward`, `reload`, `inspect`, `wait`, `click`,
   `browser_approval_surface_check_unavailable` naming its tab, which can be
   closed itself unless another tab does not answer either. This
   matters when the runtime is attached over CDP to a browser the operator also
-  uses. The check is made when the action starts, like the `url` check above.
+  uses. An input action is held to the document checked, like the `url` check
+  above.
 - `tab_new` accepts an optional `url` and runs the same destination checks
   `navigate` does. Every tab action returns the renumbered tab list, because
   opening, switching, and closing all shift the indices.
