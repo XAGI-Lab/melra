@@ -156,12 +156,48 @@ export function approvalSummary(view: ApprovalScreenView): string {
  * The approval screen, ending with what MELRA itself vouches for: the full
  * contract first, so however long the agent's content runs it cannot push the
  * effect off the screen, then the summary right above the question. `terminal`
- * adds a reset after the contract, which only a terminal has any use for.
+ * adds a reset after the contract, which only a terminal has any use for, and
+ * `columns`, that terminal's width, wraps every line to it (`wrapToColumns`).
  */
-export function approvalScreen(view: ApprovalScreenView, terminal = false): string {
-  return [
+export function approvalScreen(view: ApprovalScreenView, terminal = false, columns?: number): string {
+  const screen = [
     screened(JSON.stringify(view.contract, null, 2), true),
     ...(terminal ? ["\u001b[0m"] : []),
     approvalSummary(view),
   ].join("\n");
+  return terminal && columns !== undefined ? wrapToColumns(screen, columns) : screen;
+}
+
+/**
+ * Every line wrapped to `columns` here, each continuation indented, so the
+ * terminal never wraps one itself: its wrap would start the rest at column 0,
+ * where agent text padded to the right length reads like a line MELRA wrote,
+ * the Effect line included. A character from U+1100 up counts as two columns
+ * (some are one), so a row only ever comes out shorter than the terminal.
+ * Below 20 columns nothing is wrapped: there is no room to indent.
+ */
+export function wrapToColumns(text: string, columns: number, indent = 4): string {
+  if (!Number.isInteger(columns) || columns < 20) return text;
+  const limit = columns - 1;
+  const pad = " ".repeat(indent);
+  return text
+    .split("\n")
+    .map((line) => {
+      const rows: string[] = [];
+      let row = "";
+      let width = 0;
+      for (const character of line) {
+        const cells = character.codePointAt(0)! < 0x1100 ? 1 : 2;
+        if (width + cells > limit) {
+          rows.push(row);
+          row = pad;
+          width = indent;
+        }
+        row += character;
+        width += cells;
+      }
+      rows.push(row);
+      return rows.join("\n");
+    })
+    .join("\n");
 }

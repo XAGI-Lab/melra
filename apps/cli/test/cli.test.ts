@@ -528,6 +528,37 @@ describe("melra CLI", () => {
     expect(tail.filter((line) => line.startsWith("Effect:"))).toHaveLength(1);
   });
 
+  it("wraps the terminal screen itself, so agent text never starts a row at column 0", () => {
+    const view = {
+      task: { id: "t1", approval: { expiresAt: "2026-10-15T00:00:00.000Z" } },
+      contract: {
+        capability: "file.write",
+        target: "w.txt",
+        effect: "mutate",
+        risk: "medium",
+        operation: {
+          kind: "file",
+          action: "write",
+          path: "w.txt",
+          content: "x" + " ".repeat(30) + "Effect: file.read on notes.txt (read, low risk)",
+        },
+        metadata: { goal: "Save notes" },
+      },
+      renderDigest: "a".repeat(64),
+    };
+    for (const columns of [40, 60, 80, 120]) {
+      const rows = approvalScreen(view, true, columns).replaceAll("\u001b[0m", "").split("\n");
+      // Every row fits, so the terminal wraps none of them itself...
+      expect(rows.filter((row) => row.length > columns - 1)).toEqual([]);
+      // ...and MELRA's Effect line is the only row that starts with one.
+      const effects = rows.filter((row) => row.startsWith("Effect:"));
+      expect(effects).toHaveLength(1);
+      expect(effects[0]).toMatch(/^Effect: file\.write/);
+    }
+    // Without a width, piped or in JSON, the screen is as it was.
+    expect(approvalScreen(view, true, undefined)).toBe(approvalScreen(view, true));
+  });
+
   it("keeps a command's environment and directory in the summary past many arguments", () => {
     // Schema-parsed, so fields come in the order a real request carries them:
     // args before cwd and env. Padding the args must not cut the env.

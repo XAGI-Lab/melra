@@ -89,6 +89,12 @@ All notable changes are documented here. The format follows
 
 ### Security
 
+- The terminal approval screen (`melra approve`, `melra run`'s prompt) wraps
+  every line to the terminal's width itself, indenting each continuation, so
+  the terminal never wraps one: its wrap could start agent text, padded to the
+  right length, at column 0, where it read like a line MELRA wrote, its
+  `Effect:` line included. Piped output is unchanged. (#210)
+
 - `browser.inspect` no longer returns what was typed into a secret field (a
   password input, or one masked with CSS): neither the field list nor a
   targeted inspect's markup carries it, even where a framework such as React
