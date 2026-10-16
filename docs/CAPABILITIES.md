@@ -121,10 +121,10 @@ Actions: `navigate`, `back`, `forward`, `reload`, `inspect`, `wait`, `click`,
 - `back` and `forward` report `moved`, which is false only at the end of the
   history stack. A move to an entry with no HTTP response (`about:blank`, a hash
   change) reports `moved: true` with a null `status`.
-- Reads never return what was typed into a secret field (a password input, one
-  marked as a password or one-time code, or one masked with CSS), in the
-  element list or in a target's markup. While any frame holds a filled secret
-  field, a read aimed at part of the page is refused
+- Reads never return what was typed into a secret field (a password input, or
+  one masked with CSS), in the element list or in a target's markup. While any
+  frame holds a secret field with something in it, live or still in its markup,
+  a read aimed at part of the page is refused
   (`browser_secret_field_filled`), since whether its target exists could be
   made to depend on the secret; an untargeted `inspect` still works.
 - On any action but `navigate` and `tab_new`, a `url` names the page the action

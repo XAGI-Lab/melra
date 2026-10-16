@@ -53,15 +53,12 @@ interface Element {
   testId: string | null;
 }
 
-async function fixture(page = PAGE, slowQueryMs = 0): Promise<{ runtime: BrowserRuntime; url: string } | undefined> {
+async function fixture(page = PAGE): Promise<{ runtime: BrowserRuntime; url: string } | undefined> {
   const executablePath = await detectBrowserExecutable();
   if (executablePath === undefined) return undefined;
   const server = createServer((_request, response) => {
-    // A request with a query is answered late, as a slow redirect target is.
-    setTimeout(() => {
-      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      response.end(page);
-    }, _request.url?.includes("?") === true ? slowQueryMs : 0);
+    response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    response.end(page);
   });
   servers.push(server);
   await new Promise<void>((done) => {
@@ -136,7 +133,7 @@ describe("browser see/act loop", () => {
     const context = await fixture(`<!doctype html><html><body><form id="login"><table><tr>
       <td>Password</td><td><input name="password" type="password"></td></tr></table>
       <input name="pin" type="text" style="-webkit-text-security: disc">
-      <input name="code" type="text" autocomplete="one-time-code">
+      <input name="country" type="text" autocomplete="new-password">
       <textarea name="phrase" style="-webkit-text-security: disc"></textarea>
       <input name="user"><input type="submit" value="Go">
     </form><script>
@@ -152,7 +149,11 @@ describe("browser see/act loop", () => {
       await run({ action: "navigate", url });
       // Nothing secret entered yet: an ordinary value selector reads.
       await run({ action: "inspect", target: { selector: "input[type=submit][value=Go]" } });
-      const fields = [["password", "input"], ["pin", "input"], ["code", "input"], ["phrase", "textarea"], ["user", "input"]];
+      // A field that shows what is typed, whatever its autocomplete says to
+      // keep autofill away, is not hiding anything.
+      await run({ action: "type", target: { selector: 'input[name="country"]' }, value: "India" });
+      await run({ action: "wait", target: { selector: 'input[name="country"]' }, state: "attached" });
+      const fields = [["password", "input"], ["pin", "input"], ["phrase", "textarea"], ["user", "input"]];
       for (const [name, tag] of fields) {
         await run({ action: "type", target: { selector: `${tag}[name="${name}"]` }, value: name === "user" ? "alice" : `s3cret-${name}` });
       }
@@ -176,7 +177,7 @@ describe("browser see/act loop", () => {
         await expect(run({ action: "screenshot", target })).rejects.toThrow("browser_secret_field_filled");
       }
       // Every secret field emptied again, targeted reads come back.
-      for (const [name, tag] of fields.slice(0, 3)) {
+      for (const [name, tag] of fields.slice(0, 2)) {
         await run({ action: "type", target: { selector: `${tag}[name="${name}"]` }, value: "" });
       }
       await expect(run({ action: "inspect", target: { selector: "#login" } })).rejects.toThrow("browser_secret_field_filled");
@@ -187,9 +188,10 @@ describe("browser see/act loop", () => {
     }
   }, 120_000);
 
-  it("leaves a secret out of markup that still carries it after the field was cleared", async () => {
+  it("counts a secret still in the markup after the field was cleared", async () => {
     // Values rendered by the server, then cleared through the property only:
-    // nothing is typed, so reads are allowed, and the markup still holds them.
+    // the live value is empty, but a target can still match the attribute or
+    // the textarea's text, so its existence would still guess the secret.
     const context = await fixture(`<!doctype html><html><body><form id="login">
       <input name="password" type="password" value="s3cret-rendered">
       <textarea name="phrase" style="-webkit-text-security: disc">s3cret-text</textarea>
@@ -202,25 +204,35 @@ describe("browser see/act loop", () => {
       runtime.execute(BrowserOperationSchema.parse({ kind: "browser", ...operation }));
     try {
       await run({ action: "navigate", url });
-      for (const selector of ["#login", 'textarea[name="phrase"]', 'input[name="password"]']) {
-        expect(JSON.stringify(await run({ action: "inspect", target: { selector } }))).not.toMatch(/s3cret/);
+      expect(JSON.stringify(await run({ action: "inspect" }))).not.toMatch(/s3cret/);
+      for (const selector of ['input[type=password][value^="s3"]', 'textarea:has-text("s3cret")', "#login"]) {
+        await expect(run({ action: "inspect", target: { selector } })).rejects.toThrow("browser_secret_field_filled");
       }
     } finally {
       await runtime.close();
     }
   }, 120_000);
 
-  it("waits through a page that navigates itself, where no secret is filled", async () => {
+  it("waits through a page that keeps navigating itself, where no secret is filled", async () => {
+    // Each hop destroys the document a secret check may be reading; a check
+    // that counted that as a secret refused this wait on a page with none.
     const context = await fixture(`<!doctype html><html><body><script>
-      if (location.search === "") setTimeout(() => { location.search = "?next"; }, 150);
-      else document.body.insertAdjacentHTML("beforeend", '<p id="next">here</p>');
-    </script></body></html>`, 400);
+      const hop = Number(new URLSearchParams(location.search).get("hop") ?? 0);
+      if (hop < 80) setTimeout(() => { location.search = "?hop=" + (hop + 1); }, 20);
+      else document.body.insertAdjacentHTML("beforeend", '<p id="done">here</p>');
+    </script></body></html>`);
     if (context === undefined) return;
     const { runtime, url } = context;
     try {
       await runtime.execute(BrowserOperationSchema.parse({ kind: "browser", action: "navigate", url }));
       const waited = await runtime.execute(
-        BrowserOperationSchema.parse({ kind: "browser", action: "wait", target: { selector: "#next" }, state: "attached" }),
+        BrowserOperationSchema.parse({
+          kind: "browser",
+          action: "wait",
+          target: { selector: "#done" },
+          state: "attached",
+          timeoutMs: 60_000,
+        }),
       );
       expect(waited.success).toBe(true);
     } finally {

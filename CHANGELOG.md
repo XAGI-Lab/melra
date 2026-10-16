@@ -278,10 +278,10 @@ All notable changes are documented here. The format follows
 ### Security
 
 - `browser.inspect` no longer returns what was typed into a secret field: a
-  password input, one the page marks as a password or one-time code, or one
-  masked with CSS. Neither the field list nor a targeted inspect's markup
+  password input, or one masked with CSS. Neither the field list nor a targeted inspect's markup
   carries it, though frameworks such as React mirror input into the `value`
-  attribute. And while any frame holds a filled secret field, a read aimed at
+  attribute. And while any frame holds a secret field with something in it,
+  live or still in its markup, a read aimed at
   part of the page (`inspect`, `wait`, `scroll` or `screenshot` with a target)
   is refused (`browser_secret_field_filled`), asked again on every poll of a
   `wait`: whether a target exists can be made to depend on the secret, through a mirrored value or an accessible name

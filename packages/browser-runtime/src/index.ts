@@ -198,16 +198,17 @@ export function pageAddress(url: string): string {
  * test is the one `collectFrame` and `extract` use.
  */
 function filledSecretField(): boolean {
-  const secret = (field: Element): boolean =>
+  const secret = (field: Element): field is HTMLInputElement | HTMLTextAreaElement =>
     (field instanceof HTMLInputElement && field.type === "password") ||
     ((field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement) &&
-      (/\b(current-password|new-password|one-time-code)\b/.test(field.autocomplete) ||
-        !["", "none"].includes(getComputedStyle(field).getPropertyValue("-webkit-text-security"))));
+      !["", "none"].includes(getComputedStyle(field).getPropertyValue("-webkit-text-security")));
   const roots: ParentNode[] = [document];
   while (roots.length > 0) {
     for (const element of roots.pop()!.querySelectorAll("*")) {
       if (element.shadowRoot !== null) roots.push(element.shadowRoot);
-      if (secret(element) && (element as HTMLInputElement | HTMLTextAreaElement).value !== "") return true;
+      // The markup counts as well as the live value: a target can match the
+      // `value` attribute, or a textarea's text, after the field was cleared.
+      if (secret(element) && (element.value !== "" || element.defaultValue !== "")) return true;
     }
   }
   return false;
@@ -227,13 +228,12 @@ function withoutColour(text: string): string {
  */
 function collectFrame(limit: number) {
   const text = document.body?.innerText ?? "";
-  // A field holding a secret: a password input, one the page marks as a
-  // password or one-time code, or one masked on screen with CSS. Kept in here:
-  // this function runs in the page, where nothing outside it exists.
+  // A field holding a secret: a password input, or one masked on screen with
+  // CSS; one that shows its text is not hiding it. Kept in here: this function
+  // runs in the page, where nothing outside it exists.
   const secret = (element: Element): boolean =>
-    (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) &&
-    ((element instanceof HTMLInputElement && element.type === "password") ||
-      /\b(current-password|new-password|one-time-code)\b/.test(element.autocomplete) ||
+    (element instanceof HTMLInputElement && element.type === "password") ||
+    ((element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) &&
       !["", "none"].includes(getComputedStyle(element).getPropertyValue("-webkit-text-security")));
   /**
    * Walk up from the element recording the position of each ancestor, and
@@ -1056,8 +1056,7 @@ export class BrowserRuntime {
           const secret = (field: Element): boolean =>
             (field instanceof HTMLInputElement && field.type === "password") ||
             ((field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement) &&
-              (/\b(current-password|new-password|one-time-code)\b/.test(field.autocomplete) ||
-                !["", "none"].includes(getComputedStyle(field).getPropertyValue("-webkit-text-security"))));
+              !["", "none"].includes(getComputedStyle(field).getPropertyValue("-webkit-text-security")));
           // The target itself too: a secret textarea's markup is its content.
           const live = [element, ...element.querySelectorAll("input, textarea")];
           const copy = element.cloneNode(true) as Element;
