@@ -96,7 +96,7 @@ refuses a bind outside loopback and serves no client-registration endpoint, and
 `mode` is stamped on every receipt and published in `melra_capabilities`. See
 [deployment modes](https://github.com/XAGI-Lab/melra/blob/main/docs/INSTALLATION.md#deployment-modes).
 
-Requires Node.js 22 or newer. Full documentation:
+Requires Node.js 22.13 or newer. Full documentation:
 [github.com/XAGI-Lab/melra](https://github.com/XAGI-Lab/melra)
 
 Apache-2.0

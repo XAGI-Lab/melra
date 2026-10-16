@@ -6,7 +6,6 @@ import { access, lstat, mkdir, readFile, stat, writeFile } from "node:fs/promise
 import { constants } from "node:fs";
 import { spawn } from "node:child_process";
 import { basename, dirname, join, resolve } from "node:path";
-import { createInterface } from "node:readline/promises";
 import { DatabaseSync } from "node:sqlite";
 import {
   ApprovalResponseSchema,
@@ -24,7 +23,6 @@ import {
   type WorkflowRun,
 } from "@melra/protocol";
 import {
-  approvalScreen,
   assertEnforceable,
   confinedRoot,
   createMelraRuntime,
@@ -54,7 +52,7 @@ import {
   parseCliEnvironment,
   serverLaunch,
 } from "./environment.js";
-import { approvalConsole, assertConsoleTerminal } from "./approval-console.js";
+import { approvalConsole, assertConsoleTerminal, confirmInTerminal } from "./approval-console.js";
 import { runConformance } from "./conformance.js";
 import { statusCommand, tasksCommand, watchCommand } from "./activity.js";
 import { clientStatuses, clientsCheck, detectClients } from "./client-status.js";
@@ -785,17 +783,6 @@ async function runTask(args: string[], env: CliEnvironment): Promise<number> {
   }
 }
 
-type ApprovalView = ReturnType<MelraRuntime["controller"]["approvalView"]>;
-
-/** The effect as an approver needs to see it, on stderr, then y/N. */
-async function confirmInTerminal(view: ApprovalView): Promise<boolean> {
-  process.stderr.write(approvalScreen(view, true));
-  const prompt = createInterface({ input: process.stdin, output: process.stderr });
-  const answer = (await prompt.question("Approve this effect? [y/N] ")).trim().toLowerCase();
-  prompt.close();
-  return answer === "y" || answer === "yes";
-}
-
 /**
  * Records an approval for a task another process planned, without running it:
  * the agent that planned it runs it, and the decision lets it.
@@ -832,10 +819,7 @@ async function approveCommand(args: string[], env: CliEnvironment): Promise<numb
         });
         return 3;
       }
-      if (!(await confirmInTerminal(view))) {
-        process.stderr.write("Not approved.\n");
-        return 1;
-      }
+      if (!(await confirmInTerminal(view))) return 1;
     }
     const decision = melra.controller.decide(taskId, view.renderDigest, approver);
     if (decision.channel === "in_band") {

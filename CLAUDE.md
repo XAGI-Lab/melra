@@ -37,7 +37,7 @@ operational memory as a kernel service: six task tools (`melra_capabilities`,
 `melra_plan`, `melra_execute`, `melra_task_status`, `melra_task_cancel`,
 `melra_receipt`) and five durable-workflow tools (`melra_workflow_plan`,
 `melra_workflow_advance`, `melra_workflow_status`, `melra_workflow_cancel`,
-`melra_workflow_control`). pnpm workspace of TypeScript packages (Node 22+, ESM,
+`melra_workflow_control`). pnpm workspace of TypeScript packages (Node 22.13+, ESM,
 strict tsc), plus two Python projects managed by `uv` (`sdk-py`,
 `benchmarks/browser-agent`).
 

@@ -156,12 +156,51 @@ export function approvalSummary(view: ApprovalScreenView): string {
  * The approval screen, ending with what MELRA itself vouches for: the full
  * contract first, so however long the agent's content runs it cannot push the
  * effect off the screen, then the summary right above the question. `terminal`
- * adds a reset after the contract, which only a terminal has any use for.
+ * adds a reset after the contract, which only a terminal has any use for, and
+ * `columns`, that terminal's width, wraps every line to it (`wrapToColumns`).
  */
-export function approvalScreen(view: ApprovalScreenView, terminal = false): string {
-  return [
+export function approvalScreen(view: ApprovalScreenView, terminal = false, columns?: number): string {
+  const screen = [
     screened(JSON.stringify(view.contract, null, 2), true),
     ...(terminal ? ["\u001b[0m"] : []),
     approvalSummary(view),
   ].join("\n");
+  return terminal && columns !== undefined ? wrapToColumns(screen, columns) : screen;
+}
+
+/**
+ * Every line wrapped to `columns` here, each continuation indented, so the
+ * terminal has none to wrap itself: its wrap would start the rest at column 0,
+ * where agent text padded to the right length reads like a line MELRA wrote,
+ * the Effect line included. Anything past ASCII counts as two columns, the
+ * most a terminal draws one in (one set to draw ambiguous-width characters
+ * wide draws even Greek or Cyrillic in two), so no row comes out wider than
+ * the terminal was when it was printed. Below 20 columns nothing is wrapped:
+ * there is no room to indent.
+ */
+function wrapToColumns(text: string, columns: number): string {
+  if (!Number.isInteger(columns) || columns < 20) return text;
+  const indent = 4;
+  const limit = columns - 1;
+  const pad = " ".repeat(indent);
+  return text
+    .split("\n")
+    .map((line) => {
+      const rows: string[] = [];
+      let row = "";
+      let width = 0;
+      for (const character of line) {
+        const cells = character.codePointAt(0)! < 0x80 ? 1 : 2;
+        if (width + cells > limit) {
+          rows.push(row);
+          row = pad;
+          width = indent;
+        }
+        row += character;
+        width += cells;
+      }
+      rows.push(row);
+      return rows.join("\n");
+    })
+    .join("\n");
 }
