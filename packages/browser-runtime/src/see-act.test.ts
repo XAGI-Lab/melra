@@ -262,6 +262,54 @@ describe("browser see/act loop", () => {
     }
   }, 120_000);
 
+  it("leaves the operator's own new tabs alone in a browser it is attached to", async () => {
+    // ?opens opens a window of its own a moment after it loads.
+    const context = await fixture(`<!doctype html><html><body><p>page</p><script>
+      if (location.search === "?opens") setTimeout(() => window.open(location.origin + "/?popup"), 300);
+    </script></body></html>`);
+    if (context === undefined) return;
+    const executablePath = (await detectBrowserExecutable())!;
+    const root = await mkdtemp(join(tmpdir(), "melra-see-act-cdp-"));
+    roots.push(root);
+    const port = await new Promise<number>((done) => {
+      const probe = createServer().listen(0, "127.0.0.1", () => {
+        const { port: free } = probe.address() as { port: number };
+        probe.close(() => done(free));
+      });
+    });
+    const owner = await chromium.launch({ executablePath, headless: true, args: [`--remote-debugging-port=${port}`] });
+    const operator = await owner.newContext();
+    await operator.newPage();
+    const runtime = new BrowserRuntime({
+      workspaceRoot: root,
+      artifactDirectory: join(root, "artifacts"),
+      allowedDomains: ["127.0.0.1"],
+      allowLocalhost: true,
+      cdpEndpoint: `http://127.0.0.1:${port}`,
+    });
+    const run = (operation: Record<string, unknown>) =>
+      runtime.execute(BrowserOperationSchema.parse({ kind: "browser", ...operation }));
+    try {
+      await run({ action: "tab_new", url: context.url });
+      // A tab the operator opens between the runtime's actions is theirs.
+      const mine = await operator.newPage();
+      await mine.goto(`${context.url}/?mine`);
+      await new Promise((done) => setTimeout(done, 500));
+      const read = await run({ action: "inspect" });
+      expect(mine.isClosed()).toBe(false);
+      expect(JSON.stringify(read.popups ?? [])).not.toContain("?mine");
+      // A window the runtime's own page opens between actions is still its own.
+      await run({ action: "navigate", url: `${context.url}/?opens` });
+      await new Promise((done) => setTimeout(done, 1_000));
+      const next = await run({ action: "inspect" });
+      expect(next.popups).toEqual([expect.objectContaining({ url: expect.stringContaining("?popup"), blocked: true })]);
+      expect(operator.pages().some((page) => page.url().includes("?popup"))).toBe(false);
+    } finally {
+      await runtime.close();
+      await owner.close();
+    }
+  }, 120_000);
+
   it("closes its tabs freely in a browser it launched, where no operator's console can be", async () => {
     const context = await fixture(`<!doctype html><html><head><meta name="${APPROVAL_SURFACE}" content="operator-only">
       <title>marked</title></head><body></body></html>`);

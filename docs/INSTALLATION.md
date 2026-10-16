@@ -264,7 +264,10 @@ window's first response, so a slow popup still lands on the right result.
 setting governs whether the window survives, not whether it is reported, and
 `assertSafeUrl` still decides where it may load from. Unsafe-local mode allows
 popups, because closing one is MELRA's judgement about what the caller should be
-looking at.
+looking at. In a browser the runtime is attached to over CDP, a tab that
+appears between its actions is the operator's unless one of the runtime's own
+pages opened it: it is left open and not reported, so a tab you open yourself,
+or one `melra console` opens, survives.
 
 Attaching over CDP and recording a HAR are mutually exclusive; setting both
 fails at startup. A HAR captures full request and response data, including

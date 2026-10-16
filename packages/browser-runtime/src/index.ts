@@ -380,6 +380,11 @@ export class BrowserRuntime {
   /** True only while `tab_new` is opening the tab the caller asked for. */
   private openingTab = false;
   /**
+   * The pages this runtime opened or made active. In a browser it is attached
+   * to, the rest belong to someone else, the operator above all.
+   */
+  private ownPages = new WeakSet<Page>();
+  /**
    * Browser-level session that hears about a new window the moment Chromium
    * creates it, which is what lets an action wait for a popup it knows exists
    * instead of guessing how long one might take. Absent if the browser would
@@ -635,21 +640,40 @@ export class BrowserRuntime {
       // closed before Playwright finished with them.
       this.windowsAdopted += 1;
       if (opened === this.activePage || this.openingTab) return;
-      // Closing a window the page opened is MELRA's judgement about what the
-      // caller should be looking at, so unhinged mode drops it. Reporting it is
-      // not a judgement — that stays on, like every other receipt.
-      const allowed = this.options.popups === "allow" || this.options.unhinged === true;
-      if (this.popups.length < MAX_POPUPS) {
-        this.popups.push({
-          url: opened.url(),
-          blocked: !allowed,
-          ...(this.acting ? {} : { betweenActions: true }),
-        });
+      const acting = this.acting;
+      const adopt = () => {
+        // Closing a window the page opened is MELRA's judgement about what
+        // the caller should be looking at, so unhinged mode drops it.
+        // Reporting it is not a judgement — that stays on, like every other
+        // receipt.
+        const allowed = this.options.popups === "allow" || this.options.unhinged === true;
+        if (this.popups.length < MAX_POPUPS) {
+          this.popups.push({
+            url: opened.url(),
+            blocked: !allowed,
+            ...(acting ? {} : { betweenActions: true }),
+          });
+        }
+        if (allowed) return;
+        // A popup that closed on its own, or whose opener navigated away
+        // first, must not turn into the action's error.
+        return opened.close().catch(() => undefined);
+      };
+      // In a browser this runtime is attached to, a tab that appears between
+      // its actions is the operator's (one they opened, a console `melra
+      // console` opened) unless one of this runtime's pages opened it: that
+      // tab is left alone and not reported.
+      if (this.options.cdpEndpoint !== undefined && !acting) {
+        this.closing.push(
+          opened.opener().then(
+            (opener) => (opener !== null && this.ownPages.has(opener) ? adopt() : undefined),
+            () => undefined,
+          ),
+        );
+        return;
       }
-      if (allowed) return;
-      // A popup that closed on its own, or whose opener navigated away first,
-      // must not turn into the action's error.
-      this.closing.push(opened.close().catch(() => undefined));
+      const closing = adopt();
+      if (closing !== undefined) this.closing.push(closing);
     });
     /**
      * Hear about new windows when Chromium creates them, not when Playwright
@@ -764,7 +788,9 @@ export class BrowserRuntime {
   private async openPage(context: BrowserContext): Promise<Page> {
     this.openingTab = true;
     try {
-      return await this.call(context.newPage(), "new_page");
+      const opened = await this.call(context.newPage(), "new_page");
+      this.ownPages.add(opened);
+      return opened;
     } finally {
       this.openingTab = false;
     }
@@ -776,6 +802,7 @@ export class BrowserRuntime {
       return this.activePage;
     }
     this.activePage = context.pages()[0] ?? (await this.openPage(context));
+    this.ownPages.add(this.activePage);
     return this.activePage;
   }
 
@@ -1732,6 +1759,7 @@ export class BrowserRuntime {
         // focus behaviour differ.
         await this.call(target.bringToFront(), "bring_to_front");
         this.activePage = target;
+        this.ownPages.add(target);
         return {
           switched: true,
           index: (await this.ensureContext()).pages().indexOf(target),
@@ -1751,6 +1779,7 @@ export class BrowserRuntime {
         this.dispatched = true;
         await this.call(target.close(), "close");
         this.activePage = context.pages().at(-1);
+        if (this.activePage !== undefined) this.ownPages.add(this.activePage);
         return { closed: true, url, tabs: await this.describeTabs(context) };
       }
     }

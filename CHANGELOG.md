@@ -72,6 +72,12 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- In a browser the runtime is attached to over CDP, it no longer closes tabs it
+  did not open: a tab that appears between its actions is the operator's (one
+  they opened, or a console `melra console` opened) unless one of the
+  runtime's own pages opened it, and it is left open and not reported as a
+  popup. Windows the agent's pages open are still closed and reported. (#203)
+
 - A release run that fails after publishing to npm can be re-run: packages
   already on the registry at that version are skipped instead of stopping the
   run. The provenance check waits up to 15 minutes per package for the
