@@ -6,12 +6,14 @@
 
 **M**odular **E**xecution **L**ayer for **R**eliable **A**utonomy
 
-### Your AI agent decides what to do. MELRA makes sure it happens safely, once, and provably.
+### Your AI agent decides what to do. MELRA governs how tool calls are authorized, verified, and recovered.
 
 An open-source **autonomy kernel**: the layer every agent action passes through on its
 way to your files, terminal, browser, desktop and APIs. It checks each action against
-your rules, asks you before anything risky, runs it exactly once, verifies it actually
-worked, and keeps a receipt. Any agent, any model, same guarantees.
+policy, requests approval when needed, verifies declared evidence, and keeps a redacted
+receipt. For each task, MELRA dispatches mutations at most once; uncertain outcomes are
+parked for reconciliation instead of replay. Exactly-once external effects still depend
+on the provider.
 
 <br />
 
@@ -422,9 +424,9 @@ the [threat model](docs/THREAT_MODEL.md) and the [security policy](SECURITY.md).
 ## Why MELRA
 
 An LLM decides *what* to do. A harness runs the loop that gets it there. Something
-still has to decide whether the resulting effect is allowed, run it exactly once,
-prove it worked, and survive a crash in the middle. Today that machinery is rebuilt
-inside every agent harness, and it dies with the harness. MELRA is that machinery,
+still has to decide whether the resulting effect is allowed, avoid replaying uncertain
+mutations, prove what happened, and survive a crash in the middle. Today that machinery
+is rebuilt inside every agent harness, and it dies with the harness. MELRA is that machinery,
 factored out and made agent-independent.
 
 <table>
