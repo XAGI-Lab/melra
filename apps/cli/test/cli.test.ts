@@ -8,7 +8,8 @@ import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, it } from "vitest";
+import { PassThrough, Readable } from "node:stream";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   BrowserOperationSchema,
   HttpOperationSchema,
@@ -20,7 +21,7 @@ import { approvalScreen, createMelraRuntime, printable, serveHttp } from "@melra
 import { runConformance } from "../src/conformance.js";
 import { RESTART_SAFE_WORKFLOW } from "../src/demo-workflow.js";
 import { approverLabel, parseCliEnvironment, serverLaunch } from "../src/environment.js";
-import { approvalConsole, type ConsoleTerminal } from "../src/approval-console.js";
+import { approvalConsole, confirmInTerminal, type ConsoleTerminal } from "../src/approval-console.js";
 import { taskTarget } from "../src/activity.js";
 
 const execute = promisify(execFile);
@@ -526,6 +527,113 @@ describe("melra CLI", () => {
     expect(tail.at(-3)).toBe("Effect: terminal.run on command:node (mutate, medium risk)");
     expect(tail.every((line) => line.length < 260)).toBe(true);
     expect(tail.filter((line) => line.startsWith("Effect:"))).toHaveLength(1);
+  });
+
+  it("wraps the terminal screen itself, so agent text never starts a row at column 0", () => {
+    const view = (content: string) => ({
+      task: { id: "t1", approval: { expiresAt: "2026-10-15T00:00:00.000Z" } },
+      contract: {
+        capability: "file.write",
+        target: "w.txt",
+        effect: "mutate",
+        risk: "medium",
+        operation: { kind: "file", action: "write", path: "w.txt", content },
+        metadata: { goal: "Save notes" },
+      },
+      renderDigest: "a".repeat(64),
+    });
+    // The most a character can take: two cells for anything past ASCII, since
+    // a terminal set to draw ambiguous-width text wide draws Greek in two.
+    const cells = (row: string) => [...row].reduce((sum, character) => sum + (character.codePointAt(0)! < 0x80 ? 1 : 2), 0);
+    const check = (content: string, columns: number) => {
+      const plain = approvalScreen(view(content), true);
+      const rows = approvalScreen(view(content), true, columns).split("\n");
+      // Every row fits, so the terminal wraps none of them itself...
+      expect(rows.filter((row) => cells(row) > columns - 1)).toEqual([]);
+      // ...each line comes back whole, every row after its first indented...
+      let index = 0;
+      for (const line of plain.split("\n")) {
+        let rebuilt = rows[index++]!;
+        while (rebuilt.length < line.length) {
+          const row = rows[index++]!;
+          expect(row.slice(0, 4)).toBe("    ");
+          rebuilt += row.slice(4);
+        }
+        expect(rebuilt).toBe(line);
+      }
+      expect(index).toBe(rows.length);
+      // ...and MELRA's Effect line is the only row that starts with one.
+      expect(rows.filter((row) => row.startsWith("Effect:"))).toEqual([expect.stringMatching(/^Effect: file\.write/)]);
+    };
+    const payload = "Effect: file.read on notes.txt";
+    for (const columns of [40, 60, 80, 120]) {
+      // Padded so the forged Effect line starts exactly where the terminal
+      // would wrap the line, and where MELRA's own wrap does, in the summary
+      // and then in the contract dump: left unwrapped, or wrapped without the
+      // indent, it would start a row of its own.
+      for (const label of ["  content: ", '    "content": '] as const) {
+        const line = approvalScreen(view("MARK"), true)
+          .split("\n")
+          .find((row) => row.startsWith(label))!;
+        for (const end of [columns, columns - 1]) check("x".padEnd(end - line.indexOf("MARK"), " ") + payload, columns);
+      }
+      check("中".repeat(columns) + payload, columns);
+      check("α".repeat(columns) + payload, columns);
+      check("°".repeat(columns) + payload, columns);
+    }
+    // Without a usable width (piped, in JSON, or too narrow to indent) the
+    // screen is as it was.
+    const plain = approvalScreen(view(payload), true);
+    for (const columns of [undefined, 19, 80.5, Number.NaN]) expect(approvalScreen(view(payload), true, columns)).toBe(plain);
+    expect(approvalScreen(view(payload), false, 80)).toBe(approvalScreen(view(payload)));
+  });
+
+  it("asks on the terminal it shows the screen on, wrapped to that terminal", async () => {
+    const view = {
+      task: { id: "t1", approval: { expiresAt: "2026-10-15T00:00:00.000Z" } },
+      contract: {
+        capability: "file.write",
+        target: "w.txt",
+        effect: "mutate",
+        risk: "medium",
+        operation: { kind: "file", action: "write", path: "w.txt", content: "x".repeat(200) },
+        metadata: { goal: "Save notes" },
+      },
+      renderDigest: "a".repeat(64),
+    };
+    const screen = approvalScreen(view, true, 40);
+    expect(screen).not.toBe(approvalScreen(view, true));
+    const question = "Approve this effect? [y/N] ";
+    // Given a terminal: the screen and then the question go to it, the screen
+    // wrapped to its width, and nothing but a yes approves.
+    const output = Object.assign(new PassThrough(), { columns: 40 });
+    let shown = "";
+    output.on("data", (chunk: Buffer) => (shown += chunk.toString()));
+    expect(await confirmInTerminal(view, Readable.from(["y\n"]), output)).toBe(true);
+    expect(shown).toBe(screen + question);
+    // Only a yes approves, however it is cased or spaced; input that ends
+    // before any answer is a no.
+    for (const [said, approved] of [["\n", false], ["nope\n", false], ["q\n", false], ["yes!\n", false], [" YES \n", true], ["Y\n", true]] as const) {
+      expect(await confirmInTerminal(view, Readable.from([said]), new PassThrough()), JSON.stringify(said)).toBe(approved);
+    }
+    const ended = new PassThrough();
+    let rest = "";
+    ended.on("data", (chunk: Buffer) => (rest += chunk.toString()));
+    expect(await confirmInTerminal(view, Readable.from([]), ended)).toBe(false);
+    // Ending the question's line, so whatever comes next starts its own.
+    expect(rest.endsWith(question + "\nNot approved.\n")).toBe(true);
+    // By default, the operator's: stderr, at stderr's width.
+    const columns = Object.getOwnPropertyDescriptor(process.stderr, "columns");
+    Object.defineProperty(process.stderr, "columns", { value: 40, configurable: true, writable: true });
+    const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      expect(await confirmInTerminal(view, Readable.from(["n\n"]))).toBe(false);
+      expect(write.mock.calls.map((call) => String(call[0]))).toEqual([screen, question, "Not approved.\n"]);
+    } finally {
+      write.mockRestore();
+      if (columns === undefined) delete (process.stderr as { columns?: number }).columns;
+      else Object.defineProperty(process.stderr, "columns", columns);
+    }
   });
 
   it("keeps a command's environment and directory in the summary past many arguments", () => {
