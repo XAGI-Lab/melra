@@ -158,7 +158,7 @@ Actions: `navigate`, `back`, `forward`, `reload`, `inspect`, `wait`, `click`,
   page report itself visible and focused, so the page cannot see being raised.
   Other reads on it still work; moving it ends the console's pairing. In an
   attached browser, a page that does not answer within a second holds `close`
-  of the others, and every `tab_switch`, the same way, refused with
+  and `tab_switch` of the others the same way, refused with
   `browser_approval_surface_check_unavailable` naming its tab, which can be
   closed itself unless another tab does not answer either. This
   matters when the runtime is attached over CDP to a browser the operator also

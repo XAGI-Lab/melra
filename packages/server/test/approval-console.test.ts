@@ -416,9 +416,11 @@ describe("approval console", () => {
       await page.getByRole("button", { name: "Approve", exact: true }).waitFor();
       // Where each "Effect:" is drawn, found in the summary's text however it
       // is split into nodes.
+      // The folded contract above the summary too, once opened.
+      await page.getByText("Full contract (JSON)").click();
       const left = await page.evaluate(() => {
-        const leftOf = (needle: string) => {
-          const walker = document.createTreeWalker(document.querySelector("pre.screen")!, NodeFilter.SHOW_TEXT);
+        const leftOf = (needle: string, where = "pre.screen") => {
+          const walker = document.createTreeWalker(document.querySelector(where)!, NodeFilter.SHOW_TEXT);
           for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
             const index = node.textContent!.indexOf(needle);
             if (index < 0) continue;
@@ -429,9 +431,14 @@ describe("approval console", () => {
           }
           throw new Error(`not drawn: ${needle}`);
         };
-        return { real: leftOf("Effect: file.write"), agent: leftOf("Effect: file.read") };
+        return {
+          real: leftOf("Effect: file.write"),
+          agent: leftOf("Effect: file.read"),
+          contract: leftOf("Effect: file.read", "details pre"),
+        };
       });
       expect(left.agent).toBeGreaterThan(left.real + 10);
+      expect(left.contract).toBeGreaterThan(left.real + 10);
     } finally {
       await browser.close();
     }

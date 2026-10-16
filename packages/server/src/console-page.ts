@@ -182,7 +182,7 @@ pre { margin: 0; font-family: var(--mono); font-size: 12px; white-space: pre-wra
   background: var(--soft); border-radius: 8px; padding: 10px 12px; max-height: 360px; overflow: auto; }
 details summary { cursor: pointer; color: var(--muted); margin-top: 16px; }
 pre.screen { max-height: none; margin: 12px 0; }
-pre.screen .line { display: block; padding-left: 4ch; text-indent: -4ch; }
+pre .line { display: block; padding-left: 4ch; text-indent: -4ch; }
 button[aria-disabled="true"] { opacity: .45; cursor: progress; }
 .copy { background: none; border: 1px solid var(--line); border-radius: 6px; padding: 0 6px; cursor: pointer; font-size: 11px; color: var(--muted); margin-left: 6px; }
 @media (max-width: 860px) {
@@ -622,10 +622,12 @@ async function approvalPanel(id) {
   showSettling();
   return el("div", { class: "section" }, el("h2", { text: "Approve this effect?" }),
     pending.mode === "enforced" ? null : el("div", { class: "callout", text: "Developer mode: this records an in-band decision, which an enforced server will not act on." }),
-    el("details", {}, el("summary", { text: "Full contract (JSON)" }), el("pre", { text: pending.contract })),
-    // One block per line, each with a hanging indent: however agent text in a
-    // line wraps, the wrapped part starts indented, so it can never stand at
-    // the left edge looking like a line MELRA wrote, its Effect line above all.
+    el("details", {}, el("summary", { text: "Full contract (JSON)" }),
+      el("pre", {}, pending.contract.split("\n").map((line) => el("span", { class: "line", text: line })))),
+    // One block per line, each with a hanging indent, here and in the contract
+    // above: however agent text in a line wraps, the wrapped part starts
+    // indented, so it can never stand at the left edge looking like a line
+    // MELRA wrote, its Effect line above all.
     el("pre", { class: "screen" }, pending.summary.replace(/\n$/, "").split("\n").map((line) => el("span", { class: "line", text: line }))),
     pending.decision ? el("p", {}, "Approved by " + pending.decision.approver + " ", when(pending.decision.decidedAt), ".")
       : el("p", {}, buttons[0], " ", buttons[1]),
