@@ -72,16 +72,15 @@ export interface BrowserRuntimeOptions extends NetworkPolicy {
  */
 const MAX_FRAMES = 20;
 
-/** Whether a page call failed because its document went away under it. */
+/**
+ * Whether a page call failed because its document went away under it, on
+ * Playwright's own wording only: that comes before anything an error quotes,
+ * and a quoted selector, the caller's, may say anything.
+ */
 const navigatedAway = (error: unknown): boolean =>
   error instanceof Error &&
-  // A selector Playwright could not parse is the caller's mistake, whatever
-  // the selector it quotes says.
-  !/while parsing/i.test(error.message) &&
-  // Playwright's own wording only: a message can also quote the caller's
-  // selector, which may say anything.
   /execution context was destroyed|cannot find context with specified id|unable to adopt element handle|frame (?:was|has been|got) detached|in detached frame|not attached to the dom|interrupted by another navigation/i.test(
-    error.message,
+    error.message.split(/["'`]/)[0] ?? "",
   );
 
 /** What a secret-field check found, and the frames it read. */
@@ -1032,7 +1031,14 @@ export class BrowserRuntime {
             await element?.dispose().catch(() => undefined);
           }
         } catch (error) {
-          if (!navigatedAway(error)) throw error;
+          if (!navigatedAway(error)) {
+            // A search that failed outright is answered like any other: the
+            // check after it wins over what it met.
+            const after = (await this.secretFieldFilled(page, Math.max(1_000, deadline - Date.now()))).state;
+            if (after === "filled") throw new Error("browser_secret_field_filled");
+            if (after === "unknown") throw new Error("browser_secret_check_unavailable");
+            throw error;
+          }
         }
         if (present === undefined) {
           reached = false;

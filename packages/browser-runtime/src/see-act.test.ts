@@ -354,6 +354,11 @@ describe("browser see/act loop", () => {
           "browser_secret_field_filled",
         );
       }
+      // Nor on a search that fails outright.
+      queue = [];
+      await expect(
+        run({ action: "wait", target: { selector: "xpath=//*[" }, state: "attached", timeoutMs: 600 }),
+      ).rejects.toThrow("browser_secret_field_filled");
     } finally {
       await runtime.close();
     }
@@ -365,7 +370,7 @@ describe("browser see/act loop", () => {
     const { runtime, url } = context;
     try {
       await runtime.execute(BrowserOperationSchema.parse({ kind: "browser", action: "navigate", url }));
-      for (const selector of ["#navigation-detached[", "[data-x='frame was detached'"]) {
+      for (const selector of ["#navigation-detached[", "[data-x='frame was detached'", "xpath=//*[@x='frame was detached'"]) {
         const started = Date.now();
         const failed = await runtime
           .execute(
