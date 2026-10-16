@@ -842,7 +842,9 @@ agent may hold the same access. `melra run` asks the same way in a terminal.
 In enforced mode an operator's decision, recorded this way or through
 `melra run`'s prompt, is the only way a mutation gets approved: the agent is
 given no phrase, and one it sends is refused. Run `melra approve` in enforced
-mode too (`MELRA_MODE=enforced` or `--mode enforced`). A developer-mode
+mode too (`MELRA_MODE=enforced` or `--mode enforced`), with the `MELRA_HOME`
+and `MELRA_WORKSPACE` the agent's server uses (see
+[`melra console`](#approving-in-a-browser) for why the workspace matters). A developer-mode
 `melra approve` on a task with no phrase is refused with
 `approval_needs_enforced_mode` and records nothing, because the enforced kernel
 would not run on its in-band decision and a task has only one.
@@ -858,16 +860,25 @@ plans the step again once the challenge expires, and a single task needs
 
 `melra console` is [`melra approve`](#approving-from-the-command-line) on a
 page instead of a y/N prompt. Run it yourself, in a terminal, with the same
-`MELRA_HOME` and the same mode as the server your agent uses:
+`MELRA_HOME`, `MELRA_WORKSPACE` and mode as the server your agent uses. A stdio
+client sets those in its own config, not in your shell, so set them here too:
 
 ```bash
-MELRA_MODE=enforced melra console
+MELRA_MODE=enforced MELRA_WORKSPACE=/path/to/agent/workspace melra console
 ```
 
-It opens the console in your default browser. A task waiting for approval shows
-the screen `melra approve` shows, with Approve and Deny. Approve records a
-decision bound to exactly that screen and runs nothing: the agent that planned
-the task runs it, as after `melra approve`. Deny cancels the task, as `--deny`
+If it stops with `enforced_mode_refuses_data_inside_workspace`, the workspace it
+worked out holds the data directory: with `MELRA_WORKSPACE` unset, the
+workspace is the current directory, and from your home directory that contains
+the default `~/.melra`. Set `MELRA_WORKSPACE` to the agent's workspace, or run
+the console from there. Do not move `MELRA_HOME` instead, as the error says to
+for a server: the console would then open an empty database, with no task
+waiting in it.
+
+Once started, it opens the console in your default browser. A task waiting
+for approval shows the screen `melra approve` shows, with Approve and Deny.
+Approve records a decision bound to exactly that screen and runs nothing: the
+agent that planned the task runs it, as after `melra approve`. Deny cancels the task, as `--deny`
 does. The receipt names the approver as `console:` plus
 [`MELRA_APPROVER`](#local-configuration). In enforced mode the decision is
 `out_of_band`. In developer mode it is `in_band`, the terminal and the page say
@@ -894,15 +905,24 @@ opens:
    If the terminal says paired and no tab opened for you, press Ctrl-C. If your
    tab says another tab already paired, stop the console and run it again.
 
-**Reloading or leaving the page ends the pairing**; run `melra console` again
-for a new one. Only the page that spent the code is ever paired, so a page that
-sends a tab back to the console does not arrive at a paired one.
+**Reloading or leaving the page ends the pairing**, and so does anything else
+moving its URL, such as a link to another fragment, back or forward; run
+`melra console` again for a new one. The page takes the task you approve from
+your clicks in it, never from its URL, and never changes its URL itself. Only
+the page that spent the code is ever paired, so a page that sends a tab back to
+the console does not arrive at a paired one.
+
+The page shows MELRA's summary of the effect (the operation, `Effect:`, the
+agent's goal, the digest) right above Approve and Deny, with the full contract
+folded above it, and spells out every hidden character in what the agent sent
+(bidi overrides, zero-width characters) as `\uXXXX`, as the terminal screen
+does.
 
 An approve or a deny is a POST from that page: its `Origin` must be the
 console's own, it carries the session as `Authorization: Bearer`, its body is
-JSON, and an approve names the digest of the screen it showed. No other origin
-can send that without a CORS preflight, which the console never answers, and a
-GET never decides.
+JSON, and an approve names the task and the digest of the screen it showed,
+both fixed when the page drew it. No other origin can send that without a CORS
+preflight, which the console never answers, and a GET never decides.
 
 | Deployment | `melra console` |
 |---|---|
@@ -924,11 +944,12 @@ does. See [the threat model](THREAT_MODEL.md#the-approval-console).
 **An agent's browser attached to yours.** With `MELRA_BROWSER_CDP_ENDPOINT`
 set, the agent's browser runtime drives tabs in a browser you may also use, and
 `melra doctor` warns about it. The console page carries a marker, and MELRA's
-browser runtime refuses every action that drives a page carrying it
+browser runtime refuses every action that sends input to a page carrying it
 (`browser_refuses_approval_surface`), in every mode, whatever approved the
-action. Reads still work there: the agent can see the page, and can navigate
-its tab away, which ends the pairing. Attach the agent to a browser you do not
-use yourself.
+action. Reads still work there: the agent can see the page, and can move its
+tab (navigate it away or to another fragment, back, forward), and closing it is
+allowed; each of those ends the pairing. Attach the agent to a browser you do
+not use yourself.
 
 **A computer action lands wherever the screen is.** MELRA cannot tell which
 page a `computer.click` or `computer.type` reaches, so approving one approves

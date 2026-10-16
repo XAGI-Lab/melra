@@ -350,7 +350,7 @@ describe("melra CLI", () => {
         const shown = await call(url, `/api/tasks/${task.id}/approval`, { token: session });
         const decided = await call(url, `/api/tasks/${task.id}/approve`, {
           token: session,
-          body: { renderDigest: shown.json.renderDigest },
+          body: { taskId: task.id, renderDigest: shown.json.renderDigest },
         });
         expect(decided.json.decision).toMatchObject({ channel: "out_of_band", approver: "console:alice" });
         expect((await melra.controller.execute(task.id)).task.status).toBe("verified_success");

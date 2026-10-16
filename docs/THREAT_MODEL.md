@@ -105,12 +105,15 @@ authority. It is a separate process: a loopback server with no MCP endpoint and
 no client registration, which refuses to start without a terminal and never
 prints its pairing code. It pairs once, with the tab it opened, and that page
 holds its session in memory only; a decision is a JSON POST from the console's
-own origin, bound to the digest of the screen shown. MELRA's browser runtime
-refuses every action that drives the console page
-(`browser_refuses_approval_surface`), in every mode. The server an agent
-connects to has no approval route, and no MELRA operation that runs without
-approval can produce a console approval. That is the claim; it is not a claim
-that the agent cannot approve. What remains:
+own origin, bound to the task and the digest of the screen shown. MELRA's
+browser runtime refuses every action that sends the console page input
+(`browser_refuses_approval_surface`), in every mode. Its reads can still move
+the page (navigate, back, forward), but the page takes the task it approves
+from the operator's clicks, never from its URL, and any move of its URL, or
+leaving it, ends the pairing. The server an agent connects to has no approval
+route, and no MELRA operation that runs without approval can produce a console
+approval. That is the claim; it is not a claim that the agent cannot approve.
+What remains:
 
 - **Same-user writes.** Anything running as the operator's OS user against the
   data directory can approve with `melra approve --yes`, which needs no
@@ -122,11 +125,17 @@ that the agent cannot approve. What remains:
 - **A pairing race.** Until the page spends it, the code is on the browser
   opener's command line, in browser history, and, in a browser the agent's
   runtime is attached to over CDP, in a `tabs` read. Whatever reads it there
-  can pair first. The operator sees that: their tab says another tab already
-  paired, and the terminal prints a pairing time they did not cause. A tab the
-  agent's browser paired is one that runtime refuses to drive, a process that
-  read the command line or history could already run `melra approve --yes`,
-  and a spent code is worthless.
+  can pair first, and use that session from any HTTP client (the `Origin`
+  check binds browsers only) to approve whatever is pending until the console
+  stops. The operator sees that: their tab says another tab already paired,
+  and the terminal prints a pairing time they did not cause, which is the cue
+  to stop the console. Who can read the code decides what that costs. A tab
+  the agent's browser paired gets no input from that runtime. An
+  unsandboxed process of the operator's own user could already run
+  `melra approve --yes`. But another OS user, or a sandboxed process that can
+  list processes without reaching the data directory, can read the opener's
+  command line (`ps`, `/proc/<pid>/cmdline`) and race the pairing for an
+  approval it could not make otherwise. A spent code is worthless.
 - **Same-user memory reads.** A process that can read the console's memory or
   the browser's (a debugger, `ptrace`) can take the session.
 - **Social engineering.** An agent can ask the operator to approve something in

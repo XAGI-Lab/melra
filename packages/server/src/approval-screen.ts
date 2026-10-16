@@ -121,17 +121,14 @@ function operationLines(operation: unknown, fieldLimit = 8): string[] {
 }
 
 /**
- * The approval screen, ending with what MELRA itself vouches for: the full
- * contract first, so however long the agent's content runs it cannot push the
- * effect off the screen, then the operation and the summary, each line
- * bounded, right above the question. `terminal` adds a reset after the
- * contract, which only a terminal has any use for.
+ * What MELRA itself vouches for, each line bounded: the task, the operation,
+ * the effect, the agent's goal, and the digest. However long the agent's
+ * content runs, its height is bounded, so a page can put it right above its
+ * buttons, and the contract dump wherever it fits.
  */
-export function approvalScreen(view: ApprovalScreenView, terminal = false): string {
+export function approvalSummary(view: ApprovalScreenView): string {
   const { contract } = view;
   return [
-    printable(JSON.stringify(contract, null, 2), true),
-    ...(terminal ? ["\u001b[0m"] : []),
     `Task ${view.task.id}, waiting for approval until ${view.task.approval?.expiresAt ?? "unknown"}`,
     "Operation:",
     ...operationLines(contract.operation).map((line) => `  ${line}`),
@@ -139,5 +136,19 @@ export function approvalScreen(view: ApprovalScreenView, terminal = false): stri
     `Goal (stated by the agent, unverified): ${bounded(contract.metadata.goal, 200)}`,
     `Contract digest: ${view.renderDigest}`,
     "",
+  ].join("\n");
+}
+
+/**
+ * The approval screen, ending with what MELRA itself vouches for: the full
+ * contract first, so however long the agent's content runs it cannot push the
+ * effect off the screen, then the summary right above the question. `terminal`
+ * adds a reset after the contract, which only a terminal has any use for.
+ */
+export function approvalScreen(view: ApprovalScreenView, terminal = false): string {
+  return [
+    printable(JSON.stringify(view.contract, null, 2), true),
+    ...(terminal ? ["\u001b[0m"] : []),
+    approvalSummary(view),
   ].join("\n");
 }

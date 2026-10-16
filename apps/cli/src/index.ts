@@ -998,9 +998,11 @@ Usage:
 
 'melra console', run by you in a terminal, opens an approval console in your
 browser: a page paired with that one tab, on a server of its own with no MCP
-endpoint, that approves or denies as 'melra approve' does. Its pairing code
-goes to the browser only, and reloading or leaving the page ends the pairing.
-Without a terminal or a browser to open, it refuses to start.
+endpoint, that approves or denies as 'melra approve' does. Its one-time pairing
+code is never printed: it reaches the browser on its opener's command line, and
+reloading or leaving the page ends the pairing. Run it with the MELRA_HOME,
+MELRA_WORKSPACE and mode your agent's server uses. Without a terminal or a
+browser to open, it refuses to start.
 
 In a terminal, doctor, setup, init, and version print a readable report, and
 'melra setup' with no --client asks which detected client to set up. Piped or

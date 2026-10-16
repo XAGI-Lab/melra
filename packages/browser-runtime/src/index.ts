@@ -1119,10 +1119,14 @@ export class BrowserRuntime {
     }
     // An approval console open in a browser this runtime is attached to is a
     // read or two away (`tab_switch`, `back`), and an action without a url acts
-    // on whatever page is active. So nothing that drives a page acts on one,
-    // whatever approved the action and in every mode: an approval there is
-    // the operator's act alone. Same ponytail as above: checked at the start.
+    // on whatever page is active. So no input reaches one, whatever approved
+    // the action and in every mode: an approval there is the operator's act
+    // alone. Reads still move the tab, and the console unpairs when they do.
+    // Not `close`: closing ends the pairing just as navigating away does, and
+    // the count needs the tab's renderer, so a hung or crashed tab could never
+    // be closed. Same ponytail as above: checked at the start.
     if (
+      operation.action !== "close" &&
       classifyOperation(operation).effect !== "read" &&
       acted !== undefined &&
       (await this.call(acted.locator(`meta[name="${APPROVAL_SURFACE}"]`).count(), "count")) > 0

@@ -175,6 +175,16 @@ describe("human doctor report", () => {
     expect(nextStep(unresolved)).toBe("point MELRA_WORKSPACE at a directory you can read and write");
   });
 
+  it("says what clears an attached browser's warning, which no install does", () => {
+    const browser = (detail: string) => report({ checks: [{ name: "browser", status: "warn", detail }], clients: [] });
+    expect(nextStep(browser("attached over CDP to http://127.0.0.1:9/: any tab open there is a tab_switch away"))).toBe(
+      "point MELRA_BROWSER_CDP_ENDPOINT at a browser you do not use yourself, or unset it",
+    );
+    expect(nextStep(browser("Chrome, Chromium, or Edge not found"))).toBe(
+      "install Chrome, or set MELRA_BROWSER to a Chrome, Chromium, or Edge executable",
+    );
+  });
+
   it("does not send a missing command round the setup loop", () => {
     const missing = report({
       clients: [

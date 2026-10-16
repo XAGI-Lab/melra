@@ -25,10 +25,12 @@ export function assertConsoleTerminal(interactive: boolean): void {
 
 /**
  * Starts the approval console: a loopback server with no MCP endpoint, on the
- * same data directory as the agent's server, whose pairing code goes to the
- * browser it opens and nowhere else. Not stdout, not stderr, not a file: a
- * harness reads what a process it started prints, and pipes are how it would,
- * so this refuses to start anywhere but in an operator's terminal.
+ * same data directory as the agent's server, whose pairing code is never
+ * printed. Not stdout, not stderr, not a file: a harness reads what a process
+ * it started prints, and pipes are how it would, so this refuses to start
+ * anywhere but in an operator's terminal. The code reaches the browser on its
+ * opener's command line, where a process that can list processes can read it
+ * until the page spends it (THREAT_MODEL.md, "A pairing race").
  */
 export async function approvalConsole(
   env: CliEnvironment,

@@ -81,14 +81,21 @@ All notable changes are documented here. The format follows
   `MELRA_HTTP_TOKEN`, and opens a page that pairs with it once through a
   one-time code in the URL fragment. The code is never printed, and the
   session it buys is held in memory only, by the console and that page, so
-  reloading or leaving the page ends the pairing. The page shows the screen `melra approve` shows, with
-  Approve, a decision bound to that screen's digest, and Deny, which cancels
-  the task; receipts name the approver as `console:` plus `MELRA_APPROVER`.
+  reloading or leaving the page ends the pairing, as does any change to its
+  URL the page did not make: it picks the task from the operator's clicks,
+  never from the URL. The page shows the screen `melra approve` shows, with
+  MELRA's summary right above Approve, a decision bound to the task and the
+  digest it drew, and Deny, which cancels the task; the full contract sits
+  folded above the summary, and hidden characters in anything the agent sent
+  are spelled out as `\uXXXX`. Receipts name the approver as `console:` plus
+  `MELRA_APPROVER`. Run it with the `MELRA_HOME`, `MELRA_WORKSPACE` and mode
+  the agent's server uses.
   It refuses to start without a terminal (`console_needs_a_terminal`) or a
   browser opener (`console_needs_a_browser`). The server an agent connects to
-  still has no approval route. `@melra/server` exports `approvalScreen` and
-  `printable`, and `serveHttp` takes `approver` and `onPaired`, refused on a
-  socket or off loopback (`approval_console_loopback_only`).
+  still has no approval route. `@melra/server` exports `approvalScreen`,
+  `approvalSummary` and `printable`, and `serveHttp` takes `approver` and
+  `onPaired`, refused on a socket or off loopback
+  (`approval_console_loopback_only`) on every platform and in every mode.
 
 - `melra doctor` reports a data directory inside the workspace in a new
   `data-location` check, decided exactly as the server decides it: a `warn` in
@@ -291,16 +298,18 @@ All notable changes are documented here. The format follows
 
 ### Security
 
-- The browser runtime refuses every action that drives a page carrying
-  `<meta name="melra-approval-surface">`, as `melra console`'s page does:
-  `click`, `type`, `fill_form`, `select`, `press`, `upload`, `download` and
-  `close` fail with `browser_refuses_approval_surface`, in every mode and
+- The browser runtime refuses every action that sends input to a page
+  carrying `<meta name="melra-approval-surface">`, as `melra console`'s page
+  does: `click`, `type`, `fill_form`, `select`, `press`, `upload` and
+  `download` fail with `browser_refuses_approval_surface`, in every mode and
   whatever approved them. A runtime attached over CDP to the browser an
   operator approves in could otherwise reach the console tab with reads and
-  aim an approved click at it. Reads still work. The check is made when the
-  action starts. `melra doctor` now warns when `MELRA_BROWSER_CDP_ENDPOINT` is
-  set: every tab in that browser, signed-in sites included, is a `tab_switch`
-  away from the agent.
+  aim an approved click at it. Reads still work, and so does `close`, which
+  asks the page nothing, so a hung or crashed tab can still be closed. The
+  check is made when the action starts. `melra doctor` now warns when
+  `MELRA_BROWSER_CDP_ENDPOINT` is set: every tab in that browser, signed-in
+  sites included, is a `tab_switch` away from the agent; its next step says to
+  point that endpoint at a browser you do not use yourself, or unset it.
 
 - In enforced mode an approval challenge carries no phrase, so the agent is
   handed nothing to echo, and any approval it sends to `melra_execute`, the

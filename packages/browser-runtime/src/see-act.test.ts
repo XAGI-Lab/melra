@@ -147,6 +147,24 @@ describe("browser see/act loop", () => {
       // Reads still work, and show nothing was done.
       const seen = await run({ action: "inspect" });
       expect(seen.title).toBe("untouched");
+      // Closing is not driving: it ends a console's pairing, as navigating away does.
+      expect(await run({ action: "close" })).toMatchObject({ closed: true, url: `${url}/` });
+    } finally {
+      await runtime.close();
+    }
+  }, 120_000);
+
+  it("closes a tab whose page no longer answers", async () => {
+    const context = await fixture(`<!doctype html><title>hung</title><script>setTimeout(() => { for (;;) {} }, 300)</script>`);
+    if (context === undefined) return;
+    const { runtime, url } = context;
+    const run = (operation: Record<string, unknown>) =>
+      runtime.execute(BrowserOperationSchema.parse({ kind: "browser", ...operation }));
+    try {
+      await run({ action: "navigate", url });
+      await new Promise((done) => setTimeout(done, 800));
+      // Closing is how an agent gets rid of a wedged tab, so it asks the page nothing.
+      expect(await run({ action: "close", timeoutMs: 3_000 })).toMatchObject({ closed: true });
     } finally {
       await runtime.close();
     }

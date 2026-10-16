@@ -15,7 +15,7 @@ import { APPROVAL_SURFACE } from "@melra/browser-runtime";
  *
  * `approvals` is the same page as `melra console` serves it, where an operator
  * can approve or deny a pending task. Its marker tells a browser runtime
- * attached to the same browser never to drive it, and the page's own script
+ * attached to the same browser never to send it input, and the page's own script
  * reads the marker to pair instead of reading a token from the URL. The CSP
  * below lets no other script run on it, so nothing can take the marker off.
  */
@@ -181,6 +181,7 @@ th { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: v
 pre { margin: 0; font-family: var(--mono); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere;
   background: var(--soft); border-radius: 8px; padding: 10px 12px; max-height: 360px; overflow: auto; }
 details summary { cursor: pointer; color: var(--muted); margin-top: 16px; }
+pre.screen { max-height: none; margin: 12px 0; }
 .copy { background: none; border: 1px solid var(--line); border-radius: 6px; padding: 0 6px; cursor: pointer; font-size: 11px; color: var(--muted); margin-left: 6px; }
 @media (max-width: 860px) {
   .split, .two { grid-template-columns: 1fr; }
@@ -228,8 +229,11 @@ const clock = (iso) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", m
 
 const auth = { headers: { authorization: "Bearer " + token } };
 const view = document.getElementById("view");
-// Leaving ends the pairing, before a back/forward cache could keep it.
-if (approvals) addEventListener("pagehide", () => {
+// Leaving ends the pairing, before a back/forward cache could keep it. So does
+// a move of the URL within this page: the approval console never makes one
+// (see go), so whatever did is driving the tab, and the reads of a browser
+// runtime attached to it can (navigate to a fragment, back, forward).
+if (approvals) for (const type of ["pagehide", "hashchange", "popstate"]) addEventListener(type, () => {
   auth.headers.authorization = "";
   paired = { error: "left" };
   renderUnauthorized();
@@ -254,18 +258,26 @@ const FILTERS = [
   ["active", "In flight", (t) => ["planned", "running", "verifying"].includes(t.status)],
 ];
 
+// The characters approvalScreen spells out (approval-screen.ts; keep the two
+// in step), spelled out the same way in all text this page draws. Most of it is
+// the agent's: targets, errors, prompts, stored records. A bidi override or a
+// zero-width character in it would otherwise reorder or hide what it shows.
+const HIDDEN = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u034f\u115f\u1160\u17b4\u17b5\u180b-\u180f\u3164\ufe00-\ufe0f\uffa0\u{e0100}-\u{e01ef}]/gu;
+const printable = (text) => String(text).replace(HIDDEN, (character) => character === "\n" ? character
+  : Array.from({ length: character.length }, (_, i) => "\\u" + character.charCodeAt(i).toString(16).padStart(4, "0")).join(""));
+
 function el(tag, attrs, ...children) {
   const node = document.createElement(tag);
   for (const [key, value] of Object.entries(attrs ?? {})) {
     if (value === undefined || value === null || value === false) continue;
     if (key === "class") node.className = value;
-    else if (key === "text") node.textContent = value;
+    else if (key === "text") node.textContent = printable(value);
     else if (key.startsWith("on")) node.addEventListener(key.slice(2), value);
     else node.setAttribute(key, value === true ? "" : String(value));
   }
   for (const child of children.flat()) {
     if (child === undefined || child === null || child === false) continue;
-    node.append(child instanceof Node ? child : document.createTextNode(String(child)));
+    node.append(child instanceof Node ? child : document.createTextNode(printable(child)));
   }
   return node;
 }
@@ -337,11 +349,20 @@ async function refresh() {
   }
 }
 
+// In the approval console the task an Approve applies to is the one this
+// page's own clicks chose, kept here: the URL never picks it. Nor does the page
+// ever change its URL, so a change it sees is something else driving the tab,
+// and ends the pairing (the pagehide listener above).
+let selected = { name: "overview", id: null };
 function route() {
+  if (approvals) return selected;
   const [name, id] = location.hash.replace(/^#\/?/, "").split("/");
   return { name: ["tasks", "workflows"].includes(name) ? name : "overview", id: id ? decodeURIComponent(id) : null };
 }
-function go(name, id) { location.hash = "#/" + name + (id ? "/" + encodeURIComponent(id) : ""); }
+function go(name, id) {
+  if (approvals) { selected = { name, id: id ?? null }; render(); }
+  else location.hash = "#/" + name + (id ? "/" + encodeURIComponent(id) : "");
+}
 
 function render() {
   if (!state.caps) return;
@@ -509,15 +530,19 @@ async function renderTaskDetail(id, into) {
 }
 
 /**
- * What the task would do, exactly as the CLI's approval screen shows it, and
- * the two answers. The digest posted is the one that came with the screen
- * shown, so a request that changed in between is refused, not approved unseen.
+ * What the task would do, as the CLI's approval screen shows it, and the two
+ * answers. MELRA's own summary sits right above the buttons, where the terminal
+ * puts it above its question, and the agent's full contract above that, folded.
+ * Approve posts the task and the digest this panel drew, fixed when it drew
+ * them, so a request that changed since is refused, not approved unseen, and
+ * nothing selected since can take the click.
  */
 async function approvalPanel(id) {
   const path = "/api/tasks/" + encodeURIComponent(id) + "/";
   let pending;
   try { pending = await get(path + "approval"); }
   catch { return el("div", { class: "callout bad", text: "Could not load what this task would do." }); }
+  const drawn = { taskId: id, renderDigest: pending.renderDigest };
   const status = el("p", { role: "status" });
   const answer = async (action, body) => {
     for (const button of buttons) button.disabled = true;
@@ -530,12 +555,13 @@ async function approvalPanel(id) {
       : "Approved, " + human(result.decision.channel) + ". The agent's next call runs it.";
   };
   const buttons = pending.decision ? [] : [
-    el("button", { type: "button", class: "filter", text: "Approve", onclick: () => answer("approve", { renderDigest: pending.renderDigest }) }),
+    el("button", { type: "button", class: "filter", text: "Approve", onclick: () => answer("approve", drawn) }),
     el("button", { type: "button", class: "filter", text: "Deny", onclick: () => answer("deny") }),
   ];
   return el("div", { class: "section" }, el("h2", { text: "Approve this effect?" }),
     pending.mode === "enforced" ? null : el("div", { class: "callout", text: "Developer mode: this records an in-band decision, which an enforced server will not act on." }),
-    el("pre", { text: pending.screen }),
+    el("details", {}, el("summary", { text: "Full contract (JSON)" }), el("pre", { text: pending.contract })),
+    el("pre", { class: "screen", text: pending.summary }),
     pending.decision ? el("p", { text: "Approved by " + pending.decision.approver + " " + ago(pending.decision.decidedAt) + "." })
       : el("p", {}, buttons[0], " ", buttons[1]),
     status);
@@ -566,7 +592,8 @@ function nodeTable(run) {
   return el("table", {}, el("thead", {}, el("tr", {}, ["Node", "Status", "Tasks", "Detail"].map((h) => el("th", { text: h })))),
     el("tbody", {}, Object.entries(run.nodes ?? {}).map(([nodeId, node]) => el("tr", {},
       el("td", { class: "mono", text: nodeId }), el("td", {}, badge(node.status, RUN_TONE)),
-      el("td", {}, (node.taskIds ?? []).map((taskId) => el("a", { href: "#/tasks/" + encodeURIComponent(taskId), class: "mono", title: taskId, text: taskId.slice(0, 8) + " " }))),
+      el("td", {}, (node.taskIds ?? []).map((taskId) => el("a", { href: "#/tasks/" + encodeURIComponent(taskId), class: "mono", title: taskId, text: taskId.slice(0, 8) + " ",
+        onclick: (e) => { e.preventDefault(); go("tasks", taskId); } }))),
       el("td", { text: node.error ?? node.prompt ?? "" })))));
 }
 
@@ -611,7 +638,10 @@ for (const tab of document.querySelectorAll("[role=tab]")) {
     next.focus(); go(next.dataset.view);
   });
 }
-window.addEventListener("hashchange", render);
+if (!approvals) window.addEventListener("hashchange", render);
+// Focus the content without touching the URL, which would end an approval
+// console's pairing.
+document.querySelector(".skip").addEventListener("click", (e) => { e.preventDefault(); view.focus(); });
 
 if (!token) { renderUnauthorized(); setLive(false, approvals ? "Not paired" : "No token"); }
 else if (await refresh()) render();

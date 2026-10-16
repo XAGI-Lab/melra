@@ -19,7 +19,7 @@ import type { Principal } from "@melra/protocol";
 import { principalRef } from "@melra/protocol";
 import { capabilitiesPayload, createMcpServer } from "./mcp-server.js";
 import type { MelraRuntime } from "./runtime.js";
-import { approvalScreen } from "./approval-screen.js";
+import { approvalSummary, printable } from "./approval-screen.js";
 import { consolePage, consoleSecurityHeaders } from "./console-page.js";
 import { clientPrincipal, CONSENT_HEADERS, OAuthProvider, requestOf } from "./oauth.js";
 
@@ -315,6 +315,12 @@ export async function serveHttp(
   const enforced = runtime.policy.mode === "enforced";
   const socketPath =
     options.socketPath === undefined ? undefined : resolve(options.socketPath);
+  // An approval is a person at this machine's browser: no browser reaches a
+  // socket, and anywhere wider than loopback is not this machine. First, so it
+  // is the answer on every platform and in every mode.
+  if (pairing !== undefined && (socketPath !== undefined || !isLoopback(host))) {
+    throw new Error("approval_console_loopback_only");
+  }
   // Windows has named pipes instead, and their default ACL is not a mode this
   // process can set or read back from Node. A transport sold as "only you can
   // connect" that cannot check that claim is worse than none, so refuse it.
@@ -337,11 +343,6 @@ export async function serveHttp(
   // A Unix socket is that IPC, and narrower than loopback, so it is allowed.
   if (enforced && socketPath === undefined && !isLoopback(host)) {
     throw new Error("enforced_mode_refuses_public_bind");
-  }
-  // An approval is a person at this machine's browser: no browser reaches a
-  // socket, and anywhere wider than loopback is not this machine.
-  if (pairing !== undefined && (socketPath !== undefined || !isLoopback(host))) {
-    throw new Error("approval_console_loopback_only");
   }
   // A browser approval is only a boundary on the machine the browser is on. A
   // server deliberately bound to a wider interface keeps the shared token and
@@ -623,7 +624,10 @@ export async function serveHttp(
         mode: runtime.policy.mode,
         expiresAt: view.task.approval?.expiresAt,
         renderDigest: view.renderDigest,
-        screen: approvalScreen(view),
+        // Apart, so a page can show the bounded summary right above its
+        // buttons, where the terminal shows it, and the dump anywhere else.
+        contract: printable(JSON.stringify(view.contract, null, 2), true),
+        summary: approvalSummary(view),
         decision: runtime.controller.approvalDecision(view.task) ?? null,
       });
       return;
@@ -634,8 +638,11 @@ export async function serveHttp(
       json(response, 200, { task: runtime.controller.status(taskId) });
       return;
     }
-    const body = (await readBody(request)) as { renderDigest?: unknown } | undefined;
-    if (typeof body?.renderDigest !== "string") throw new Error("render_digest_required");
+    const body = (await readBody(request)) as { taskId?: unknown; renderDigest?: unknown } | undefined;
+    // The page names the task it drew as well as the digest it drew, both
+    // taken when it drew them, so nothing that changed since redirects this.
+    if (body?.taskId !== taskId) throw new Error("approval_task_mismatch");
+    if (typeof body.renderDigest !== "string") throw new Error("render_digest_required");
     json(response, 200, {
       decision: runtime.controller.decide(taskId, body.renderDigest, console_.approver),
     });
