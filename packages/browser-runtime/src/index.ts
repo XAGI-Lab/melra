@@ -1124,9 +1124,11 @@ export class BrowserRuntime {
     // reads that can put its Approve under the operator's pointer: raising its
     // tab (`tab_switch`) and scrolling it. Reads that move its URL still work,
     // and the console unpairs when they do.
-    // Not `close`: closing ends the pairing just as navigating away does, and
-    // the count needs the tab's renderer, so a hung or crashed tab could never
-    // be closed. Same ponytail as above: checked at the start.
+    // The console holds its buttons back for a second after it is raised, but
+    // in a browser this runtime is attached to, Playwright's focus emulation
+    // makes every page report itself visible and focused, so the console never
+    // sees being raised. Whatever of ours could raise it is refused instead.
+    // Same ponytail as above: checked at the start.
     if (
       (operation.action === "tab_switch" ||
         operation.action === "scroll" ||
@@ -1135,6 +1137,20 @@ export class BrowserRuntime {
       (await this.call(acted.locator(`meta[name="${APPROVAL_SURFACE}"]`).count(), "count")) > 0
     ) {
       throw new Error("browser_refuses_approval_surface");
+    }
+    // `close` asks the tab it closes nothing: closing a console ends its
+    // pairing, and a hung or crashed tab must still close. But the browser then
+    // raises a neighbour, which can be a console, so it is refused while
+    // another page here carries the marker. A page that does not answer within
+    // a second counts as unmarked: it is not a live console.
+    if (operation.action === "close") {
+      const others = (await this.ensureContext()).pages().filter((other) => other !== acted);
+      const marks = await Promise.all(
+        others.map((other) =>
+          bounded(other.locator(`meta[name="${APPROVAL_SURFACE}"]`).count(), 1_000, "count").catch(() => 0),
+        ),
+      );
+      if (marks.some((count) => count > 0)) throw new Error("browser_refuses_approval_surface");
     }
     switch (operation.action) {
       case "navigate": {

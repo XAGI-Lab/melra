@@ -249,9 +249,11 @@ if (approvals) for (const type of ["pagehide", "hashchange", "popstate"]) addEve
 });
 // Approve and Deny act only once this page has been visible, focused and
 // unscrolled for a second, as a browser holds back a permission prompt's
-// buttons. Raising a tab and scrolling it are reads a browser runtime attached
-// to this one can make, and either can put Approve under a pointer aimed at
-// something else; a click that lands sooner than that is ignored.
+// buttons. Raising a tab and scrolling it can put Approve under a pointer aimed
+// at something else; a click that lands sooner than that is ignored. While a
+// CDP client with focus emulation is attached, as MELRA's browser runtime is,
+// this page reads visible and focused throughout and sees no raise, so only
+// scroll and resize restart the hold; that runtime refuses its own raises.
 const SETTLE_MS = 1000;
 let steadySince = Infinity;
 function unsettle() {

@@ -919,7 +919,9 @@ agent's goal, the digest) right above Approve and Deny, with the full contract
 folded above it, and spells out every hidden character in what the agent sent
 (bidi overrides, zero-width characters) as `\uXXXX`, as the terminal screen
 does. Approve and Deny show as not yet active, and ignore clicks, for a second
-after they appear and after the page is raised, refocused or scrolled.
+after they appear and after the page is raised, refocused or scrolled (in a
+browser an agent's runtime is attached to, after it is scrolled or resized:
+see below).
 
 An approve or a deny is a POST from that page: its `Origin` must be the
 console's own, it carries the session as `Authorization: Bearer`, its body is
@@ -949,14 +951,17 @@ set, the agent's browser runtime drives tabs in a browser you may also use, and
 `melra doctor` warns about it. The console page carries a marker, and MELRA's
 browser runtime refuses every action that sends input to a page carrying it
 (`browser_refuses_approval_surface`), in every mode, whatever approved the
-action. It also refuses the two reads that could put Approve under your own
-pointer: `tab_switch` onto the console's tab, and `scroll` on it. Other reads
-still work there: the agent can see the page, and can move its tab (navigate
-it away or to another fragment, back, forward), and closing it is allowed; each
-of those ends the pairing. Anything else that raises, scrolls or refocuses the
-page holds Approve and Deny back: they show as not yet active, and ignore
-clicks, until the page has been visible, focused and unscrolled for a second.
-Attach the agent to a browser you do not use yourself.
+action. It also refuses each action of its own that could raise or move the
+console under your pointer: `tab_switch` onto the console's tab, `scroll` on
+it, and `close` of any tab while a console is open in another, because the
+browser then raises a neighbouring tab. Other reads still work there: the
+agent can see the page, and can move its tab (navigate it away or to another
+fragment, back, forward), and closing the console itself is allowed; each of
+those ends the pairing. The page's own second's hold on Approve and Deny sees
+less in such a browser: Playwright's focus emulation makes every page there
+report itself visible and focused, so the console cannot tell it was raised,
+and the hold restarts only when it is scrolled or resized. Attach the agent to
+a browser you do not use yourself.
 
 **A computer action lands wherever the screen is.** MELRA cannot tell which
 page a `computer.click` or `computer.type` reaches, so approving one approves

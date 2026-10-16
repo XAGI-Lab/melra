@@ -107,15 +107,21 @@ prints its pairing code. It pairs once, with the tab it opened, and that page
 holds its session in memory only; a decision is a JSON POST from the console's
 own origin, bound to the task and the digest of the screen shown. MELRA's
 browser runtime refuses every action that sends the console page input
-(`browser_refuses_approval_surface`), in every mode, and the two reads that
-can put its Approve under the operator's own pointer: raising its tab
-(`tab_switch`) and scrolling it. Its other reads can still move the page
-(navigate, back, forward), but the page takes the task it approves from the
-operator's clicks, never from its URL, and any move of its URL, or leaving it,
-ends the pairing on both sides: the page hands its session back and the
-console refuses it after. Whatever raises or moves the page, Approve and Deny
-ignore clicks until it has been visible, focused and unscrolled for a second,
-as a browser holds back a permission prompt's buttons. The server an agent
+(`browser_refuses_approval_surface`), in every mode, and each action of its
+own that could raise or move the page under the operator's pointer:
+`tab_switch` onto its tab, `scroll` on it, and `close` of any tab while a
+console is open in another, since the browser then raises a neighbour. Its
+other reads can still move the page (navigate, back, forward), but the page
+takes the task it approves from the operator's clicks, never from its URL, and
+any move of its URL, or leaving it, ends the pairing on both sides: the page
+hands its session back and the console refuses it after. On its own side,
+Approve and Deny ignore clicks until the page has been visible, focused and
+unscrolled for a second, as a browser holds back a permission prompt's
+buttons. In a browser MELRA's runtime is attached to, that hold sees less:
+Playwright's focus emulation makes every page there report itself visible and
+focused, so the console cannot see being raised, and its hold restarts only
+on scrolling and resizing. There the runtime's refusals above are what keep
+it from raising the console. The server an agent
 connects to has no approval route, and no MELRA operation that runs without
 approval can produce a console approval. That is the claim; it is not a claim
 that the agent cannot approve. What remains:
@@ -142,9 +148,13 @@ that the agent cannot approve. What remains:
   command line (`ps`, `/proc/<pid>/cmdline`) and race the pairing for an
   approval it could not make otherwise. A spent code is worthless.
 - **A click after the console comes forward.** The second's hold stops a click
-  already on its way when the page is raised, refocused or scrolled. A click
-  made later than that lands on whatever is under the pointer then, the
-  console's buttons included, if the operator did not notice it come forward.
+  already on its way when the page is raised, refocused or scrolled, but in a
+  browser MELRA's runtime is attached to it sees only scrolling and resizing.
+  Something other than MELRA's runtime that raises the console there (the
+  operator, the OS, another CDP client) is not held, and anywhere, a click
+  made later than the hold lands on whatever is under the pointer then, the
+  console's buttons included, if the operator did not notice it come
+  forward.
 - **Same-user memory reads.** A process that can read the console's memory or
   the browser's (a debugger, `ptrace`) can take the session.
 - **Social engineering.** An agent can ask the operator to approve something in

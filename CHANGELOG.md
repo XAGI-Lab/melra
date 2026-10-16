@@ -86,8 +86,10 @@ All notable changes are documented here. The format follows
   never from the URL. The page hands the session back as it goes, and the
   console refuses it from then on. Approve and Deny act only once the page
   has been visible, focused and unscrolled for a second, and show as not yet
-  active until then. The page shows the screen `melra approve` shows, with
-  MELRA's summary right above Approve, a decision bound to the task and the
+  active until then; in a browser MELRA's runtime is attached to, Playwright's
+  focus emulation hides raises from the page, so there the hold restarts
+  only on scroll and resize. The page shows the screen `melra approve` shows,
+  with MELRA's summary right above Approve, a decision bound to the task and the
   digest it drew, and Deny, which cancels the task; the full contract sits
   folded above the summary, and hidden characters in anything the agent sent
   are spelled out as `\uXXXX`. Receipts name the approver as `console:` plus
@@ -305,12 +307,17 @@ All notable changes are documented here. The format follows
   carrying `<meta name="melra-approval-surface">`, as `melra console`'s page
   does: `click`, `type`, `fill_form`, `select`, `press`, `upload` and
   `download` fail with `browser_refuses_approval_surface`, in every mode and
-  whatever approved them. So do two reads that can put the console's Approve
-  under the operator's own pointer: `tab_switch` onto a marked tab, and
-  `scroll` on a marked page. A runtime attached over CDP to the browser an
-  operator approves in could otherwise reach the console tab with reads and
-  aim a click at it. Other reads still work, and so does `close`, which asks
-  the page nothing, so a hung or crashed tab can still be closed. The
+  whatever approved them. So do the actions that can raise or move the
+  console under the operator's own pointer, which the console cannot see in
+  an attached browser, where Playwright's focus emulation makes every page
+  report itself visible and focused: `tab_switch` onto a marked tab, `scroll`
+  on a marked page, and `close` of any tab while a marked page is open in
+  another, since the browser then raises a neighbour. A runtime attached over
+  CDP to the browser an operator approves in could otherwise reach the console
+  tab with reads and aim a click at it. Other reads still work, and so does
+  closing a marked page itself; `close` asks the tab it closes nothing, and a
+  page that does not answer within a second counts as unmarked, so a hung or
+  crashed tab can still be closed. The
   check is made when the action starts. `melra doctor` now warns when
   `MELRA_BROWSER_CDP_ENDPOINT` is set: every tab in that browser, signed-in
   sites included, is a `tab_switch` away from the agent; its next step says to

@@ -6,6 +6,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BrowserOperationSchema } from "@melra/protocol";
+import { chromium } from "playwright-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { APPROVAL_SURFACE, BrowserRuntime, detectBrowserExecutable } from "./index.js";
 
@@ -158,6 +159,48 @@ describe("browser see/act loop", () => {
       expect(await run({ action: "close", tabIndex: 0 })).toMatchObject({ closed: true, url: `${url}/` });
     } finally {
       await runtime.close();
+    }
+  }, 120_000);
+
+  it("closes none of its tabs while a console is open in another, which the browser would raise", async () => {
+    const context = await fixture(`<!doctype html><html><head><meta name="${APPROVAL_SURFACE}" content="operator-only">
+      <title>console</title></head><body><button>Approve</button></body></html>`);
+    if (context === undefined) return;
+    const executablePath = (await detectBrowserExecutable())!;
+    const root = await mkdtemp(join(tmpdir(), "melra-see-act-cdp-"));
+    roots.push(root);
+    const port = await new Promise<number>((done) => {
+      const probe = createServer().listen(0, "127.0.0.1", () => {
+        const { port: free } = probe.address() as { port: number };
+        probe.close(() => done(free));
+      });
+    });
+    // The operator's browser, with the console open in it, and the runtime
+    // attached to it: there every page reports itself visible and focused, so
+    // the console cannot tell it was raised.
+    const owner = await chromium.launch({ executablePath, headless: true, args: [`--remote-debugging-port=${port}`] });
+    const operatorConsole = await (await owner.newContext()).newPage();
+    await operatorConsole.goto(context.url);
+    const runtime = new BrowserRuntime({
+      workspaceRoot: root,
+      artifactDirectory: join(root, "artifacts"),
+      allowedDomains: ["127.0.0.1"],
+      allowLocalhost: true,
+      cdpEndpoint: `http://127.0.0.1:${port}`,
+    });
+    const run = (operation: Record<string, unknown>) =>
+      runtime.execute(BrowserOperationSchema.parse({ kind: "browser", ...operation }));
+    try {
+      // A tab of its own, the active one: closing it could bring the console forward.
+      expect(await run({ action: "tab_new" })).toMatchObject({ opened: true, index: 1 });
+      await expect(run({ action: "close" })).rejects.toThrow("browser_refuses_approval_surface");
+      await expect(run({ action: "close", tabIndex: 1 })).rejects.toThrow("browser_refuses_approval_surface");
+      // Once the operator has closed the console, it closes.
+      await operatorConsole.close();
+      expect(await run({ action: "close" })).toMatchObject({ closed: true, url: "about:blank" });
+    } finally {
+      await runtime.close();
+      await owner.close();
     }
   }, 120_000);
 
