@@ -462,7 +462,7 @@ export async function serveHttp(
     if (!path.startsWith("/.well-known/") && !path.startsWith("/oauth/")) return false;
     // Everything else needs the token, which a rebound page does not have;
     // these routes do not.
-    if (!hostAllowed(request, response)) return true;
+    if (!hostAllowed(request, response, "sign-in")) return true;
     try {
       if (path === "/.well-known/oauth-protected-resource") {
         json(response, 200, oauth.resourceMetadata(origin));
@@ -528,12 +528,12 @@ export async function serveHttp(
    * page keeps its own name whatever the port, and an SSH tunnel arrives on a
    * different one.
    */
-  function hostAllowed(request: IncomingMessage, response: ServerResponse): boolean {
+  function hostAllowed(request: IncomingMessage, response: ServerResponse, what = "this"): boolean {
     const hostname = (request.headers.host ?? "").toLowerCase().replace(/:\d*$/, "");
     if (loopbackHosts === undefined || loopbackHosts.has(hostname)) return true;
     json(response, 421, {
       error: "host_not_allowed",
-      detail: `Use ${origin}; this answers only to this machine's loopback names.`,
+      detail: `Use ${origin}; ${what} answers only to this machine's loopback names.`,
     });
     return false;
   }

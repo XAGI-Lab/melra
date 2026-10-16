@@ -1146,10 +1146,14 @@ export class BrowserRuntime {
     // this runtime launched has no operator's console in it. A page that does
     // not answer within a second could be a console too busy to, so it holds
     // the others open the same way, under its own reason naming its tab; it
-    // can always be closed itself. One closed meanwhile holds nothing.
+    // can be closed itself unless another tab also does not answer. One closed
+    // meanwhile holds nothing. Every context of the browser, not only this
+    // runtime's: closing its last tab closes its window, and the system then
+    // raises another, which can hold a console.
     if (operation.action === "close" && this.options.cdpEndpoint !== undefined) {
       if (operation.tabIndex !== undefined && acted === undefined) throw new Error("browser_tab_not_found");
-      const pages = (await this.ensureContext()).pages();
+      const own = (await this.ensureContext()).pages();
+      const pages = this.browser?.contexts().flatMap((context) => context.pages()) ?? own;
       const marks = await Promise.all(
         pages.map((other) =>
           other === acted
@@ -1160,9 +1164,11 @@ export class BrowserRuntime {
         ),
       );
       if (marks.some((count) => count > 0)) throw new Error("browser_refuses_approval_surface");
-      const silent = marks.flatMap((count, index) => (count < 0 ? [index] : []));
+      const silent = pages.flatMap((other, index) =>
+        (marks[index] ?? 0) >= 0 ? [] : [own.includes(other) ? `tab ${own.indexOf(other)}` : "a tab in another context"],
+      );
       if (silent.length > 0) {
-        throw new Error(`browser_approval_surface_check_unavailable: tab ${silent.join(", ")} did not answer`);
+        throw new Error(`browser_approval_surface_check_unavailable: ${silent.join(", ")} did not answer`);
       }
     }
     switch (operation.action) {

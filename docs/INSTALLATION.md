@@ -839,8 +839,9 @@ default), when, and the digest of what they were shown. In enforced mode the
 channel is `out_of_band`; in developer mode it is `in_band`, because there the
 agent may hold the same access. `melra run` asks the same way in a terminal.
 
-In enforced mode an operator's decision, recorded this way or through
-`melra run`'s prompt, is the only way a mutation gets approved: the agent is
+In enforced mode an operator's decision, recorded this way, in
+[`melra console`](#approving-in-a-browser), or through `melra run`'s prompt,
+is the only way a mutation gets approved: the agent is
 given no phrase, and one it sends is refused. Run `melra approve` in enforced
 mode too (`MELRA_MODE=enforced` or `--mode enforced`), with the `MELRA_HOME`
 and `MELRA_WORKSPACE` the agent's server uses (see
@@ -910,15 +911,17 @@ moving its URL, such as a link to another fragment, back or forward; run
 `melra console` again for a new one. It ends at the console as well: the page
 hands its session back as it goes, and the console refuses it after. The page
 takes the task you approve from
-your clicks in it, never from its URL, and never changes its URL itself. Only
+your clicks in it, never from its URL, and changes its URL itself only to take
+the pairing code out of it as it opens. Only
 the page that spent the code is ever paired, so a page that sends a tab back to
 the console does not arrive at a paired one.
 
 The page shows MELRA's summary of the effect (the operation, `Effect:`, the
 agent's goal, the digest) right above Approve and Deny, with the full contract
 folded above it, and spells out every hidden character in what the agent sent
-(bidi overrides, zero-width characters) as `\uXXXX`, as the terminal screen
-does. Approve and Deny show as not yet active, and ignore clicks, for a second
+(bidi overrides, zero-width characters, combining marks stacked past two on
+one character, which would draw over the lines around them) as `\uXXXX`, as
+the terminal screen does. Approve and Deny show as not yet active, and ignore clicks, for a second
 after they appear and after the page is raised, refocused or scrolled (in a
 browser an agent's runtime is attached to, after it is scrolled or resized:
 see below).
@@ -955,10 +958,11 @@ action. It also refuses each action of its own that could raise or move the
 console under your pointer: `tab_switch` onto the console's tab, `scroll` on
 it, and, in a browser it is attached to, `close` of any tab while another
 console is open there, because the browser then raises a neighbouring tab; a
-tab that does not answer within a second counts as one. Other reads still
-work there: the agent can see the page, and can move its tab (navigate it away
-or to another fragment, back, forward), and can close the console itself while
-no other is open; each of those ends the pairing. The page's own second's hold on Approve and Deny sees
+tab that does not answer within a second counts as one, so two such tabs hold
+each other open until you close one. Other reads still work there: the agent
+can see the page and move its tab (navigate it away or to another fragment,
+back, forward), and an approved `close` can close the console itself while no
+other is open; each of those ends the pairing. The page's own second's hold on Approve and Deny sees
 less in such a browser: Playwright's focus emulation makes every page there
 report itself visible and focused, so the console cannot tell it was raised,
 and the hold restarts only when it is scrolled or resized. Attach the agent to

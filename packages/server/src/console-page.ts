@@ -299,12 +299,16 @@ const FILTERS = [
 ];
 
 // The characters approvalScreen spells out (approval-screen.ts; keep the two
-// in step), spelled out the same way in all text this page draws. Most of it is
-// the agent's: targets, errors, prompts, stored records. A bidi override or a
-// zero-width character in it would otherwise reorder or hide what it shows.
+// in step), spelled out the same way in all text the approval console draws.
+// Most of it is the agent's: targets, errors, prompts, stored records. A bidi
+// override, a zero-width character or a stack of combining marks in it would
+// otherwise reorder, hide or draw over what it shows. The agent's own console
+// approves nothing and shows its text as it is.
 const HIDDEN = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u034f\u115f\u1160\u17b4\u17b5\u180b-\u180f\u3164\ufe00-\ufe0f\uffa0\u{e0100}-\u{e01ef}]/gu;
-const printable = (text) => String(text).replace(HIDDEN, (character) => character === "\n" ? character
-  : Array.from({ length: character.length }, (_, i) => "\\u" + character.charCodeAt(i).toString(16).padStart(4, "0")).join(""));
+const STACKED = /(?<=[\p{Mn}\p{Me}]{2})[\p{Mn}\p{Me}]/gu;
+const spelled = (character) => Array.from({ length: character.length }, (_, i) => "\\u" + character.charCodeAt(i).toString(16).padStart(4, "0")).join("");
+const printable = (text) => !approvals ? String(text)
+  : String(text).replace(HIDDEN, (character) => character === "\n" ? character : spelled(character)).replace(STACKED, spelled);
 
 function el(tag, attrs, ...children) {
   const node = document.createElement(tag);
@@ -402,7 +406,7 @@ async function refresh() {
 
 // In the approval console the task an Approve applies to is the one this
 // page's own clicks chose, kept here: the URL never picks it. Nor does the page
-// ever change its URL, so a change it sees is something else driving the tab,
+// change its URL once paired, so a change it sees is something else driving the tab,
 // and ends the pairing (the pagehide listener above).
 let selected = { name: "overview", id: null };
 function route() {

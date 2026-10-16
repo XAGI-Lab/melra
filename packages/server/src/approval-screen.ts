@@ -11,6 +11,18 @@ const HIDDEN =
   /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u034f\u115f\u1160\u17b4\u17b5\u180b-\u180f\u3164\ufe00-\ufe0f\uffa0\u{e0100}-\u{e01ef}]/gu;
 
 /**
+ * Combining marks past the second on one character: a long run of them draws
+ * outside its own line, over the lines around it, the effect line included.
+ * Two are as many as ordinary accented and Indic text stacks.
+ */
+const STACKED = /(?<=[\p{Mn}\p{Me}]{2})[\p{Mn}\p{Me}]/gu;
+
+const spelled = (character: string): string =>
+  Array.from({ length: character.length }, (_, index) => `\\u${character.charCodeAt(index).toString(16).padStart(4, "0")}`).join(
+    "",
+  );
+
+/**
  * Text a terminal shows as text and nothing else. Everything in an approval
  * render except its labels was chosen by the agent asking for approval, and a
  * raw escape sequence in it can erase the line saying so, paint a different
@@ -18,14 +30,9 @@ const HIDDEN =
  * `\uXXXX` per UTF-16 unit, which inside JSON is also a valid escape for it.
  */
 export function printable(text: string, keepNewlines = false): string {
-  return text.replace(HIDDEN, (character) =>
-    keepNewlines && character === "\n"
-      ? character
-      : Array.from(
-          { length: character.length },
-          (_, index) => `\\u${character.charCodeAt(index).toString(16).padStart(4, "0")}`,
-        ).join(""),
-  );
+  return text
+    .replace(HIDDEN, (character) => (keepNewlines && character === "\n" ? character : spelled(character)))
+    .replace(STACKED, spelled);
 }
 
 export interface ApprovalScreenView {

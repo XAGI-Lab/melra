@@ -91,8 +91,9 @@ All notable changes are documented here. The format follows
   only on scroll and resize. The page shows the screen `melra approve` shows,
   with MELRA's summary right above Approve, a decision bound to the task and the
   digest it drew, and Deny, which cancels the task; the full contract sits
-  folded above the summary, and hidden characters in anything the agent sent
-  are spelled out as `\uXXXX`. Receipts name the approver as `console:` plus
+  folded above the summary, and hidden characters in anything the agent sent,
+  and combining marks stacked past two on one character, are spelled out as
+  `\uXXXX`. Receipts name the approver as `console:` plus
   `MELRA_APPROVER`. Run it with the `MELRA_HOME`, `MELRA_WORKSPACE` and mode
   the agent's server uses.
   It refuses to start without a terminal (`console_needs_a_terminal`) or a
@@ -318,8 +319,9 @@ All notable changes are documented here. The format follows
   with reads and aim a click at it. Other reads still work. In an attached
   browser, a page that does not answer within a second could be a busy
   console, so it holds `close` of the others the same way
-  (`browser_approval_surface_check_unavailable`, naming its tab); it can still
-  be closed itself. The check is made when the action starts. `melra doctor` now warns when
+  (`browser_approval_surface_check_unavailable`, naming its tab); it can be
+  closed itself unless another tab does not answer either. Every context of
+  the attached browser is checked. The check is made when the action starts. `melra doctor` now warns when
   `MELRA_BROWSER_CDP_ENDPOINT` is set: every tab in that browser, signed-in
   sites included, is a `tab_switch` away from the agent; its next step says to
   point that endpoint at a browser you do not use yourself, or unset it.
