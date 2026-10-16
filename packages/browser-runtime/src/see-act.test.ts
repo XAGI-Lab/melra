@@ -245,6 +245,7 @@ describe("browser see/act loop", () => {
     const { runtime, url } = context;
     try {
       await runtime.execute(BrowserOperationSchema.parse({ kind: "browser", action: "navigate", url }));
+      const started = Date.now();
       await expect(
         runtime.execute(
           BrowserOperationSchema.parse({
@@ -256,6 +257,8 @@ describe("browser see/act loop", () => {
           }),
         ),
       ).rejects.toThrow("browser_secret_field_filled");
+      // At its end, not on the first poll that met the field.
+      expect(Date.now() - started).toBeGreaterThanOrEqual(1_400);
     } finally {
       await runtime.close();
     }
@@ -295,6 +298,19 @@ describe("browser see/act loop", () => {
     const { runtime, url } = context;
     try {
       await runtime.execute(BrowserOperationSchema.parse({ kind: "browser", action: "navigate", url }));
+      // While it reloads: a poll that lands on a reload says nothing about
+      // hidden, so a target on every document never reads as hidden.
+      await expect(
+        runtime.execute(
+          BrowserOperationSchema.parse({
+            kind: "browser",
+            action: "wait",
+            target: { selector: "#here" },
+            state: "hidden",
+            timeoutMs: 1_200,
+          }),
+        ),
+      ).rejects.toThrow("browser_wait_timeout");
       for (let round = 0; round < 15; round += 1) {
         const waited = await runtime.execute(
           BrowserOperationSchema.parse({
@@ -306,6 +322,76 @@ describe("browser see/act loop", () => {
           }),
         );
         expect(waited.success).toBe(true);
+      }
+    } finally {
+      await runtime.close();
+    }
+  }, 120_000);
+
+  it("drops what a read found if a secret field was filled while it looked", async () => {
+    const context = await fixture(`<!doctype html><html><body><p id="here">here</p></body></html>`);
+    if (context === undefined) return;
+    const { runtime, url } = context;
+    const run = (operation: Record<string, unknown>) =>
+      runtime.execute(BrowserOperationSchema.parse({ kind: "browser", ...operation }));
+    try {
+      await run({ action: "navigate", url });
+      // As if a field were filled just after each read's first check.
+      const answers = (page: Page) => [{ state: "clear", read: new Set(page.frames()) }, { state: "filled", read: new Set() }];
+      let queue: Array<{ state: string; read: ReadonlySet<unknown> }> = [];
+      (runtime as unknown as { secretFieldFilled: (page: Page) => Promise<unknown> }).secretFieldFilled = async (page) =>
+        (queue.length > 0 ? queue : (queue = answers(page))).shift();
+      await expect(run({ action: "inspect", target: { selector: "#here" } })).rejects.toThrow("browser_secret_field_filled");
+      queue = [];
+      await expect(run({ action: "scroll", direction: "into_view", target: { selector: "#here" } })).rejects.toThrow(
+        "browser_secret_field_filled",
+      );
+      queue = [];
+      await expect(
+        run({ action: "wait", target: { selector: "#here" }, state: "attached", timeoutMs: 600 }),
+      ).rejects.toThrow("browser_secret_field_filled");
+    } finally {
+      await runtime.close();
+    }
+  }, 120_000);
+
+  it("fails a wait on a selector that cannot parse at once, whatever its text says", async () => {
+    const context = await fixture(`<!doctype html><html><body><p>page</p></body></html>`);
+    if (context === undefined) return;
+    const { runtime, url } = context;
+    try {
+      await runtime.execute(BrowserOperationSchema.parse({ kind: "browser", action: "navigate", url }));
+      const started = Date.now();
+      const failed = await runtime
+        .execute(
+          BrowserOperationSchema.parse({
+            kind: "browser",
+            action: "wait",
+            target: { selector: "#navigation-detached[" },
+            state: "attached",
+            timeoutMs: 20_000,
+          }),
+        )
+        .then(() => "", (error: Error) => error.message);
+      expect(failed).not.toContain("browser_wait_timeout");
+      expect(Date.now() - started).toBeLessThan(10_000);
+    } finally {
+      await runtime.close();
+    }
+  }, 120_000);
+
+  it("refuses a targeted read aimed at another page before looking at the page it is on", async () => {
+    const context = await fixture(`<!doctype html><html><body><input type="password" value="s3cret"><p id="here">here</p></body></html>`);
+    if (context === undefined) return;
+    const { runtime, url } = context;
+    const run = (operation: Record<string, unknown>) =>
+      runtime.execute(BrowserOperationSchema.parse({ kind: "browser", ...operation }));
+    try {
+      await run({ action: "navigate", url });
+      for (const action of [{ action: "inspect" }, { action: "scroll", direction: "into_view" }, { action: "screenshot" }]) {
+        await expect(run({ ...action, target: { selector: "#here" }, url: "http://127.0.0.1:1/elsewhere" })).rejects.toThrow(
+          "browser_page_not_at_url",
+        );
       }
     } finally {
       await runtime.close();

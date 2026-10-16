@@ -126,7 +126,9 @@ Actions: `navigate`, `back`, `forward`, `reload`, `inspect`, `wait`, `click`,
   frame holds a secret field with something in it, live or still in its markup,
   a read aimed at part of the page is refused
   (`browser_secret_field_filled`), since whether its target exists could be
-  made to depend on the secret; an untargeted `inspect` still works. A
+  made to depend on the secret; an untargeted `inspect` still works. The page
+  is asked again once the read has looked, and a field filled meanwhile voids
+  what it found. A
   targeted read is also refused when some frame cannot answer
   (`browser_secret_check_unavailable`). A `wait` asks on each poll and looks
   for nothing while a field is filled or some frame cannot answer; it is

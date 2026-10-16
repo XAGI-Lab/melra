@@ -75,7 +75,11 @@ const MAX_FRAMES = 20;
 /** Whether a page call failed because its document went away under it. */
 const navigatedAway = (error: unknown): boolean =>
   error instanceof Error &&
-  /context was destroyed|cannot find context|unable to adopt|navigat|detached/i.test(error.message);
+  // Playwright's own wording only: a message can also quote the caller's
+  // selector, which may say anything.
+  /execution context was destroyed|cannot find context with specified id|unable to adopt element handle|frame (?:was|has been|got) detached|interrupted by another navigation/i.test(
+    error.message,
+  );
 
 /** What a secret-field check found, and the frames it read. */
 interface SecretCheck {
@@ -812,6 +816,14 @@ export class BrowserRuntime {
     return { state: page.frames().some((frame) => !asked.has(frame)) ? "unknown" : state, read };
   }
 
+  /** The frames a targeted read may search, or its refusal while a secret field is filled. */
+  private async clearOfSecrets(page: Page): Promise<ReadonlySet<Frame>> {
+    const secret = await this.secretFieldFilled(page);
+    if (secret.state === "filled") throw new Error("browser_secret_field_filled");
+    if (secret.state === "unknown") throw new Error("browser_secret_check_unavailable");
+    return secret.read;
+  }
+
   /**
    * A frame mid-navigation is asked again once its next document has loaded;
    * a detached one holds nothing. A frame with no document yet (a lazy or
@@ -935,7 +947,12 @@ export class BrowserRuntime {
    * a match anywhere else counts as none, and what it is makes no difference.
    */
   private async readFirst(candidate: Locator, within: ReadonlySet<Frame> | undefined): Promise<ElementHandle | undefined> {
-    const [element] = await this.call(candidate.first().elementHandles(), "count");
+    const pending = candidate.first().elementHandles();
+    const [element] = await this.call(pending, "count").catch((error: unknown) => {
+      // Released once it arrives, if it arrives after the bound or a cancel.
+      void pending.then((late) => late.forEach((handle) => void handle.dispose().catch(() => undefined)), () => undefined);
+      throw error;
+    });
     if (element === undefined || within === undefined) return element;
     let kept = false;
     try {
@@ -998,18 +1015,23 @@ export class BrowserRuntime {
       for (const candidate of secret.state === "clear" ? this.candidates(page, target, secret.read) : []) {
         // Absence is an answer here: it satisfies `hidden` and `detached`. A
         // document that went away mid-poll is not: the poll decides nothing.
-        let present: boolean;
+        let present: boolean | undefined;
         try {
           const element = await this.readFirst(candidate, secret.read);
           try {
-            present =
-              element !== undefined &&
-              (state === "attached" || state === "detached" || (await this.call(element.isVisible(), "is_visible")));
+            if (element === undefined) present = false;
+            else if (state === "attached" || state === "detached") present = true;
+            else if (await this.call(element.isVisible(), "is_visible")) present = true;
+            // isVisible() also answers false for an element whose document went
+            // away, so a false counts only for one still in its document.
+            else present = (await this.call(element.evaluate((node) => node.isConnected), "is_visible")) ? false : undefined;
           } finally {
             await element?.dispose().catch(() => undefined);
           }
         } catch (error) {
           if (!navigatedAway(error)) throw error;
+        }
+        if (present === undefined) {
           reached = false;
           break;
         }
@@ -1023,11 +1045,16 @@ export class BrowserRuntime {
           break;
         }
       }
-      if (reached) return;
+      // What a poll found counts only if no field was filled while it looked.
+      let last = secret.state;
+      if (reached) {
+        last = (await this.secretFieldFilled(page, Math.max(1_000, deadline - Date.now()))).state;
+        if (last === "clear") return;
+      }
       if (Date.now() >= deadline) {
         // Not the target's fault when the last poll, or every poll, could not
         // look for it.
-        if (secret.state === "filled") throw new Error("browser_secret_field_filled");
+        if (last === "filled") throw new Error("browser_secret_field_filled");
         if (!looked) throw new Error("browser_secret_check_unavailable");
         throw new Error(
           `browser_wait_timeout:${state}:${JSON.stringify(target)}`,
@@ -1282,20 +1309,6 @@ export class BrowserRuntime {
 
   private async run(operation: BrowserOperation): Promise<Record<string, unknown>> {
     const page = await this.page();
-    // A targeted read says whether its target exists, and a target can be
-    // made to exist only for the right guess at a secret field: an attribute
-    // selector on a mirrored value, an accessible name built from the field.
-    // No list of selector spellings closes that, so while any frame holds a
-    // filled secret field a read may look at the whole page but not aim at
-    // part of it. The refusal depends on the page, never on the guess.
-    // `wait` asks on every poll instead, within its own deadline.
-    let within: ReadonlySet<Frame> | undefined;
-    if (["inspect", "scroll", "screenshot"].includes(operation.action) && operation.target !== undefined) {
-      const secret = await this.secretFieldFilled(page);
-      if (secret.state === "filled") throw new Error("browser_secret_field_filled");
-      if (secret.state === "unknown") throw new Error("browser_secret_check_unavailable");
-      within = secret.read;
-    }
     // Anywhere but on the way to it, a url names the page the action acts on:
     // the active page, or for `close` and `tab_switch` the tab they name.
     // Policy shows it to the approver as the target and matches grants against
@@ -1313,6 +1326,16 @@ export class BrowserRuntime {
       const at = acted === undefined ? "no such tab" : pageAddress(acted.url());
       if (at !== pageAddress(operation.url)) throw new Error(`browser_page_not_at_url: the page is at ${at}`);
     }
+    // A targeted read says whether its target exists, and whether a target
+    // exists can be made to depend on a secret field's content, however the
+    // target is written. So while any frame holds a filled secret field a read
+    // may look at the whole page but not aim at part of it: the refusal
+    // depends on the page, never on the target. Asked again once the read has
+    // looked, since a field can be filled while it does. `wait` asks on every
+    // poll instead, within its own deadline.
+    const targetedRead =
+      ["inspect", "scroll", "screenshot"].includes(operation.action) && operation.target !== undefined;
+    const within = targetedRead ? await this.clearOfSecrets(page) : undefined;
     switch (operation.action) {
       case "navigate": {
         if (operation.url === undefined) throw new Error("browser_navigate_requires_url");
@@ -1365,10 +1388,12 @@ export class BrowserRuntime {
           ...(await this.settledSnapshot(page, operation)),
         };
       }
-      case "inspect":
-        return operation.target === undefined
-          ? await this.snapshot(page, operation.maxChars)
-          : await this.extract(page, operation, within);
+      case "inspect": {
+        if (operation.target === undefined) return await this.snapshot(page, operation.maxChars);
+        const found = await this.extract(page, operation, within);
+        await this.clearOfSecrets(page);
+        return found;
+      }
       /**
        * Block until the page reaches a state, instead of guessing a sleep.
        *
@@ -1498,6 +1523,7 @@ export class BrowserRuntime {
           await element
             .scrollIntoViewIfNeeded({ timeout: operation.timeoutMs })
             .finally(() => element.dispose().catch(() => undefined));
+          await this.clearOfSecrets(page);
         } else {
           // A fixed ±600 was too small for a long article and too large for a
           // short scroll container, and nothing could change it.
