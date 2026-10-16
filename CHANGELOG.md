@@ -311,8 +311,9 @@ All notable changes are documented here. The format follows
   console under the operator's own pointer, which the console cannot see in
   an attached browser, where Playwright's focus emulation makes every page
   report itself visible and focused: `tab_switch` onto a marked tab, `scroll`
-  on a marked page, and `close` of any tab while a marked page is open in
-  another, since the browser then raises a neighbour. A runtime attached over
+  on a marked page, and, in a browser it is attached to, `close` of any
+  unmarked tab while a marked page is open in another, since the browser then
+  raises a neighbour. A runtime attached over
   CDP to the browser an operator approves in could otherwise reach the console
   tab with reads and aim a click at it. Other reads still work, and so does
   closing a marked page itself; `close` asks the tab it closes nothing, and a

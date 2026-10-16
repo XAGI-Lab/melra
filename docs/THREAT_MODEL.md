@@ -109,8 +109,9 @@ own origin, bound to the task and the digest of the screen shown. MELRA's
 browser runtime refuses every action that sends the console page input
 (`browser_refuses_approval_surface`), in every mode, and each action of its
 own that could raise or move the page under the operator's pointer:
-`tab_switch` onto its tab, `scroll` on it, and `close` of any tab while a
-console is open in another, since the browser then raises a neighbour. Its
+`tab_switch` onto its tab, `scroll` on it, and, in a browser it is attached
+to, `close` of any other tab while a console is open there, since the browser
+then raises a neighbour. Its
 other reads can still move the page (navigate, back, forward), but the page
 takes the task it approves from the operator's clicks, never from its URL, and
 any move of its URL, or leaving it, ends the pairing on both sides: the page

@@ -195,12 +195,38 @@ describe("browser see/act loop", () => {
       expect(await run({ action: "tab_new" })).toMatchObject({ opened: true, index: 1 });
       await expect(run({ action: "close" })).rejects.toThrow("browser_refuses_approval_surface");
       await expect(run({ action: "close", tabIndex: 1 })).rejects.toThrow("browser_refuses_approval_surface");
-      // Once the operator has closed the console, it closes.
+      // A tab that is not there is just not there.
+      await expect(run({ action: "close", tabIndex: 9 })).rejects.toThrow("browser_tab_not_found");
+      // Two marked pages do not hold each other open: a console can always be closed.
+      await run({ action: "navigate", url: context.url });
+      expect(await run({ action: "close" })).toMatchObject({ closed: true });
+      // Once the operator has closed the console, an unmarked tab closes too.
+      expect(await run({ action: "tab_new" })).toMatchObject({ opened: true });
+      await expect(run({ action: "close" })).rejects.toThrow("browser_refuses_approval_surface");
       await operatorConsole.close();
       expect(await run({ action: "close" })).toMatchObject({ closed: true, url: "about:blank" });
     } finally {
       await runtime.close();
       await owner.close();
+    }
+  }, 120_000);
+
+  it("closes its tabs freely in a browser it launched, where no operator's console can be", async () => {
+    const context = await fixture(`<!doctype html><html><head><meta name="${APPROVAL_SURFACE}" content="operator-only">
+      <title>marked</title></head><body></body></html>`);
+    if (context === undefined) return;
+    const { runtime, url } = context;
+    const run = (operation: Record<string, unknown>) =>
+      runtime.execute(BrowserOperationSchema.parse({ kind: "browser", ...operation }));
+    try {
+      await run({ action: "navigate", url });
+      await run({ action: "tab_new", url });
+      await run({ action: "tab_new" });
+      // Two marked tabs beside it hold nothing open.
+      expect(await run({ action: "close" })).toMatchObject({ closed: true });
+      expect(await run({ action: "close", tabIndex: 1 })).toMatchObject({ closed: true });
+    } finally {
+      await runtime.close();
     }
   }, 120_000);
 

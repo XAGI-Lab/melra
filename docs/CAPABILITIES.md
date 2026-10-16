@@ -140,7 +140,8 @@ Actions: `navigate`, `back`, `forward`, `reload`, `inspect`, `wait`, `click`,
   since the browser then raises a neighbour. In an attached browser,
   Playwright's focus emulation makes every page report itself visible and
   focused, so the page cannot see being raised. Other reads on it still work,
-  and so does closing the marked page itself; moving or closing it ends the
+  and so does closing a marked page itself, even beside another; moving or
+  closing it ends the
   console's pairing. A page that does not answer within a second counts as
   unmarked, so a hung or crashed tab still closes. This
   matters when the runtime is attached over CDP to a browser the operator also
