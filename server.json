@@ -1,0 +1,26 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.xagi-lab/melra",
+  "title": "MELRA",
+  "description": "Local MCP runtime for policy-governed, verified agent actions with durable receipts.",
+  "version": "0.3.0-alpha.13",
+  "websiteUrl": "https://xagilab.com/",
+  "repository": {
+    "url": "https://github.com/XAGI-Lab/melra",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "@melra/cli",
+      "version": "0.3.0-alpha.13",
+      "runtimeHint": "npx",
+      "runtimeArguments": [{ "type": "positional", "value": "-y" }],
+      "packageArguments": [{ "type": "positional", "value": "serve" }],
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}
