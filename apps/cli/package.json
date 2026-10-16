@@ -24,6 +24,9 @@
   "homepage": "https://github.com/XAGI-Lab/melra#readme",
   "bugs": "https://github.com/XAGI-Lab/melra/issues",
   "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "bin": {
     "melra": "./dist/bin.js"
   },

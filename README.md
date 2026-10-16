@@ -136,7 +136,7 @@ underneath your agent, the way an operating system sits underneath your apps:
 
 ## Quick start
 
-You need **Node.js 22 or newer**. One command sets everything up:
+You need **Node.js 22.13 or newer**. One command sets everything up:
 
 ```bash
 npx @melra/cli@alpha setup
