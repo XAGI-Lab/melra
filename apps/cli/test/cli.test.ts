@@ -328,12 +328,24 @@ describe("melra CLI", () => {
 
     it("prints its address before the pairing, even when the page pairs first", async () => {
       const { env, melra, terminal, seen } = await start();
-      // A browser fast enough to pair before the opener has returned.
+      const task = melra.controller.plan(
+        TaskRequestSchema.parse({
+          goal: "Write the report",
+          operation: { kind: "file", action: "write", path: "report.txt", content: "x" },
+        }),
+      );
+      // A browser fast enough to pair, and approve, before the opener has returned.
       const quick: ConsoleTerminal = {
         ...terminal,
         open: async (address) => {
           const url = new URL(address);
-          await call(url, "/pair", { body: { code: url.hash.slice("#pair=".length) } });
+          const paired = await call(url, "/pair", { body: { code: url.hash.slice("#pair=".length) } });
+          const session = paired.json.session as string;
+          const shown = await call(url, `/api/tasks/${task.id}/approval`, { token: session });
+          await call(url, `/api/tasks/${task.id}/approve`, {
+            token: session,
+            body: { taskId: task.id, renderDigest: shown.json.renderDigest },
+          });
           return true;
         },
       };
@@ -341,6 +353,9 @@ describe("melra CLI", () => {
       try {
         expect(seen.said.indexOf("Approval console on")).toBeGreaterThanOrEqual(0);
         expect(seen.said.indexOf("Paired with a browser tab")).toBeGreaterThan(seen.said.indexOf("Approval console on"));
+        // An approval is named at once, the opener still running, so no Ctrl-C can lose it.
+        expect(seen.said.indexOf(`Approved ${task.id} at `)).toBeGreaterThanOrEqual(0);
+        expect(seen.said.indexOf(`Approved ${task.id} at `)).toBeLessThan(seen.said.indexOf("Approval console on"));
       } finally {
         await endpoint.close();
         await melra.close();

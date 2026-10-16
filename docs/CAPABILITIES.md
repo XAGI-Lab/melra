@@ -439,7 +439,8 @@ Mutations and destructive operations have one execution attempt.
   and per-client identity — an approved client is named at the head of the
   delegation chain on every receipt. `MELRA_HTTP_OAUTH=0` turns it off.
 - `melra console`: an operator's approval console, a separate loopback HTTP
-  server with no MCP endpoint, paired with the one browser tab it opens. It
+  server with no MCP endpoint, paired with the first page to use its one-time
+  code, normally the browser tab it opens. It
   needs a terminal (`console_needs_a_terminal`) and a browser opener
   (`console_needs_a_browser`), and is never served on a socket or off loopback
   (`approval_console_loopback_only`).

@@ -438,8 +438,9 @@ function renderUnauthorized() {
     const taken = paired.error === "console_already_paired";
     view.replaceChildren(el("div", { class: "card empty" },
       el("h3", { text: taken ? "Another tab already paired with this console" : "This page is not paired with a running approval console" }),
-      el("p", {}, taken ? "If that was not you, stop the console with Ctrl-C now. " : "",
-        "Run ", el("code", { text: "melra console" }), " in a terminal: it opens a page paired with it, and only that page can approve. ",
+      el("p", {}, taken ? "If that was not you, press Ctrl-C in the console's terminal now, then cancel each task it lists as approved with " : "",
+        taken ? el("code", { text: "melra approve <task-id> --deny" }) : "", taken ? ". " : "",
+        "Run ", el("code", { text: "melra console" }), " in a terminal: the first page to use its one-time code, normally the one it opens, is the only one that can approve. ",
         "Leaving or reloading that page ends its pairing."),
     ));
     return;

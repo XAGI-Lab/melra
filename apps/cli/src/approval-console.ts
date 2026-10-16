@@ -42,8 +42,8 @@ export async function approvalConsole(
   // the address, so the terminal reads address, then pairing; if the opener
   // then fails, the pairing is reported with what it approved, since nothing
   // the operator opened made it.
-  // Every approval is printed as it happens too, so however the console ends,
-  // a Ctrl-C after a pairing race included, the terminal names what to cancel.
+  // Every approval is printed the moment it is made, the opener still running
+  // included, so however the console ends the terminal names what to cancel.
   let pairedAt: Date | undefined;
   let addressed = false;
   const approved: string[] = [];
@@ -52,8 +52,7 @@ export async function approvalConsole(
     `If no console tab just opened for you, press Ctrl-C now.\n`;
   const approvedLine = (taskId: string, at: Date) =>
     `Approved ${taskId} at ${at.toTimeString().slice(0, 5)} in the paired tab. ` +
-    `If that was not you, run 'melra approve ${taskId} --deny' before the agent runs it.\n`;
-  const heldApprovals: string[] = [];
+    `If that was not you, run 'melra approve ${taskId} --deny', with this console's MELRA_HOME, before the agent runs it.\n`;
   const endpoint = await serveHttp({
     runtime: melra,
     port: 0,
@@ -64,9 +63,7 @@ export async function approvalConsole(
     },
     onApproved: (taskId) => {
       approved.push(taskId);
-      const line = approvedLine(taskId, new Date());
-      if (addressed) terminal.say(line);
-      else heldApprovals.push(line);
+      terminal.say(approvedLine(taskId, new Date()));
     },
   });
   // What the operator must hear when the console closes after a tab paired
@@ -107,6 +104,5 @@ export async function approvalConsole(
   );
   addressed = true;
   if (pairedAt !== undefined) terminal.say(pairedLine(pairedAt));
-  for (const line of heldApprovals) terminal.say(line);
   return endpoint;
 }

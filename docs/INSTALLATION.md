@@ -905,10 +905,11 @@ opens:
    `Paired with a browser tab at HH:MM`, and the page shows `paired at HH:MM`.
    If the terminal says paired and no tab opened for you, press Ctrl-C. If your
    tab says another tab already paired, press Ctrl-C too: every approval that
-   tab made is on the terminal as `Approved <task-id> at HH:MM`, still pending
-   until the agent runs it, so cancel each you did not make with
-   `melra approve <task-id> --deny`, then run `melra console` again (it shows
-   them as approved under *Needs attention*).
+   tab made is on the terminal as `Approved <task-id> at HH:MM`, and runs the
+   next time the agent asks, so cancel each you did not make with
+   `melra approve <task-id> --deny`, with the console's `MELRA_HOME`, then run
+   `melra console` again. A task already approved shows there as approved, with
+   no Deny button, which is why `--deny` is run from the terminal.
 
 **Reloading or leaving the page ends the pairing**, and so does anything else
 moving its URL, such as a link to another fragment, back or forward; run

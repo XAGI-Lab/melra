@@ -586,7 +586,8 @@ export async function serveHttp(
       if (console_.session !== undefined) {
         json(response, 409, {
           error: "console_already_paired",
-          detail: "Another page paired with this console. Stop it with Ctrl-C and run `melra console` again.",
+          detail:
+            "Another page paired with this console first. Stop it with Ctrl-C, cancel each task its terminal lists as approved (`melra approve <task-id> --deny`), and run `melra console` again.",
         });
         return;
       }
@@ -604,7 +605,7 @@ export async function serveHttp(
     if (typeof console_.session !== "string" || !tokenMatches(console_.session, suppliedToken(request))) {
       json(response, 401, {
         error: "unauthorized",
-        detail: "Only the page `melra console` opened, while it stays open, can use this console.",
+        detail: "Only the page that paired with this console, while it stays open, can use it.",
       });
       return;
     }

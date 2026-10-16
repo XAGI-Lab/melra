@@ -997,7 +997,7 @@ Usage:
   melra version [--json]
 
 'melra console', run by you in a terminal, opens an approval console in your
-browser: a page paired with that one tab, on a server of its own with no MCP
+browser: paired with the first page to use its code, normally that tab, on a server of its own with no MCP
 endpoint, that approves or denies as 'melra approve' does. Its one-time pairing
 code is never printed: it reaches the browser on its opener's command line, and
 reloading or leaving the page ends the pairing. Run it with the MELRA_HOME,
