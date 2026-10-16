@@ -611,7 +611,12 @@ describe("melra CLI", () => {
     output.on("data", (chunk: Buffer) => (shown += chunk.toString()));
     expect(await confirmInTerminal(view, Readable.from(["y\n"]), output)).toBe(true);
     expect(shown).toBe(screen + question);
-    expect(await confirmInTerminal(view, Readable.from(["\n"]), new PassThrough())).toBe(false);
+    // Only a yes approves, however it is cased or spaced; input that ends
+    // before any answer is a no.
+    for (const [said, approved] of [["\n", false], ["nope\n", false], ["q\n", false], ["yes!\n", false], [" YES \n", true], ["Y\n", true]] as const) {
+      expect(await confirmInTerminal(view, Readable.from([said]), new PassThrough()), JSON.stringify(said)).toBe(approved);
+    }
+    expect(await confirmInTerminal(view, Readable.from([]), new PassThrough())).toBe(false);
     // By default, the operator's: stderr, at stderr's width.
     const columns = Object.getOwnPropertyDescriptor(process.stderr, "columns");
     Object.defineProperty(process.stderr, "columns", { value: 40, configurable: true, writable: true });

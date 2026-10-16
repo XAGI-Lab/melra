@@ -1,6 +1,7 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
+import { once } from "node:events";
 import { createInterface } from "node:readline/promises";
 import {
   approvalScreen,
@@ -42,9 +43,22 @@ export async function confirmInTerminal(
 ): Promise<boolean> {
   showApprovalScreen(view, output);
   const prompt = createInterface({ input, output });
-  const answer = (await prompt.question("Approve this effect? [y/N] ")).trim().toLowerCase();
-  prompt.close();
-  return answer === "y" || answer === "yes";
+  try {
+    // Input that ends before an answer (Ctrl-D on an empty line, say) is a
+    // no: the question would otherwise stay open and the command exit 0
+    // without a word.
+    const answer = await Promise.race([
+      prompt.question("Approve this effect? [y/N] ").catch(() => ""),
+      once(prompt, "close").then(
+        () => "",
+        () => "",
+      ),
+    ]);
+    const said = answer.trim().toLowerCase();
+    return said === "y" || said === "yes";
+  } finally {
+    prompt.close();
+  }
 }
 
 /** Refuses anywhere but an operator's terminal, before anything is opened. */
