@@ -20,6 +20,11 @@
 5. Record the supported OS and named-client results in `VALIDATION.md`.
 6. Review `SECURITY.md`, the threat model, compatibility notes, and changelog.
 7. Create a signed, protected `v*` tag only from an approved main-branch commit.
+8. Once the tag's npm packages are out, publish the MCP Registry listing from
+   the tagged checkout: `mcp-publisher login github`, then `mcp-publisher
+   publish`. The Registry checks `server.json`'s name against the CLI's
+   `mcpName`, case and all, and installs the version `server.json` names, so
+   both come from `pnpm versions:set`, never by hand.
 
 ## Automated artifacts
 
@@ -68,7 +73,16 @@ node scripts/npm-trust.mjs
 ```
 
 The script skips packages that already trust the workflow, so rerunning it is
-harmless. A **brand-new** package cannot be trusted until it exists on the
+harmless. Moving the `latest` dist-tag needs one more setting the script does
+not grant: in each package's trusted-publisher settings on npmjs.com, enable
+**Allow npm dist-tag**. Without it the release still publishes and the GitHub
+release is still created, but `latest` stays where it was and the run warns
+with the command to move it by hand.
+
+**A failed release run can be re-run.** Packages already on the registry at the
+tag's version are skipped, so a re-run continues with the provenance check,
+the GitHub release and the install smoke. A re-run uses the workflow as it was
+at the tag, so this applies to tags cut after this change. A **brand-new** package cannot be trusted until it exists on the
 registry: publish its first version by hand as an owner, then run the script.
 
 Once a release has published this way, set each package to *Require two-factor

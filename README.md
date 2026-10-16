@@ -334,7 +334,7 @@ are never displayed.
 
 ```text
 $ melra status
-MELRA 0.3.0-alpha.12  developer mode
+MELRA 0.3.0-alpha.14  developer mode
   Tasks       3 total: 1 awaiting_approval,
               1 policy_blocked, 1 verified_success
   Waiting     1 waiting for approval
