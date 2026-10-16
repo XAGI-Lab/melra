@@ -1,8 +1,8 @@
 {
   "name": "@melra/cli",
-  "version": "0.3.0-alpha.13",
+  "version": "0.3.0-alpha.14",
   "description": "MELRA autonomy kernel and command-line interface.",
-  "mcpName": "io.github.xagi-lab/melra",
+  "mcpName": "io.github.XAGI-Lab/melra",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
