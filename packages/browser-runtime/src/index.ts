@@ -1138,26 +1138,23 @@ export class BrowserRuntime {
     ) {
       throw new Error("browser_refuses_approval_surface");
     }
-    // `close` may always close a console (that ends its pairing) and a hung or
-    // crashed tab. But the browser then raises a neighbour, which can be a
-    // console, so in a browser this runtime is attached to, where an operator
-    // can have one open, closing any other tab is refused while a page here
-    // carries the marker. A browser this runtime launched has no operator's
-    // console in it. A page that does not answer within a second counts as
-    // unmarked: it is not a live console.
+    // Closing a tab lets the browser raise a neighbour, which can be a
+    // console. So in a browser this runtime is attached to, where an operator
+    // can have one open, `close` is refused while any other page here carries
+    // the marker, whatever the closed tab carries itself: any page can carry
+    // it. A marked tab of the agent's can be navigated away first. A browser
+    // this runtime launched has no operator's console in it. A page that does
+    // not answer within a second counts as unmarked: it is not a live console,
+    // and it never holds other tabs open.
     if (operation.action === "close" && this.options.cdpEndpoint !== undefined) {
       if (operation.tabIndex !== undefined && acted === undefined) throw new Error("browser_tab_not_found");
-      const marked = (candidate: Page) =>
-        bounded(candidate.locator(`meta[name="${APPROVAL_SURFACE}"]`).count(), 1_000, "count").then(
-          (count) => count > 0,
-          () => false,
-        );
-      if (acted === undefined || !(await marked(acted))) {
-        const others = (await this.ensureContext()).pages().filter((other) => other !== acted);
-        if ((await Promise.all(others.map(marked))).some(Boolean)) {
-          throw new Error("browser_refuses_approval_surface");
-        }
-      }
+      const others = (await this.ensureContext()).pages().filter((other) => other !== acted);
+      const marks = await Promise.all(
+        others.map((other) =>
+          bounded(other.locator(`meta[name="${APPROVAL_SURFACE}"]`).count(), 1_000, "count").catch(() => 0),
+        ),
+      );
+      if (marks.some((count) => count > 0)) throw new Error("browser_refuses_approval_surface");
     }
     switch (operation.action) {
       case "navigate": {

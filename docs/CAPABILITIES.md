@@ -136,14 +136,14 @@ Actions: `navigate`, `back`, `forward`, `reload`, `inspect`, `wait`, `click`,
   `browser_refuses_approval_surface`, in every mode and whatever approved the
   action, a `url` naming the page included. So are the actions that could
   raise or move it under the operator's pointer: `scroll` on it, `tab_switch`
-  onto its tab, and `close` of any tab while a marked page is open in another,
-  since the browser then raises a neighbour. In an attached browser,
-  Playwright's focus emulation makes every page report itself visible and
-  focused, so the page cannot see being raised. Other reads on it still work,
-  and so does closing a marked page itself, even beside another; moving or
-  closing it ends the
-  console's pairing. A page that does not answer within a second counts as
-  unmarked, so a hung or crashed tab still closes. This
+  onto its tab, and, in a browser the runtime is attached to over CDP, `close`
+  of any tab while another marked page is open there, whatever the closed tab
+  carries (any page can carry the marker), since the browser then raises a
+  neighbour. In an attached browser, Playwright's focus emulation makes every
+  page report itself visible and focused, so the page cannot see being raised.
+  Other reads on it still work; moving it ends the console's pairing. A page
+  that does not answer within a second counts as unmarked, so a hung or
+  crashed tab never holds other tabs open. This
   matters when the runtime is attached over CDP to a browser the operator also
   uses. The check is made when the action starts, like the `url` check above.
 - `tab_new` accepts an optional `url` and runs the same destination checks

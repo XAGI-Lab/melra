@@ -197,14 +197,12 @@ describe("browser see/act loop", () => {
       await expect(run({ action: "close", tabIndex: 1 })).rejects.toThrow("browser_refuses_approval_surface");
       // A tab that is not there is just not there.
       await expect(run({ action: "close", tabIndex: 9 })).rejects.toThrow("browser_tab_not_found");
-      // Two marked pages do not hold each other open: a console can always be closed.
+      // Carrying the marker itself buys a tab nothing: any page can carry it.
       await run({ action: "navigate", url: context.url });
-      expect(await run({ action: "close" })).toMatchObject({ closed: true });
-      // Once the operator has closed the console, an unmarked tab closes too.
-      expect(await run({ action: "tab_new" })).toMatchObject({ opened: true });
       await expect(run({ action: "close" })).rejects.toThrow("browser_refuses_approval_surface");
+      // Once the operator has closed the console, nothing else is marked, and it closes.
       await operatorConsole.close();
-      expect(await run({ action: "close" })).toMatchObject({ closed: true, url: "about:blank" });
+      expect(await run({ action: "close" })).toMatchObject({ closed: true });
     } finally {
       await runtime.close();
       await owner.close();
