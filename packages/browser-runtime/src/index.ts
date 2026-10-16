@@ -75,6 +75,9 @@ const MAX_FRAMES = 20;
 /** Whether a page call failed because its document went away under it. */
 const navigatedAway = (error: unknown): boolean =>
   error instanceof Error &&
+  // A selector Playwright could not parse is the caller's mistake, whatever
+  // the selector it quotes says.
+  !/while parsing/i.test(error.message) &&
   // Playwright's own wording only: a message can also quote the caller's
   // selector, which may say anything.
   /execution context was destroyed|cannot find context with specified id|unable to adopt element handle|frame (?:was|has been|got) detached|in detached frame|not attached to the dom|interrupted by another navigation/i.test(
@@ -1003,7 +1006,6 @@ export class BrowserRuntime {
   ): Promise<void> {
     const negated = state === "hidden" || state === "detached";
     const deadline = Date.now() + timeoutMs;
-    let looked = false;
     for (;;) {
       // Asked on every poll: someone can fill a secret field while this waits.
       // A poll that finds one filled, or cannot tell, looks for nothing and
@@ -1012,7 +1014,6 @@ export class BrowserRuntime {
       // the last poll is not starved into "unknown".
       this.signal?.throwIfAborted();
       const secret = await this.secretFieldFilled(page, Math.max(1_000, deadline - Date.now()));
-      looked ||= secret.state === "clear";
       let reached = negated && secret.state === "clear";
       for (const candidate of secret.state === "clear" ? this.candidates(page, target, secret.read) : []) {
         // Absence is an answer here: it satisfies `hidden` and `detached`. A
@@ -1047,17 +1048,18 @@ export class BrowserRuntime {
           break;
         }
       }
-      // What a poll found counts only if no field was filled while it looked.
+      // What a poll found, or did not, counts only if no field was filled
+      // while it looked: every poll that searched is checked again after.
       let last = secret.state;
-      if (reached) {
+      if (secret.state === "clear") {
         last = (await this.secretFieldFilled(page, Math.max(1_000, deadline - Date.now()))).state;
-        if (last === "clear") return;
+        if (reached && last === "clear") return;
       }
       if (Date.now() >= deadline) {
-        // Not the target's fault when the last poll, or every poll, could not
-        // look for it.
+        // Not the target's fault when the last poll could not look for it,
+        // or could not vouch for what it saw.
         if (last === "filled") throw new Error("browser_secret_field_filled");
-        if (!looked) throw new Error("browser_secret_check_unavailable");
+        if (last === "unknown") throw new Error("browser_secret_check_unavailable");
         throw new Error(
           `browser_wait_timeout:${state}:${JSON.stringify(target)}`,
         );
@@ -1392,9 +1394,13 @@ export class BrowserRuntime {
       }
       case "inspect": {
         if (operation.target === undefined) return await this.snapshot(page, operation.maxChars);
-        const found = await this.extract(page, operation, within);
-        await this.clearOfSecrets(page);
-        return found;
+        // Whatever the read found, or failed to find, a field filled while it
+        // looked voids it: the refusal in `finally` replaces either.
+        try {
+          return await this.extract(page, operation, within);
+        } finally {
+          await this.clearOfSecrets(page);
+        }
       }
       /**
        * Block until the page reaches a state, instead of guessing a sleep.
@@ -1521,11 +1527,15 @@ export class BrowserRuntime {
       case "scroll": {
         const direction = operation.direction ?? "down";
         if (direction === "into_view") {
-          const element = await this.readTarget(page, operation.target, within);
-          await element
-            .scrollIntoViewIfNeeded({ timeout: operation.timeoutMs })
-            .finally(() => element.dispose().catch(() => undefined));
-          await this.clearOfSecrets(page);
+          // As for inspect: the check after the read wins over its outcome.
+          try {
+            const element = await this.readTarget(page, operation.target, within);
+            await element
+              .scrollIntoViewIfNeeded({ timeout: operation.timeoutMs })
+              .finally(() => element.dispose().catch(() => undefined));
+          } finally {
+            await this.clearOfSecrets(page);
+          }
         } else {
           // A fixed ±600 was too small for a long article and too large for a
           // short scroll container, and nothing could change it.

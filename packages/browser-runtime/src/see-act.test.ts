@@ -341,15 +341,19 @@ describe("browser see/act loop", () => {
       let queue: Array<{ state: string; read: ReadonlySet<unknown> }> = [];
       (runtime as unknown as { secretFieldFilled: (page: Page) => Promise<unknown> }).secretFieldFilled = async (page) =>
         (queue.length > 0 ? queue : (queue = answers(page))).shift();
-      await expect(run({ action: "inspect", target: { selector: "#here" } })).rejects.toThrow("browser_secret_field_filled");
-      queue = [];
-      await expect(run({ action: "scroll", direction: "into_view", target: { selector: "#here" } })).rejects.toThrow(
-        "browser_secret_field_filled",
-      );
-      queue = [];
-      await expect(
-        run({ action: "wait", target: { selector: "#here" }, state: "attached", timeoutMs: 600 }),
-      ).rejects.toThrow("browser_secret_field_filled");
+      // Found or not: the answer must not depend on what the search met.
+      for (const selector of ["#here", "#absent"]) {
+        queue = [];
+        await expect(run({ action: "inspect", target: { selector } })).rejects.toThrow("browser_secret_field_filled");
+        queue = [];
+        await expect(run({ action: "scroll", direction: "into_view", target: { selector } })).rejects.toThrow(
+          "browser_secret_field_filled",
+        );
+        queue = [];
+        await expect(run({ action: "wait", target: { selector }, state: "attached", timeoutMs: 600 })).rejects.toThrow(
+          "browser_secret_field_filled",
+        );
+      }
     } finally {
       await runtime.close();
     }
@@ -361,20 +365,16 @@ describe("browser see/act loop", () => {
     const { runtime, url } = context;
     try {
       await runtime.execute(BrowserOperationSchema.parse({ kind: "browser", action: "navigate", url }));
-      const started = Date.now();
-      const failed = await runtime
-        .execute(
-          BrowserOperationSchema.parse({
-            kind: "browser",
-            action: "wait",
-            target: { selector: "#navigation-detached[" },
-            state: "attached",
-            timeoutMs: 20_000,
-          }),
-        )
-        .then(() => "", (error: Error) => error.message);
-      expect(failed).not.toContain("browser_wait_timeout");
-      expect(Date.now() - started).toBeLessThan(10_000);
+      for (const selector of ["#navigation-detached[", "[data-x='frame was detached'"]) {
+        const started = Date.now();
+        const failed = await runtime
+          .execute(
+            BrowserOperationSchema.parse({ kind: "browser", action: "wait", target: { selector }, state: "attached", timeoutMs: 20_000 }),
+          )
+          .then(() => "", (error: Error) => error.message);
+        expect(failed).not.toContain("browser_wait_timeout");
+        expect(Date.now() - started).toBeLessThan(10_000);
+      }
     } finally {
       await runtime.close();
     }

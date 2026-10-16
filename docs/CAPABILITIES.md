@@ -132,7 +132,7 @@ Actions: `navigate`, `back`, `forward`, `reload`, `inspect`, `wait`, `click`,
   targeted read is also refused when some frame cannot answer
   (`browser_secret_check_unavailable`). A `wait` asks on each poll and looks
   for nothing while a field is filled or some frame cannot answer; it is
-  refused only if a field is still filled at its end, or if no poll could look. A frame with no document yet does
+  refused only if its last poll still found a field filled, or could not tell. A frame with no document yet does
   not hold a read up, and the read does not search it. Such a read uses an
   element only when its own document is one the check read, however its target
   is written.
