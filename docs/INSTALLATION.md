@@ -266,12 +266,15 @@ setting governs whether the window survives, not whether it is reported, and
 popups, because closing one is MELRA's judgement about what the caller should be
 looking at. In a browser the runtime is attached to over CDP, a tab that
 appears between its actions is the operator's unless it is the runtime's: one
-it opened, a window one of those opened (down any chain), or one its active
-tab opened while active, judged when Chromium creates the window. The
-operator's is left open and not reported, so a tab you open yourself, or one
-`melra console` opens, survives as long as no action is running. One that
-appears while an action runs is closed and reported like any popup, so open
-the console while the agent is idle, or use `melra approve`.
+it opened, a window one of those opened (down any chain), or one opened by the
+tab it is driving, which a tab it merely landed on becomes only once it
+navigates it or sends it input. The operator's is left open and not reported,
+so a tab you open yourself, or one `melra console` opens, survives as long as
+no action is running. One that appears while an action runs is closed and
+reported like any popup, so open the console while the agent is idle, or use
+`melra approve`. A tab that a link in a frame from another site opens is not
+recognised as the runtime's between actions: it is left open and not
+reported, but it is listed by `tabs` and its loads are still checked.
 
 Attaching over CDP and recording a HAR are mutually exclusive; setting both
 fails at startup. A HAR captures full request and response data, including

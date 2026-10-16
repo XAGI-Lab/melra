@@ -264,14 +264,19 @@ describe("browser see/act loop", () => {
 
   it("leaves the operator's own new tabs alone in a browser it is attached to", async () => {
     // Each of these opens a window well after it loads, so between actions:
-    // one window, a window that opens another as it loads, and one with no
-    // opener the page can reach.
-    const context = await fixture(`<!doctype html><html><body><p>page</p><script>
+    // one window, a window that opens another as it loads, one with no opener
+    // the page can reach, one a link opens with a modifier click (Chromium
+    // gives that tab no opener at all), and one while the page stays busy.
+    const context = await fixture(`<!doctype html><html><body><p>page</p>
+      <a id="link" href="/?linked">link</a><button id="mod">mod</button><script>
       const later = (path, features) => setTimeout(() => window.open(location.origin + path, "_blank", features), 1_500);
       if (location.search === "?opens") later("/?popup");
       if (location.search === "?chain") later("/?p1");
       if (location.search === "?p1") window.open(location.origin + "/?p2");
       if (location.search === "?noopener") later("/?np", "noopener");
+      if (location.search === "?busy") { later("/?busypop"); setInterval(() => document.body.append("."), 50); }
+      document.getElementById("mod").onclick = () => setTimeout(() => document.getElementById("link")
+        .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, ctrlKey: true, metaKey: true })), 1_500);
     </script></body></html>`);
     if (context === undefined) return;
     const executablePath = (await detectBrowserExecutable())!;
@@ -309,6 +314,13 @@ describe("browser see/act loop", () => {
         ),
       );
     try {
+      // A read lands on the operator's tab, which does not make it the
+      // runtime's: what the operator opens from it stays theirs.
+      await run({ action: "tabs" });
+      await operator.pages()[0]!.evaluate((url) => window.open(url), `${context.url}/?fromread`);
+      await idle();
+      expect(JSON.stringify((await run({ action: "inspect" })).popups ?? [])).not.toContain("?fromread");
+      expect(await open()).toContain("?fromread");
       await run({ action: "tab_new", url: context.url });
       // A tab the operator opens between the runtime's actions is theirs.
       const mine = await operator.newPage();
@@ -326,6 +338,21 @@ describe("browser see/act loop", () => {
         reported((await run({ action: "inspect" })).popups, ...windows);
         for (const window of windows) expect(await open(), window).not.toContain(window);
       }
+      await run({ action: "navigate", url: context.url });
+      await run({ action: "click", target: { selector: "#mod" } });
+      await idle();
+      reported((await run({ action: "inspect" })).popups, "?linked");
+      expect(await open()).not.toContain("?linked");
+      // An action cancelled midway leaves nothing stale behind for the
+      // windows that come after it.
+      const cancel = new AbortController();
+      setTimeout(() => cancel.abort(), 600);
+      await expect(
+        runtime.execute(BrowserOperationSchema.parse({ kind: "browser", action: "navigate", url: `${context.url}/?busy` }), cancel.signal),
+      ).rejects.toThrow();
+      await idle();
+      reported((await run({ action: "inspect" })).popups, "?busypop");
+      expect(await open()).not.toContain("?busypop");
       // A tab of the operator's the runtime picked up is its own only while
       // it is active: once the runtime moves on, what it opens is theirs.
       await run({ action: "close" });
