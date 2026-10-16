@@ -1,7 +1,7 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
-import { randomUUID, timingSafeEqual } from "node:crypto";
+import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { lstatSync, unlinkSync } from "node:fs";
 import {
   createServer,
@@ -19,6 +19,7 @@ import type { Principal } from "@melra/protocol";
 import { principalRef } from "@melra/protocol";
 import { capabilitiesPayload, createMcpServer } from "./mcp-server.js";
 import type { MelraRuntime } from "./runtime.js";
+import { approvalSummary, printable } from "./approval-screen.js";
 import { consolePage, consoleSecurityHeaders } from "./console-page.js";
 import { clientPrincipal, CONSENT_HEADERS, OAuthProvider, requestOf } from "./oauth.js";
 
@@ -38,13 +39,35 @@ export interface MelraHttpOptions {
   /** Falls back to `MELRA_HTTP_TOKEN`, then to a fresh random token. */
   token?: string;
   environment?: NodeJS.ProcessEnv;
+  /**
+   * Serve the operator's approval console instead of an agent endpoint, and
+   * record its decisions as this approver. Only `melra console` sets it.
+   *
+   * An agent's harness holds every token its endpoint accepts, and reads what
+   * a server it started prints, so an approval there is one the agent could
+   * make. This server is never an agent endpoint: no `/mcp`, no OAuth, no
+   * `MELRA_HTTP_TOKEN` or `token`, loopback TCP only. `url` carries a one-time
+   * pairing code in its fragment; the one page that redeems it gets a session
+   * held only in memory, here and in that page, until that page leaves, and
+   * nothing else is accepted.
+   */
+  approver?: string;
+  /** With `approver`: called once, when a tab redeems the pairing code. */
+  onPaired?: (pairedAt: Date) => void;
+  /** With `approver`: called for each task the paired tab approves. */
+  onApproved?: (taskId: string) => void;
 }
 
 export interface MelraHttpServer {
-  /** Console URL, token included, ready to open. */
+  /**
+   * Console URL, token included, ready to open. For an approval console, the
+   * pairing code rides in the fragment instead, which no request line, log or
+   * Referer carries.
+   */
   url: string;
   /** MCP endpoint for a Streamable HTTP client. */
   mcpUrl: string;
+  /** The bearer token; for an approval console, the one-time pairing code. */
   token: string;
   host: string;
   port: number;
@@ -109,7 +132,7 @@ function tokenMatches(expected: string, supplied: string | undefined): boolean {
 
 function suppliedToken(
   request: IncomingMessage,
-  url: URL,
+  url?: URL,
 ): string | undefined {
   const header = request.headers.authorization;
   if (header !== undefined && header.startsWith("Bearer ")) {
@@ -117,7 +140,7 @@ function suppliedToken(
   }
   // `EventSource` cannot set headers, so the stream and the page it lives on
   // have to be reachable with the token in the query string.
-  return url.searchParams.get("token") ?? undefined;
+  return url?.searchParams.get("token") ?? undefined;
 }
 
 async function readBody(request: IncomingMessage): Promise<unknown> {
@@ -268,10 +291,24 @@ export async function serveHttp(
     configuredPort <= 65_535
       ? configuredPort
       : DEFAULT_HTTP_PORT);
+  // An approval console has no standing token, only a code that one tab can
+  // spend once for a session. Fixed or inherited, a token is one written down
+  // somewhere, which a harness that started this process may have read.
+  const pairing =
+    options.approver === undefined
+      ? undefined
+      : {
+          approver: options.approver,
+          code: randomBytes(16).toString("hex"),
+          // Not yet paired, then the paired page's session, then null once
+          // that page has left: the code stays spent either way.
+          session: undefined as string | null | undefined,
+        };
   // An empty MELRA_HTTP_TOKEN (`MELRA_HTTP_TOKEN=${TOKEN}` with TOKEN unset) is
   // treated as unset, like an empty MELRA_SOCKET, so it gets a random token
   // rather than becoming one that matches an empty `?token=`.
   const token =
+    pairing?.code ??
     options.token ??
     (environment.MELRA_HTTP_TOKEN?.trim() || randomUUID().replaceAll("-", ""));
   if (token.trim() === "") throw new Error("http_token_empty");
@@ -283,6 +320,12 @@ export async function serveHttp(
   const enforced = runtime.policy.mode === "enforced";
   const socketPath =
     options.socketPath === undefined ? undefined : resolve(options.socketPath);
+  // An approval is a person at this machine's browser: no browser reaches a
+  // socket, and anywhere wider than loopback is not this machine. First, so it
+  // is the answer on every platform and in every mode.
+  if (pairing !== undefined && (socketPath !== undefined || !isLoopback(host))) {
+    throw new Error("approval_console_loopback_only");
+  }
   // Windows has named pipes instead, and their default ACL is not a mode this
   // process can set or read back from Node. A transport sold as "only you can
   // connect" that cannot check that claim is worse than none, so refuse it.
@@ -317,6 +360,7 @@ export async function serveHttp(
   // A socket drops it for the first reason: no browser can reach a Unix socket,
   // so there is nobody to show a consent page to.
   const oauthEnabled =
+    pairing === undefined &&
     !enforced &&
     socketPath === undefined &&
     isLoopback(host) &&
@@ -348,6 +392,10 @@ export async function serveHttp(
     response: ServerResponse,
   ): Promise<void> {
     const url = new URL(request.url ?? "/", origin);
+    if (pairing !== undefined) {
+      await handleApprovals(request, response, url, pairing);
+      return;
+    }
     if (await handleOAuth(request, response, url)) return;
     const caller = authenticate(suppliedToken(request, url));
     if (caller === undefined) {
@@ -414,19 +462,9 @@ export async function serveHttp(
     const path = url.pathname.replace(/\/mcp$/, "");
     const method = request.method ?? "GET";
     if (!path.startsWith("/.well-known/") && !path.startsWith("/oauth/")) return false;
-    // A web page can rename itself to 127.0.0.1 (DNS rebinding) and talk to this
-    // server as its own origin, from the operator's browser. Everything else
-    // needs the token, which such a page does not have; these routes do not, so
-    // they answer only to a loopback name. Any port: a rebound page keeps its
-    // own name whatever the port, and an SSH tunnel arrives on a different one.
-    const hostname = (request.headers.host ?? "").toLowerCase().replace(/:\d*$/, "");
-    if (loopbackHosts !== undefined && !loopbackHosts.has(hostname)) {
-      json(response, 421, {
-        error: "host_not_allowed",
-        detail: `Use ${origin}; sign-in answers only to this machine's loopback names.`,
-      });
-      return true;
-    }
+    // Everything else needs the token, which a rebound page does not have;
+    // these routes do not.
+    if (!hostAllowed(request, response, "sign-in")) return true;
     try {
       if (path === "/.well-known/oauth-protected-resource") {
         json(response, 200, oauth.resourceMetadata(origin));
@@ -483,6 +521,160 @@ export async function serveHttp(
       return true;
     }
     return false;
+  }
+
+  /**
+   * A web page can rename itself to 127.0.0.1 (DNS rebinding) and talk to this
+   * server as its own origin, from the operator's browser, so a route such a
+   * page must not reach answers only to a loopback name. Any port: a rebound
+   * page keeps its own name whatever the port, and an SSH tunnel arrives on a
+   * different one.
+   */
+  function hostAllowed(request: IncomingMessage, response: ServerResponse, what = "this"): boolean {
+    const hostname = (request.headers.host ?? "").toLowerCase().replace(/:\d*$/, "");
+    if (loopbackHosts === undefined || loopbackHosts.has(hostname)) return true;
+    json(response, 421, {
+      error: "host_not_allowed",
+      detail: `Use ${origin}; ${what} answers only to this machine's loopback names.`,
+    });
+    return false;
+  }
+
+  /**
+   * Whether a POST came from the console page itself. A browser puts the
+   * page's origin on every POST it sends and no page can change it, so this
+   * refuses every other page, another port on this machine included: same
+   * site, never the same origin. JSON on top, which no other origin can send
+   * without a CORS preflight that this server never answers.
+   */
+  function fromConsole(request: IncomingMessage, response: ServerResponse): boolean {
+    if (request.headers.origin !== `http://${request.headers.host ?? ""}`) {
+      json(response, 403, { error: "origin_not_allowed" });
+      return false;
+    }
+    const type = (request.headers["content-type"] ?? "").split(";")[0]!.trim().toLowerCase();
+    if (type !== "application/json") {
+      json(response, 415, { error: "json_required" });
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * The approval console's whole surface: the page, pairing and unpairing,
+   * the read-only API, and one read and two writes per pending task. Every route answers
+   * only to a loopback name. The page is the same static text for anyone;
+   * everything past it needs the session that pairing gave one tab, sent as a
+   * header and never in a URL.
+   */
+  async function handleApprovals(
+    request: IncomingMessage,
+    response: ServerResponse,
+    url: URL,
+    console_: NonNullable<typeof pairing>,
+  ): Promise<void> {
+    if (!hostAllowed(request, response)) return;
+    const method = request.method ?? "GET";
+    if (method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
+      sendConsole(response, true);
+      return;
+    }
+    if (url.pathname === "/pair" && method === "POST") {
+      if (!fromConsole(request, response)) return;
+      const body = (await readBody(request)) as { code?: unknown } | undefined;
+      // Spent is checked first, so a late tab learns only that it is late.
+      if (console_.session !== undefined) {
+        json(response, 409, {
+          error: "console_already_paired",
+          detail:
+            "Another page paired with this console first. Stop it with Ctrl-C, cancel each task its terminal lists as approved (`melra approve <task-id> --deny`), and run `melra console` again.",
+        });
+        return;
+      }
+      const code = typeof body?.code === "string" ? body.code : undefined;
+      if (!tokenMatches(console_.code, code)) {
+        json(response, 403, { error: "pairing_code_invalid" });
+        return;
+      }
+      console_.session = randomBytes(32).toString("hex");
+      const pairedAt = new Date();
+      options.onPaired?.(pairedAt);
+      json(response, 200, { session: console_.session, pairedAt: pairedAt.toISOString() });
+      return;
+    }
+    if (typeof console_.session !== "string" || !tokenMatches(console_.session, suppliedToken(request))) {
+      json(response, 401, {
+        error: "unauthorized",
+        detail: "Only the page that paired with this console, while it stays open, can use it.",
+      });
+      return;
+    }
+    if (url.pathname === "/unpair") {
+      if (method !== "POST") {
+        json(response, 405, { error: "method_not_allowed" });
+        return;
+      }
+      if (!fromConsole(request, response)) return;
+      // The page sends this as it leaves, or when something else moves it, so
+      // the session it held is worth nothing after, here as well as there.
+      console_.session = null;
+      json(response, 200, { unpaired: true });
+      return;
+    }
+    const route = /^\/api\/tasks\/([^/]+)\/(approval|approve|deny)$/.exec(url.pathname);
+    if (route?.[1] === undefined) {
+      await handleApi(request, response, url);
+      return;
+    }
+    const taskId = route[1];
+    const read = route[2] === "approval";
+    if (method !== (read ? "GET" : "POST")) {
+      json(response, 405, { error: "method_not_allowed" });
+      return;
+    }
+    if (!read && !fromConsole(request, response)) return;
+    // The screen and the digest come from one view, and `decide` refuses any
+    // other digest, so a decision covers exactly what the operator was shown.
+    const view = runtime.controller.approvalView(taskId);
+    if (read) {
+      json(response, 200, {
+        taskId,
+        mode: runtime.policy.mode,
+        expiresAt: view.task.approval?.expiresAt,
+        renderDigest: view.renderDigest,
+        // Apart, so a page can show the bounded summary right above its
+        // buttons, where the terminal shows it, and the dump anywhere else.
+        contract: printable(JSON.stringify(view.contract, null, 2), true),
+        summary: approvalSummary(view),
+        decision: runtime.controller.approvalDecision(view.task) ?? null,
+      });
+      return;
+    }
+    if (route[2] === "deny") {
+      runtime.controller.cancel(taskId);
+      // Read back: another process may have started it in the meantime.
+      json(response, 200, { task: runtime.controller.status(taskId) });
+      return;
+    }
+    const body = (await readBody(request)) as { taskId?: unknown; renderDigest?: unknown } | undefined;
+    // The page names the task it drew as well as the digest it drew, both
+    // taken when it drew them, so nothing that changed since redirects this.
+    if (body?.taskId !== taskId) throw new Error("approval_task_mismatch");
+    if (typeof body.renderDigest !== "string") throw new Error("render_digest_required");
+    const decision = runtime.controller.decide(taskId, body.renderDigest, console_.approver);
+    options.onApproved?.(taskId);
+    json(response, 200, { decision });
+  }
+
+  function sendConsole(response: ServerResponse, approvals = false): void {
+    const page = consolePage(approvals);
+    response.writeHead(200, {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store",
+      "content-length": Buffer.byteLength(page),
+      ...consoleSecurityHeaders(),
+    });
+    response.end(page);
   }
 
   async function handleMcp(
@@ -551,14 +743,7 @@ export async function serveHttp(
     }
     const path = url.pathname;
     if (path === "/" || path === "/index.html") {
-      const page = consolePage();
-      response.writeHead(200, {
-        "content-type": "text/html; charset=utf-8",
-        "cache-control": "no-store",
-        "content-length": Buffer.byteLength(page),
-        ...consoleSecurityHeaders(),
-      });
-      response.end(page);
+      sendConsole(response);
       return;
     }
     if (path === "/api/capabilities") {
@@ -693,7 +878,8 @@ export async function serveHttp(
   }
 
   return {
-    url: `${origin}/?token=${token}`,
+    // No `&` in it: Windows' `start` would read one as a second command.
+    url: pairing === undefined ? `${origin}/?token=${token}` : `${origin}/#pair=${token}`,
     mcpUrl: `${origin}/mcp`,
     token,
     host,

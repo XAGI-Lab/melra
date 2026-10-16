@@ -6,7 +6,7 @@
 // because importing that runs the CLI, and every piece here needs a test.
 
 import { createInterface } from "node:readline/promises";
-import { printable } from "./approval-screen.js";
+import { printable } from "@melra/server";
 import { CLIENTS } from "./clients.js";
 import type { ClientChoice, ClientStatus } from "./client-status.js";
 import { mark, paint, table, type Status } from "./output.js";
@@ -86,7 +86,10 @@ export function nextStep(report: DoctorReport): string | undefined {
       case "guardrails":
         return "unset MELRA_UNHINGED and drop --unsafe-local to turn the guardrails back on";
       case "browser":
-        return "install Chrome, or set MELRA_BROWSER to a Chrome, Chromium, or Edge executable";
+        // An attached browser warns whatever is installed, so installing clears nothing.
+        return check.detail.startsWith("attached over CDP")
+          ? "point MELRA_BROWSER_CDP_ENDPOINT at a browser you do not use yourself, or unset it"
+          : "install Chrome, or set MELRA_BROWSER to a Chrome, Chromium, or Edge executable";
       case "clients": {
         if (broken === undefined) return undefined;
         if (broken.state === "unreadable") return `check the permissions on ${broken.path}`;

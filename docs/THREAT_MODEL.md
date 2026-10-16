@@ -89,14 +89,87 @@ and what lets the mutation run, depends on the
 | | Developer mode | Enforced mode |
 |---|---|---|
 | Phrase in the challenge | yes: `APPROVE` plus the first 12 hex digits of the action digest | none |
-| What lets a mutation run | the phrase echoed to `melra_execute`, or a decision recorded with [`melra approve`](INSTALLATION.md#approving-from-the-command-line) | only an operator's decision recorded by a process in enforced mode (`melra approve`, or `melra run`'s prompt in a terminal) |
+| What lets a mutation run | the phrase echoed to `melra_execute`, or a decision recorded with [`melra approve`](INSTALLATION.md#approving-from-the-command-line) or [`melra console`](INSTALLATION.md#approving-in-a-browser) | only an operator's decision recorded by a process in enforced mode (`melra approve`, `melra console`, or `melra run`'s prompt in a terminal) |
 | An approval the agent sends | checked against the phrase | refused (`approval_in_band_refused`), even when an operator has already decided |
 | No usable decision yet | `approval_required` | `approval_awaiting_operator`, or `approval_expired` once the challenge has expired |
 | Channel on the receipt | `in_band` | `out_of_band` |
-| Residual risk | anyone who knows the task can compute the phrase, so an echo shows only that something echoed it | anyone with OS access to the data directory can run `melra approve`, which is an operator only if the agent has no such access |
+| Residual risk | anyone who knows the task can compute the phrase, so an echo shows only that something echoed it | anyone with OS access to the data directory can run `melra approve` or `melra console`, or write `melra.sqlite` directly, which is an operator only if the agent has no such access; see [the approval console](#the-approval-console) for that path's own residuals |
 
 Approvals cannot be reused for a different task or operation. Policy is
 re-evaluated after approval and immediately before execution.
+
+### The approval console
+
+`melra console` is an operator path beside `melra approve`, with the same
+authority. It is a separate process: a loopback server with no MCP endpoint and
+no client registration, which refuses to start without a terminal and never
+prints its pairing code. It pairs once, with the first page to use its one-time
+code, normally the tab it opened (see the pairing race below), and that page
+holds its session in memory only; a decision is a JSON POST from the console's
+own origin, bound to the task and the digest of the screen shown. MELRA's
+browser runtime refuses every action that sends the console page input
+(`browser_refuses_approval_surface`), in every mode, and each action of its
+own that could raise or move the page under the operator's pointer:
+`tab_switch` onto its tab, `scroll` on it, and, in a browser it is attached
+to, `close` of any tab and `tab_switch` to any while another console is open
+there, since the browser then raises a neighbour or, in a split view, the
+switched tab's partner; a tab that does not answer within a second counts as
+one, since a console too busy to answer is still a console. Its
+other reads can still move the page (navigate, back, forward), but the page
+takes the task it approves from the operator's clicks, never from its URL, and
+any move of its URL, or leaving it, ends the pairing on both sides: the page
+hands its session back and the console refuses it after. On its own side,
+Approve and Deny ignore clicks until the page has been visible, focused and
+unscrolled for a second, as a browser holds back a permission prompt's
+buttons. In a browser MELRA's runtime is attached to, that hold sees less:
+Playwright's focus emulation makes every page there report itself visible and
+focused, so the console cannot see being raised, and its hold restarts only
+on scrolling and resizing. There the runtime's refusals above are what keep
+it from raising the console. The server an agent
+connects to has no approval route, and no MELRA operation that runs without
+approval can produce a console approval. That is the claim; it is not a claim
+that the agent cannot approve. What remains:
+
+- **Same-user writes.** Anything running as the operator's OS user against the
+  data directory can approve with `melra approve --yes`, which needs no
+  terminal, or write `melra.sqlite` directly. Both were true before the console
+  and still are.
+- **Computer actions as a confused deputy.** MELRA cannot tell which page a
+  `computer.click` or `computer.type` lands on. Approving one approves whatever
+  is on screen when it runs, the console's Approve button included.
+- **A pairing race.** Until the page spends it, the code is on the browser
+  opener's command line, in browser history, and, in a browser the agent's
+  runtime is attached to over CDP, in a `tabs` read. Whatever reads it there
+  can pair first, and use that session from any HTTP client (the `Origin`
+  check binds browsers only) to approve whatever is pending, and to read every
+  task, receipt and workflow event the console serves, until the console
+  stops. The operator's cue is their own tab saying another tab already
+  paired; the terminal's pairing line alone looks like a normal start. Every
+  approval is printed on the terminal as it is made, and if the browser opener
+  reports failure after a tab paired, the console closes with an error naming
+  them, so the operator can cancel each with `melra approve <task-id> --deny`
+  before the agent runs it; one already run cannot be taken back. Who can read the code decides what that costs. A tab
+  the agent's browser paired gets no input from that runtime. An
+  unsandboxed process of the operator's own user could already run
+  `melra approve --yes`. But another OS user, or a sandboxed process that can
+  list processes without reaching the data directory, can read the opener's
+  command line (`ps`, `/proc/<pid>/cmdline`) and race the pairing for an
+  approval it could not make otherwise. A spent code is worthless.
+- **A click after the console comes forward.** The second's hold stops a click
+  already on its way when the page is raised, refocused or scrolled, but in a
+  browser MELRA's runtime is attached to it sees only scrolling and resizing.
+  Something other than MELRA's runtime that raises the console there (the
+  operator, the OS, another CDP client) is not held, and anywhere, a click
+  made later than the hold lands on whatever is under the pointer then, the
+  console's buttons included, if the operator did not notice it come
+  forward.
+- **Same-user memory reads.** A process that can read the console's memory or
+  the browser's (a debugger, `ptrace`) can take the session.
+- **Social engineering.** An agent can ask the operator to approve something in
+  the console. The console shows what the effect is, and a misleading but
+  accurately displayed operation can still be approved.
+- **A harness that gives the agent a terminal** breaks enforced mode's premise,
+  whatever the console does: that terminal can run `melra approve --yes`.
 
 ## Network policy
 

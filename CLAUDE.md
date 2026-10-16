@@ -54,7 +54,7 @@ pnpm e2e                    # packages/server/test/e2e.test.ts against a live st
 pnpm pack:check              # npm pack --dry-run for the published CLI
 pnpm readme:check           # typecheck every ```ts block in every package README
 pnpm security:audit          # pnpm audit --prod + scripts/python-audit.mjs
-pnpm melra <cmd>            # run the CLI from source via tsx (setup | doctor | conformance | init | serve | run | approve | inspect | export | tasks | watch | status | workflow | demo | clients | policy test | version)
+pnpm melra <cmd>            # run the CLI from source via tsx (setup | doctor | conformance | init | serve | run | approve | console | inspect | export | tasks | watch | status | workflow | demo | clients | policy test | version)
 ```
 
 Single test file (vitest args pass through the package script):
@@ -111,8 +111,8 @@ minus `src/**/*.test.ts`, so tests never reach `dist/` or the tarball) and its
 `TaskRecord`, and — for mutations — returns a task-scoped, expiring approval challenge. In
 developer mode its exact phrase must be echoed back; in enforced mode it has no phrase,
 `melra_execute` refuses any approval the caller sends (`approval_in_band_refused`), and
-only an `out_of_band` decision recorded by an enforced-mode process (`melra approve`, or
-`melra run`'s prompt) lets it run
+only an `out_of_band` decision recorded by an enforced-mode process (`melra approve`,
+`melra console`, or `melra run`'s prompt) lets it run
 (`approval_awaiting_operator` until then). `melra_execute` **re-evaluates policy** so a stale plan
 cannot ride a since-tightened policy, validates the approval, runs the adapter under an
 `AbortSignal` armed with `budget.maxDurationMs`, then verifies.

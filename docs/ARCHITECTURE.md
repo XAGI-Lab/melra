@@ -332,6 +332,7 @@ same durable record; none of them is a shortcut past a stage of the lifecycle.
 | TypeScript SDK | stdio subprocess, or a running server over loopback HTTP or the Unix socket | Node applications and custom harnesses |
 | Python SDK | stdio subprocess, or a running server over loopback HTTP or the Unix socket | Python applications and custom harnesses |
 | JSON API | loopback HTTP or the Unix socket, read-only | Consoles and dashboards |
+| Approval console | `melra console`: its own loopback HTTP server, no MCP endpoint | An operator approving or denying in a browser tab paired with it |
 
 The MCP surface is exactly eleven tools:
 
@@ -347,7 +348,10 @@ The MCP surface is exactly eleven tools:
 The CLI exposes `workflow plan`, `workflow advance`, `workflow inspect`,
 `workflow cancel`, and the operator halts `workflow pause`, `workflow resume`,
 and `workflow suspend`; `tasks`, `watch`, and `status` read the local database
-read-only, with or without a server running. The TypeScript and Python SDKs call the same workflow
+read-only, with or without a server running. `approve` and `console` record an
+operator's decision through `TaskController.decide`, the first in a terminal
+and the second in a browser tab; the server an agent connects to has no route
+that does. The TypeScript and Python SDKs call the same workflow
 tools and do not implement a second execution engine.
 
 ## Packages
@@ -454,8 +458,10 @@ A receipt for an approved effect also says who approved it and how:
 and `renderDigest`, the digest of the effect contract they were shown. An echoed
 phrase is `in_band` with approver `phrase`, because anything that knows the task
 can compute it. A decision recorded through an operator surface
-(`TaskController.decide`) is `out_of_band` only in enforced mode, and is bound
-to the render: a request that changed after it was shown cannot run on it.
+(`TaskController.decide`, which `melra approve`, `melra run`'s prompt and
+`melra console` call; the approver reads `cli:<name>` or `console:<name>`) is
+`out_of_band` only in enforced mode, and is bound to the render: a request that
+changed after it was shown cannot run on it.
 Decisions live in their own insert-once table, and one made before the
 challenge expired stays usable for a TTL after it was made.
 

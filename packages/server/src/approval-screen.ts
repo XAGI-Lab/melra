@@ -4,11 +4,26 @@
 /**
  * Characters a terminal does not show as themselves: controls (C0, C1, DEL),
  * format characters (bidi overrides, zero-width, soft hyphen, tag characters),
- * line and paragraph separators, and the ones that render as nothing at all
- * (variation selectors, Hangul fillers, the grapheme joiner).
+ * line and paragraph separators, the ones that render as nothing at all
+ * (variation selectors, Hangul fillers, the grapheme joiner), and unassigned
+ * code points, which a renderer may draw as nothing too.
  */
 const HIDDEN =
-  /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u034f\u115f\u1160\u17b4\u17b5\u180b-\u180f\u3164\ufe00-\ufe0f\uffa0\u{e0100}-\u{e01ef}]/gu;
+  /[\p{Cc}\p{Cf}\p{Cn}\p{Zl}\p{Zp}\u034f\u115f\u1160\u17b4\u17b5\u180b-\u180f\u3164\ufe00-\ufe0f\uffa0\u{e0100}-\u{e01ef}]/gu;
+
+/**
+ * Combining marks past the second on one character: a long run of them draws
+ * outside its own line, over the lines around it, the effect line included.
+ * Only an approval screen spells them out, since it is the one place where
+ * what sits around the agent's text must stay legible; elsewhere scripts that
+ * stack more, such as Tibetan or pointed Hebrew, show as written.
+ */
+const STACKED = /(?<=[\p{Mn}\p{Me}]{2})[\p{Mn}\p{Me}]/gu;
+
+const spelled = (character: string): string =>
+  Array.from({ length: character.length }, (_, index) => `\\u${character.charCodeAt(index).toString(16).padStart(4, "0")}`).join(
+    "",
+  );
 
 /**
  * Text a terminal shows as text and nothing else. Everything in an approval
@@ -18,14 +33,12 @@ const HIDDEN =
  * `\uXXXX` per UTF-16 unit, which inside JSON is also a valid escape for it.
  */
 export function printable(text: string, keepNewlines = false): string {
-  return text.replace(HIDDEN, (character) =>
-    keepNewlines && character === "\n"
-      ? character
-      : Array.from(
-          { length: character.length },
-          (_, index) => `\\u${character.charCodeAt(index).toString(16).padStart(4, "0")}`,
-        ).join(""),
-  );
+  return text.replace(HIDDEN, (character) => (keepNewlines && character === "\n" ? character : spelled(character)));
+}
+
+/** `printable` for an approval screen: stacked combining marks spelled out too. */
+function screened(text: string, keepNewlines = false): string {
+  return printable(text, keepNewlines).replace(STACKED, spelled);
 }
 
 export interface ApprovalScreenView {
@@ -43,7 +56,7 @@ export interface ApprovalScreenView {
 
 /** At most `limit` characters, saying how many more there were. */
 function bounded(text: string, limit = 160): string {
-  const shown = printable(text);
+  const shown = screened(text);
   return shown.length > limit ? `${shown.slice(0, limit)}…(+${shown.length - limit} chars)` : shown;
 }
 
@@ -121,16 +134,14 @@ function operationLines(operation: unknown, fieldLimit = 8): string[] {
 }
 
 /**
- * The approval screen, ending with what MELRA itself vouches for: the full
- * contract first, so however long the agent's content runs it cannot push the
- * effect off the screen, then the operation and the summary, each line
- * bounded, right above the question.
+ * What MELRA itself vouches for, each line bounded: the task, the operation,
+ * the effect, the agent's goal, and the digest. However long the agent's
+ * content runs, its height is bounded, so a page can put it right above its
+ * buttons, and the contract dump wherever it fits.
  */
-export function approvalScreen(view: ApprovalScreenView): string {
+export function approvalSummary(view: ApprovalScreenView): string {
   const { contract } = view;
   return [
-    printable(JSON.stringify(contract, null, 2), true),
-    "\u001b[0m",
     `Task ${view.task.id}, waiting for approval until ${view.task.approval?.expiresAt ?? "unknown"}`,
     "Operation:",
     ...operationLines(contract.operation).map((line) => `  ${line}`),
@@ -138,5 +149,19 @@ export function approvalScreen(view: ApprovalScreenView): string {
     `Goal (stated by the agent, unverified): ${bounded(contract.metadata.goal, 200)}`,
     `Contract digest: ${view.renderDigest}`,
     "",
+  ].join("\n");
+}
+
+/**
+ * The approval screen, ending with what MELRA itself vouches for: the full
+ * contract first, so however long the agent's content runs it cannot push the
+ * effect off the screen, then the summary right above the question. `terminal`
+ * adds a reset after the contract, which only a terminal has any use for.
+ */
+export function approvalScreen(view: ApprovalScreenView, terminal = false): string {
+  return [
+    screened(JSON.stringify(view.contract, null, 2), true),
+    ...(terminal ? ["\u001b[0m"] : []),
+    approvalSummary(view),
   ].join("\n");
 }

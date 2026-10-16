@@ -6,8 +6,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import { isSea } from "node:sea";
 import type { DeploymentMode } from "@melra/protocol";
 import { deploymentMode } from "@melra/protocol";
-import { unhingedFromEnvironment } from "@melra/server";
-import { printable } from "./approval-screen.js";
+import { printable, unhingedFromEnvironment } from "@melra/server";
 
 export interface CliEnvironment {
   workspaceRoot: string;
@@ -60,12 +59,15 @@ export function serverLaunch(
     : { command: "melra", args: ["serve"] };
 }
 
-/** The approver as receipts record it: `cli:` and a label nothing can disguise. */
-export function approverLabel(env: CliEnvironment): string {
+/**
+ * The approver as receipts record it: the surface it was given on (`cli:` or
+ * `console:`), then a label nothing can disguise.
+ */
+export function approverLabel(env: CliEnvironment, surface: "cli" | "console" = "cli"): string {
   if (!/^[\p{L}\p{N}_.@-]{1,64}$/u.test(env.approver) || printable(env.approver) !== env.approver) {
     throw new Error("MELRA_APPROVER must be 1 to 64 letters, digits, '.', '_', '@' or '-'");
   }
-  return `cli:${env.approver}`;
+  return `${surface}:${env.approver}`;
 }
 
 function cdpEndpoint(value: string | undefined): string | undefined {

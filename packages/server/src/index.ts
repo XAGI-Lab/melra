@@ -1,6 +1,7 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
+export * from "./approval-screen.js";
 export * from "./mcp-server.js";
 export * from "./harness-tools.js";
 export * from "./http-server.js";

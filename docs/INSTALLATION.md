@@ -218,7 +218,7 @@ MELRA uses these environment variables:
 | `MELRA_PAYLOAD_KEY` | Optional canonical base64url 256-bit payload key | private `<MELRA_HOME>/payload.key` |
 | `MELRA_UNHINGED` | Set to `1` to remove every guardrail — see below | unset (all guardrails on) |
 | `MELRA_MODE` | `developer` or `enforced` — see [deployment modes](#deployment-modes) | `developer` |
-| `MELRA_APPROVER` | The name [`melra approve`](#approving-from-the-command-line) records as the approver, as `cli:<name>`. Letters (any script), digits, `.`, `_`, `@` and `-`, at most 64; checked when `melra approve` or `melra run` records a decision. Receipts carry it, and an agent can read receipts. | `operator` |
+| `MELRA_APPROVER` | The name [`melra approve`](#approving-from-the-command-line) records as the approver, as `cli:<name>`, and [`melra console`](#approving-in-a-browser) as `console:<name>`. Letters (any script), digits, `.`, `_`, `@` and `-`, at most 64; checked when `melra approve` or `melra run` records a decision, and when `melra console` starts. Receipts carry it, and an agent can read receipts. | `operator` |
 | `MELRA_HTTP_PORT` | Port for `melra serve --http` | `7457` |
 | `MELRA_HTTP_TOKEN` | Bearer token for `melra serve --http` | a fresh random token, printed at startup |
 | `MELRA_HTTP_OAUTH` | Set to `0` so that token is the only way in and no client can register itself | unset (clients may register, on loopback) |
@@ -541,6 +541,10 @@ generated each start. **Anyone who can read the token can drive this machine** �
 the server binds loopback only, and putting it behind a proxy on a reachable
 interface hands out that reach.
 
+The console this server serves is read-only, and the server has no approval
+route. To approve in a browser, run [`melra console`](#approving-in-a-browser),
+a separate process.
+
 ### Over a Unix socket
 
 A loopback port is reachable by every process on the machine; the token is all
@@ -786,8 +790,9 @@ closing every door it owns:
   is handed nothing to echo, and `melra_execute` refuses any approval it is
   sent with `approval_in_band_refused`. A mutation runs only on a decision an
   operator recorded from a process in enforced mode, with
-  [`melra approve`](#approving-from-the-command-line) or `melra run`'s prompt
-  in a terminal; until then the answer is `approval_awaiting_operator`, and
+  [`melra approve`](#approving-from-the-command-line),
+  [`melra console`](#approving-in-a-browser) or `melra run`'s prompt in a
+  terminal; until then the answer is `approval_awaiting_operator`, and
   `approval_expired` once the challenge has expired, which means plan the task
   again. A developer-mode `melra approve` on a task with no phrase records
   nothing and fails with `approval_needs_enforced_mode`.
@@ -834,10 +839,13 @@ default), when, and the digest of what they were shown. In enforced mode the
 channel is `out_of_band`; in developer mode it is `in_band`, because there the
 agent may hold the same access. `melra run` asks the same way in a terminal.
 
-In enforced mode an operator's decision, recorded this way or through
-`melra run`'s prompt, is the only way a mutation gets approved: the agent is
+In enforced mode an operator's decision, recorded this way, in
+[`melra console`](#approving-in-a-browser), or through `melra run`'s prompt,
+is the only way a mutation gets approved: the agent is
 given no phrase, and one it sends is refused. Run `melra approve` in enforced
-mode too (`MELRA_MODE=enforced` or `--mode enforced`). A developer-mode
+mode too (`MELRA_MODE=enforced` or `--mode enforced`), with the `MELRA_HOME`
+and `MELRA_WORKSPACE` the agent's server uses (see
+[`melra console`](#approving-in-a-browser) for why the workspace matters). A developer-mode
 `melra approve` on a task with no phrase is refused with
 `approval_needs_enforced_mode` and records nothing, because the enforced kernel
 would not run on its in-band decision and a task has only one.
@@ -848,6 +856,127 @@ refused in enforced mode, and a developer-mode `melra approve` on such a task
 still records an in-band decision the enforced kernel ignores: a workflow
 plans the step again once the challenge expires, and a single task needs
 `melra approve --deny` and planning again.
+
+## Approving in a browser
+
+`melra console` is [`melra approve`](#approving-from-the-command-line) on a
+page instead of a y/N prompt. Run it yourself, in a terminal, with the same
+`MELRA_HOME`, `MELRA_WORKSPACE` and mode as the server your agent uses. A stdio
+client sets those in its own config, not in your shell, so set them here too:
+
+```bash
+MELRA_MODE=enforced MELRA_WORKSPACE=/path/to/agent/workspace melra console
+```
+
+If it stops with `enforced_mode_refuses_data_inside_workspace`, the workspace it
+worked out holds the data directory: with `MELRA_WORKSPACE` unset, the
+workspace is the current directory, and from your home directory that contains
+the default `~/.melra`. Set `MELRA_WORKSPACE` to the agent's workspace, or run
+the console from there. Do not move `MELRA_HOME` instead, as the error says to
+for a server: the console would then open an empty database, with no task
+waiting in it.
+
+Once started, it opens the console in your default browser. A task waiting
+for approval shows the screen `melra approve` shows, with Approve and Deny.
+Approve records a decision bound to exactly that screen and runs nothing: the
+agent that planned the task runs it, as after `melra approve`. Deny cancels the task, as `--deny`
+does. The receipt names the approver as `console:` plus
+[`MELRA_APPROVER`](#local-configuration). In enforced mode the decision is
+`out_of_band`. In developer mode it is `in_band`, the terminal and the page say
+so, and a task with no phrase is refused with `approval_needs_enforced_mode`,
+as `melra approve` refuses it.
+
+`melra console` approves with the same authority as `melra approve`. The
+server your agent connects to has no approval route, and no MELRA operation
+that runs without approval can produce a console approval. The console is a
+server of its own: it listens on a fresh loopback port, serves no MCP endpoint
+and no client registration, and ignores `MELRA_HTTP_TOKEN`.
+
+**Pairing.** The console has no standing token. It pairs once, with the first
+page to use its one-time code, normally the tab it opens:
+
+1. It hands your browser `http://127.0.0.1:<port>/#pair=<code>`, a one-time
+   code in the fragment, which no request line, log or `Referer` carries. It
+   never prints the code.
+2. The page spends the code, in a POST the console accepts only from its own
+   origin, for a session it keeps in memory: not in browser storage, the DOM or
+   a URL. A second pairing is refused with `console_already_paired`.
+3. The terminal prints the console's address, then
+   `Paired with a browser tab at HH:MM`, and the page shows `paired at HH:MM`.
+   If the terminal says paired and no tab opened for you, press Ctrl-C. If your
+   tab says another tab already paired, press Ctrl-C too: every approval that
+   tab made is on the terminal as `Approved <task-id> at HH:MM`, and runs the
+   next time the agent asks, so cancel each you did not make with
+   `melra approve <task-id> --deny`, with the console's `MELRA_HOME`, then run
+   `melra console` again. A task already approved shows there as approved, with
+   no Deny button, which is why `--deny` is run from the terminal.
+
+**Reloading or leaving the page ends the pairing**, and so does anything else
+moving its URL, such as a link to another fragment, back or forward; run
+`melra console` again for a new one. It ends at the console as well: the page
+hands its session back as it goes, and the console refuses it after. The page
+takes the task you approve from
+your clicks in it, never from its URL, and changes its URL itself only to take
+the pairing code out of it as it opens. Only
+the page that spent the code is ever paired, so a page that sends a tab back to
+the console does not arrive at a paired one.
+
+The page shows MELRA's summary of the effect (the operation, `Effect:`, the
+agent's goal, the digest) right above Approve and Deny, with the full contract
+folded above it, and spells out every hidden character in what the agent sent
+(bidi overrides, zero-width characters, combining marks stacked past two on
+one character, which would draw over the lines around them) as `\uXXXX`, as
+the terminal screen does. Approve and Deny show as not yet active, and ignore clicks, for a second
+after they appear and after the page is raised, refocused or scrolled (in a
+browser an agent's runtime is attached to, after it is scrolled or resized:
+see below).
+
+An approve or a deny is a POST from that page: its `Origin` must be the
+console's own, it carries the session as `Authorization: Bearer`, its body is
+JSON, and an approve names the task and the digest of the screen it showed,
+both fixed when the page drew it. No other origin can send that without a CORS
+preflight, which the console never answers, and a GET never decides.
+
+| Deployment | `melra console` |
+|---|---|
+| A stdio client (Claude Code, Claude Desktop, Cursor, …), with you running `melra console` on the same machine | supported |
+| `melra serve --http`, started by you or by a harness, with you running `melra console` beside it | supported |
+| A macOS, Linux or Windows desktop with a default browser | supported |
+| Started without a terminal: by a harness, systemd, launchd or compose, or with stdin or stderr piped | refused: `console_needs_a_terminal` |
+| Nothing here opens a browser | refused: `console_needs_a_browser`, and the URL is not printed instead; if a tab paired while the opener ran, the error names every task it approved, to cancel with `melra approve <task-id> --deny` |
+| Inside a Docker container | refused, as one of the two rows above: use `docker exec -it <container> node /opt/melra/dist/bin.js approve <task-id>`, with the container's id from `docker ps` |
+| The console itself on a Unix socket or off loopback (`serveHttp` with `approver`); an agent server on a socket is fine | refused: `approval_console_loopback_only` |
+
+**Same root of trust as `melra approve --yes`.** That command needs no
+terminal, so anything running as your OS user against the data directory can
+approve with it, and can write `melra.sqlite` directly. The console does not
+change either. Enforced mode rests on the agent having no such process; a
+harness that gives the agent a terminal removes that, whatever the console
+does. See [the threat model](THREAT_MODEL.md#the-approval-console).
+
+**An agent's browser attached to yours.** With `MELRA_BROWSER_CDP_ENDPOINT`
+set, the agent's browser runtime drives tabs in a browser you may also use, and
+`melra doctor` warns about it. The console page carries a marker, and MELRA's
+browser runtime refuses every action that sends input to a page carrying it
+(`browser_refuses_approval_surface`), in every mode, whatever approved the
+action. It also refuses each action of its own that could raise or move the
+console under your pointer: `tab_switch` onto the console's tab, `scroll` on
+it, and, in a browser it is attached to, `close` of any tab and `tab_switch`
+to any while another console is open there, because the browser then raises
+a neighbouring tab, or a split view's other half; a
+tab that does not answer within a second counts as one, so two such tabs hold
+each other open until you close one. Other reads still work there: the agent
+can see the page and move its tab (navigate it away or to another fragment,
+back, forward), and an approved `close` can close the console itself while no
+other is open; each of those ends the pairing. The page's own second's hold on Approve and Deny sees
+less in such a browser: Playwright's focus emulation makes every page there
+report itself visible and focused, so the console cannot tell it was raised,
+and the hold restarts only when it is scrolled or resized. Attach the agent to
+a browser you do not use yourself.
+
+**A computer action lands wherever the screen is.** MELRA cannot tell which
+page a `computer.click` or `computer.type` reaches, so approving one approves
+whatever is on screen when it runs, the console included.
 
 ## Unsafe-local mode
 

@@ -24,6 +24,7 @@ import {
 } from "./browser-connection.js";
 import {
   assertSafeUrl,
+  classifyOperation,
   type NetworkPolicy,
 } from "@melra/policy-core";
 import { startPinningProxy, type PinningProxy } from "./pinning-proxy.js";
@@ -340,6 +341,12 @@ function collectFrame(limit: number) {
     elements,
   };
 }
+
+/**
+ * The `<meta>` name of a page only an operator may act on: `melra console`
+ * serves its approval page with it, and its CSP lets no script take it off.
+ */
+export const APPROVAL_SURFACE = "melra-approval-surface";
 
 export class BrowserRuntime {
   private browser: Browser | undefined;
@@ -1328,13 +1335,64 @@ export class BrowserRuntime {
     // ponytail: checked when the action starts. A page that navigates itself
     // while the action waits for its target can still receive it; pinning
     // each action to the checked document would close that.
+    const acted =
+      (operation.action === "close" || operation.action === "tab_switch") && operation.tabIndex !== undefined
+        ? (await this.ensureContext()).pages()[operation.tabIndex]
+        : page;
     if (operation.url !== undefined && operation.action !== "navigate" && operation.action !== "tab_new") {
-      const acted =
-        (operation.action === "close" || operation.action === "tab_switch") && operation.tabIndex !== undefined
-          ? (await this.ensureContext()).pages()[operation.tabIndex]
-          : page;
       const at = acted === undefined ? "no such tab" : pageAddress(acted.url());
       if (at !== pageAddress(operation.url)) throw new Error(`browser_page_not_at_url: the page is at ${at}`);
+    }
+    // An approval console open in a browser this runtime is attached to is a
+    // read away (`tabs`), and an action without a url acts on whatever page is
+    // active. So no input reaches one, whatever approved the action and in
+    // every mode: an approval there is the operator's act alone. Nor do the two
+    // reads that can put its Approve under the operator's pointer: raising its
+    // tab (`tab_switch`) and scrolling it. Reads that move its URL still work,
+    // and the console unpairs when they do.
+    // The console holds its buttons back for a second after it is raised, but
+    // in a browser this runtime is attached to, Playwright's focus emulation
+    // makes every page report itself visible and focused, so the console never
+    // sees being raised. Whatever of ours could raise it is refused instead.
+    // Same ponytail as above: checked at the start.
+    if (
+      (operation.action === "tab_switch" ||
+        operation.action === "scroll" ||
+        (operation.action !== "close" && classifyOperation(operation).effect !== "read")) &&
+      acted !== undefined &&
+      (await this.call(acted.locator(`meta[name="${APPROVAL_SURFACE}"]`).count(), "count")) > 0
+    ) {
+      throw new Error("browser_refuses_approval_surface");
+    }
+    // Closing a tab lets the browser raise a neighbour, which can be a
+    // console, and switching to a tab raises its split-view partner with it,
+    // which CDP does not say. So in a browser this runtime is attached to,
+    // where an operator can have one open, `close` and `tab_switch` are
+    // refused while any other page here carries the marker, whatever the tab
+    // acted on carries itself: any page can carry it. A marked tab of the agent's can be navigated away first. A browser
+    // this runtime launched has no operator's console in it. A page that does
+    // not answer within a second could be a console too busy to, so it holds
+    // the others open the same way, under its own reason naming its tab; it
+    // can be closed itself unless another tab also does not answer. One closed
+    // meanwhile holds nothing. Attached over CDP, every page of the browser is
+    // in this one context.
+    if ((operation.action === "close" || operation.action === "tab_switch") && this.options.cdpEndpoint !== undefined) {
+      if (operation.tabIndex !== undefined && acted === undefined) throw new Error("browser_tab_not_found");
+      const pages = (await this.ensureContext()).pages();
+      const marks = await Promise.all(
+        pages.map((other) =>
+          other === acted
+            ? 0
+            : bounded(other.locator(`meta[name="${APPROVAL_SURFACE}"]`).count(), 1_000, "count").catch(() =>
+                other.isClosed() ? 0 : -1,
+              ),
+        ),
+      );
+      if (marks.some((count) => count > 0)) throw new Error("browser_refuses_approval_surface");
+      const silent = marks.flatMap((count, index) => (count < 0 ? [index] : []));
+      if (silent.length > 0) {
+        throw new Error(`browser_approval_surface_check_unavailable: tab ${silent.join(", ")} did not answer`);
+      }
     }
     // A targeted read says whether its target exists, and whether a target
     // exists can be made to depend on a secret field's content, however the
@@ -1666,8 +1724,9 @@ export class BrowserRuntime {
         if (operation.tabIndex === undefined) {
           throw new Error("browser_tab_switch_requires_tab_index");
         }
-        const target = context.pages()[operation.tabIndex];
-        if (target === undefined) throw new Error("browser_tab_not_found");
+        // The page checked above, not whichever holds its index by now.
+        const target = acted;
+        if (target === undefined || target.isClosed()) throw new Error("browser_tab_not_found");
         // Bring the tab to the front so a screenshot of it is what the user
         // would actually see; a background page still renders, but modal and
         // focus behaviour differ.
@@ -1675,19 +1734,16 @@ export class BrowserRuntime {
         this.activePage = target;
         return {
           switched: true,
-          index: operation.tabIndex,
+          index: (await this.ensureContext()).pages().indexOf(target),
           url: target.url(),
           tabs: await this.describeTabs(context),
         };
       }
       case "close": {
         const context = await this.ensureContext();
-        const pages = context.pages();
-        const target =
-          operation.tabIndex === undefined
-            ? page
-            : pages[operation.tabIndex];
-        if (target === undefined) throw new Error("browser_tab_not_found");
+        // The page checked above, not whichever holds its index by now.
+        const target = acted;
+        if (target === undefined || target.isClosed()) throw new Error("browser_tab_not_found");
         const url = target.url();
         // Set before the close, unlike the other mutations: this call is the
         // effect and has no wait-for-ready phase, so once it is in flight a

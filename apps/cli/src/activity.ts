@@ -20,7 +20,7 @@ import { classifyOperation, loadPolicy } from "@melra/policy-core";
 import { SqliteStore } from "@melra/storage-sqlite";
 import type { CliEnvironment } from "./environment.js";
 import { isHuman, paint, table } from "./output.js";
-import { printable } from "./approval-screen.js";
+import { printable } from "@melra/server";
 
 const DEFAULT_HTTP_PORT = 7457;
 const POLL_MS = 1_000;
