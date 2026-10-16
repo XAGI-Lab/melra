@@ -102,8 +102,10 @@ holds: the file exists, the exit code is 0, the page says what it should.
 
 ### 🔁 What if it crashes?
 
-Every action is **recorded before it runs** and runs **at most once**. After a crash,
-MELRA settles what happened instead of blindly repeating it.
+Before dispatch, MELRA durably records the task and attempt—not the final outcome
+receipt. On normal completion, the receipt follows the returned result and evidence
+check. If a mutation is interrupted, the task moves to `recovery_required`; MELRA
+does not replay it automatically. Reconcile provider state before deciding what to do next.
 
 </td>
 <td width="25%" valign="top">
