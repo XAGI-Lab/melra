@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      existing_version:
+        description: Published prerelease version to move to npm's latest tag
+        required: true
+        type: string
 
 # Read-only by default. Each job asks for exactly what it writes, so a job that
 # runs third-party code it did not need write access for — `installed` pulls an
@@ -16,6 +22,7 @@ jobs:
   # same workflow every pull request runs. Read-only: the artifacts job below
   # checksums, attests and publishes what it uploads.
   binaries:
+    if: github.event_name == 'push'
     uses: ./.github/workflows/single-executable.yml
     with:
       release: true
@@ -23,6 +30,7 @@ jobs:
       contents: read
 
   artifacts:
+    if: github.event_name == 'push'
     needs: binaries
     runs-on: ubuntu-latest
     permissions:
@@ -219,7 +227,66 @@ jobs:
           MELRA_EXPECTED_VERSION="${MELRA_EXPECTED_VERSION#v}" \
             node scripts/registry-smoke.mjs
 
+  retag-existing:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # npm trusted publishing; no long-lived npm token
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - run: npm install -g npm@11.21.0
+      - name: Validate the existing prerelease and package provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.existing_version }}
+        shell: bash
+        run: |
+          if [[ ! "${RELEASE_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-(alpha|beta|rc)\.[0-9]+$ ]]; then
+            echo "::error::Only an existing alpha, beta, or rc prerelease can be retagged"
+            exit 1
+          fi
+          tag="v${RELEASE_VERSION}"
+          git show-ref --verify --quiet "refs/tags/${tag}"
+          GH_TOKEN="${GH_TOKEN}" gh release view "${tag}" --json isPrerelease --jq '.isPrerelease' | grep -qx true
+          tag_version="$(git show "${tag}:package.json" | node -p 'JSON.parse(require("node:fs").readFileSync(0, "utf8")).version')"
+          test "${tag_version}" = "${RELEASE_VERSION}"
+
+          package_list="${RUNNER_TEMP}/retag-packages.txt"
+          while IFS= read -r manifest; do
+            [[ "${manifest}" =~ ^(apps|packages)/[^/]+/package\.json$ ]] || continue
+            metadata="$(git show "${tag}:${manifest}")"
+            name="$(printf '%s' "${metadata}" | node -p 'JSON.parse(require("node:fs").readFileSync(0, "utf8")).name')"
+            private="$(printf '%s' "${metadata}" | node -p 'JSON.parse(require("node:fs").readFileSync(0, "utf8")).private === true')"
+            if [ "${private}" != "true" ]; then printf '%s\n' "${name}" >> "${package_list}"; fi
+          done < <(git ls-tree -r --name-only "${tag}" apps packages)
+          test -s "${package_list}"
+          while IFS= read -r name; do
+            version="$(npm view "${name}@${RELEASE_VERSION}" version)"
+            provenance="$(npm view "${name}@${RELEASE_VERSION}" dist.attestations.provenance.predicateType)"
+            test "${version}" = "${RELEASE_VERSION}"
+            test "${provenance}" = "https://slsa.dev/provenance/v1"
+          done < "${package_list}"
+      - name: Move npm latest to the existing prerelease
+        env:
+          RELEASE_VERSION: ${{ inputs.existing_version }}
+        shell: bash
+        run: |
+          failed=0
+          while IFS= read -r name; do
+            if ! npm dist-tag add "${name}@${RELEASE_VERSION}" latest; then failed=1; fi
+          done < "${RUNNER_TEMP}/retag-packages.txt"
+          test "${failed}" = 0
+
   container:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: read
