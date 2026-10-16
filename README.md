@@ -176,7 +176,7 @@ show me the system info"*. That's it.
 | Prebuilt release | download from [releases](https://github.com/XAGI-Lab/melra/releases), verify against `SHA256SUMS`, then `node melra/dist/bin.js doctor` |
 | From source | `git clone https://github.com/XAGI-Lab/melra.git && cd melra && corepack enable && pnpm install --frozen-lockfile && pnpm build && pnpm melra setup` |
 | One file, no Node needed *(experimental)* | from a checkout: `pnpm build:sea`, then `./dist-sea/melra setup`; see [single executable](docs/INSTALLATION.md#single-executable-experimental) |
-| Check what you installed | `npm audit signatures` verifies the registry signatures; npm provenance linking each package to its build arrives with the next release (see [npm packages](docs/INSTALLATION.md#npm)) |
+| Check what you installed | `npm audit signatures` verifies registry signatures; npm provenance links each package to its GitHub Actions build (see [npm packages](docs/INSTALLATION.md#npm)) |
 
 Every command prints readable output in a terminal and plain JSON when piped or with
 `--json`, so scripts keep working. MELRA creates `<MELRA_HOME>/payload.key` with
