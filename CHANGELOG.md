@@ -78,16 +78,19 @@ All notable changes are documented here. The format follows
   open and not reported as a popup, unless it is the runtime's. The
   runtime's are the tabs it opened, every window one of those opened, down
   any chain, and what the tab it is driving opens: a tab it picked up becomes
-  its own only once it navigates it or sends it input, and stops being so
-  when it moves on. That is decided when Chromium creates the window, from
-  the opener it names, and holds even when Playwright hands the window over
+  its own only once it navigates it or sends it input (an action refused, or
+  one whose target was never found, does not count), and stops being so when
+  it moves on. That is decided when Chromium creates the window, from the
+  opener it names, and holds even when Playwright hands the window over
   during the next action. A tab a link opens with a modifier or middle click
   has no opener, so between actions it counts as the operator's whoever
   clicked; it is still listed by `tabs`, and its loads are still checked. A
   tab created while an action runs is still closed and reported, so open the
-  console while the agent is idle, or use `melra approve`. A reported popup's
-  URL no longer carries its fragment, where a console keeps its one-time
-  pairing code until its page has read it. (#203)
+  console while the agent is idle, or use `melra approve`. A window that closes
+  before it can be looked up, such as a tab that turns into a download, is
+  reported either way. A reported popup's URL no longer carries its fragment,
+  where a console keeps its one-time pairing code until its page has read it.
+  (#203)
 
 - A release run that fails after publishing to npm can be re-run: packages
   already on the registry at that version are skipped instead of stopping the

@@ -278,14 +278,28 @@ describe("browser see/act loop", () => {
     servers.push(slow);
     await new Promise<void>((done) => slow.listen(0, "127.0.0.1", done));
     const slowUrl = `http://127.0.0.1:${(slow.address() as { port: number }).port}/?slow`;
+    // And one on another site, whose page keeps its process busy as it loads.
+    const heavy = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html" });
+      response.end("<!doctype html><script>const end = Date.now() + 4000; while (Date.now() < end) {}</script>");
+    });
+    servers.push(heavy);
+    await new Promise<void>((done) => heavy.listen(0, done));
+    const heavyUrl = `http://localhost:${(heavy.address() as { port: number }).port}/?busyload`;
     const context = await fixture(`<!doctype html><html><body><p>page</p>
-      <a id="link" href="/?linked">link</a><button id="mod">mod</button><script>
+      <a id="link" href="/?linked">link</a><button id="mod">mod</button>
+      <button id="busy" onclick="window.open(new URLSearchParams(location.search).get('busy'))">busy</button><script>
       const later = (path, features) => setTimeout(() => window.open(location.origin + path, "_blank", features), 1_500);
       if (location.search === "?opens") later("/?popup#pair=secret");
       if (location.search === "?chain") later("/?p1");
       if (location.search === "?p1") window.open(location.origin + "/?p2");
       if (location.search === "?noopener") later("/?np", "noopener");
       if (location.search === "?busy") { later("/?busypop"); setInterval(() => document.body.append("."), 50); }
+      // Windows that close themselves as soon as they load, and one on
+      // another site that keeps its process busy as it loads.
+      if (location.search === "?selfclose") setTimeout(() => [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].forEach((i) => window.open(location.origin + "/?closes" + i)), 1_500);
+      if (location.search.startsWith("?closes")) setTimeout(() => window.close(), Number(location.search.slice(7)));
+
       document.getElementById("mod").onclick = () => setTimeout(() => document.getElementById("link")
         .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, ctrlKey: true, metaKey: true })), 1_500);
     </script></body></html>`);
@@ -305,7 +319,7 @@ describe("browser see/act loop", () => {
     const runtime = new BrowserRuntime({
       workspaceRoot: root,
       artifactDirectory: join(root, "artifacts"),
-      allowedDomains: ["127.0.0.1"],
+      allowedDomains: ["127.0.0.1", "localhost"],
       allowLocalhost: true,
       cdpEndpoint: `http://127.0.0.1:${port}`,
     });
@@ -316,6 +330,16 @@ describe("browser see/act loop", () => {
     // does not list.
     const open = async () =>
       ((await run({ action: "tabs" })) as { tabs: Array<{ url: string }> }).tabs.map((tab) => new URL(tab.url).search);
+    // Playwright can hand a window over after the next action has returned,
+    // and the action running then reports it, so gather a few actions' worth.
+    const gather = async (count: number) => {
+      const popups: unknown[] = [];
+      for (let attempt = 0; attempt < 5 && popups.length < count; attempt += 1) {
+        popups.push(...(((await run({ action: "inspect" })).popups as unknown[] | undefined) ?? []));
+        if (popups.length < count) await new Promise((done) => setTimeout(done, 500));
+      }
+      return popups;
+    };
     const reported = (popups: unknown, ...searches: string[]) =>
       expect(popups).toEqual(
         expect.arrayContaining(
@@ -332,6 +356,14 @@ describe("browser see/act loop", () => {
       await idle();
       expect(JSON.stringify((await run({ action: "inspect" })).popups ?? [])).not.toContain("?fromread");
       expect(await open()).toContain("?fromread");
+      // Nor does an action on it that is refused, or whose target is never
+      // found: nothing reached the tab.
+      await expect(run({ action: "navigate", url: "http://example.com/" })).rejects.toThrow();
+      await expect(run({ action: "click", target: { selector: "#nothing" }, timeoutMs: 500 })).rejects.toThrow();
+      await operator.pages()[0]!.evaluate((url) => window.open(url), `${context.url}/?afterrefusal`);
+      await idle();
+      expect(JSON.stringify((await run({ action: "inspect" })).popups ?? [])).not.toContain("?afterrefusal");
+      expect(await open()).toContain("?afterrefusal");
       await run({ action: "tab_new", url: context.url });
       // A tab the operator opens between the runtime's actions is theirs.
       const mine = await operator.newPage();
@@ -354,12 +386,20 @@ describe("browser see/act loop", () => {
       for (const [path, ...windows] of [["?opens", "?popup"], ["?chain", "?p1", "?p2"], ["?noopener", "?np"]]) {
         await run({ action: "navigate", url: `${context.url}/${path}` });
         await idle();
-        const { popups } = await run({ action: "inspect" });
+        const popups = await gather(windows.length);
         reported(popups, ...windows);
         // Reported without its fragment, where a console keeps its pairing code.
         expect(JSON.stringify(popups)).not.toContain("#");
         for (const window of windows) expect(await open(), window).not.toContain(window);
       }
+      // Windows that close themselves as soon as they load are still reported.
+      await run({ action: "navigate", url: `${context.url}/?selfclose` });
+      await idle();
+      reported(await gather(10), ...Array.from({ length: 10 }, (_, i) => `?closes${i}`));
+      // A window whose page is busy as it loads holds up nothing.
+      await run({ action: "navigate", url: `${context.url}/?busy=${encodeURIComponent(heavyUrl)}` });
+      const busy = await run({ action: "click", target: { selector: "#busy" }, timeoutMs: 2_500 });
+      expect(JSON.stringify(busy.popups ?? [])).toContain("?busyload");
       // A tab a link opens with a modifier click has no opener to judge it by,
       // so between actions it is taken for the operator's, whoever clicked:
       // left open and not reported, but still listed.
@@ -376,7 +416,7 @@ describe("browser see/act loop", () => {
         runtime.execute(BrowserOperationSchema.parse({ kind: "browser", action: "navigate", url: `${context.url}/?busy` }), cancel.signal),
       ).rejects.toThrow();
       await idle();
-      reported((await run({ action: "inspect" })).popups, "?busypop");
+      reported(await gather(1), "?busypop");
       expect(await open()).not.toContain("?busypop");
       // A tab of the operator's the runtime switches to is its own only once
       // it drives the tab, and only while that tab stays active.
@@ -388,7 +428,7 @@ describe("browser see/act loop", () => {
       expect(await open()).toContain("?undriven");
       await run({ action: "navigate", url: `${context.url}/?opens` });
       await idle();
-      reported((await run({ action: "inspect" })).popups, "?popup");
+      reported(await gather(1), "?popup");
       await run({ action: "tab_new", url: context.url });
       await mine.evaluate(() => window.open(`${location.origin}/?later`));
       await idle();

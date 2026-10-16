@@ -688,7 +688,9 @@ export class BrowserRuntime {
       this.windowsAdopted += 1;
       if (opened === this.activePage || this.openingTab) return;
       const acting = this.acting;
-      const adopt = () => {
+      // `during`: whether the window came while an action ran, which in a
+      // browser this runtime is attached to is known from when it was created.
+      const adopt = (during = acting) => {
         // Closing a window the page opened is MELRA's judgement about what
         // the caller should be looking at, so unhinged mode drops it.
         // Reporting it is not a judgement — that stays on, like every other
@@ -700,7 +702,7 @@ export class BrowserRuntime {
             // its one-time pairing code there until its first script runs.
             url: withoutFragment(opened.url()),
             blocked: !allowed,
-            ...(acting ? {} : { betweenActions: true }),
+            ...(during ? {} : { betweenActions: true }),
           });
         }
         if (allowed) return;
@@ -715,7 +717,7 @@ export class BrowserRuntime {
       // it was created, not by when Playwright hands it over, which for a slow
       // first response can be during the next action.
       if (this.options.cdpEndpoint !== undefined && this.targets !== undefined) {
-        this.closing.push(this.adoptable(opened, acting).then((adoptable) => (adoptable ? adopt() : undefined)));
+        this.closing.push(this.adoptable(opened, acting).then(({ adopt: yes, during }) => (yes ? adopt(during) : undefined)));
         return;
       }
       const closing = adopt();
@@ -770,9 +772,12 @@ export class BrowserRuntime {
           this.ownTargets.add(targetInfo.targetId);
         }
       });
+      // Ids stay after their window closes: one that closes itself as soon as
+      // it loads is still to be judged when Playwright hands it over.
+      // ponytail: `ownTargets` keeps one id per window the runtime owned for
+      // the context's life; prune once its `page` event is handled if that
+      // ever matters.
       targets.on("Target.targetDestroyed", ({ targetId }) => {
-        this.ownTargets.delete(targetId);
-        this.createdActing.delete(targetId);
         if (this.drivenTarget === targetId) this.drivenTarget = undefined;
       });
       await this.call(
@@ -870,7 +875,9 @@ export class BrowserRuntime {
       this.targetIds.set(page, targetInfo.targetId);
       return targetInfo.targetId;
     } finally {
-      await bounded(session.detach(), SETUP_TIMEOUT_MS, "cdp_detach").catch(() => undefined);
+      // Not waited for: a detach waits on the page's main thread, which a
+      // page busy with a long script holds for as long as it runs.
+      void session.detach().catch(() => undefined);
     }
   }
 
@@ -881,16 +888,17 @@ export class BrowserRuntime {
    * reported, as everywhere else; one still open that cannot be asked counts
    * by when Playwright handed it over.
    */
-  private async adoptable(page: Page, acting: boolean): Promise<boolean> {
+  private async adoptable(page: Page, acting: boolean): Promise<{ adopt: boolean; during: boolean }> {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
         const id = await this.targetOf(page);
-        return this.createdActing.has(id) || this.ownTargets.has(id);
+        const during = this.createdActing.delete(id);
+        return { adopt: during || this.ownTargets.has(id), during };
       } catch {
-        if (page.isClosed()) return true;
+        if (page.isClosed()) return { adopt: true, during: acting };
       }
     }
-    return acting;
+    return { adopt: acting, during: acting };
   }
 
   /**
@@ -904,12 +912,13 @@ export class BrowserRuntime {
   }
 
   /**
-   * The runtime is about to navigate the active page or send it input, so
-   * from here what that page opens is the runtime's, until another page is
-   * made active.
+   * The runtime is navigating the active page or has sent it input, so from
+   * here what that page opens is the runtime's, until another page is made
+   * active. Not before: an action refused, or one whose target was never
+   * found, leaves an operator's tab theirs.
    */
-  private async drive(page: Page): Promise<void> {
-    if (this.options.cdpEndpoint === undefined) return;
+  private async drive(page: Page | undefined): Promise<void> {
+    if (this.options.cdpEndpoint === undefined || page === undefined) return;
     const id = await this.targetOf(page);
     if (this.activePage === page) this.drivenTarget = id;
   }
@@ -1435,6 +1444,10 @@ export class BrowserRuntime {
     this.acting = true;
     try {
       const ran = await this.run(operation);
+      // An input action that went through, or a step back or forward that
+      // moved, drove its page; windows it opened meanwhile are the action's
+      // anyway (`createdActing`). Navigations mark it before they are sent.
+      if (DRIVING_ACTIONS.has(operation.action) && ran.moved !== false) await this.drive(this.activePage).catch(() => undefined);
       await this.awaitOpenedWindows(operation.timeoutMs);
       // A blocked popup is closed from an event handler, which has no way to
       // join the action that provoked it. Waiting here is what stops the next
@@ -1463,6 +1476,7 @@ export class BrowserRuntime {
       // The message is stored on the task record and shown in the console.
       if (error instanceof Error) error.message = withoutColour(error.message);
       if (!this.dispatched && !inputSent(error)) throw error;
+      await this.drive(this.activePage).catch(() => undefined);
       throw outcomeUnknown(error instanceof Error ? error.message : String(error));
     } finally {
       this.acting = false;
@@ -1549,12 +1563,11 @@ export class BrowserRuntime {
     const targetedRead =
       ["inspect", "scroll", "screenshot"].includes(operation.action) && operation.target !== undefined;
     const within = targetedRead ? await this.clearOfSecrets(page) : undefined;
-    // Past every refusal: from here the runtime drives this page.
-    if (DRIVING_ACTIONS.has(operation.action)) await this.drive(page);
     switch (operation.action) {
       case "navigate": {
         if (operation.url === undefined) throw new Error("browser_navigate_requires_url");
         await assertSafeUrl(operation.url, this.options);
+        await this.drive(page);
         const response = await page.goto(operation.url, {
           waitUntil: "domcontentloaded",
           timeout: operation.timeoutMs,
@@ -1594,6 +1607,7 @@ export class BrowserRuntime {
         // meaning of reload and matches `navigate`, whose target URL may have any
         // server-side effect; the domain allowlist, not the read/mutate split, is
         // what bounds what a navigation may reach.
+        await this.drive(page);
         const response = await page.reload({
           waitUntil: "domcontentloaded",
           timeout: operation.timeoutMs,
