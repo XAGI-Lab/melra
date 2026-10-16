@@ -163,11 +163,6 @@ Then restart your agent app (Claude Code asks you to approve a project's server
 once) and ask it to do something, for example *"use melra to
 show me the system info"*. That's it.
 
-If MELRA helps, [star the repository](https://github.com/XAGI-Lab/melra) so other
-agent builders can find it. Trying it in Cursor or another client? Share the client,
-version, and OS in [issue #184](https://github.com/XAGI-Lab/melra/issues/184); partial
-test results are useful too.
-
 <details>
 <summary><b>Prefer flags, a container, or building from source?</b></summary>
 
@@ -197,6 +192,12 @@ every install path, environment variable, and the hardened Docker invocation.
 > third-party projects**. This project publishes only under the `@melra/` npm scope:
 > `@melra/cli` is the CLI. Install from that scope, from this repository, or from the
 > official [releases](https://github.com/XAGI-Lab/melra/releases).
+
+If MELRA helps, [star the repository](https://github.com/XAGI-Lab/melra) so other
+agent builders can find it. Trying it in Cursor or another client? Share the client
+and its version, your OS, and your MELRA version (`npx @melra/cli@alpha version`) in
+[issue #184](https://github.com/XAGI-Lab/melra/issues/184); partial test results are
+useful too.
 
 ---
 
