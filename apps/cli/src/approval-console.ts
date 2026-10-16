@@ -34,7 +34,8 @@ export function showApprovalScreen(view: ApprovalScreenView, terminal: { columns
 /**
  * `melra run`'s and `melra approve`'s question: the effect as an approver
  * needs to see it, then y/N, on the operator's terminal (stderr, answered on
- * stdin), so nothing an agent reads from stdout carries it.
+ * stdin), so nothing an agent reads from stdout carries it. Anything but a
+ * yes is answered there with "Not approved.".
  */
 export async function confirmInTerminal(
   view: ApprovalScreenView,
@@ -63,7 +64,9 @@ export async function confirmInTerminal(
     // Nothing was typed to end the line, so end it here.
     if (!answered) output.write("\n");
     const said = answer.trim().toLowerCase();
-    return said === "y" || said === "yes";
+    const approved = said === "y" || said === "yes";
+    if (!approved) output.write("Not approved.\n");
+    return approved;
   } finally {
     prompt.close();
   }

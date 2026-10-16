@@ -621,14 +621,14 @@ describe("melra CLI", () => {
     ended.on("data", (chunk: Buffer) => (rest += chunk.toString()));
     expect(await confirmInTerminal(view, Readable.from([]), ended)).toBe(false);
     // Ending the question's line, so whatever comes next starts its own.
-    expect(rest.endsWith(question + "\n")).toBe(true);
+    expect(rest.endsWith(question + "\nNot approved.\n")).toBe(true);
     // By default, the operator's: stderr, at stderr's width.
     const columns = Object.getOwnPropertyDescriptor(process.stderr, "columns");
     Object.defineProperty(process.stderr, "columns", { value: 40, configurable: true, writable: true });
     const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     try {
       expect(await confirmInTerminal(view, Readable.from(["n\n"]))).toBe(false);
-      expect(write.mock.calls.map((call) => String(call[0]))).toEqual([screen, question]);
+      expect(write.mock.calls.map((call) => String(call[0]))).toEqual([screen, question, "Not approved.\n"]);
     } finally {
       write.mockRestore();
       if (columns === undefined) delete (process.stderr as { columns?: number }).columns;
