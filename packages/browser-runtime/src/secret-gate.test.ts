@@ -17,7 +17,12 @@ const frame = (outcomes: Array<boolean | Error>, detached = false) => ({
 
 const check = (target: ReturnType<typeof frame>) =>
   (
-    new BrowserRuntime({ workspaceRoot: "/tmp", artifactDirectory: "/tmp/melra-secret-gate" }) as unknown as {
+    new BrowserRuntime({
+      workspaceRoot: "/tmp",
+      artifactDirectory: "/tmp/melra-secret-gate",
+      allowedDomains: [],
+      allowLocalhost: false,
+    }) as unknown as {
       frameHoldsSecret(frame: unknown): Promise<boolean>;
     }
   ).frameHoldsSecret(target);
