@@ -277,6 +277,10 @@ All notable changes are documented here. The format follows
 
 ### Security
 
+- `browser.inspect` no longer returns the value of a password field. It is a
+  read, which runs without approval, so in a browser someone else also types
+  into, such as one attached over CDP, a password they typed could be read back.
+
 - In enforced mode an approval challenge carries no phrase, so the agent is
   handed nothing to echo, and any approval it sends to `melra_execute`, the
   harness `approve` tool or `melra_workflow_advance` is refused

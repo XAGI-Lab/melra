@@ -126,6 +126,27 @@ describe("browser see/act loop", () => {
     }
   }, 120_000);
 
+  it("never reads back what was typed into a password field", async () => {
+    const context = await fixture();
+    if (context === undefined) return;
+    const { runtime, url } = context;
+    try {
+      await runtime.execute(BrowserOperationSchema.parse({ kind: "browser", action: "navigate", url }));
+      await runtime.execute(
+        BrowserOperationSchema.parse({
+          kind: "browser",
+          action: "type",
+          target: { selector: 'input[name="password"]' },
+          value: "s3cret-typed-by-someone",
+        }),
+      );
+      const inspected = await runtime.execute(BrowserOperationSchema.parse({ kind: "browser", action: "inspect" }));
+      expect(JSON.stringify(inspected)).not.toContain("s3cret-typed-by-someone");
+    } finally {
+      await runtime.close();
+    }
+  }, 120_000);
+
   it("matches text through surrounding whitespace instead of failing exact", async () => {
     const context = await fixture();
     if (context === undefined) return;

@@ -268,8 +268,10 @@ function collectFrame(limit: number) {
       attributeName: element.getAttribute("name"),
       placeholder: element.getAttribute("placeholder"),
       href: element.getAttribute("href"),
+      // Never a password field's: in a browser someone else also types into,
+      // that is their secret, and this is a read anything may ask for.
       value:
-        element instanceof HTMLInputElement ||
+        (element instanceof HTMLInputElement && element.type !== "password") ||
         element instanceof HTMLTextAreaElement ||
         element instanceof HTMLSelectElement
           ? element.value.slice(0, 200)
