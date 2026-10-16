@@ -85,8 +85,8 @@ export function parseMelraToolResult(result: unknown): Record<string, unknown> {
 /**
  * The settings of this process worth passing to a stdio server it spawns:
  * where its state and policy live, and a stricter mode. Not the ones that
- * would redirect or widen it: MELRA_SOCKET moves it off stdio, so connecting
- * hangs; MELRA_UNHINGED unconfines it, with a banner nobody reads; and an
+ * would redirect or widen it: MELRA_SOCKET moved older versions of `melra
+ * serve` off stdio, so connecting hung; MELRA_UNHINGED unconfines it, with a banner nobody reads; and an
  * explicit `cwd` decides the workspace over an inherited MELRA_WORKSPACE.
  * Pass any of those in `env` to mean them.
  */

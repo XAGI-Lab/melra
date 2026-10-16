@@ -370,7 +370,7 @@ alternative, not asking the harness not to use it.
       Enforced mode deliberately implements none of these itself — the isolation
       is the operator's, brought as a container or a sandbox profile. MELRA's
       side of it is half done: the Unix-socket transport has shipped
-      (`melra serve --socket` / `MELRA_SOCKET`, mode `0600`, token still
+      (`melra serve --socket`, mode `0600`, token still
       required, refused on Windows, checked by `melra doctor`). Still missing
       are hardened deployment recipes that make the sandboxed-harness setup
       the default rather than a thing to assemble.

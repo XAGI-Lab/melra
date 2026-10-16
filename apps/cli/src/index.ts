@@ -435,7 +435,7 @@ async function durableCoreDemo(env: CliEnvironment): Promise<number> {
 }
 
 /**
- * Whether `MELRA_SOCKET` names somewhere `serve` can listen, and whether a
+ * Whether `MELRA_SOCKET` names somewhere `serve --socket` can listen, and whether a
  * socket already there is one only this user can open. The mode is the whole
  * point of the transport, so a wider one is a `fail`, not a `warn`.
  */
@@ -998,7 +998,8 @@ Flags:
   --port <port>    HTTP port (default: 7457, or MELRA_HTTP_PORT).
   --socket <path>  Serve what --http serves on a Unix socket created mode 0600,
                    so only this OS user can connect; the token is still
-                   required. Not on Windows. Same as MELRA_SOCKET.
+                   required. Not on Windows. Only this flag moves 'serve'
+                   off stdio.
   --open           Open the console in your browser once it is listening.
   --url <mcp-url>  Endpoint for 'conformance'. Default: spawn 'melra serve'.
   --level <1|2|3>  Conformance level being claimed (default: 3). The run exits
@@ -1019,7 +1020,7 @@ Environment:
   MELRA_HTTP_PORT  Port for 'serve --http' (default: 7457)
   MELRA_HTTP_TOKEN Fixed bearer token for 'serve --http' (default: random)
   MELRA_HTTP_OAUTH Set to 0 so only that token gets in; no client can register
-  MELRA_SOCKET     Unix socket path for 'serve' instead of stdio (see --socket)
+  MELRA_SOCKET     Socket path 'doctor' and 'status' check (serve needs --socket)
   MELRA_BROWSER    Optional Chrome/Chromium/Edge executable
   MELRA_BROWSER_CDP_ENDPOINT       Optional HTTP(S) CDP endpoint
   MELRA_BROWSER_CDP_CONTEXT_INDEX  External context index (-1 is last)
@@ -1106,7 +1107,9 @@ async function main(): Promise<void> {
       if (args.includes("--socket") && argument("--socket", args) === undefined) {
         throw new Error("--socket requires a path");
       }
-      const socketPath = argument("--socket", args) ?? env.socketPath;
+      // Only the flag: an exported MELRA_SOCKET would otherwise move every
+      // stdio client launched from that shell off stdio, to wait forever.
+      const socketPath = argument("--socket", args);
       const http = args.includes("--http");
       const port = argument("--port", args);
       // One transport per process. Quietly preferring one would leave an
@@ -1117,7 +1120,7 @@ async function main(): Promise<void> {
         (http || port !== undefined || args.includes("--open"))
       ) {
         throw new Error(
-          "--socket (or MELRA_SOCKET) replaces --http, --port, and --open; pass one transport",
+          "--socket replaces --http, --port, and --open; pass one transport",
         );
       }
       const melra = await runtime(env);
@@ -1133,16 +1136,6 @@ async function main(): Promise<void> {
               })
             : undefined;
       if (endpoint?.socketPath !== undefined) {
-        // An exported MELRA_SOCKET also reaches every stdio client spawned from
-        // that shell, which then waits forever for JSON-RPC on stdout. Name the
-        // variable where those clients log stderr, so the hang has a cause.
-        if (argument("--socket", args) === undefined) {
-          process.stderr.write(
-            `melra: MELRA_SOCKET is set, so 'serve' is on the socket below, not stdio.\n` +
-              `  An MCP client that started this process will get no reply; unset\n` +
-              `  MELRA_SOCKET for it, or pass --socket explicitly when you mean it.\n`,
-          );
-        }
         process.stderr.write(
           `MELRA server listening on Unix socket ${endpoint.socketPath} (mode 0600)\n` +
             `  MCP:      ${endpoint.mcpUrl}, connecting to that socket\n` +

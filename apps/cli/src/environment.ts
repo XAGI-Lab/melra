@@ -25,7 +25,7 @@ export interface CliEnvironment {
   unhinged: boolean;
   mode: DeploymentMode;
   policyPath?: string;
-  /** `MELRA_SOCKET`: `serve` listens on this Unix socket instead of stdio. */
+  /** `MELRA_SOCKET`: the socket `doctor` and `status` check; `serve` needs `--socket`. */
   socketPath?: string;
   browserExecutablePath?: string;
   browserCdpEndpoint?: string;
