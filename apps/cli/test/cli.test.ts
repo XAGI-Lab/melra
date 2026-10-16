@@ -8,7 +8,8 @@ import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, it } from "vitest";
+import { PassThrough, Readable } from "node:stream";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   BrowserOperationSchema,
   HttpOperationSchema,
@@ -20,7 +21,7 @@ import { approvalScreen, createMelraRuntime, printable, serveHttp } from "@melra
 import { runConformance } from "../src/conformance.js";
 import { RESTART_SAFE_WORKFLOW } from "../src/demo-workflow.js";
 import { approverLabel, parseCliEnvironment, serverLaunch } from "../src/environment.js";
-import { approvalConsole, showApprovalScreen, type ConsoleTerminal } from "../src/approval-console.js";
+import { approvalConsole, confirmInTerminal, type ConsoleTerminal } from "../src/approval-console.js";
 import { taskTarget } from "../src/activity.js";
 
 const execute = promisify(execFile);
@@ -578,17 +579,48 @@ describe("melra CLI", () => {
       }
       check("中".repeat(columns) + payload, columns);
       check("α".repeat(columns) + payload, columns);
+      check("°".repeat(columns) + payload, columns);
     }
     // Without a usable width (piped, in JSON, or too narrow to indent) the
     // screen is as it was.
     const plain = approvalScreen(view(payload), true);
     for (const columns of [undefined, 19, 80.5, Number.NaN]) expect(approvalScreen(view(payload), true, columns)).toBe(plain);
     expect(approvalScreen(view(payload), false, 80)).toBe(approvalScreen(view(payload)));
-    // The CLI takes the width from the stream it writes the screen to.
+  });
+
+  it("asks on the terminal it shows the screen on, wrapped to that terminal", async () => {
+    const view = {
+      task: { id: "t1", approval: { expiresAt: "2026-10-15T00:00:00.000Z" } },
+      contract: {
+        capability: "file.write",
+        target: "w.txt",
+        effect: "mutate",
+        risk: "medium",
+        operation: { kind: "file", action: "write", path: "w.txt", content: "x".repeat(200) },
+        metadata: { goal: "Save notes" },
+      },
+      renderDigest: "a".repeat(64),
+    };
+    const screen = approvalScreen(view, true, 40);
+    expect(screen).not.toBe(approvalScreen(view, true));
+    // Given a terminal: the screen goes to it, wrapped to its width.
+    const output = Object.assign(new PassThrough(), { columns: 40 });
     let shown = "";
-    showApprovalScreen(view(payload), { columns: 40, write: (text: string) => (shown += text) });
-    expect(shown).toBe(approvalScreen(view(payload), true, 40));
-    expect(shown).not.toBe(plain);
+    output.on("data", (chunk: Buffer) => (shown += chunk.toString()));
+    expect(await confirmInTerminal(view, Readable.from(["y\n"]), output)).toBe(true);
+    expect(shown.startsWith(screen)).toBe(true);
+    // By default, the operator's: stderr, at stderr's width.
+    const columns = Object.getOwnPropertyDescriptor(process.stderr, "columns");
+    Object.defineProperty(process.stderr, "columns", { value: 40, configurable: true, writable: true });
+    const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      expect(await confirmInTerminal(view, Readable.from(["n\n"]))).toBe(false);
+      expect(String(write.mock.calls[0]?.[0])).toBe(screen);
+    } finally {
+      write.mockRestore();
+      if (columns === undefined) delete (process.stderr as { columns?: number }).columns;
+      else Object.defineProperty(process.stderr, "columns", columns);
+    }
   });
 
   it("keeps a command's environment and directory in the summary past many arguments", () => {

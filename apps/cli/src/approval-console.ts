@@ -1,6 +1,7 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
+import { createInterface } from "node:readline/promises";
 import {
   approvalScreen,
   serveHttp,
@@ -25,11 +26,25 @@ export interface ConsoleTerminal {
  * terminal's width: taken from any other stream, a piped stdout say, the
  * width is missing and the terminal wraps the screen itself (#210).
  */
-export function showApprovalScreen(
-  view: ApprovalScreenView,
-  terminal: { columns?: number; write(text: string): unknown } = process.stderr,
-): void {
+export function showApprovalScreen(view: ApprovalScreenView, terminal: { columns?: number; write(text: string): unknown }): void {
   terminal.write(approvalScreen(view, true, terminal.columns));
+}
+
+/**
+ * `melra run`'s and `melra approve`'s question: the effect as an approver
+ * needs to see it, then y/N, on the operator's terminal (stderr, answered on
+ * stdin), so nothing an agent reads from stdout carries it.
+ */
+export async function confirmInTerminal(
+  view: ApprovalScreenView,
+  input: NodeJS.ReadableStream = process.stdin,
+  output: NodeJS.WritableStream & { columns?: number } = process.stderr,
+): Promise<boolean> {
+  showApprovalScreen(view, output);
+  const prompt = createInterface({ input, output });
+  const answer = (await prompt.question("Approve this effect? [y/N] ")).trim().toLowerCase();
+  prompt.close();
+  return answer === "y" || answer === "yes";
 }
 
 /** Refuses anywhere but an operator's terminal, before anything is opened. */
