@@ -48,6 +48,17 @@ describe("the secret-field check on a frame", () => {
 
   it("finds nothing in a frame that has gone", async () => {
     expect(await check(frame([], true))).toBe("clear");
+    // Nor in one that goes while it is being asked, whatever the error says.
+    const going = { ...frame([]), detached: false };
+    const leaving = {
+      ...going,
+      isDetached: () => going.detached,
+      evaluate: async () => {
+        going.detached = true;
+        throw new Error("some wording no pattern knows");
+      },
+    };
+    expect(await check(leaving)).toBe("clear");
   });
 
   it("asks every frame of the page, not only the ones a snapshot reads", async () => {

@@ -77,7 +77,7 @@ const navigatedAway = (error: unknown): boolean =>
   error instanceof Error &&
   // Playwright's own wording only: a message can also quote the caller's
   // selector, which may say anything.
-  /execution context was destroyed|cannot find context with specified id|unable to adopt element handle|frame (?:was|has been|got) detached|interrupted by another navigation/i.test(
+  /execution context was destroyed|cannot find context with specified id|unable to adopt element handle|frame (?:was|has been|got) detached|in detached frame|not attached to the dom|interrupted by another navigation/i.test(
     error.message,
   );
 
@@ -846,6 +846,8 @@ export class BrowserRuntime {
         return filled ? "filled" : "clear";
       } catch (error) {
         this.signal?.throwIfAborted();
+        // Gone while being asked: whatever the error says, it holds nothing.
+        if (frame.isDetached()) return "clear";
         if (documentless) {
           if (frame.url() === "") return "unread";
           continue;
