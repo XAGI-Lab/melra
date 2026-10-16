@@ -263,9 +263,15 @@ describe("browser see/act loop", () => {
   }, 120_000);
 
   it("leaves the operator's own new tabs alone in a browser it is attached to", async () => {
-    // ?opens opens a window of its own a moment after it loads.
+    // Each of these opens a window well after it loads, so between actions:
+    // one window, a window that opens another as it loads, and one with no
+    // opener the page can reach.
     const context = await fixture(`<!doctype html><html><body><p>page</p><script>
-      if (location.search === "?opens") setTimeout(() => window.open(location.origin + "/?popup"), 300);
+      const later = (path, features) => setTimeout(() => window.open(location.origin + path, "_blank", features), 1_500);
+      if (location.search === "?opens") later("/?popup");
+      if (location.search === "?chain") later("/?p1");
+      if (location.search === "?p1") window.open(location.origin + "/?p2");
+      if (location.search === "?noopener") later("/?np", "noopener");
     </script></body></html>`);
     if (context === undefined) return;
     const executablePath = (await detectBrowserExecutable())!;
@@ -289,6 +295,19 @@ describe("browser see/act loop", () => {
     });
     const run = (operation: Record<string, unknown>) =>
       runtime.execute(BrowserOperationSchema.parse({ kind: "browser", ...operation }));
+    const idle = () => new Promise((done) => setTimeout(done, 2_500));
+    // What the runtime itself sees open, which the operator's own connection
+    // does not list.
+    const open = async () =>
+      ((await run({ action: "tabs" })) as { tabs: Array<{ url: string }> }).tabs.map((tab) => new URL(tab.url).search);
+    const reported = (popups: unknown, ...searches: string[]) =>
+      expect(popups).toEqual(
+        expect.arrayContaining(
+          searches.map((search) =>
+            expect.objectContaining({ url: expect.stringContaining(search), blocked: true, betweenActions: true }),
+          ),
+        ),
+      );
     try {
       await run({ action: "tab_new", url: context.url });
       // A tab the operator opens between the runtime's actions is theirs.
@@ -298,12 +317,27 @@ describe("browser see/act loop", () => {
       const read = await run({ action: "inspect" });
       expect(mine.isClosed()).toBe(false);
       expect(JSON.stringify(read.popups ?? [])).not.toContain("?mine");
-      // A window the runtime's own page opens between actions is still its own.
-      await run({ action: "navigate", url: `${context.url}/?opens` });
-      await new Promise((done) => setTimeout(done, 1_000));
-      const next = await run({ action: "inspect" });
-      expect(next.popups).toEqual([expect.objectContaining({ url: expect.stringContaining("?popup"), blocked: true })]);
-      expect(operator.pages().some((page) => page.url().includes("?popup"))).toBe(false);
+      // Windows the runtime's own page opens between actions are its own,
+      // down a chain of them, whose opener has closed by the time Playwright
+      // hands over the next, and whatever the page cut it off from.
+      for (const [path, ...windows] of [["?opens", "?popup"], ["?chain", "?p1", "?p2"], ["?noopener", "?np"]]) {
+        await run({ action: "navigate", url: `${context.url}/${path}` });
+        await idle();
+        reported((await run({ action: "inspect" })).popups, ...windows);
+        for (const window of windows) expect(await open(), window).not.toContain(window);
+      }
+      // A tab of the operator's the runtime picked up is its own only while
+      // it is active: once the runtime moves on, what it opens is theirs.
+      await run({ action: "close" });
+      expect(((await run({ action: "tabs" })) as { tabs: Array<{ url: string; active: boolean }> }).tabs).toEqual(
+        expect.arrayContaining([expect.objectContaining({ url: expect.stringContaining("?mine"), active: true })]),
+      );
+      await run({ action: "tab_new", url: context.url });
+      await mine.evaluate(() => window.open(`${location.origin}/?later`));
+      await idle();
+      const after = await run({ action: "inspect" });
+      expect(JSON.stringify(after.popups ?? [])).not.toContain("?later");
+      expect(await open()).toContain("?later");
     } finally {
       await runtime.close();
       await owner.close();

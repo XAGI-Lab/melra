@@ -380,10 +380,16 @@ export class BrowserRuntime {
   /** True only while `tab_new` is opening the tab the caller asked for. */
   private openingTab = false;
   /**
-   * The pages this runtime opened or made active. In a browser it is attached
-   * to, the rest belong to someone else, the operator above all.
+   * The windows this runtime owns, by CDP target id: tabs it opened, and every
+   * window one it owns or its active tab opened. Decided when Chromium creates
+   * the window, from the opener it names then: Playwright's `opener()` comes
+   * later and is null by then if the opener has closed. In a browser this
+   * runtime is attached to, the rest belong to someone else, the operator
+   * above all.
    */
-  private ownPages = new WeakSet<Page>();
+  private ownTargets = new Set<string>();
+  /** The active page's target id, in a browser this runtime is attached to. */
+  private activeTarget: string | undefined;
   /**
    * Browser-level session that hears about a new window the moment Chromium
    * creates it, which is what lets an action wait for a popup it knows exists
@@ -623,6 +629,7 @@ export class BrowserRuntime {
     this.context.on("close", () => {
       this.context = undefined;
       this.activePage = undefined;
+      this.activeTarget = undefined;
     });
     /**
      * Report every window the page opened itself, and by default close it.
@@ -661,13 +668,14 @@ export class BrowserRuntime {
       };
       // In a browser this runtime is attached to, a tab that appears between
       // its actions is the operator's (one they opened, a console `melra
-      // console` opened) unless one of this runtime's pages opened it: that
-      // tab is left alone and not reported.
-      if (this.options.cdpEndpoint !== undefined && !acting) {
+      // console` opened) unless it is one of this runtime's (`ownTargets`):
+      // that tab is left alone and not reported. One that closed before it
+      // could be asked is reported, as everywhere else.
+      if (this.options.cdpEndpoint !== undefined && !acting && this.targets !== undefined) {
         this.closing.push(
-          opened.opener().then(
-            (opener) => (opener !== null && this.ownPages.has(opener) ? adopt() : undefined),
-            () => undefined,
+          this.targetOf(opened).then(
+            (id) => (this.ownTargets.has(id) ? adopt() : undefined),
+            () => (opened.isClosed() ? adopt() : undefined),
           ),
         );
         return;
@@ -696,6 +704,8 @@ export class BrowserRuntime {
     this.windowsCreated = new Map();
     this.windowsAdopted = 0;
     this.contextId = undefined;
+    this.ownTargets = new Set();
+    this.activeTarget = undefined;
     // A session left from a context that closed under us would count into the
     // fresh map below and make every action wait for windows that never come.
     if (this.targets !== undefined) {
@@ -714,6 +724,10 @@ export class BrowserRuntime {
         if (targetInfo.type !== "page" || targetInfo.subtype !== undefined) return;
         const id = targetInfo.browserContextId ?? "";
         this.windowsCreated.set(id, (this.windowsCreated.get(id) ?? 0) + 1);
+        const opener = targetInfo.openerId;
+        if (opener !== undefined && (this.ownTargets.has(opener) || opener === this.activeTarget)) {
+          this.ownTargets.add(targetInfo.targetId);
+        }
       });
       await this.call(
         targets.send("Target.setDiscoverTargets", { discover: true }),
@@ -789,11 +803,35 @@ export class BrowserRuntime {
     this.openingTab = true;
     try {
       const opened = await this.call(context.newPage(), "new_page");
-      this.ownPages.add(opened);
+      if (this.options.cdpEndpoint !== undefined) this.ownTargets.add(await this.targetOf(opened));
       return opened;
     } finally {
       this.openingTab = false;
     }
+  }
+
+  /** A page's CDP target id. */
+  private async targetOf(page: Page): Promise<string> {
+    const session = await this.call(page.context().newCDPSession(page), "cdp_session");
+    try {
+      const { targetInfo } = await this.call(session.send("Target.getTargetInfo"), "cdp:Target.getTargetInfo");
+      return targetInfo.targetId;
+    } finally {
+      await this.call(session.detach(), "cdp_detach").catch(() => undefined);
+    }
+  }
+
+  /**
+   * Makes `page` the one actions land on. In a browser this runtime is
+   * attached to, the windows it opens are then this runtime's, but only while
+   * it stays active: it may be a tab of the operator's that it picked up.
+   */
+  private async activate(page: Page | undefined): Promise<void> {
+    this.activePage = page;
+    this.activeTarget = undefined;
+    if (page === undefined || this.options.cdpEndpoint === undefined) return;
+    const id = await this.targetOf(page).catch(() => undefined);
+    if (this.activePage === page) this.activeTarget = id;
   }
 
   private async page(): Promise<Page> {
@@ -801,9 +839,9 @@ export class BrowserRuntime {
     if (this.activePage !== undefined && !this.activePage.isClosed()) {
       return this.activePage;
     }
-    this.activePage = context.pages()[0] ?? (await this.openPage(context));
-    this.ownPages.add(this.activePage);
-    return this.activePage;
+    const page = context.pages()[0] ?? (await this.openPage(context));
+    await this.activate(page);
+    return page;
   }
 
   /**
@@ -1732,7 +1770,7 @@ export class BrowserRuntime {
       case "tab_new": {
         const context = await this.ensureContext();
         const opened = await this.openPage(context);
-        this.activePage = opened;
+        await this.activate(opened);
         if (operation.url !== undefined) {
           await assertSafeUrl(operation.url, this.options);
           await opened.goto(operation.url, {
@@ -1758,8 +1796,7 @@ export class BrowserRuntime {
         // would actually see; a background page still renders, but modal and
         // focus behaviour differ.
         await this.call(target.bringToFront(), "bring_to_front");
-        this.activePage = target;
-        this.ownPages.add(target);
+        await this.activate(target);
         return {
           switched: true,
           index: (await this.ensureContext()).pages().indexOf(target),
@@ -1778,8 +1815,7 @@ export class BrowserRuntime {
         // bound running out cannot say whether the tab went away.
         this.dispatched = true;
         await this.call(target.close(), "close");
-        this.activePage = context.pages().at(-1);
-        if (this.activePage !== undefined) this.ownPages.add(this.activePage);
+        await this.activate(context.pages().at(-1));
         return { closed: true, url, tabs: await this.describeTabs(context) };
       }
     }
