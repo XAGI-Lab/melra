@@ -128,15 +128,17 @@ describe("browser see/act loop", () => {
 
   it("never reads back what was typed into a secret field", async () => {
     // Fields that hold secrets, on a page that mirrors each keystroke into the
-    // `value` attribute the way React's controlled inputs do.
-    const context = await fixture(`<!doctype html><html><body><form id="login">
-      <input name="password" type="password">
+    // markup the way React's controlled inputs do, laid out so that a cell's
+    // accessible name is built from the password field inside it.
+    const context = await fixture(`<!doctype html><html><body><form id="login"><table><tr>
+      <td>Password</td><td><input name="password" type="password"></td></tr></table>
       <input name="pin" type="text" style="-webkit-text-security: disc">
       <input name="code" type="text" autocomplete="one-time-code">
-      <input name="user">
+      <textarea name="phrase" style="-webkit-text-security: disc"></textarea>
+      <input name="user"><input type="submit" value="Go">
     </form><script>
-      for (const input of document.querySelectorAll("input")) {
-        input.addEventListener("input", () => { input.defaultValue = input.value; });
+      for (const field of document.querySelectorAll("input, textarea")) {
+        field.addEventListener("input", () => { field.defaultValue = field.value; });
       }
     </script></body></html>`);
     if (context === undefined) return;
@@ -145,24 +147,34 @@ describe("browser see/act loop", () => {
       runtime.execute(BrowserOperationSchema.parse({ kind: "browser", ...operation }));
     try {
       await run({ action: "navigate", url });
-      for (const [name, value] of [["password", "s3cret-pw"], ["pin", "s3cret-pin"], ["code", "s3cret-code"], ["user", "alice"]]) {
-        await run({ action: "type", target: { selector: `input[name="${name}"]` }, value });
+      // Nothing secret entered yet: an ordinary value selector reads.
+      await run({ action: "inspect", target: { selector: "input[type=submit][value=Go]" } });
+      const fields = [["password", "input"], ["pin", "input"], ["code", "input"], ["phrase", "textarea"], ["user", "input"]];
+      for (const [name, tag] of fields) {
+        await run({ action: "type", target: { selector: `${tag}[name="${name}"]` }, value: name === "user" ? "alice" : `s3cret-${name}` });
       }
       const whole = JSON.stringify(await run({ action: "inspect" }));
-      const form = JSON.stringify(await run({ action: "inspect", target: { selector: "#login" } }));
-      for (const seen of [whole, form]) {
-        expect(seen).not.toMatch(/s3cret/);
-        // An ordinary field still reads back.
-        expect(seen).toContain("alice");
+      expect(whole).not.toMatch(/s3cret/);
+      expect(whole).toContain("alice");
+      // Whether a target exists can be made to depend on the secret, through
+      // its mirrored value or an accessible name built from the field, however
+      // the selector is spelled. So no read aims at part of the page now.
+      for (const target of [
+        { selector: "#login" },
+        { selector: 'input[\\76 alue^="s3"]' },
+        { selector: "xpath=//input[starts-with(attribute::value,'s3')]" },
+        { role: "cell", name: "s3cret" },
+      ]) {
+        await expect(run({ action: "inspect", target })).rejects.toThrow("browser_secret_field_filled");
+        await expect(run({ action: "wait", target, state: "attached" })).rejects.toThrow("browser_secret_field_filled");
       }
-      // A read reports whether its target exists, so a selector testing the
-      // value would guess the secret a prefix at a time.
-      for (const selector of ['input[value^="s3"]', "#login:has(input[VALUE^='s'])", "//input[@value]"]) {
-        await expect(run({ action: "inspect", target: { selector } })).rejects.toThrow("browser_value_selector_refused");
-        await expect(run({ action: "wait", target: { selector }, state: "attached" })).rejects.toThrow(
-          "browser_value_selector_refused",
-        );
+      // Every secret field emptied again, targeted reads come back.
+      for (const [name, tag] of fields.slice(0, 3)) {
+        await run({ action: "type", target: { selector: `${tag}[name="${name}"]` }, value: "" });
       }
+      await expect(run({ action: "inspect", target: { selector: "#login" } })).rejects.toThrow("browser_secret_field_filled");
+      await run({ action: "type", target: { selector: 'textarea[name="phrase"]' }, value: "" });
+      expect(JSON.stringify(await run({ action: "inspect", target: { selector: "#login" } }))).toContain("alice");
     } finally {
       await runtime.close();
     }

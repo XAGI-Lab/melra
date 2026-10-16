@@ -192,9 +192,25 @@ export function pageAddress(url: string): string {
   }
 }
 
-/** Whether a selector tests an element's `value` attribute: CSS, XPath, or Playwright's attribute engine. */
-function testsValue(selector: string | undefined): boolean {
-  return selector !== undefined && /\[\s*(?:[\w*-]*\|)?value\b|@value\b/i.test(selector);
+/**
+ * Whether this document, shadow roots included, has a secret field with
+ * something in it. Passed to `evaluate`, so it must stand alone; the secret
+ * test is the one `collectFrame` and `extract` use.
+ */
+function filledSecretField(): boolean {
+  const secret = (field: Element): boolean =>
+    (field instanceof HTMLInputElement && field.type === "password") ||
+    ((field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement) &&
+      (/\b(current-password|new-password|one-time-code)\b/.test(field.autocomplete) ||
+        !["", "none"].includes(getComputedStyle(field).getPropertyValue("-webkit-text-security"))));
+  const roots: ParentNode[] = [document];
+  while (roots.length > 0) {
+    for (const element of roots.pop()!.querySelectorAll("*")) {
+      if (element.shadowRoot !== null) roots.push(element.shadowRoot);
+      if (secret(element) && (element as HTMLInputElement | HTMLTextAreaElement).value !== "") return true;
+    }
+  }
+  return false;
 }
 
 /** Playwright's terminal colour codes, which mean nothing in a stored record. */
@@ -770,6 +786,14 @@ export class BrowserRuntime {
    *
    * Ad and analytics pages can attach dozens of frames, so the list is bounded.
    */
+  /** Whether any frame of the page holds a filled secret field; a frame that cannot answer counts as one. */
+  private async secretFieldFilled(page: Page): Promise<boolean> {
+    const answers = await Promise.all(
+      this.frames(page).map((frame) => this.call(frame.evaluate(filledSecretField), "secret_check").catch(() => true)),
+    );
+    return answers.some(Boolean);
+  }
+
   private frames(page: Page): Frame[] {
     return page.frames().slice(0, MAX_FRAMES);
   }
@@ -1016,9 +1040,10 @@ export class BrowserRuntime {
             ((field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement) &&
               (/\b(current-password|new-password|one-time-code)\b/.test(field.autocomplete) ||
                 !["", "none"].includes(getComputedStyle(field).getPropertyValue("-webkit-text-security"))));
-          const live = [...element.querySelectorAll("input, textarea")];
+          // The target itself too: a secret textarea's markup is its content.
+          const live = [element, ...element.querySelectorAll("input, textarea")];
           const copy = element.cloneNode(true) as Element;
-          const copies = [...copy.querySelectorAll("input, textarea")];
+          const copies = [copy, ...copy.querySelectorAll("input, textarea")];
           live.forEach((field, index) => {
             if (!secret(field)) return;
             copies[index]!.removeAttribute("value");
@@ -1130,11 +1155,18 @@ export class BrowserRuntime {
 
   private async run(operation: BrowserOperation): Promise<Record<string, unknown>> {
     const page = await this.page();
-    // A read says whether its target exists, so one whose selector tests an
-    // input's `value` attribute would let anything allowed to read guess a
-    // secret a page mirrors there, a prefix at a time, with no approval.
-    if (["inspect", "wait", "scroll", "screenshot"].includes(operation.action) && testsValue(operation.target?.selector)) {
-      throw new Error("browser_value_selector_refused");
+    // A targeted read says whether its target exists, and a target can be
+    // made to exist only for the right guess at a secret field: an attribute
+    // selector on a mirrored value, an accessible name built from the field.
+    // No list of selector spellings closes that, so while any frame holds a
+    // filled secret field a read may look at the whole page but not aim at
+    // part of it. The refusal depends on the page, never on the guess.
+    if (
+      ["inspect", "wait", "scroll", "screenshot"].includes(operation.action) &&
+      operation.target !== undefined &&
+      (await this.secretFieldFilled(page))
+    ) {
+      throw new Error("browser_secret_field_filled");
     }
     // Anywhere but on the way to it, a url names the page the action acts on:
     // the active page, or for `close` and `tab_switch` the tab they name.

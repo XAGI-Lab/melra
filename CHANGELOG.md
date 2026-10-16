@@ -281,11 +281,13 @@ All notable changes are documented here. The format follows
   password input, one the page marks as a password or one-time code, or one
   masked with CSS. Neither the field list nor a targeted inspect's markup
   carries it, though frameworks such as React mirror input into the `value`
-  attribute. A read whose target selector tests `value` is refused
-  (`browser_value_selector_refused`), since whether it matches would guess the
-  secret a prefix at a time. These reads run without approval, so in a browser
-  someone else also types into, such as one attached over CDP, a password they
-  typed could be read back.
+  attribute. And while any frame holds a filled secret field, a read aimed at
+  part of the page (`inspect`, `wait`, `scroll` or `screenshot` with a target)
+  is refused (`browser_secret_field_filled`): whether a target exists can be
+  made to depend on the secret, through a mirrored value or an accessible name
+  built from the field, however the selector is spelled. These reads run
+  without approval, so in a browser someone else also types into, such as one
+  attached over CDP, a password they typed could be read back or guessed.
 
 - In enforced mode an approval challenge carries no phrase, so the agent is
   handed nothing to echo, and any approval it sends to `melra_execute`, the
