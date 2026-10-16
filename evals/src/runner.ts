@@ -66,6 +66,9 @@ async function runScenario(scenario: EvaluationScenario): Promise<EvaluationResu
     dataDirectory: join(root, ".melra"),
     ...(policyPath === undefined ? {} : { policyPath }),
     ...(desktop === undefined ? {} : { computerAdapter: desktop }),
+    // The scenarios echo developer-mode phrases, so the shell's MELRA_MODE or
+    // MELRA_UNHINGED must not change what they measure.
+    environment: {},
   });
   try {
     for (const fixture of scenario.fixtures ?? []) {
@@ -96,7 +99,7 @@ async function runScenario(scenario: EvaluationScenario): Promise<EvaluationResu
         scenario.approve === true && task.approval !== undefined
           ? {
               approvalId: task.approval.approvalId,
-              phrase: task.approval.phrase,
+              phrase: task.approval.phrase!,
             }
           : undefined;
       const execution = await runtime.controller.execute(task.id, approval);

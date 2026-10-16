@@ -31,10 +31,12 @@ pipeline, so the approval column below says exactly what it says above:
 | `browser_read` | none | no |
 | `remember` | stores one operational fact | scoped |
 | `recall` | none | no |
-| `approve` | runs the task a phrase was issued for | is the approval |
+| `approve` | runs a task held for approval | is the approval (developer mode); runs on an operator's (enforced mode) |
 
 A tool needing approval returns the phrase rather than failing; `approve` takes
-that task id and phrase and runs the operation that was approved. A policy
+that task id and phrase and runs the operation that was approved. In enforced
+mode no phrase is issued: an operator approves with `melra approve <task-id>`,
+and `approve` then takes the task id alone. A policy
 denial comes back as a result with `status: "blocked"` and a reason.
 
 ## Durable workflows

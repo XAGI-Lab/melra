@@ -203,6 +203,8 @@ async function openRuntime(
   const runtime = await createMelraRuntime({
     workspaceRoot: root,
     dataDirectory: join(root, ".melra"),
+    // Developer mode, whatever the shell says: the run echoes phrases.
+    environment: {},
   });
   const execute = runtime.router.execute.bind(runtime.router);
   runtime.router.execute = async (
@@ -347,7 +349,7 @@ async function postApprovalRestart(
   runtime = await openRuntime(root, counter);
   try {
     await runtime.workflows.advance(planned.id, [
-      { approvalId: approval.approvalId, phrase: approval.phrase },
+      { approvalId: approval.approvalId, phrase: approval.phrase! },
     ]);
     const content = await readFile(join(root, "approved.txt"), "utf8");
     return observe(

@@ -183,7 +183,9 @@ class MelraClient:
     async def plan(self, request: dict[str, Any]) -> dict[str, Any]:
         """Plan a task without running it.
 
-        A mutation comes back with an approval challenge to echo to `execute`.
+        A mutation comes back with an approval challenge: in developer mode,
+        echo its phrase to `execute`; in enforced mode it has none, and an
+        operator approves with `melra approve <task-id>`.
         A refusal is a normal result with `status` `policy_blocked` and a reason,
         not an exception. Leave `constraints` out — any value denies — and give
         `requiredEvidence` for anything that is not a read.
@@ -198,9 +200,10 @@ class MelraClient:
         """Run a planned task, verify it, and receipt it.
 
         Pass the challenge from `plan` as `{"approvalId": ..., "phrase": ...}`
-        when there was one; the phrase is scoped to this task and expires.
-        Policy is evaluated again here, so a plan made under a looser policy is
-        still refused.
+        when there was one; the phrase is scoped to this task and expires. In
+        enforced mode pass no approval: one sent is refused, and the task runs
+        once an operator has run `melra approve`. Policy is evaluated again
+        here, so a plan made under a looser policy is still refused.
         """
         arguments: dict[str, Any] = {"taskId": task_id}
         if approval is not None:
@@ -256,7 +259,8 @@ class MelraClient:
         """Run one scheduling wave.
 
         Call until the run reaches a terminal status; committed effects are not
-        repeated. `approvals` answers approval nodes, `inputs` answers
+        repeated. `approvals` answers approval nodes in developer mode only (in
+        enforced mode an operator runs `melra approve`), `inputs` answers
         `human_input` nodes as `{"nodeId": ..., "value": ...}`.
         """
         workflow_id = self._workflow_id(workflow_id)

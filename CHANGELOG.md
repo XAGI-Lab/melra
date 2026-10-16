@@ -50,6 +50,22 @@ All notable changes are documented here. The format follows
 
 ### Changed
 
+- Breaking: `ApprovalChallenge.phrase` in `@melra/protocol` is optional, and
+  absent on every challenge an enforced-mode kernel issues. Harnesses that
+  echoed phrases in enforced mode must switch to operator approval
+  (`melra approve <task-id>`, then `melra_execute` with no approval); the
+  harness `approve` tool takes no phrase there. Conformance against an enforced
+  endpoint swaps `wrong-phrase-is-refused` for `approval-credential-withheld`
+  and `in-band-approval-refused` (L2), adds `approval-provenance-recorded` (L3),
+  and needs an out-of-band approver: the suite runs its own `melra approve`
+  when it spawned the server, and stops at L2 against `--url`. Developer-mode
+  conformance is unchanged at 14 checks. A developer-mode `melra approve` on a
+  task with no phrase is refused (`approval_needs_enforced_mode`) and records
+  nothing. Tasks planned before the upgrade keep their phrase and stored expiry;
+  echoing it is refused, and a developer-mode decision on one is ignored until
+  it expires. 0.3.0-alpha.12 and earlier cannot read back a workflow that
+  reached an approval in enforced mode, so do not downgrade past one.
+
 - In enforced mode an approval challenge stays open for 30 minutes by default,
   not 5: an operator approves out of band, with `melra approve`, and needs the
   time. Developer mode keeps 5 minutes, and a policy file's `approvalTtlMs`
@@ -200,6 +216,17 @@ All notable changes are documented here. The format follows
     reports `recovery_required` rather than `running`.
 
 ### Security
+
+- In enforced mode an approval challenge carries no phrase, so the agent is
+  handed nothing to echo, and any approval it sends to `melra_execute`, the
+  harness `approve` tool or `melra_workflow_advance` is refused
+  (`approval_in_band_refused`), even after an operator has decided, and a
+  workflow advance carrying one is refused before any node moves. Only an
+  operator's decision recorded in enforced mode (`melra approve`, or
+  `melra run`'s prompt; `out_of_band`) runs the effect; until then the answer is `approval_awaiting_operator`, or
+  `approval_expired` once the challenge has expired. An `in_band` decision row
+  counts as none in enforced mode. `validateApproval` also refuses a challenge
+  with no phrase, where an in-process `phrase: undefined` used to match it.
 
 - A browser action other than `navigate` and `tab_new` that carries a `url` is
   refused unless the page it acts on (the active page, or the tab `close` and

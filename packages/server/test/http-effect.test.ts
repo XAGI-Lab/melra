@@ -69,6 +69,7 @@ beforeAll(async () => {
     workspaceRoot: root,
     dataDirectory: join(root, ".data"),
     policyPath,
+    environment: {},
   });
 });
 
@@ -104,7 +105,7 @@ describe("a governed API call", () => {
 
     const { task, receipt } = await runtime.controller.execute(planned.id, {
       approvalId: planned.approval!.approvalId,
-      phrase: planned.approval!.phrase,
+      phrase: planned.approval!.phrase!,
     });
     expect(task.status).toBe("verified_success");
     expect(orders).toEqual(['{"item":"widget"}']);
@@ -131,7 +132,7 @@ describe("a governed API call", () => {
     const planned = runtime.controller.plan(post(`${origin}/broken`, "{}"));
     const { task, receipt } = await runtime.controller.execute(planned.id, {
       approvalId: planned.approval!.approvalId,
-      phrase: planned.approval!.phrase,
+      phrase: planned.approval!.phrase!,
     });
     // The call went out and came back. The effect did not happen, and the
     // adapter's own 500 is not allowed to read as a success.
@@ -160,7 +161,7 @@ describe("a governed API call", () => {
     const planned = runtime.controller.plan(request);
     const { task, receipt } = await runtime.controller.execute(planned.id, {
       approvalId: planned.approval!.approvalId,
-      phrase: planned.approval!.phrase,
+      phrase: planned.approval!.phrase!,
     });
     expect(task.status).toBe("partial");
     expect(receipt?.success).toBe(true);
@@ -193,7 +194,7 @@ describe("a governed API call", () => {
     const planned = runtime.controller.plan(post(`${origin}/orders`, '{"item":"receipted"}'));
     const { task } = await runtime.controller.execute(planned.id, {
       approvalId: planned.approval!.approvalId,
-      phrase: planned.approval!.phrase,
+      phrase: planned.approval!.phrase!,
     });
     const stored = runtime.controller.receipts({ taskId: task.id });
     expect(stored.receipts).not.toHaveLength(0);

@@ -227,7 +227,7 @@ describe("TaskController", () => {
     await expect(
       controller.execute(planned.id, {
         approvalId: stored.approval.approvalId,
-        phrase: stored.approval.phrase,
+        phrase: stored.approval.phrase!,
       }),
     ).rejects.toThrow("approval_action_digest_mismatch");
   });
@@ -446,7 +446,7 @@ describe("TaskController", () => {
     await expect(controller.execute(task.id)).rejects.toThrow("approval_required");
     const result = await controller.execute(task.id, {
       approvalId: task.approval!.approvalId,
-      phrase: task.approval!.phrase,
+      phrase: task.approval!.phrase!,
     });
     expect(result.task.status).toBe("verified_success");
   });
@@ -657,7 +657,7 @@ describe("TaskController", () => {
     expect(JSON.stringify(store.getTask(task.id))).not.toContain(secretInput);
     const execution = await controller.execute(task.id, {
       approvalId: task.approval!.approvalId,
-      phrase: task.approval!.phrase,
+      phrase: task.approval!.phrase!,
     });
     expect(execution.task.status).toBe("verified_success");
   });
@@ -738,7 +738,7 @@ describe("effect contract and principal", () => {
       );
       const parked = await controller.execute(task.id, {
         approvalId: task.approval!.approvalId,
-        phrase: task.approval!.phrase,
+        phrase: task.approval!.phrase!,
       });
       return { controller, store, task, parked, execute };
     }
@@ -834,7 +834,7 @@ describe("effect contract and principal", () => {
       );
       const parked = await controller.execute(task.id, {
         approvalId: task.approval!.approvalId,
-        phrase: task.approval!.phrase,
+        phrase: task.approval!.phrase!,
       });
       expect(parked.task.status).toBe("recovery_required");
       expect(parked.receipt?.executionGuarantee).toBe("at-most-once");

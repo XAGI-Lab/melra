@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createServer, type Server } from "node:http";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -16,9 +16,11 @@ import { createMelraRuntime } from "../src/runtime.js";
 const detectedBrowserExecutable = await detectBrowserExecutable();
 const rootPackage = resolve(import.meta.dirname, "../../..");
 const cli = join(rootPackage, "apps/cli/dist/bin.js");
+// Without MELRA_MODE: the developer-mode cases echo phrases, so a shell in
+// enforced mode must not turn them into a different test.
 const childEnvironment = Object.fromEntries(
   Object.entries(process.env).filter(
-    (entry): entry is [string, string] => entry[1] !== undefined,
+    (entry): entry is [string, string] => entry[1] !== undefined && entry[0] !== "MELRA_MODE",
   ),
 );
 
@@ -551,6 +553,129 @@ describe("MELRA over real stdio transport", () => {
     } finally {
       await session.client.close();
       await rm(secretRoot, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  it("in enforced mode, hands the agent no approval phrase anywhere and takes none back", async () => {
+    const base = await mkdtemp(join(tmpdir(), "melra-mcp-enforced-"));
+    const workspace = join(base, "workspace");
+    const home = join(base, "data");
+    await mkdir(workspace, { recursive: true });
+    const stderr: string[] = [];
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [cli, "serve"],
+      cwd: rootPackage,
+      env: {
+        ...childEnvironment,
+        MELRA_WORKSPACE: workspace,
+        MELRA_HOME: home,
+        MELRA_POLICY: "",
+        MELRA_MODE: "enforced",
+        MELRA_HARNESS_TOOLS: "1",
+      },
+      stderr: "pipe",
+    });
+    transport.stderr?.on("data", (chunk) => stderr.push(String(chunk)));
+    const session = new Client({ name: "melra-enforced-e2e", version: "1.0.0" });
+    await session.connect(transport);
+    const instructions = session.getInstructions() ?? "";
+    const seen: string[] = [instructions];
+    const call = async (name: string, args: Record<string, unknown>) => {
+      const result = (await session.callTool({ name, arguments: args })) as TextToolResult;
+      const text = result.content.map((item) => item.text ?? "").join("\n");
+      seen.push(text);
+      return {
+        ok: result.isError !== true,
+        text,
+        value: result.isError === true ? {} : (JSON.parse(text) as Record<string, unknown>),
+      };
+    };
+    const write = (path: string) => ({
+      goal: `Write ${path}`,
+      operation: { kind: "file", action: "write", path, content: "x" },
+      requiredEvidence: [{ type: "file_exists", path }],
+    });
+    try {
+      expect(instructions).toContain("melra approve <taskId>");
+      // The enforced addendum is held to the same rule: only real tools by name.
+      const tools = new Set((await session.listTools()).tools.map((tool) => tool.name));
+      for (const [name] of instructions.matchAll(/melra_[a-z_]+/g)) {
+        expect(tools, name).toContain(name);
+      }
+
+      const planned = await call("melra_plan", write("w.txt"));
+      const taskId = String(planned.value.id);
+      const challenge = planned.value.approval as { approvalId: string; actionDigest: string };
+      await call("melra_task_status", { taskId });
+      const forged = { approvalId: challenge.approvalId, phrase: `APPROVE ${challenge.actionDigest.slice(0, 12)}` };
+      const refused = await call("melra_execute", { taskId, approval: forged });
+      expect(refused.ok).toBe(false);
+      expect(refused.text).toContain("approval_in_band_refused");
+      expect((await call("melra_execute", { taskId })).text).toContain("approval_awaiting_operator");
+
+      const workflow = await call("melra_workflow_plan", {
+        definition: {
+          schemaVersion: "1.0.0",
+          id: "88888888-8888-4888-8888-888888888888",
+          version: 1,
+          name: "enforced-e2e",
+          nodes: [{ id: "write", type: "operation", request: write("v.txt") }],
+        },
+      });
+      const workflowId = String(workflow.value.id);
+      const waiting = await call("melra_workflow_advance", { workflowId });
+      const node = (waiting.value as unknown as WorkflowAdvanceResult).run.nodes.write!.approval!;
+      const advanced = await call("melra_workflow_advance", {
+        workflowId,
+        approvals: [{ approvalId: node.approvalId, phrase: `APPROVE ${node.actionDigest.slice(0, 12)}` }],
+      });
+      expect(advanced.text).toContain("approval_in_band_refused");
+      await call("melra_workflow_status", { workflowId });
+
+      const held = await call("write_file", { path: "h.txt", content: "x" });
+      expect(held.value.status).toBe("approval_required");
+      expect((await call("approve", { taskId: held.value.taskId, phrase: "APPROVE 000000000000" })).ok).toBe(false);
+      // The call an agent makes in enforced mode takes no phrase, over the real
+      // transport and its schema, and waits for the operator.
+      const early = await call("approve", { taskId: held.value.taskId });
+      expect(early.ok).toBe(false);
+      expect(early.text).toContain("approval_awaiting_operator");
+
+      // The operator: another process on the same data directory.
+      const operator = await createMelraRuntime({
+        workspaceRoot: workspace,
+        dataDirectory: home,
+        environment: { MELRA_MODE: "enforced" },
+      });
+      try {
+        operator.controller.decide(taskId, operator.controller.approvalView(taskId).renderDigest, "cli:e2e");
+        const heldId = String(held.value.taskId);
+        operator.controller.decide(heldId, operator.controller.approvalView(heldId).renderDigest, "cli:e2e");
+      } finally {
+        await operator.close();
+      }
+      const approved = await call("approve", { taskId: held.value.taskId });
+      expect(approved.ok).toBe(true);
+      expect(approved.value.status).toBe("verified_success");
+      const executed = await call("melra_execute", { taskId });
+      expect(executed.value).toMatchObject({ task: { status: "verified_success" } });
+      const receipt = await call("melra_receipt", { taskId });
+      expect(receipt.value).toMatchObject({
+        receipts: [{ policyDecision: { approval: { channel: "out_of_band" } } }],
+        certificate: { approvalChannel: "out_of_band" },
+      });
+
+      const store = new SqliteStore(join(home, "melra.sqlite"));
+      seen.push(JSON.stringify(store.listWorkflowEvents(workflowId)));
+      store.close();
+      seen.push(stderr.join(""));
+      for (const text of seen) {
+        expect(text).not.toMatch(/"phrase"|APPROVE [a-f0-9]{12}/);
+      }
+    } finally {
+      await session.close();
+      await rm(base, { recursive: true, force: true });
     }
   }, 120_000);
 

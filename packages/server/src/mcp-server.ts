@@ -214,6 +214,14 @@ export const SERVER_INSTRUCTIONS = [
   "For multi-step jobs that must survive restarts, use melra_workflow_plan and melra_workflow_advance; each step still goes through the same policy, approval, and verification.",
 ].join("\n");
 
+/**
+ * Enforced mode only: the challenge carries no phrase, and an operator answers
+ * it out of band. Appended rather than woven in, so developer mode's text is
+ * unchanged byte for byte.
+ */
+const ENFORCED_APPROVAL =
+  "Enforced mode: a challenge has no phrase and you cannot approve it. Anything you send as an approval is refused (approval_in_band_refused). An operator approves with `melra approve <taskId>` outside this conversation; until then melra_execute answers approval_awaiting_operator, so try again later. approval_expired means plan the task again.";
+
 export function createMcpServer(
   runtime: MelraRuntime,
   /** Who the transport authenticated, if it authenticated anyone. */
@@ -227,7 +235,10 @@ export function createMcpServer(
     // Clients that support it (Claude Code among them) put this in the model's
     // context once, so the loop below is learned up front instead of pieced
     // together from eleven tool descriptions after a failed first call.
-    { instructions: SERVER_INSTRUCTIONS },
+    {
+      instructions:
+        runtime.policy.mode === "enforced" ? `${SERVER_INSTRUCTIONS}\n${ENFORCED_APPROVAL}` : SERVER_INSTRUCTIONS,
+    },
   );
 
   server.registerTool(
@@ -278,7 +289,8 @@ export function createMcpServer(
       description:
         "Execute one previously planned task through policy, runtime, verification, and receipt generation. " +
         "If melra_plan returned an approval challenge, pass its id and its exact phrase; the phrase is scoped to that one task and expires. " +
-        "Policy is re-evaluated here, so a plan made under a looser policy is still refused. Only reads are retried.",
+        "Policy is re-evaluated here, so a plan made under a looser policy is still refused. Only reads are retried." +
+        (runtime.policy.mode === "enforced" ? ` ${ENFORCED_APPROVAL}` : ""),
       inputSchema: MelraExecuteInputSchema,
       annotations: {
         readOnlyHint: false,

@@ -205,6 +205,11 @@ export class WorkflowController {
     if (["paused", "suspended"].includes(current.status)) {
       throw new Error(`workflow_halted:${current.status}`);
     }
+    // Every task would refuse these anyway, but only once its node's turn came,
+    // after siblings in the same wave had already been cancelled, planned
+    // again or run on the strength of a request that is refused. Refused
+    // before anything moves.
+    if (this.tasks.enforced && approvals.length > 0) throw new Error("approval_in_band_refused");
     // An expired lease someone else holds is an advance that died mid-flight.
     // Taking it over would read a projection from before that advance's tasks
     // and plan them again under keys that were never committed, so the run is
@@ -307,7 +312,7 @@ export class WorkflowController {
     ) {
       return { run: current, tasks: [], events: [] };
     }
-    // A node parked for a human — approval phrase or supplied input — is no
+    // A node parked for a human — approval or supplied input — is no
     // longer `pending`, so `readyNodeIds` will not return it. Re-offer it here
     // or the workflow would stall forever with the answer in hand.
     const awaiting = [...graph.nodes.values()]

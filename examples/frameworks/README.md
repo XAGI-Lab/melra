@@ -31,11 +31,14 @@ Each snippet launches `melra` from `PATH`. Without an install, use
 
 ## Approvals
 
-A mutation planned through `melra_plan` comes back `awaiting_approval` with an
-exact phrase that `melra_execute` must echo. Who echoes it is the harness's
-decision: route it to a person (the OpenAI Agents SDK's `require_approval`, a
-LangGraph interrupt, your own UI) rather than letting the model approve its own
-plan. Read-only operations run without one.
+A mutation planned through `melra_plan` comes back `awaiting_approval`. In
+developer mode it carries an exact phrase that `melra_execute` must echo. Who
+echoes it is the harness's decision: route it to a person (the OpenAI Agents
+SDK's `require_approval`, a LangGraph interrupt, your own UI) rather than
+letting the model approve its own plan. In enforced mode there is no phrase:
+an operator approves with `melra approve <task-id>`, `melra_execute` then runs
+the task with no approval passed, and any approval the harness sends is
+refused. Read-only operations run without one.
 
 ## Over HTTP or a Unix socket instead of stdio
 

@@ -45,6 +45,7 @@ beforeAll(async () => {
     dataDirectory: join(root, ".melra"),
     policyPath: join(root, "policy.json"),
     evidenceVerifiers: [rowExists],
+    environment: {},
   });
 });
 
@@ -64,7 +65,7 @@ async function run(verifier: string, id: string) {
   const planned = runtime.controller.plan(write(verifier, id));
   return await runtime.controller.execute(
     planned.id,
-    planned.approval && { approvalId: planned.approval.approvalId, phrase: planned.approval.phrase },
+    planned.approval && { approvalId: planned.approval.approvalId, phrase: planned.approval.phrase! },
   );
 }
 

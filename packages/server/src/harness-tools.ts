@@ -9,9 +9,10 @@
 // knows how to call — `read_file`, `write_file`, `run_command`, `browser_click`
 // — and runs plan → policy → approval → execute → verify → receipt underneath.
 // Nothing here is a shortcut past a stage: it builds an ordinary `TaskRequest`
-// and hands it to the same `TaskController`. A mutation still stops on an
-// approval phrase; the tool reports the phrase instead of pretending it was
-// asked for.
+// and hands it to the same `TaskController`. A mutation still stops for
+// approval. In developer mode the tool reports the approval phrase instead of
+// pretending it was asked for; in enforced mode there is no phrase, and the
+// tool says an operator approves out of band.
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
@@ -258,12 +259,18 @@ export function registerHarnessTools(
   /** Who the transport authenticated, recorded on every task these plan. */
   client?: Principal,
 ): void {
+  // Enforced mode only extends or loosens what is registered, so developer
+  // mode's tool list is unchanged byte for byte.
+  const enforced = runtime.policy.mode === "enforced";
   for (const [name, definition] of Object.entries(HARNESS_TOOLS)) {
     server.registerTool(
       name,
       {
         title: definition.title,
-        description: definition.description,
+        description:
+          enforced && name === "write_file"
+            ? "Create or overwrite one workspace file. Needs approval: an operator approves it with `melra approve <taskId>`, then call `approve`."
+            : definition.description,
         inputSchema: definition.input,
         annotations: {
           readOnlyHint: definition.readOnly,
@@ -294,17 +301,20 @@ export function registerHarnessTools(
           });
         }
         if (task.status === "awaiting_approval" && task.approval !== undefined) {
-          // The phrase is scoped to this task and this exact operation, so it
-          // travels with the task id rather than standing alone. Re-planning on
-          // the approving call would mint a different task and a different
-          // phrase — which is the property that stops approved arguments from
-          // being swapped for others.
+          // The approval is scoped to this task and this exact operation, so
+          // it travels with the task id rather than standing alone. Re-planning
+          // on the approving call would mint a different task and a different
+          // challenge — which is the property that stops approved arguments
+          // from being swapped for others. Enforced mode issues no phrase.
           return toolResult({
             status: "approval_required",
             taskId: task.id,
-            phrase: task.approval.phrase,
+            ...(task.approval.phrase === undefined ? {} : { phrase: task.approval.phrase }),
             expiresAt: task.approval.expiresAt,
-            next: "Show the phrase to the person who has to authorise this, then call `approve` with this taskId and the phrase they confirm.",
+            next:
+              task.approval.phrase === undefined
+                ? `An operator approves this outside the conversation with \`melra approve ${task.id}\`; then call \`approve\` with this taskId and no phrase.`
+                : "Show the phrase to the person who has to authorise this, then call `approve` with this taskId and the phrase they confirm.",
           });
         }
         const executed = await runtime.controller.execute(task.id);
@@ -317,11 +327,13 @@ export function registerHarnessTools(
     "approve",
     {
       title: "Approve and run a held task",
-      description:
-        "Run the task a previous tool call held for approval, using the exact phrase it returned. The task runs the operation that was approved; nothing about it can be changed here.",
+      description: enforced
+        ? "Run the task a previous tool call held for approval, once an operator has approved it outside this conversation with `melra approve <taskId>`. Pass no phrase: none is issued, and one sent is refused. The task runs the operation that was approved; nothing about it can be changed here."
+        : "Run the task a previous tool call held for approval, using the exact phrase it returned. The task runs the operation that was approved; nothing about it can be changed here.",
       inputSchema: {
         taskId: z.string().uuid(),
-        phrase: z.string().min(1).max(200),
+        // Optional only where no phrase is ever issued.
+        phrase: enforced ? z.string().min(1).max(200).optional() : z.string().min(1).max(200),
       },
       annotations: {
         readOnlyHint: false,
@@ -335,10 +347,10 @@ export function registerHarnessTools(
       if (held.approval === undefined) {
         return toolResult({ status: "blocked", taskId, reason: "no_approval_pending" });
       }
-      const executed = await runtime.controller.execute(taskId, {
-        approvalId: held.approval.approvalId,
-        phrase,
-      });
+      const executed = await runtime.controller.execute(
+        taskId,
+        phrase === undefined ? undefined : { approvalId: held.approval.approvalId, phrase },
+      );
       return toolResult(summarize(taskId, executed.task.status, executed.output));
     },
   );

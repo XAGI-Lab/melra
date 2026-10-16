@@ -80,6 +80,7 @@ beforeAll(async () => {
     workspaceRoot: root,
     dataDirectory: join(root, ".data"),
     policyPath: join(root, "policy.json"),
+    environment: {},
   });
 });
 
@@ -109,7 +110,7 @@ async function run(request: ReturnType<typeof charge>) {
   const approval =
     planned.approval === undefined
       ? undefined
-      : { approvalId: planned.approval.approvalId, phrase: planned.approval.phrase };
+      : { approvalId: planned.approval.approvalId, phrase: planned.approval.phrase! };
   return { planned, ...(await runtime.controller.execute(planned.id, approval)) };
 }
 

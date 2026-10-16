@@ -20,7 +20,8 @@ they belong to the harness above.
 
 For every effect it does exactly nine things and nothing else: type it against a
 strict schema, classify it, authorise it against policy, gate it on an exact
-approval phrase, record it durably before anything runs, deduplicate it by
+approval (a phrase in developer mode, an operator's out-of-band decision in
+enforced mode), record it durably before anything runs, deduplicate it by
 idempotency key, run it under a budget and cancel signal, verify it against
 declared evidence, and receipt it. Work that is not one of those nine jobs — a
 model router, a planner, a prompt library, semantic memory about the user —
@@ -107,8 +108,12 @@ minus `src/**/*.test.ts`, so tests never reach `dist/` or the tarball) and its
 ## Execution pipeline (the core invariant)
 
 `melra_plan` never executes. It classifies the operation, evaluates policy, persists a
-`TaskRecord`, and — for mutations — returns a task-scoped, expiring approval challenge whose
-exact phrase must be echoed back. `melra_execute` **re-evaluates policy** so a stale plan
+`TaskRecord`, and — for mutations — returns a task-scoped, expiring approval challenge. In
+developer mode its exact phrase must be echoed back; in enforced mode it has no phrase,
+`melra_execute` refuses any approval the caller sends (`approval_in_band_refused`), and
+only an `out_of_band` decision recorded by an enforced-mode process (`melra approve`, or
+`melra run`'s prompt) lets it run
+(`approval_awaiting_operator` until then). `melra_execute` **re-evaluates policy** so a stale plan
 cannot ride a since-tightened policy, validates the approval, runs the adapter under an
 `AbortSignal` armed with `budget.maxDurationMs`, then verifies.
 

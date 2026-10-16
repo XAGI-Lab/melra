@@ -190,9 +190,33 @@ describe("local policy", () => {
     expect(
       validateApproval(challenge, {
         approvalId: challenge!.approvalId,
-        phrase: challenge!.phrase,
+        phrase: challenge!.phrase!,
       }),
     ).toEqual({ ok: true });
+  });
+
+  it("issues no phrase in enforced mode, and developer mode's challenge is unchanged", () => {
+    const write = TaskRequestSchema.parse({
+      goal: "Write",
+      operation: { kind: "file", action: "write", path: "x.txt", content: "x" },
+      requiredEvidence: [{ type: "file_exists", path: "x.txt" }],
+    });
+    const id = "db65d7da-9d59-46a7-86f7-aa1bd205382c";
+    const developer = evaluatePolicy(id, write, createDefaultPolicy(root)).challenge!;
+    expect(Object.keys(developer)).toEqual(["approvalId", "taskId", "actionDigest", "phrase", "expiresAt"]);
+    expect(developer.phrase).toBe(`APPROVE ${developer.actionDigest.slice(0, 12)}`);
+    const enforced = evaluatePolicy(id, write, { ...createDefaultPolicy(root), mode: "enforced" }).challenge!;
+    expect(Object.keys(enforced)).toEqual(["approvalId", "taskId", "actionDigest", "expiresAt"]);
+    // The phrase it would have been is derivable, and matches nothing.
+    expect(
+      validateApproval(enforced, { approvalId: enforced.approvalId, phrase: `APPROVE ${enforced.actionDigest.slice(0, 12)}` }),
+    ).toEqual({ ok: false, reason: "approval_phrase_mismatch" });
+    // An in-process caller reading the missing phrase passes undefined, and
+    // undefined is not a match for undefined.
+    const { phrase: _phrase, ...withoutPhrase } = developer;
+    expect(
+      validateApproval(withoutPhrase, { approvalId: developer.approvalId, phrase: undefined as never }),
+    ).toEqual({ ok: false, reason: "approval_phrase_mismatch" });
   });
 
   it("never silently ignores caller constraints or forbidden effects", () => {
@@ -555,7 +579,8 @@ describe("enforced-mode reads that leave the workspace", () => {
         reason: "read_outside_workspace",
         effect: "read",
       });
-      expect(result.challenge?.phrase).toMatch(/^APPROVE /);
+      expect(result.challenge?.actionDigest).toMatch(/^[a-f0-9]{64}$/);
+      expect(result.challenge).not.toHaveProperty("phrase");
     }
     // Inside the workspace, however spelled, and every read in developer mode,
     // are as they were.

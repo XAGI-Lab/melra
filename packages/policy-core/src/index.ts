@@ -1249,7 +1249,7 @@ export function evaluatePolicy(
       approvalId,
       taskId,
       actionDigest: digest,
-      phrase,
+      ...(policy.mode === "enforced" ? {} : { phrase }),
       expiresAt: new Date(Date.now() + approvalTtl(policy)).toISOString(),
     },
   };
@@ -1281,7 +1281,7 @@ export function validateApproval(
   if (challenge.approvalId !== response.approvalId) {
     return { ok: false, reason: "approval_id_mismatch" };
   }
-  if (challenge.phrase !== response.phrase) {
+  if (challenge.phrase === undefined || challenge.phrase !== response.phrase) {
     return { ok: false, reason: "approval_phrase_mismatch" };
   }
   if (Date.parse(challenge.expiresAt) <= Date.now()) {

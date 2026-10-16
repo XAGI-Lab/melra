@@ -58,7 +58,7 @@ async function pair() {
   );
   const running = first.controller.execute(planned.id, {
     approvalId: planned.approval!.approvalId,
-    phrase: planned.approval!.phrase,
+    phrase: planned.approval!.phrase!,
   });
   running.catch(() => undefined);
   await held.inside;
@@ -121,7 +121,7 @@ describe("recovery between runtimes sharing a home", () => {
     );
     const checked = await runtime.controller.execute(write.id, {
       approvalId: write.approval!.approvalId,
-      phrase: write.approval!.phrase,
+      phrase: write.approval!.phrase!,
     });
     expect(checked.receipt?.evidence[0]?.summary).toBe("verification_path_reserved");
   });

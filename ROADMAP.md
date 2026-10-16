@@ -83,7 +83,7 @@ them as promises was the wrong call:
 - **Prompt-injection and memory-poisoning classifiers.** A classifier is a model,
   and a probabilistic gate is the wrong shape for this boundary anyway. Poisoned
   memory in MELRA still has to become an effect request that passes policy,
-  echoes an approval phrase, and satisfies declared evidence — none of which
+  is approved, and satisfies declared evidence — none of which
   cares where the idea came from. Classifying text is the harness's job; refusing
   the effect is the kernel's.
 
@@ -262,7 +262,7 @@ but not in the shape the protocol should eventually name.
 | Delegation chain | ✓ | `identity.onBehalfOf`, stamped on every receipt |
 | Capability engine | ✓ | Issued grants in `policy.capabilities`, checked before allowlists |
 | Policy engine | ✓ | `@melra/policy-core`, re-evaluated at execution |
-| Authorization | ✓ | Exact, expiring, task-scoped approval phrases |
+| Authorization | ✓ | Exact, expiring, task-scoped approval phrases; operator-only, out of band, in enforced mode |
 | Credential broker | ✓ | `policy.credentials`, scoped by host and by capability; adapters never see the value |
 | Durable effect runtime | ✓ | `@melra/runtime-core` over SQLite |
 | Idempotency | ✓ | `idempotency_commits`, unique per committed attempt |

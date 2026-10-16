@@ -12,6 +12,8 @@ import type { TaskRecord } from "@melra/protocol";
 import { taskTarget } from "../src/activity.js";
 
 const execute = promisify(execFile);
+// The approval case echoes a developer-mode phrase, whatever the shell says.
+delete process.env.MELRA_MODE;
 const entry = resolve(import.meta.dirname, "../dist/bin.js");
 const systemInfo = resolve(import.meta.dirname, "../../../examples/01-system-info/task.json");
 const fileWrite = resolve(import.meta.dirname, "../../../examples/02-verified-file-write/task.json");

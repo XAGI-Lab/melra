@@ -21,11 +21,15 @@
  * Read `notProven` before quoting a result. This is a black-box check of one
  * endpoint: it can show that the endpoint governs the effects it is asked for,
  * and it cannot show that the harness on the other side has no second way to
- * reach the same disk.
+ * reach the same disk. One exception: against an enforced endpoint it spawned,
+ * the suite approves out of band through the shared data directory, because
+ * the agent's side may not approve anything there.
  */
 
+import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { isSea } from "node:sea";
+import { promisify } from "node:util";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -68,7 +72,7 @@ const KERNEL_TOOLS = [
  */
 function bypassCaveat(mode: string): string {
   return mode === "enforced"
-    ? "That the operator's enforced-mode claim is true. The endpoint reports enforced mode and this suite verified the refusals MELRA owns, but whether the harness above it is really sandboxed is a fact about the deployment, not about this endpoint."
+    ? "That the operator's enforced-mode claim is true. The endpoint reports enforced mode and this suite verified the refusals MELRA owns, but whether the harness above it is really sandboxed is a fact about the deployment, not about this endpoint. That includes the approvals: `melra approve` counts as out of band because it runs as a process with OS access to the data directory, which is only an operator if the agent has no such access."
     : "That the harness has no second, ungoverned path to the same systems. A harness holding both a MELRA terminal and a native one makes the kernel optional, and an optional boundary is not a trust boundary. Nothing observable from this side distinguishes the two.";
 }
 
@@ -120,6 +124,13 @@ export interface ConformanceOptions {
   env?: Record<string, string>;
   /** The level being claimed. The run fails if the endpoint falls short of it. */
   claim?: number;
+  /**
+   * Records an operator's out-of-band yes to a task, for an endpoint in
+   * enforced mode. Defaults to this CLI's own `approve <id> --yes --mode
+   * enforced` when the suite spawned the server itself; any other endpoint has
+   * no default, and so cannot earn L3 in enforced mode.
+   */
+  approve?: (taskId: string) => Promise<void>;
 }
 
 /**
@@ -162,7 +173,7 @@ export async function runConformance(
     name: "melra-conformance",
     version: PRODUCT_VERSION,
   });
-  const target = await connect(client, options);
+  const { target, approve } = await connect(client, options);
   const call = caller(client);
 
   const checks: Check[] = [];
@@ -195,7 +206,28 @@ export async function runConformance(
   let mode = "developer";
   let approvalId: string | undefined;
   let phrase: string | undefined;
+  let actionDigest: string | undefined;
   let writeTaskId: string | undefined;
+  let planReply: Reply | undefined;
+
+  /**
+   * What `melra_execute` needs beside the task id to run an approved effect:
+   * the echoed phrase in developer mode, and in enforced mode nothing at all,
+   * once an operator has said yes out of band.
+   */
+  const approveFor = async (reply: Reply): Promise<Record<string, unknown>> => {
+    if (mode !== "enforced") {
+      return {
+        approval: {
+          approvalId: field<string>(reply.value, "approval.approvalId"),
+          phrase: field<string>(reply.value, "approval.phrase"),
+        },
+      };
+    }
+    must(approve !== undefined, "enforced mode needs an out-of-band approver; run without --url, or pass `approve`");
+    await approve(field<string>(reply.value, "id"));
+    return {};
+  };
 
   await check(1, "kernel-tools-present", async () => {
     const listed = (await client.listTools()).tools.map((tool) => tool.name);
@@ -285,8 +317,10 @@ export async function runConformance(
       guarantee === "at-most-once",
       `a gated mutation published the guarantee ${guarantee}`,
     );
+    planReply = reply;
     approvalId = field<string>(reply.value, "approval.approvalId");
-    phrase = field<string>(reply.value, "approval.phrase");
+    actionDigest = field<string>(reply.value, "approval.actionDigest");
+    if (mode !== "enforced") phrase = field<string>(reply.value, "approval.phrase");
     must(
       field<string>(reply.value, "approval.taskId") === writeTaskId,
       "the approval challenge is not scoped to this task",
@@ -305,16 +339,47 @@ export async function runConformance(
     return `refused: ${reply.text}`;
   });
 
-  await check(2, "wrong-phrase-is-refused", async () => {
-    must(writeTaskId !== undefined, "no planned mutation to execute");
-    must(phrase !== undefined && approvalId !== undefined, "no challenge issued");
-    const reply = await call("melra_execute", {
-      taskId: writeTaskId,
-      approval: { approvalId, phrase: `${phrase} and also this` },
+  if (mode !== "enforced") {
+    await check(2, "wrong-phrase-is-refused", async () => {
+      must(writeTaskId !== undefined, "no planned mutation to execute");
+      must(phrase !== undefined && approvalId !== undefined, "no challenge issued");
+      const reply = await call("melra_execute", {
+        taskId: writeTaskId,
+        approval: { approvalId, phrase: `${phrase} and also this` },
+      });
+      must(!reply.ok, "a gated mutation executed on a phrase that was not the one issued");
+      return `refused: ${reply.text}`;
     });
-    must(!reply.ok, "a gated mutation executed on a phrase that was not the one issued");
-    return `refused: ${reply.text}`;
-  });
+  } else {
+    // A credential the agent is handed proves only that the agent echoed it,
+    // so in enforced mode there must be none to echo.
+    await check(2, "approval-credential-withheld", async () => {
+      must(writeTaskId !== undefined && planReply !== undefined, "no planned mutation");
+      const status = await call("melra_task_status", { taskId: writeTaskId });
+      must(status.ok, status.text);
+      for (const reply of [planReply, status]) {
+        must(!hasKey(reply.value, "phrase"), "a reply carries an approval phrase");
+        must(!/APPROVE [a-f0-9]{12}/.test(reply.text), "a reply carries an approval phrase by value");
+      }
+      return "no phrase in the plan or the task record";
+    });
+
+    // The phrase MELRA would have issued is computable from the challenge, so
+    // an endpoint that still accepted it would be accepting the agent's word.
+    await check(2, "in-band-approval-refused", async () => {
+      must(writeTaskId !== undefined && approvalId !== undefined && actionDigest !== undefined, "no challenge issued");
+      const reply = await call("melra_execute", {
+        taskId: writeTaskId,
+        approval: { approvalId, phrase: `APPROVE ${actionDigest.slice(0, 12)}` },
+      });
+      // An endpoint that ran it wrote the probe, and the report has to say so.
+      if (reply.ok) probeWritten = true;
+      must(!reply.ok, "a gated mutation executed on a phrase the agent derived itself");
+      const status = await call("melra_task_status", { taskId: writeTaskId });
+      must(field<string>(status.value, "status") === "awaiting_approval", "the refused task is no longer awaiting approval");
+      return `refused: ${reply.text}`;
+    });
+  }
 
   await check(2, "refused-effects-did-not-happen", async () => {
     const reply = await call("melra_plan", {
@@ -364,10 +429,10 @@ export async function runConformance(
 
   await check(3, "approved-mutation-verifies", async () => {
     must(writeTaskId !== undefined, "no planned mutation to execute");
-    must(phrase !== undefined && approvalId !== undefined, "no challenge issued");
+    must(planReply !== undefined, "no challenge issued");
     const reply = await call("melra_execute", {
       taskId: writeTaskId,
-      approval: { approvalId, phrase },
+      ...(await approveFor(planReply)),
     });
     must(reply.ok, reply.text);
     probeWritten = true;
@@ -449,6 +514,23 @@ export async function runConformance(
     return `receipt ${receipts[0]?.receiptId} for ${receipts[0]?.capability}, still readable after other tasks ran`;
   });
 
+  // Enforced mode only: in developer mode every approval is in band by
+  // definition, and an endpoint older than approval provenance has no field to
+  // say so, so the check would only mark it down for its age.
+  if (mode === "enforced") {
+    await check(3, "approval-provenance-recorded", async () => {
+      must(writeTaskId !== undefined, "no executed mutation to read back");
+      const reply = await call("melra_receipt", { taskId: writeTaskId });
+      must(reply.ok, reply.text);
+      const receipts = field<Array<{ policyDecision?: { approval?: { channel?: string } } }>>(reply.value, "receipts");
+      const channel = receipts[0]?.policyDecision?.approval?.channel;
+      must(channel === "out_of_band", `the receipt says the approval came ${channel ?? "from nowhere"}, not out_of_band`);
+      const certified = field<string>(reply.value, "certificate.approvalChannel");
+      must(certified === "out_of_band", `the certificate says ${certified}, not out_of_band`);
+      return "receipt and certificate both say out_of_band";
+    });
+  }
+
   // Last, because it is also the cleanup: a destructive effect gated by its own
   // approval, verified by the file being gone.
   await check(3, "destructive-effects-are-gated-and-verified", async () => {
@@ -470,10 +552,7 @@ export async function runConformance(
     );
     const executed = await call("melra_execute", {
       taskId: field<string>(reply.value, "id"),
-      approval: {
-        approvalId: field<string>(reply.value, "approval.approvalId"),
-        phrase: field<string>(reply.value, "approval.phrase"),
-      },
+      ...(await approveFor(reply)),
     });
     must(executed.ok, executed.text);
     must(
@@ -517,10 +596,17 @@ export async function runConformance(
   };
 }
 
+/** Whether a key appears anywhere in a reply, however deep. */
+function hasKey(value: unknown, key: string): boolean {
+  if (Array.isArray(value)) return value.some((item) => hasKey(item, key));
+  if (value === null || typeof value !== "object") return false;
+  return Object.entries(value).some(([name, item]) => name === key || hasKey(item, key));
+}
+
 async function connect(
   client: Client,
   options: ConformanceOptions,
-): Promise<Record<string, unknown>> {
+): Promise<{ target: Record<string, unknown>; approve?: (taskId: string) => Promise<void> }> {
   if (options.url !== undefined) {
     // Forgiving about the one thing people get wrong: `serve --http` prints both
     // the console URL and the MCP URL, and only one of them is an endpoint. The
@@ -545,17 +631,18 @@ async function connect(
             }),
       }) as unknown as Transport,
     );
-    return { transport: "http", url: url.href, authenticated: options.token !== undefined };
+    return {
+      target: { transport: "http", url: url.href, authenticated: options.token !== undefined },
+      ...(options.approve === undefined ? {} : { approve: options.approve }),
+    };
   }
   const command = options.command ?? process.execPath;
-  const args =
-    options.args ??
-    (options.command === undefined && !isSea()
-      ? // Reproduce how this process was started, loaders included, so the same
-        // command works from `dist/bin.js` and from `tsx src/index.ts`.
-        [...process.execArgv, process.argv[1] ?? "", "serve"]
-      : // A single executable is its own entry point: it takes `serve` directly.
-        ["serve"]);
+  // Reproduce how this process was started, loaders included, so the same
+  // command works from `dist/bin.js` and from `tsx src/index.ts`. A single
+  // executable is its own entry point and takes the subcommand directly.
+  const self = isSea() ? [] : [...process.execArgv, process.argv[1] ?? ""];
+  const args = options.args ?? (options.command === undefined ? [...self, "serve"] : ["serve"]);
+  const env = options.env ?? inheritedEnvironment();
   await client.connect(
     new StdioClientTransport({
       command,
@@ -563,11 +650,25 @@ async function connect(
       // The SDK forwards a small allowlist by default, which would drop every
       // MELRA_* variable and quietly check a server configured differently from
       // the one the operator runs. The point is to check *their* endpoint.
-      env: options.env ?? inheritedEnvironment(),
+      env,
       stderr: "pipe",
     }),
   );
-  return { transport: "stdio", command, args };
+  // Only a server this suite started is known to share this CLI's data
+  // directory, so only then can its own `approve` answer for it. Always in
+  // enforced mode, so it can never spend the task's one decision in band, and
+  // under the suite's name, so the receipt says who said yes.
+  const ownServer = options.command === undefined && options.args === undefined;
+  const approve =
+    options.approve ??
+    (ownServer
+      ? async (taskId: string) => {
+          await promisify(execFile)(process.execPath, [...self, "approve", taskId, "--yes", "--mode", "enforced"], {
+            env: { ...env, MELRA_APPROVER: "melra-conformance" },
+          });
+        }
+      : undefined);
+  return { target: { transport: "stdio", command, args }, ...(approve === undefined ? {} : { approve }) };
 }
 
 function inheritedEnvironment(): Record<string, string> {

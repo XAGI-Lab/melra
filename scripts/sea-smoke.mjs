@@ -5,9 +5,11 @@
 // a PATH holding only the system directories, a fresh home and workspace.
 // `conformance` spawns the binary again as its own MCP server, so passing L3
 // proves the stdio server, the kernel, and SQLite all run from the one file.
+// The enforced run spawns it a third way, as the suite's out-of-band
+// `approve`, which is the only check of that path from a single executable.
 
 import { execFileSync } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,15 +30,39 @@ const env = {
   MELRA_WORKSPACE: home,
 };
 const run = (...args) => execFileSync(binary, args, { env, cwd: home, encoding: "utf8", timeout: 180_000 });
+// Enforced mode refuses a data directory inside the workspace, so this one
+// works one level down from the home that holds it.
+const workspace = join(home, "workspace");
 
 try {
   const version = run("version").trim();
   const doctor = JSON.parse(run("doctor", "--json"));
   const conformance = JSON.parse(run("conformance", "--json"));
-  const result = { version, doctorReady: doctor.ready, level: conformance.level, passed: `${conformance.passed}/${conformance.of}` };
+  await mkdir(workspace);
+  const enforced = JSON.parse(
+    execFileSync(binary, ["conformance", "--json"], {
+      env: { ...env, MELRA_WORKSPACE: workspace, MELRA_MODE: "enforced" },
+      cwd: workspace,
+      encoding: "utf8",
+      timeout: 180_000,
+    }),
+  );
+  const result = {
+    version,
+    doctorReady: doctor.ready,
+    level: conformance.level,
+    passed: `${conformance.passed}/${conformance.of}`,
+    enforced: { mode: enforced.mode, level: enforced.level, passed: `${enforced.passed}/${enforced.of}` },
+  };
   process.stdout.write(`${JSON.stringify(result)}\n`);
   if (!doctor.ready || conformance.level !== 3 || conformance.target.command !== binary) {
     throw new Error("sea_smoke_failed");
+  }
+  // L3 in enforced mode is earned only with an operator's out-of-band yes, so
+  // a passing provenance check means the suite's own `approve` ran.
+  const approved = enforced.checks.some((check) => check.name === "approval-provenance-recorded" && check.passed);
+  if (enforced.mode !== "enforced" || enforced.level !== 3 || enforced.passed !== enforced.of || !approved) {
+    throw new Error("sea_smoke_enforced_failed");
   }
 } finally {
   await rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });

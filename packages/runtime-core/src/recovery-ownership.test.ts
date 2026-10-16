@@ -117,9 +117,9 @@ const charge = () =>
     ],
   });
 
-const approve = (task: { approval?: { approvalId: string; phrase: string } }) => ({
+const approve = (task: { approval?: { approvalId: string; phrase?: string | undefined } }) => ({
   approvalId: task.approval!.approvalId,
-  phrase: task.approval!.phrase,
+  phrase: task.approval!.phrase!,
 });
 
 describe("task recovery across processes", () => {
@@ -318,7 +318,7 @@ const put = (key: string): TaskRequest =>
 
 const approvalsFor = (run: WorkflowRun) =>
   Object.values(run.nodes).flatMap((node) =>
-    node.approval === undefined ? [] : [{ approvalId: node.approval.approvalId, phrase: node.approval.phrase }],
+    node.approval === undefined ? [] : [{ approvalId: node.approval.approvalId, phrase: node.approval.phrase! }],
   );
 
 /** A one-step workflow whose step is in A's adapter when this returns. */
@@ -758,7 +758,7 @@ describe("workflow recovery across processes", () => {
     current = (await a.workflows.advance(run.id)).run;
     expect(current.status).toBe("failed");
     const undo = current.nodes["undo-q"]!.approval!;
-    current = (await a.workflows.advance(run.id, [{ approvalId: undo.approvalId, phrase: undo.phrase }])).run;
+    current = (await a.workflows.advance(run.id, [{ approvalId: undo.approvalId, phrase: undo.phrase! }])).run;
     expect(current.status).toBe("recovery_required");
     expect(current.nodes.p?.status).toBe("failed");
 

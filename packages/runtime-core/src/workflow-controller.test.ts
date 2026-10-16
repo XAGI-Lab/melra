@@ -378,7 +378,7 @@ describe("WorkflowController execution", () => {
     const approved = await controller.advance(planned.id, [
       {
         approvalId: challenge.approvalId,
-        phrase: challenge.phrase,
+        phrase: challenge.phrase!,
       },
     ]);
     expect(approved.run.nodes["approve-write"]?.status).toBe(
@@ -706,7 +706,7 @@ describe("WorkflowController execution", () => {
     const compensated = await controller.advance(planned.id, [
       {
         approvalId: challenge.approvalId,
-        phrase: challenge.phrase,
+        phrase: challenge.phrase!,
       },
     ]);
 
@@ -741,7 +741,7 @@ describe("WorkflowController execution", () => {
           ? [
               {
                 approvalId: state.approval.approvalId,
-                phrase: state.approval.phrase,
+                phrase: state.approval.phrase!,
               },
             ]
           : [],

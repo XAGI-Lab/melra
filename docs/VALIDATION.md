@@ -26,7 +26,7 @@ Host exercised locally: macOS arm64, Node.js 24.10.0, Python 3.11.14
 | Duplicate-execution rate | `0.0` |
 | False-success rate | `0.0` |
 | Event-consistency rate | `1.0` |
-| Real MCP stdio E2E | 13 cases passed |
+| Real MCP stdio E2E | 15 cases passed |
 | CLI package dry run | `melra-cli-0.3.0-alpha.1.tgz` produced |
 | Hardened container MCP smoke | all 11 tools discovered; verified certificate produced |
 | Shipped Node and Python dependency audit | no known vulnerabilities |
@@ -98,7 +98,7 @@ Host exercised locally: macOS arm64 (Darwin 25.5.0), Node.js 24, Python 3.11.14
 | `pnpm check` | passed (versions, strict typecheck, tests, Python) |
 | TypeScript/Vitest cases | 506 passed, 6 platform-skipped (current `main`, ubuntu / Node 24 CI) |
 | `pnpm evals` | 52 of 52 scenarios passed, 0 failed |
-| `pnpm e2e` | 13 end-to-end cases passed over real stdio |
+| `pnpm e2e` | 15 end-to-end cases passed over real stdio |
 | `pnpm pack:check` | passed |
 | `pnpm security:audit` | no known vulnerabilities, Node and Python |
 | `pnpm benchmark:browser:check` | ruff clean, 28 pytest cases passed |
@@ -211,10 +211,16 @@ listed under known limitations below.
 - private and metadata network targets are rejected, including bracketed IPv6
   literals, which are checked as addresses rather than looked up as names;
 - mutations without required evidence are policy-blocked;
-- wrong or missing approval phrases are rejected;
-- a mutation planned by one harness stays gated after that harness's process is
-  gone, and a second harness on a different transport, vocabulary, and runtime
-  object can only finish it by echoing the original phrase;
+- in developer mode, wrong or missing approval phrases are rejected;
+- in developer mode, a mutation planned by one harness stays gated after that
+  harness's process is gone, and a second harness on a different transport,
+  vocabulary, and runtime object can only finish it by echoing the original
+  phrase;
+- in enforced mode, no approval phrase is issued on any MCP reply, task or
+  workflow route, or workflow event; any approval the agent sends is refused,
+  including the phrase a developer-mode kernel would have issued; and a
+  mutation runs only on an operator's `out_of_band` decision, which the receipt
+  and certificate record;
 - tampered action digests and approval IDs fail before adapter execution;
 - read retries are bounded and mutations are not retried;
 - independently observed file mutations reconcile after interruption while

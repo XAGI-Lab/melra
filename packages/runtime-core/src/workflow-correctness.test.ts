@@ -74,7 +74,7 @@ const workflow = (nodes: unknown[]) =>
 /** Approve whatever is waiting, once. */
 const approvalsFor = (run: WorkflowRun) =>
   Object.values(run.nodes).flatMap((node) =>
-    node.approval === undefined ? [] : [{ approvalId: node.approval.approvalId, phrase: node.approval.phrase }],
+    node.approval === undefined ? [] : [{ approvalId: node.approval.approvalId, phrase: node.approval.phrase! }],
   );
 
 describe("workflow ordering", () => {
@@ -210,7 +210,7 @@ describe("workflow recovery", () => {
     // Iteration 0 ran under its own idempotency key, then the process died.
     const key = sha256({ workflowId: planned.id, nodeId: "loop", iteration: 0, branch: "loop:0", request: body });
     const first = tasks.plan(body, { idempotencyKey: key, attempt: 1 });
-    await tasks.execute(first.id, { approvalId: first.approval!.approvalId, phrase: first.approval!.phrase });
+    await tasks.execute(first.id, { approvalId: first.approval!.approvalId, phrase: first.approval!.phrase! });
     const restarted = new WorkflowController(store, tasks, cipher);
     const [recovered] = await restarted.recoverInterrupted();
     expect(recovered?.nodes.loop?.status).toBe("pending");
