@@ -22,6 +22,37 @@ All notable changes are documented here. The format follows
   --dry-run`s every package and checks the GitHub release's asset list and
   checksums, with read-only permissions throughout. (#204)
 
+- `melra console` approves in a browser, with the same authority as
+  `melra approve`. Run in a terminal, it starts a loopback server of its own,
+  with no MCP endpoint and no client registration, that ignores
+  `MELRA_HTTP_TOKEN`, and opens a page that pairs with it once through a
+  one-time code in the URL fragment. The code is never printed, and the
+  session it buys is held in memory only, by the console and that page, so
+  reloading or leaving the page ends the pairing, as does any change to its
+  URL the page did not make: it picks the task from the operator's clicks,
+  never from the URL. The page hands the session back as it goes, and the
+  console refuses it from then on. Approve and Deny act only once the page
+  has been visible, focused and unscrolled for a second, and show as not yet
+  active until then; in a browser MELRA's runtime is attached to, Playwright's
+  focus emulation hides raises from the page, so there the hold restarts
+  only on scroll and resize. The page shows the screen `melra approve` shows,
+  with MELRA's summary right above Approve, a decision bound to the task and the
+  digest it drew, and Deny, which cancels the task; the full contract sits
+  folded above the summary, and hidden characters in anything the agent sent,
+  and combining marks stacked past two on one character, are spelled out as
+  `\uXXXX`. The terminal approval screen (`melra approve`, `melra run`) now
+  spells out such marks the same way, and wherever the CLI spells out hidden
+  characters it now spells out unassigned code points too, which a terminal
+  may draw as nothing. Receipts name the approver as `console:` plus
+  `MELRA_APPROVER`. Run it with the `MELRA_HOME`, `MELRA_WORKSPACE` and mode
+  the agent's server uses.
+  It refuses to start without a terminal (`console_needs_a_terminal`) or a
+  browser opener (`console_needs_a_browser`). The server an agent connects to
+  still has no approval route. `@melra/server` exports `approvalScreen`,
+  `approvalSummary` and `printable`, and `serveHttp` takes `approver`,
+  `onPaired` and `onApproved`, refused on a socket or off loopback
+  (`approval_console_loopback_only`) on every platform and in every mode.
+
 ### Changed
 
 - The hardened deployment recipes name Docker Desktop and WSL2 as the way to
@@ -54,6 +85,31 @@ All notable changes are documented here. The format follows
   `docs/COMPATIBILITY.md`, and the README's `melra version` sample), which had
   stayed at 0.3.0-alpha.12 through two releases. `docs/RELEASES.md` lists the
   MCP Registry publish step.
+
+### Security
+
+- The browser runtime refuses every action that sends input to a page
+  carrying `<meta name="melra-approval-surface">`, as `melra console`'s page
+  does: `click`, `type`, `fill_form`, `select`, `press`, `upload` and
+  `download` fail with `browser_refuses_approval_surface`, in every mode and
+  whatever approved them. So do the actions that can raise or move the
+  console under the operator's own pointer, which the console cannot see in
+  an attached browser, where Playwright's focus emulation makes every page
+  report itself visible and focused: `tab_switch` onto a marked tab, `scroll`
+  on a marked page, and, in a browser it is attached to, `close` of any tab
+  while another marked page is open there, whatever the closed tab carries,
+  since the browser then raises a neighbour. A runtime attached over CDP to
+  the browser an operator approves in could otherwise reach the console tab
+  with reads and aim a click at it. Other reads still work. In an attached
+  browser, a page that does not answer within a second could be a busy
+  console, so it holds `close` of the others the same way
+  (`browser_approval_surface_check_unavailable`, naming its tab); it can be
+  closed itself unless another tab does not answer either. `tab_switch` and
+  `close` act on the very tab they checked, even if tabs before it close
+  meanwhile. The check is made when the action starts. `melra doctor` now warns when
+  `MELRA_BROWSER_CDP_ENDPOINT` is set: every tab in that browser, signed-in
+  sites included, is a `tab_switch` away from the agent; its next step says to
+  point that endpoint at a browser you do not use yourself, or unset it.
 
 ## [0.3.0-alpha.14] - 2026-10-16
 
