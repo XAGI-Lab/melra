@@ -25,7 +25,7 @@
   "bugs": "https://github.com/XAGI-Lab/melra/issues",
   "type": "module",
   "engines": {
-    "node": ">=22.13.0"
+    "node": "^22.13.0 || >=23.4.0"
   },
   "bin": {
     "melra": "./dist/bin.js"
