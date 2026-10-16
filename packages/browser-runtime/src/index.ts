@@ -74,7 +74,8 @@ const MAX_FRAMES = 20;
 
 /** Whether a page call failed because its document went away under it. */
 const navigatedAway = (error: unknown): boolean =>
-  error instanceof Error && /context was destroyed|navigat|detached/i.test(error.message);
+  error instanceof Error &&
+  /context was destroyed|cannot find context|unable to adopt|navigat|detached/i.test(error.message);
 
 /** What a secret-field check found, and the frames it read. */
 interface SecretCheck {
@@ -936,10 +937,14 @@ export class BrowserRuntime {
   private async readFirst(candidate: Locator, within: ReadonlySet<Frame> | undefined): Promise<ElementHandle | undefined> {
     const [element] = await this.call(candidate.first().elementHandles(), "count");
     if (element === undefined || within === undefined) return element;
-    const frame = await this.call(element.ownerFrame(), "count");
-    if (frame !== null && within.has(frame)) return element;
-    await element.dispose().catch(() => undefined);
-    return undefined;
+    let kept = false;
+    try {
+      const frame = await this.call(element.ownerFrame(), "count");
+      kept = frame !== null && within.has(frame);
+      return kept ? element : undefined;
+    } finally {
+      if (!kept) await element.dispose().catch(() => undefined);
+    }
   }
 
   /** `locator` for a checked read: the element itself, from the read frames. */
@@ -982,12 +987,12 @@ export class BrowserRuntime {
     let looked = false;
     for (;;) {
       // Asked on every poll: someone can fill a secret field while this waits.
-      // A poll that cannot tell resolves nothing and waits for the next one.
+      // A poll that finds one filled, or cannot tell, looks for nothing and
+      // waits for the next one: a login form stays filled while it signs in.
       // The question gets what is left of the wait, but at least a second, so
       // the last poll is not starved into "unknown".
       this.signal?.throwIfAborted();
       const secret = await this.secretFieldFilled(page, Math.max(1_000, deadline - Date.now()));
-      if (secret.state === "filled") throw new Error("browser_secret_field_filled");
       looked ||= secret.state === "clear";
       let reached = negated && secret.state === "clear";
       for (const candidate of secret.state === "clear" ? this.candidates(page, target, secret.read) : []) {
@@ -996,10 +1001,13 @@ export class BrowserRuntime {
         let present: boolean;
         try {
           const element = await this.readFirst(candidate, secret.read);
-          present =
-            element !== undefined &&
-            (state === "attached" || state === "detached" || (await this.call(element.isVisible(), "is_visible")));
-          await element?.dispose().catch(() => undefined);
+          try {
+            present =
+              element !== undefined &&
+              (state === "attached" || state === "detached" || (await this.call(element.isVisible(), "is_visible")));
+          } finally {
+            await element?.dispose().catch(() => undefined);
+          }
         } catch (error) {
           if (!navigatedAway(error)) throw error;
           reached = false;
@@ -1017,7 +1025,9 @@ export class BrowserRuntime {
       }
       if (reached) return;
       if (Date.now() >= deadline) {
-        // Not the target's fault when no poll could look for it.
+        // Not the target's fault when the last poll, or every poll, could not
+        // look for it.
+        if (secret.state === "filled") throw new Error("browser_secret_field_filled");
         if (!looked) throw new Error("browser_secret_check_unavailable");
         throw new Error(
           `browser_wait_timeout:${state}:${JSON.stringify(target)}`,

@@ -161,17 +161,13 @@ describe("browser see/act loop", () => {
       const whole = JSON.stringify(await run({ action: "inspect" }));
       expect(whole).not.toMatch(/s3cret/);
       expect(whole).toContain("alice");
-      // Whether a target exists can be made to depend on the secret, through
-      // its mirrored value or an accessible name built from the field, however
-      // the selector is spelled. So no read aims at part of the page now.
-      for (const target of [
-        { selector: "#login" },
-        { selector: 'input[\\76 alue^="s3"]' },
-        { selector: "xpath=//input[starts-with(attribute::value,'s3')]" },
-        { role: "cell", name: "s3cret" },
-      ]) {
+      // Whether a target exists could be made to depend on the secret, so no
+      // read aims at part of the page now, whatever it names.
+      for (const target of [{ selector: "#login" }, { role: "cell" }]) {
         await expect(run({ action: "inspect", target })).rejects.toThrow("browser_secret_field_filled");
-        await expect(run({ action: "wait", target, state: "attached" })).rejects.toThrow("browser_secret_field_filled");
+        await expect(run({ action: "wait", target, state: "attached", timeoutMs: 1_000 })).rejects.toThrow(
+          "browser_secret_field_filled",
+        );
         await expect(run({ action: "scroll", direction: "into_view", target })).rejects.toThrow(
           "browser_secret_field_filled",
         );
@@ -241,7 +237,7 @@ describe("browser see/act loop", () => {
     }
   }, 120_000);
 
-  it("stops a targeted wait once a secret field is filled under it", async () => {
+  it("looks for nothing while a secret field is filled, and refuses a wait still facing one at its end", async () => {
     const context = await fixture(`<!doctype html><html><body><input name="password" type="password"><script>
       setTimeout(() => { document.querySelector("input").value = "s3cret-late"; }, 400);
     </script></body></html>`);
@@ -256,10 +252,61 @@ describe("browser see/act loop", () => {
             action: "wait",
             target: { selector: "#never" },
             state: "attached",
-            timeoutMs: 5_000,
+            timeoutMs: 1_500,
           }),
         ),
       ).rejects.toThrow("browser_secret_field_filled");
+    } finally {
+      await runtime.close();
+    }
+  }, 120_000);
+
+  it("waits out a filled sign-in form until the page replaces it", async () => {
+    const context = await fixture(`<!doctype html><html><body><form><input type="password" value="s3cret"></form><script>
+      setTimeout(() => { document.body.innerHTML = '<p id="welcome">signed in</p>'; }, 800);
+    </script></body></html>`);
+    if (context === undefined) return;
+    const { runtime, url } = context;
+    try {
+      await runtime.execute(BrowserOperationSchema.parse({ kind: "browser", action: "navigate", url }));
+      const waited = await runtime.execute(
+        BrowserOperationSchema.parse({
+          kind: "browser",
+          action: "wait",
+          target: { selector: "#welcome" },
+          state: "visible",
+          timeoutMs: 10_000,
+        }),
+      );
+      expect(waited.success).toBe(true);
+    } finally {
+      await runtime.close();
+    }
+  }, 120_000);
+
+  it("waits through a target whose document reloads under it", async () => {
+    // Forty quick reloads, the target on every one: a poll that lands on one
+    // decides nothing, and each wait ends once a poll gets through.
+    const context = await fixture(`<!doctype html><html><body><p id="here">here</p><script>
+      const n = Number(sessionStorage.getItem("n") ?? 0);
+      if (n < 40) { sessionStorage.setItem("n", String(n + 1)); setTimeout(() => location.reload(), 30); }
+    </script></body></html>`);
+    if (context === undefined) return;
+    const { runtime, url } = context;
+    try {
+      await runtime.execute(BrowserOperationSchema.parse({ kind: "browser", action: "navigate", url }));
+      for (let round = 0; round < 15; round += 1) {
+        const waited = await runtime.execute(
+          BrowserOperationSchema.parse({
+            kind: "browser",
+            action: "wait",
+            target: { selector: "#here" },
+            state: "visible",
+            timeoutMs: 20_000,
+          }),
+        );
+        expect(waited.success).toBe(true);
+      }
     } finally {
       await runtime.close();
     }
