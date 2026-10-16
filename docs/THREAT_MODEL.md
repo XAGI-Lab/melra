@@ -139,10 +139,13 @@ that the agent cannot approve. What remains:
   opener's command line, in browser history, and, in a browser the agent's
   runtime is attached to over CDP, in a `tabs` read. Whatever reads it there
   can pair first, and use that session from any HTTP client (the `Origin`
-  check binds browsers only) to approve whatever is pending until the console
-  stops. The operator sees that: their tab says another tab already paired,
-  and the terminal prints a pairing time they did not cause, which is the cue
-  to stop the console. Who can read the code decides what that costs. A tab
+  check binds browsers only) to approve whatever is pending, and to read every
+  task, receipt and workflow event the console serves, until the console
+  stops. The operator's cue is their own tab saying another tab already
+  paired; the terminal's pairing line alone looks like a normal start. If the
+  browser opener reports failure after a tab paired, the console closes and
+  its error names every task that tab approved, to cancel with `melra approve
+  <task-id> --deny`. Who can read the code decides what that costs. A tab
   the agent's browser paired gets no input from that runtime. An
   unsandboxed process of the operator's own user could already run
   `melra approve --yes`. But another OS user, or a sandboxed process that can

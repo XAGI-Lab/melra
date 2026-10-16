@@ -54,6 +54,8 @@ export interface MelraHttpOptions {
   approver?: string;
   /** With `approver`: called once, when a tab redeems the pairing code. */
   onPaired?: (pairedAt: Date) => void;
+  /** With `approver`: called for each task the paired tab approves. */
+  onApproved?: (taskId: string) => void;
 }
 
 export interface MelraHttpServer {
@@ -658,9 +660,9 @@ export async function serveHttp(
     // taken when it drew them, so nothing that changed since redirects this.
     if (body?.taskId !== taskId) throw new Error("approval_task_mismatch");
     if (typeof body.renderDigest !== "string") throw new Error("render_digest_required");
-    json(response, 200, {
-      decision: runtime.controller.decide(taskId, body.renderDigest, console_.approver),
-    });
+    const decision = runtime.controller.decide(taskId, body.renderDigest, console_.approver);
+    options.onApproved?.(taskId);
+    json(response, 200, { decision });
   }
 
   function sendConsole(response: ServerResponse, approvals = false): void {

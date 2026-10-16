@@ -604,7 +604,9 @@ async function approvalPanel(id) {
     if (!settled(drawnAt)) return;
     for (const button of buttons) button.disabled = true;
     const response = await fetch(path + action, { method: "POST",
-      headers: { ...auth.headers, "content-type": "application/json" }, body: JSON.stringify(body ?? {}) });
+      headers: { ...auth.headers, "content-type": "application/json" }, body: JSON.stringify(body ?? {}) }).catch(() => null);
+    // The console stopped: nothing here can record a decision any more.
+    if (response === null) { status.textContent = "Not sent: the console has stopped. Run 'melra console' again."; return; }
     const result = await response.json().catch(() => ({}));
     if (!response.ok) for (const button of buttons) button.disabled = false;
     status.textContent = !response.ok ? "Refused: " + (result.error ?? response.status)

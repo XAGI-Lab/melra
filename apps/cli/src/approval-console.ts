@@ -38,40 +38,50 @@ export async function approvalConsole(
   terminal: ConsoleTerminal,
 ): Promise<MelraHttpServer> {
   assertConsoleTerminal(terminal.interactive);
-  // The page can pair before the opener returns; its line waits for the
-  // address, so the terminal always reads address, then pairing.
-  let held: string | undefined;
+  // A tab can pair before the opener returns. On success its line waits for
+  // the address, so the terminal reads address, then pairing; if the opener
+  // then fails, the pairing is reported with what it approved, since nothing
+  // the operator opened made it.
+  let pairedAt: Date | undefined;
   let addressed = false;
+  const approved: string[] = [];
+  const pairedLine = (at: Date) =>
+    `Paired with a browser tab at ${at.toTimeString().slice(0, 5)}. ` +
+    `If no console tab just opened for you, press Ctrl-C now.\n`;
   const endpoint = await serveHttp({
     runtime: melra,
     port: 0,
     approver: approverLabel(env, "console"),
     onPaired: (at) => {
-      const line =
-        `Paired with a browser tab at ${at.toTimeString().slice(0, 5)}. ` +
-        `If no console tab just opened for you, press Ctrl-C now.\n`;
-      if (addressed) terminal.say(line);
-      else held = line;
+      pairedAt = at;
+      if (addressed) terminal.say(pairedLine(at));
     },
+    onApproved: (taskId) => void approved.push(taskId),
   });
+  // What the operator must hear when the console closes after a tab paired
+  // that no opener of theirs is known to have made.
+  const unexplained = (): string =>
+    pairedAt === undefined
+      ? ""
+      : `; a browser tab paired at ${pairedAt.toTimeString().slice(0, 5)} while the opener ran, and ` +
+        (approved.length === 0
+          ? "approved nothing before the console closed"
+          : `approved ${approved.join(", ")}: cancel any you did not approve with 'melra approve <task-id> --deny'`);
   let opened: boolean;
   try {
     opened = await terminal.open(endpoint.url);
   } catch (error) {
     // An opener that throws must not leave the console listening behind it.
-    if (held !== undefined) terminal.say(held);
     await endpoint.close();
-    throw error;
+    if (pairedAt === undefined) throw error;
+    throw new Error(`${error instanceof Error ? error.message : String(error)}${unexplained()}`);
   }
   if (!opened) {
-    // A tab can have paired while the opener ran and still report failure:
-    // that is exactly what the operator must hear about.
-    if (held !== undefined) terminal.say(held);
     await endpoint.close();
     throw new Error(
-      held === undefined
+      pairedAt === undefined
         ? "console_needs_a_browser: nothing here opens a browser, and the console's pairing code is never printed; use 'melra approve <task-id>'"
-        : "console_needs_a_browser: the browser opener reported failure, yet a tab paired while it ran; check pending approvals and receipts ('melra tasks') before trusting them, and use 'melra approve <task-id>'",
+        : `console_needs_a_browser: the browser opener reported failure${unexplained()}`,
     );
   }
   terminal.say(
@@ -83,6 +93,6 @@ export async function approvalConsole(
         : `Developer mode: approvals here are recorded in band, and an enforced server will not act on them.\n`),
   );
   addressed = true;
-  if (held !== undefined) terminal.say(held);
+  if (pairedAt !== undefined) terminal.say(pairedLine(pairedAt));
   return endpoint;
 }

@@ -938,7 +938,7 @@ preflight, which the console never answers, and a GET never decides.
 | `melra serve --http`, started by you or by a harness, with you running `melra console` beside it | supported |
 | A macOS, Linux or Windows desktop with a default browser | supported |
 | Started without a terminal: by a harness, systemd, launchd or compose, or with stdin or stderr piped | refused: `console_needs_a_terminal` |
-| Nothing here opens a browser | refused: `console_needs_a_browser`, and the URL is not printed instead |
+| Nothing here opens a browser | refused: `console_needs_a_browser`, and the URL is not printed instead; if a tab paired while the opener ran, the error names every task it approved, to cancel with `melra approve <task-id> --deny` |
 | Inside a Docker container | refused, as one of the two rows above: use `docker exec -it <container> node /opt/melra/dist/bin.js approve <task-id>`, with the container's id from `docker ps` |
 | The console itself on a Unix socket or off loopback (`serveHttp` with `approver`); an agent server on a socket is fine | refused: `approval_console_loopback_only` |
 

@@ -347,19 +347,35 @@ describe("melra CLI", () => {
       }
     });
 
-    it("reports a pairing made while an opener ran, even when the opener then fails", async () => {
+    it("names what a tab approved while an opener ran, when the opener then fails", async () => {
       const { env, melra, terminal, seen } = await start();
+      const task = melra.controller.plan(
+        TaskRequestSchema.parse({
+          goal: "Write the report",
+          operation: { kind: "file", action: "write", path: "report.txt", content: "x" },
+        }),
+      );
       const failing: ConsoleTerminal = {
         ...terminal,
         open: async (address) => {
           const url = new URL(address);
-          await call(url, "/pair", { body: { code: url.hash.slice("#pair=".length) } });
+          const paired = await call(url, "/pair", { body: { code: url.hash.slice("#pair=".length) } });
+          const session = paired.json.session as string;
+          const shown = await call(url, `/api/tasks/${task.id}/approval`, { token: session });
+          await call(url, `/api/tasks/${task.id}/approve`, {
+            token: session,
+            body: { taskId: task.id, renderDigest: shown.json.renderDigest },
+          });
           return false;
         },
       };
       try {
-        await expect(approvalConsole(env, melra, failing)).rejects.toThrow(/console_needs_a_browser: .*a tab paired/);
-        expect(seen.said).toMatch(/Paired with a browser tab at \d\d:\d\d/);
+        const failed = await approvalConsole(env, melra, failing).then(() => "", (error: Error) => error.message);
+        expect(failed).toMatch(/^console_needs_a_browser: the browser opener reported failure; a browser tab paired at \d\d:\d\d/);
+        expect(failed).toContain(`approved ${task.id}`);
+        expect(failed).toContain("melra approve <task-id> --deny");
+        // Nothing on the terminal claims a normal start.
+        expect(seen.said).not.toMatch(/Approval console on|Paired with a browser tab/);
         // And one that throws leaves nothing listening behind it.
         let address = "";
         const throwing: ConsoleTerminal = {
