@@ -315,9 +315,11 @@ All notable changes are documented here. The format follows
   while another marked page is open there, whatever the closed tab carries,
   since the browser then raises a neighbour. A runtime attached over CDP to
   the browser an operator approves in could otherwise reach the console tab
-  with reads and aim a click at it. Other reads still work. A page that does
-  not answer within a second counts as unmarked, so a hung or crashed tab
-  never holds other tabs open. The check is made when the action starts. `melra doctor` now warns when
+  with reads and aim a click at it. Other reads still work. In an attached
+  browser, a page that does not answer within a second could be a busy
+  console, so it holds `close` of the others the same way
+  (`browser_approval_surface_check_unavailable`, naming its tab); it can still
+  be closed itself. The check is made when the action starts. `melra doctor` now warns when
   `MELRA_BROWSER_CDP_ENDPOINT` is set: every tab in that browser, signed-in
   sites included, is a `tab_switch` away from the agent; its next step says to
   point that endpoint at a browser you do not use yourself, or unset it.

@@ -141,9 +141,11 @@ Actions: `navigate`, `back`, `forward`, `reload`, `inspect`, `wait`, `click`,
   carries (any page can carry the marker), since the browser then raises a
   neighbour. In an attached browser, Playwright's focus emulation makes every
   page report itself visible and focused, so the page cannot see being raised.
-  Other reads on it still work; moving it ends the console's pairing. A page
-  that does not answer within a second counts as unmarked, so a hung or
-  crashed tab never holds other tabs open. This
+  Other reads on it still work; moving it ends the console's pairing. In an
+  attached browser, a page that does not answer within a second holds `close`
+  of the others the same way, refused with
+  `browser_approval_surface_check_unavailable` naming its tab, which can still
+  be closed itself. This
   matters when the runtime is attached over CDP to a browser the operator also
   uses. The check is made when the action starts, like the `url` check above.
 - `tab_new` accepts an optional `url` and runs the same destination checks

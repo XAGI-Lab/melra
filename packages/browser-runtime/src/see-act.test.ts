@@ -179,7 +179,8 @@ describe("browser see/act loop", () => {
     // attached to it: there every page reports itself visible and focused, so
     // the console cannot tell it was raised.
     const owner = await chromium.launch({ executablePath, headless: true, args: [`--remote-debugging-port=${port}`] });
-    const operatorConsole = await (await owner.newContext()).newPage();
+    const operatorContext = await owner.newContext();
+    const operatorConsole = await operatorContext.newPage();
     await operatorConsole.goto(context.url);
     const runtime = new BrowserRuntime({
       workspaceRoot: root,
@@ -187,6 +188,8 @@ describe("browser see/act loop", () => {
       allowedDomains: ["127.0.0.1"],
       allowLocalhost: true,
       cdpEndpoint: `http://127.0.0.1:${port}`,
+      // Keeps the tab the test opens beside its own below.
+      popups: "allow",
     });
     const run = (operation: Record<string, unknown>) =>
       runtime.execute(BrowserOperationSchema.parse({ kind: "browser", ...operation }));
@@ -202,6 +205,19 @@ describe("browser see/act loop", () => {
       await expect(run({ action: "close" })).rejects.toThrow("browser_refuses_approval_surface");
       // Once the operator has closed the console, nothing else is marked, and it closes.
       await operatorConsole.close();
+      expect(await run({ action: "close" })).toMatchObject({ closed: true });
+      // A page that cannot say whether it is a console holds the others open,
+      // within a second or so, but can be closed itself.
+      expect(await run({ action: "tab_new" })).toMatchObject({ opened: true });
+      const silent = await operatorContext.newPage();
+      await silent.setContent(`<script>setTimeout(() => { for (;;) {} }, 300)</script>`);
+      await new Promise((done) => setTimeout(done, 800));
+      const started = Date.now();
+      const refusal = await run({ action: "close" }).then(() => "", (error: Error) => error.message);
+      expect(Date.now() - started).toBeLessThan(5_000);
+      const named = /^browser_approval_surface_check_unavailable: tab (\d+) did not answer$/.exec(refusal);
+      expect(named, refusal).not.toBeNull();
+      expect(await run({ action: "close", tabIndex: Number(named![1]) })).toMatchObject({ closed: true });
       expect(await run({ action: "close" })).toMatchObject({ closed: true });
     } finally {
       await runtime.close();

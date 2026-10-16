@@ -953,11 +953,12 @@ browser runtime refuses every action that sends input to a page carrying it
 (`browser_refuses_approval_surface`), in every mode, whatever approved the
 action. It also refuses each action of its own that could raise or move the
 console under your pointer: `tab_switch` onto the console's tab, `scroll` on
-it, and, in a browser it is attached to, `close` of any other tab while a
-console is open there, because the browser then raises a neighbouring tab. Other reads still work there: the
-agent can see the page, and can move its tab (navigate it away or to another
-fragment, back, forward), and closing the console itself is allowed; each of
-those ends the pairing. The page's own second's hold on Approve and Deny sees
+it, and, in a browser it is attached to, `close` of any tab while another
+console is open there, because the browser then raises a neighbouring tab; a
+tab that does not answer within a second counts as one. Other reads still
+work there: the agent can see the page, and can move its tab (navigate it away
+or to another fragment, back, forward), and can close the console itself while
+no other is open; each of those ends the pairing. The page's own second's hold on Approve and Deny sees
 less in such a browser: Playwright's focus emulation makes every page there
 report itself visible and focused, so the console cannot tell it was raised,
 and the hold restarts only when it is scrolled or resized. Attach the agent to

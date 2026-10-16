@@ -1144,17 +1144,26 @@ export class BrowserRuntime {
     // the marker, whatever the closed tab carries itself: any page can carry
     // it. A marked tab of the agent's can be navigated away first. A browser
     // this runtime launched has no operator's console in it. A page that does
-    // not answer within a second counts as unmarked: it is not a live console,
-    // and it never holds other tabs open.
+    // not answer within a second could be a console too busy to, so it holds
+    // the others open the same way, under its own reason naming its tab; it
+    // can always be closed itself. One closed meanwhile holds nothing.
     if (operation.action === "close" && this.options.cdpEndpoint !== undefined) {
       if (operation.tabIndex !== undefined && acted === undefined) throw new Error("browser_tab_not_found");
-      const others = (await this.ensureContext()).pages().filter((other) => other !== acted);
+      const pages = (await this.ensureContext()).pages();
       const marks = await Promise.all(
-        others.map((other) =>
-          bounded(other.locator(`meta[name="${APPROVAL_SURFACE}"]`).count(), 1_000, "count").catch(() => 0),
+        pages.map((other) =>
+          other === acted
+            ? 0
+            : bounded(other.locator(`meta[name="${APPROVAL_SURFACE}"]`).count(), 1_000, "count").catch(() =>
+                other.isClosed() ? 0 : -1,
+              ),
         ),
       );
       if (marks.some((count) => count > 0)) throw new Error("browser_refuses_approval_surface");
+      const silent = marks.flatMap((count, index) => (count < 0 ? [index] : []));
+      if (silent.length > 0) {
+        throw new Error(`browser_approval_surface_check_unavailable: tab ${silent.join(", ")} did not answer`);
+      }
     }
     switch (operation.action) {
       case "navigate": {
