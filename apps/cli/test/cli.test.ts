@@ -16,7 +16,7 @@ import {
   TaskRequestSchema,
   TerminalOperationSchema,
 } from "@melra/protocol";
-import { approvalScreen, createMelraRuntime, serveHttp } from "@melra/server";
+import { approvalScreen, createMelraRuntime, printable, serveHttp } from "@melra/server";
 import { runConformance } from "../src/conformance.js";
 import { RESTART_SAFE_WORKFLOW } from "../src/demo-workflow.js";
 import { approverLabel, parseCliEnvironment, serverLaunch } from "../src/environment.js";
@@ -326,6 +326,27 @@ describe("melra CLI", () => {
         request.end(text);
       });
 
+    it("prints its address before the pairing, even when the page pairs first", async () => {
+      const { env, melra, terminal, seen } = await start();
+      // A browser fast enough to pair before the opener has returned.
+      const quick: ConsoleTerminal = {
+        ...terminal,
+        open: async (address) => {
+          const url = new URL(address);
+          await call(url, "/pair", { body: { code: url.hash.slice("#pair=".length) } });
+          return true;
+        },
+      };
+      const endpoint = await approvalConsole(env, melra, quick);
+      try {
+        expect(seen.said.indexOf("Approval console on")).toBeGreaterThanOrEqual(0);
+        expect(seen.said.indexOf("Paired with a browser tab")).toBeGreaterThan(seen.said.indexOf("Approval console on"));
+      } finally {
+        await endpoint.close();
+        await melra.close();
+      }
+    });
+
     it("hands its pairing code to the browser and nothing else, and records console approvals", async () => {
       const { env, melra, terminal, seen } = await start();
       const endpoint = await approvalConsole(env, melra, terminal);
@@ -424,6 +445,10 @@ describe("melra CLI", () => {
     // Nor draw over the lines around it: no character carries more than two
     // combining marks, even with an unassigned code point between them.
     expect(screen).not.toMatch(/[\p{Mn}\p{Me}]{3}/u);
+    // Other CLI output keeps scripts that stack more as written, but still
+    // spells out a code point a terminal may draw as nothing.
+    expect(printable("\u0f40\u0f71\u0f72\u0f74")).toBe("\u0f40\u0f71\u0f72\u0f74");
+    expect(printable("a\ufff0b")).toBe("a\\ufff0b");
     expect(screen).toContain("e\u0301\u0302\\u0303\\u0304\\ufff0");
     // The one escape on screen is MELRA's own reset; nothing else can steer the terminal.
     expect(screen.replaceAll("\u001b[0m", "")).not.toMatch(

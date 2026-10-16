@@ -1485,7 +1485,7 @@ export class BrowserRuntime {
         this.activePage = target;
         return {
           switched: true,
-          index: operation.tabIndex,
+          index: (await this.ensureContext()).pages().indexOf(target),
           url: target.url(),
           tabs: await this.describeTabs(context),
         };

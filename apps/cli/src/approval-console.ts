@@ -38,15 +38,21 @@ export async function approvalConsole(
   terminal: ConsoleTerminal,
 ): Promise<MelraHttpServer> {
   assertConsoleTerminal(terminal.interactive);
+  // The page can pair before the opener returns; its line waits for the
+  // address, so the terminal always reads address, then pairing.
+  let held: string | undefined;
+  let addressed = false;
   const endpoint = await serveHttp({
     runtime: melra,
     port: 0,
     approver: approverLabel(env, "console"),
-    onPaired: (at) =>
-      terminal.say(
+    onPaired: (at) => {
+      const line =
         `Paired with a browser tab at ${at.toTimeString().slice(0, 5)}. ` +
-          `If no console tab just opened for you, press Ctrl-C now.\n`,
-      ),
+        `If no console tab just opened for you, press Ctrl-C now.\n`;
+      if (addressed) terminal.say(line);
+      else held = line;
+    },
   });
   if (!(await terminal.open(endpoint.url))) {
     await endpoint.close();
@@ -62,5 +68,7 @@ export async function approvalConsole(
         ? ""
         : `Developer mode: approvals here are recorded in band, and an enforced server will not act on them.\n`),
   );
+  addressed = true;
+  if (held !== undefined) terminal.say(held);
   return endpoint;
 }

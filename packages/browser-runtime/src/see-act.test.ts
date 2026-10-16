@@ -246,6 +246,8 @@ describe("browser see/act loop", () => {
       setTimeout(() => void pages[0]!.close(), 300);
       const switched = await run({ action: "tab_switch", tabIndex: 1 });
       expect(switched.url).toContain("?busy");
+      // And says where that tab sits now.
+      expect(switched.index).toBe(0);
     } finally {
       await runtime.close();
     }

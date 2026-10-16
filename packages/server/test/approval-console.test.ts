@@ -351,7 +351,7 @@ describe("approval console", () => {
     // a stack of combining marks that would draw over the lines around it.
     const task = runtime.controller.plan(
       TaskRequestSchema.parse({
-        goal: "Save the config\u0301\u0302\u0303\u0304",
+        goal: "Save the config\u0301\u0302\u0303\u0304\ufff0",
         operation: { kind: "file", action: "write", path: "cfg/‮crhsab.", content: "x" },
       }),
     );
@@ -379,7 +379,7 @@ describe("approval console", () => {
       const drawn = (await page.locator("#view").textContent()) ?? "";
       expect(drawn).toContain("cfg/\\u202ecrhsab.");
       expect(drawn).not.toMatch(/\p{Cf}/u);
-      expect(drawn).toContain("config\u0301\u0302\\u0303\\u0304");
+      expect(drawn).toContain("config\u0301\u0302\\u0303\\u0304\\ufff0");
       expect(drawn).not.toMatch(/[\p{Mn}\p{Me}]{3}/u);
     } finally {
       await browser.close();
