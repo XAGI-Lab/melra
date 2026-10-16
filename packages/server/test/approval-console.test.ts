@@ -1,13 +1,14 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
+import { randomUUID } from "node:crypto";
 import { createServer, request as httpRequest } from "node:http";
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "playwright-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { BrowserOperationSchema, TaskRequestSchema } from "@melra/protocol";
+import { BrowserOperationSchema, TaskRequestSchema, WorkflowDefinitionSchema } from "@melra/protocol";
 import { BrowserRuntime, detectBrowserExecutable } from "@melra/browser-runtime";
 import { createMelraRuntime, serveHttp } from "../src/index.js";
 import type { MelraHttpServer } from "../src/http-server.js";
@@ -308,8 +309,10 @@ describe("approval console", () => {
       await page.getByText("Approved, out of band").waitFor();
       expect(decisionFor(task.id)).toMatchObject({ channel: "out_of_band", approver: "console:test" });
       // A reload is a new page, and only the page that spent the code is paired.
+      // The one that left took the session with it: the console refuses it now.
       await page.reload();
       await page.getByText("This page is not paired").waitFor();
+      await expect.poll(async () => (await call(server, "/api/tasks", { token: session })).status).toBe(401);
       // A second tab, as the operator's would be after an agent won the race,
       // is told the code is spent and what to do.
       const late = await browser.newPage();
@@ -418,9 +421,11 @@ describe("approval console", () => {
       const approve = page.getByRole("button", { name: "Approve", exact: true });
       await approve.waitFor();
       const box = (await approve.boundingBox())!;
-      // Reads only: find the console's tab, and move it to the other task.
+      // Reads only. Raising the console's tab is refused; it is the runtime's
+      // active page anyway, the only one in that window. Move it to the other task.
       const { tabs } = (await run({ action: "tabs" })) as { tabs: Array<{ index: number; url: string }> };
-      await run({ action: "tab_switch", tabIndex: tabs.find((tab) => tab.url.startsWith(origin))!.index });
+      expect(tabs).toHaveLength(1);
+      await expect(run({ action: "tab_switch", tabIndex: 0 })).rejects.toThrow("browser_refuses_approval_surface");
       await run({ action: "navigate", url: `${origin}/#/tasks/${other.id}` });
       const unpaired = await page
         .getByText("This page is not paired")
@@ -435,6 +440,148 @@ describe("approval console", () => {
     } finally {
       await attached.close();
       await owner.close();
+    }
+  }, 60_000);
+
+  it("ends a session the page gives back, for good", async () => {
+    const { server, code, origin } = await open();
+    const session = await pair(server, code, origin);
+    const unpair = (init: { token?: string; origin?: string }) => call(server, "/unpair", { method: "POST", body: {}, ...init });
+    // Only the paired page, from its own origin, can end it.
+    expect((await unpair({ token: "0".repeat(64), origin })).status).toBe(401);
+    expect((await unpair({ token: session, origin: "null" })).status).toBe(403);
+    expect((await call(server, "/unpair", { token: session })).status).toBe(405);
+    expect((await call(server, "/api/tasks", { token: session })).status).toBe(200);
+    expect(await unpair({ token: session, origin })).toMatchObject({ status: 200, body: { unpaired: true } });
+    // Then the session is worth nothing, and the code stays spent.
+    expect((await call(server, "/api/tasks", { token: session })).status).toBe(401);
+    expect((await unpair({ token: session, origin })).status).toBe(401);
+    expect((await call(server, "/pair", { method: "POST", origin, body: { code } })).status).toBe(409);
+  });
+
+  it("ends the pairing on both sides when the page moves, and draws nothing it knew after", async () => {
+    const executablePath = await detectBrowserExecutable();
+    if (executablePath === undefined) return;
+    const { server } = await open();
+    pending();
+    const browser = await chromium.launch({ executablePath, headless: true });
+    try {
+      const page = await browser.newPage();
+      const pairing = page.waitForResponse((response) => response.url().endsWith("/pair"));
+      await page.goto(server.url);
+      const session = ((await (await pairing).json()) as { session: string }).session;
+      await page.getByText(/paired at \d/).waitFor();
+      expect((await call(server, "/api/tasks", { token: session })).status).toBe(200);
+      // A fragment move, as an attached browser's navigate makes one.
+      await page.evaluate(() => {
+        location.hash = "#/tasks";
+      });
+      await page.getByText("This page is not paired").waitFor();
+      await expect.poll(async () => (await call(server, "/api/tasks", { token: session })).status).toBe(401);
+      // A click in the page brings back neither the task list nor "paired".
+      await page.getByRole("tab", { name: /^Tasks/ }).click();
+      expect(await page.getByText("This page is not paired").count()).toBe(1);
+      expect(await page.locator(".row").count()).toBe(0);
+      expect(await page.locator("#live-text").textContent()).toBe("Not paired");
+    } finally {
+      await browser.close();
+    }
+  }, 60_000);
+
+  it("acts on Approve only once the page has sat still, visible and focused, for a second", async () => {
+    const executablePath = await detectBrowserExecutable();
+    if (executablePath === undefined) return;
+    const { server } = await open();
+    const task = pending();
+    const browser = await chromium.launch({ executablePath, headless: true });
+    try {
+      const page = await browser.newPage();
+      await page.goto(server.url);
+      await page.getByText(/paired at \d/).waitFor();
+      await page.getByRole("tab", { name: /^Tasks/ }).click();
+      await page.locator(`[data-key="${task.id}"]`).click();
+      const approve = page.getByRole("button", { name: "Approve", exact: true });
+      await approve.waitFor();
+      const box = (await approve.boundingBox())!;
+      // A click where Approve is, as a pointer aimed at something else lands.
+      const press = () => page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+      // Right after it is drawn: shown as not yet active, and a click does nothing.
+      expect(await approve.getAttribute("aria-disabled")).toBe("true");
+      await press();
+      // Settled, then raised, scrolled, refocused or resized: the same again.
+      for (const [target, type] of [["document", "visibilitychange"], ["document", "scroll"], ["window", "focus"], ["window", "resize"]]) {
+        await page.waitForTimeout(1_200);
+        await page.evaluate(
+          ([at, name]) => (at === "document" ? document : window).dispatchEvent(new Event(name!, { bubbles: true })),
+          [target, type],
+        );
+        await press();
+      }
+      await page.waitForTimeout(300);
+      expect(decisionFor(task.id)).toBeUndefined();
+      expect(await page.locator("[role=status]").textContent()).toBe("");
+      // Left alone for a second, it answers.
+      await page.waitForTimeout(1_200);
+      expect(await approve.getAttribute("aria-disabled")).toBe("false");
+      await press();
+      await page.getByText("Approved, out of band").waitFor();
+      expect(decisionFor(task.id)).toMatchObject({ channel: "out_of_band", approver: "console:test" });
+    } finally {
+      await browser.close();
+    }
+  }, 60_000);
+
+  it("writes the browser's own dates as the browser formats them", async () => {
+    const executablePath = await detectBrowserExecutable();
+    if (executablePath === undefined) return;
+    pending();
+    const browser = await chromium.launch({ executablePath, headless: true });
+    try {
+      // Arabic dates carry U+200F, and three days on every task is shown by date.
+      const page = await browser.newPage({ locale: "ar" });
+      await page.clock.setFixedTime(Date.now() + 3 * 86_400_000);
+      await page.goto(`http://127.0.0.1:${agent.port}/?token=agent-token#/tasks`);
+      await page.locator(".row time").first().waitFor();
+      const dates = (await page.locator(".row time").allTextContents()).join(" ");
+      expect(dates).toContain("‏");
+      expect(dates).not.toContain("\\u200f");
+    } finally {
+      await browser.close();
+    }
+  }, 60_000);
+
+  it("leaves a modified click on a workflow's task link to the browser, in the agent's console", async () => {
+    const executablePath = await detectBrowserExecutable();
+    if (executablePath === undefined) return;
+    const write = TaskRequestSchema.parse({
+      goal: "Write n.txt",
+      operation: { kind: "file", action: "write", path: "n.txt", content: "x" },
+      requiredEvidence: [{ type: "file_exists", path: "n.txt" }],
+    });
+    const run = runtime.workflows.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: randomUUID(),
+        version: 1,
+        name: "console-links",
+        nodes: [{ id: "write", type: "operation", request: write }],
+      }),
+    );
+    await runtime.workflows.advance(run.id);
+    const browser = await chromium.launch({ executablePath, headless: true });
+    try {
+      const context = await browser.newContext();
+      const page = await context.newPage();
+      const url = `http://127.0.0.1:${agent.port}/?token=agent-token#/workflows/${run.id}`;
+      await page.goto(url);
+      const link = page.locator("td a").first();
+      await link.waitFor();
+      const opened = context.waitForEvent("page", { timeout: 5_000 });
+      await link.click({ modifiers: ["ControlOrMeta"] });
+      expect((await opened).url()).toContain("#/tasks/");
+      expect(page.url()).toBe(url);
+    } finally {
+      await browser.close();
     }
   }, 60_000);
 

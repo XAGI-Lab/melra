@@ -907,7 +907,9 @@ opens:
 
 **Reloading or leaving the page ends the pairing**, and so does anything else
 moving its URL, such as a link to another fragment, back or forward; run
-`melra console` again for a new one. The page takes the task you approve from
+`melra console` again for a new one. It ends at the console as well: the page
+hands its session back as it goes, and the console refuses it after. The page
+takes the task you approve from
 your clicks in it, never from its URL, and never changes its URL itself. Only
 the page that spent the code is ever paired, so a page that sends a tab back to
 the console does not arrive at a paired one.
@@ -916,7 +918,8 @@ The page shows MELRA's summary of the effect (the operation, `Effect:`, the
 agent's goal, the digest) right above Approve and Deny, with the full contract
 folded above it, and spells out every hidden character in what the agent sent
 (bidi overrides, zero-width characters) as `\uXXXX`, as the terminal screen
-does.
+does. Approve and Deny show as not yet active, and ignore clicks, for a second
+after they appear and after the page is raised, refocused or scrolled.
 
 An approve or a deny is a POST from that page: its `Origin` must be the
 console's own, it carries the session as `Authorization: Bearer`, its body is
@@ -931,7 +934,7 @@ preflight, which the console never answers, and a GET never decides.
 | A macOS, Linux or Windows desktop with a default browser | supported |
 | Started without a terminal: by a harness, systemd, launchd or compose, or with stdin or stderr piped | refused: `console_needs_a_terminal` |
 | Nothing here opens a browser | refused: `console_needs_a_browser`, and the URL is not printed instead |
-| Inside a Docker container | refused, as one of the two rows above: use `docker exec -it <container> melra approve <task-id>` |
+| Inside a Docker container | refused, as one of the two rows above: use `docker exec -it <container> node /opt/melra/dist/bin.js approve <task-id>`, with the container's id from `docker ps` |
 | Served on a Unix socket or off loopback (`serveHttp` with `approver`) | refused: `approval_console_loopback_only` |
 
 **Same root of trust as `melra approve --yes`.** That command needs no
@@ -946,10 +949,14 @@ set, the agent's browser runtime drives tabs in a browser you may also use, and
 `melra doctor` warns about it. The console page carries a marker, and MELRA's
 browser runtime refuses every action that sends input to a page carrying it
 (`browser_refuses_approval_surface`), in every mode, whatever approved the
-action. Reads still work there: the agent can see the page, and can move its
-tab (navigate it away or to another fragment, back, forward), and closing it is
-allowed; each of those ends the pairing. Attach the agent to a browser you do
-not use yourself.
+action. It also refuses the two reads that could put Approve under your own
+pointer: `tab_switch` onto the console's tab, and `scroll` on it. Other reads
+still work there: the agent can see the page, and can move its tab (navigate
+it away or to another fragment, back, forward), and closing it is allowed; each
+of those ends the pairing. Anything else that raises, scrolls or refocuses the
+page holds Approve and Deny back: they show as not yet active, and ignore
+clicks, until the page has been visible, focused and unscrolled for a second.
+Attach the agent to a browser you do not use yourself.
 
 **A computer action lands wherever the screen is.** MELRA cannot tell which
 page a `computer.click` or `computer.type` reaches, so approving one approves

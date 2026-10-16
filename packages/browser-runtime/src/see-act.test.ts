@@ -141,14 +141,21 @@ describe("browser see/act loop", () => {
         { action: "click", url, target: { role: "button", name: "Approve" } },
         { action: "press", key: "Enter" },
         { action: "type", target: { selector: 'input[name="note"]' }, value: "x" },
+        // Reads, but ones that move Approve under a pointer aimed elsewhere.
+        { action: "scroll", direction: "down" },
+        { action: "scroll", direction: "into_view", target: { role: "button", name: "Approve" } },
       ]) {
         await expect(run(operation), operation.action).rejects.toThrow("browser_refuses_approval_surface");
       }
       // Reads still work, and show nothing was done.
       const seen = await run({ action: "inspect" });
       expect(seen.title).toBe("untouched");
+      // Raising the marked tab from another one is refused the same way.
+      await run({ action: "tab_new" });
+      await expect(run({ action: "tab_switch", tabIndex: 0 })).rejects.toThrow("browser_refuses_approval_surface");
+      expect(await run({ action: "tab_switch", tabIndex: 1 })).toMatchObject({ switched: true });
       // Closing is not driving: it ends a console's pairing, as navigating away does.
-      expect(await run({ action: "close" })).toMatchObject({ closed: true, url: `${url}/` });
+      expect(await run({ action: "close", tabIndex: 0 })).toMatchObject({ closed: true, url: `${url}/` });
     } finally {
       await runtime.close();
     }

@@ -48,7 +48,8 @@ export interface MelraHttpOptions {
    * make. This server is never an agent endpoint: no `/mcp`, no OAuth, no
    * `MELRA_HTTP_TOKEN` or `token`, loopback TCP only. `url` carries a one-time
    * pairing code in its fragment; the one page that redeems it gets a session
-   * held only in memory, here and in that page, and nothing else is accepted.
+   * held only in memory, here and in that page, until that page leaves, and
+   * nothing else is accepted.
    */
   approver?: string;
   /** With `approver`: called once, when a tab redeems the pairing code. */
@@ -297,7 +298,9 @@ export async function serveHttp(
       : {
           approver: options.approver,
           code: randomBytes(16).toString("hex"),
-          session: undefined as string | undefined,
+          // Not yet paired, then the paired page's session, then null once
+          // that page has left: the code stays spent either way.
+          session: undefined as string | null | undefined,
         };
   // An empty MELRA_HTTP_TOKEN (`MELRA_HTTP_TOKEN=${TOKEN}` with TOKEN unset) is
   // treated as unset, like an empty MELRA_SOCKET, so it gets a random token
@@ -556,8 +559,8 @@ export async function serveHttp(
   }
 
   /**
-   * The approval console's whole surface: the page, pairing, the read-only
-   * API, and one read and two writes per pending task. Every route answers
+   * The approval console's whole surface: the page, pairing and unpairing,
+   * the read-only API, and one read and two writes per pending task. Every route answers
    * only to a loopback name. The page is the same static text for anyone;
    * everything past it needs the session that pairing gave one tab, sent as a
    * header and never in a URL.
@@ -596,11 +599,23 @@ export async function serveHttp(
       json(response, 200, { session: console_.session, pairedAt: pairedAt.toISOString() });
       return;
     }
-    if (console_.session === undefined || !tokenMatches(console_.session, suppliedToken(request))) {
+    if (typeof console_.session !== "string" || !tokenMatches(console_.session, suppliedToken(request))) {
       json(response, 401, {
         error: "unauthorized",
         detail: "Only the page `melra console` opened, while it stays open, can use this console.",
       });
+      return;
+    }
+    if (url.pathname === "/unpair") {
+      if (method !== "POST") {
+        json(response, 405, { error: "method_not_allowed" });
+        return;
+      }
+      if (!fromConsole(request, response)) return;
+      // The page sends this as it leaves, or when something else moves it, so
+      // the session it held is worth nothing after, here as well as there.
+      console_.session = null;
+      json(response, 200, { unpaired: true });
       return;
     }
     const route = /^\/api\/tasks\/([^/]+)\/(approval|approve|deny)$/.exec(url.pathname);

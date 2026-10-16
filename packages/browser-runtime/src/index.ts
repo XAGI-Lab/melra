@@ -1118,16 +1118,19 @@ export class BrowserRuntime {
       if (at !== pageAddress(operation.url)) throw new Error(`browser_page_not_at_url: the page is at ${at}`);
     }
     // An approval console open in a browser this runtime is attached to is a
-    // read or two away (`tab_switch`, `back`), and an action without a url acts
-    // on whatever page is active. So no input reaches one, whatever approved
-    // the action and in every mode: an approval there is the operator's act
-    // alone. Reads still move the tab, and the console unpairs when they do.
+    // read away (`tabs`), and an action without a url acts on whatever page is
+    // active. So no input reaches one, whatever approved the action and in
+    // every mode: an approval there is the operator's act alone. Nor do the two
+    // reads that can put its Approve under the operator's pointer: raising its
+    // tab (`tab_switch`) and scrolling it. Reads that move its URL still work,
+    // and the console unpairs when they do.
     // Not `close`: closing ends the pairing just as navigating away does, and
     // the count needs the tab's renderer, so a hung or crashed tab could never
     // be closed. Same ponytail as above: checked at the start.
     if (
-      operation.action !== "close" &&
-      classifyOperation(operation).effect !== "read" &&
+      (operation.action === "tab_switch" ||
+        operation.action === "scroll" ||
+        (operation.action !== "close" && classifyOperation(operation).effect !== "read")) &&
       acted !== undefined &&
       (await this.call(acted.locator(`meta[name="${APPROVAL_SURFACE}"]`).count(), "count")) > 0
     ) {

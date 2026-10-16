@@ -182,6 +182,7 @@ pre { margin: 0; font-family: var(--mono); font-size: 12px; white-space: pre-wra
   background: var(--soft); border-radius: 8px; padding: 10px 12px; max-height: 360px; overflow: auto; }
 details summary { cursor: pointer; color: var(--muted); margin-top: 16px; }
 pre.screen { max-height: none; margin: 12px 0; }
+button[aria-disabled="true"] { opacity: .45; cursor: progress; }
 .copy { background: none; border: 1px solid var(--line); border-radius: 6px; padding: 0 6px; cursor: pointer; font-size: 11px; color: var(--muted); margin-left: 6px; }
 @media (max-width: 860px) {
   .split, .two { grid-template-columns: 1fr; }
@@ -232,12 +233,49 @@ const view = document.getElementById("view");
 // Leaving ends the pairing, before a back/forward cache could keep it. So does
 // a move of the URL within this page: the approval console never makes one
 // (see go), so whatever did is driving the tab, and the reads of a browser
-// runtime attached to it can (navigate to a fragment, back, forward).
+// runtime attached to it can (navigate to a fragment, back, forward). It ends
+// on the console's side too, so the session is worth nothing after, and the
+// page drops what it drew, so no click can bring it back.
 if (approvals) for (const type of ["pagehide", "hashchange", "popstate"]) addEventListener(type, () => {
+  if (token && auth.headers.authorization) {
+    void fetch("/unpair", { method: "POST", keepalive: true,
+      headers: { ...auth.headers, "content-type": "application/json" }, body: "{}" }).catch(() => {});
+  }
   auth.headers.authorization = "";
   paired = { error: "left" };
+  state.caps = null;
+  setLive(false, "Not paired");
   renderUnauthorized();
 });
+// Approve and Deny act only once this page has been visible, focused and
+// unscrolled for a second, as a browser holds back a permission prompt's
+// buttons. Raising a tab and scrolling it are reads a browser runtime attached
+// to this one can make, and either can put Approve under a pointer aimed at
+// something else; a click that lands sooner than that is ignored.
+const SETTLE_MS = 1000;
+let steadySince = Infinity;
+function unsettle() {
+  steadySince = document.visibilityState === "visible" && document.hasFocus() ? performance.now() : Infinity;
+  showSettling();
+}
+const settled = (drawnAt) => performance.now() - Math.max(steadySince, drawnAt) >= SETTLE_MS;
+function showSettling() {
+  const mark = () => {
+    for (const button of document.querySelectorAll("button[data-drawn]")) {
+      button.setAttribute("aria-disabled", String(!settled(Number(button.dataset.drawn))));
+    }
+  };
+  mark();
+  setTimeout(mark, SETTLE_MS + 50);
+}
+if (approvals) {
+  // The window's own focus and blur, not an element's: pressing a button
+  // focuses it, and that must not reset anything.
+  for (const type of ["visibilitychange", "focus", "blur", "resize"]) addEventListener(type, unsettle);
+  // Captured, so a scrolled box inside the page counts as well as the page.
+  addEventListener("scroll", unsettle, true);
+  unsettle();
+}
 const state = { caps: null, tasks: [], workflows: [], filter: "all", query: "", stream: null, streamId: null, events: [], sig: "" };
 
 const TASK_TONE = {
@@ -303,7 +341,13 @@ function until(iso) {
   if (seconds <= 0) return "expired";
   return seconds < 120 ? seconds + "s" : Math.round(seconds / 60) + "m";
 }
-const when = (iso) => el("time", { datetime: iso, title: iso ? new Date(iso).toLocaleString() : "", text: ago(iso) });
+// Set as is, not through el: the browser's own locale formats carry marks
+// printable would spell out (Arabic puts U+200F in every date).
+const when = (iso) => {
+  const node = el("time", { datetime: iso, title: iso ? new Date(iso).toLocaleString() : "" });
+  node.textContent = ago(iso);
+  return node;
+};
 
 function copyButton(text) {
   return el("button", { class: "copy", type: "button", "aria-label": "Copy " + text, text: "copy", onclick: async (e) => {
@@ -343,7 +387,12 @@ async function refresh() {
     if (caps.policy.unhinged) warning.textContent = "Unsafe-local mode — " + (caps.policy.unhingedWarning ?? "no policy and no guardrails are applied.");
     return true;
   } catch (error) {
-    if (error instanceof HttpError && error.status === 401) { renderUnauthorized(); setLive(false, "Not authorised"); return false; }
+    if (error instanceof HttpError && error.status === 401) {
+      state.caps = null;
+      renderUnauthorized();
+      setLive(false, approvals ? "Not paired" : "Not authorised");
+      return false;
+    }
     setLive(false, "Disconnected — retrying");
     return false;
   }
@@ -543,8 +592,10 @@ async function approvalPanel(id) {
   try { pending = await get(path + "approval"); }
   catch { return el("div", { class: "callout bad", text: "Could not load what this task would do." }); }
   const drawn = { taskId: id, renderDigest: pending.renderDigest };
+  const drawnAt = performance.now();
   const status = el("p", { role: "status" });
   const answer = async (action, body) => {
+    if (!settled(drawnAt)) return;
     for (const button of buttons) button.disabled = true;
     const response = await fetch(path + action, { method: "POST",
       headers: { ...auth.headers, "content-type": "application/json" }, body: JSON.stringify(body ?? {}) });
@@ -555,14 +606,15 @@ async function approvalPanel(id) {
       : "Approved, " + human(result.decision.channel) + ". The agent's next call runs it.";
   };
   const buttons = pending.decision ? [] : [
-    el("button", { type: "button", class: "filter", text: "Approve", onclick: () => answer("approve", drawn) }),
-    el("button", { type: "button", class: "filter", text: "Deny", onclick: () => answer("deny") }),
+    el("button", { type: "button", class: "filter", text: "Approve", "data-drawn": drawnAt, "aria-disabled": "true", onclick: () => answer("approve", drawn) }),
+    el("button", { type: "button", class: "filter", text: "Deny", "data-drawn": drawnAt, "aria-disabled": "true", onclick: () => answer("deny") }),
   ];
+  showSettling();
   return el("div", { class: "section" }, el("h2", { text: "Approve this effect?" }),
     pending.mode === "enforced" ? null : el("div", { class: "callout", text: "Developer mode: this records an in-band decision, which an enforced server will not act on." }),
     el("details", {}, el("summary", { text: "Full contract (JSON)" }), el("pre", { text: pending.contract })),
     el("pre", { class: "screen", text: pending.summary }),
-    pending.decision ? el("p", { text: "Approved by " + pending.decision.approver + " " + ago(pending.decision.decidedAt) + "." })
+    pending.decision ? el("p", {}, "Approved by " + pending.decision.approver + " ", when(pending.decision.decidedAt), ".")
       : el("p", {}, buttons[0], " ", buttons[1]),
     status);
 }
@@ -586,14 +638,14 @@ function renderWorkflows(id) {
 }
 
 function closeStream() { if (state.stream) state.stream.close(); state.stream = null; state.streamId = null; state.events = []; }
-const eventLine = (data) => el("div", {}, "#" + data.sequence + "  ", el("strong", { text: data.type }), "  " + ago(data.occurredAt));
+const eventLine = (data) => el("div", {}, "#" + data.sequence + "  ", el("strong", { text: data.type }), "  ", when(data.occurredAt));
 
 function nodeTable(run) {
   return el("table", {}, el("thead", {}, el("tr", {}, ["Node", "Status", "Tasks", "Detail"].map((h) => el("th", { text: h })))),
     el("tbody", {}, Object.entries(run.nodes ?? {}).map(([nodeId, node]) => el("tr", {},
       el("td", { class: "mono", text: nodeId }), el("td", {}, badge(node.status, RUN_TONE)),
       el("td", {}, (node.taskIds ?? []).map((taskId) => el("a", { href: "#/tasks/" + encodeURIComponent(taskId), class: "mono", title: taskId, text: taskId.slice(0, 8) + " ",
-        onclick: (e) => { e.preventDefault(); go("tasks", taskId); } }))),
+        onclick: approvals ? (e) => { e.preventDefault(); go("tasks", taskId); } : undefined }))),
       el("td", { text: node.error ?? node.prompt ?? "" })))));
 }
 

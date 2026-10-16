@@ -134,8 +134,10 @@ Actions: `navigate`, `back`, `forward`, `reload`, `inspect`, `wait`, `click`,
   page, is sent no input: `click`, `type`, `fill_form`, `select`, `press`,
   `upload` and `download` on it are refused with
   `browser_refuses_approval_surface`, in every mode and whatever approved the
-  action, a `url` naming the page included. Reads on it still work, and so does
-  `close`; moving or closing the page ends the console's pairing. This
+  action, a `url` naming the page included. So are `scroll` on it and
+  `tab_switch` onto its tab, two reads that could put its Approve under the
+  operator's pointer. Other reads on it still work, and so does `close`; moving
+  or closing the page ends the console's pairing. This
   matters when the runtime is attached over CDP to a browser the operator also
   uses. The check is made when the action starts, like the `url` check above.
 - `tab_new` accepts an optional `url` and runs the same destination checks
