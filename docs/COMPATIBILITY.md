@@ -95,6 +95,36 @@ Agents SDK, the Vercel AI SDK) are covered only by documentation snippets in
 [examples/frameworks](../examples/frameworks/README.md), which are not run in
 CI.
 
+### Recording an in-client run
+
+To mark a client verified, run the checklist above in it against a released
+package (`npx -y @melra/cli@<version>`, or a release binary), never a source
+checkout, in a throwaway workspace, and add one record here in a documentation
+pull request ([#184](https://github.com/XAGI-Lab/melra/issues/184) asks for the
+first). Name only what you ran: a step the client offers no way to run is
+"not available", which is neither a pass nor a failure. Evidence is a short,
+sanitized note (what the client showed, a task id, a receipt's
+`verificationStatus`), never a credential, a private path or a raw log.
+
+```markdown
+#### <Client> <version> — <YYYY-MM-DD>
+
+- OS: <name and version>; MELRA: `@melra/cli@<version>` via <npx | global | binary>
+- Configured with: `melra setup --client <name> --write` (or by hand: <how>)
+
+| Step | Result | Evidence |
+|---|---|---|
+| The client loads MELRA and lists its tools | pass / fail / not available | <tool count shown> |
+| A read task planned and run from the client | | <task id, status> |
+| A mutation planned, approved, and executed | | <approval path used: phrase, `melra approve`, or `melra console`> |
+| Its receipt retrieved from the client | | <verificationStatus> |
+| A workflow resumed after the server restarted | | |
+| A running task cancelled from the client | | |
+```
+
+A record with every step passing marks that client and version verified; any
+failure keeps it unverified until a maintainer has looked at the record.
+
 ## Data compatibility
 
 SQLite migration version `1` adds encrypted task payloads, workflow
