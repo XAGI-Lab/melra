@@ -775,6 +775,35 @@ export class BrowserRuntime {
   }
 
   /**
+   * Whether any frame of the page holds a filled secret field. Every frame,
+   * not the bounded set a snapshot reads: a selector can enter any of them.
+   * "unknown" when some frame could not answer, which a read must not take
+   * for "clear". Each frame is given at most `ms`.
+   */
+  private async secretFieldFilled(page: Page, ms = this.callMs): Promise<"filled" | "clear" | "unknown"> {
+    const answers = await Promise.all(page.frames().map((frame) => this.frameHoldsSecret(frame, ms)));
+    return answers.includes("filled") ? "filled" : answers.includes("unknown") ? "unknown" : "clear";
+  }
+
+  /**
+   * A frame mid-navigation is asked again once its next document has loaded;
+   * a detached one holds nothing. A cancelled task is not "unknown": it stops.
+   */
+  private async frameHoldsSecret(frame: Frame, ms = this.callMs): Promise<"filled" | "clear" | "unknown"> {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      if (frame.isDetached()) return "clear";
+      try {
+        return (await this.call(frame.evaluate(filledSecretField), "secret_check", ms)) ? "filled" : "clear";
+      } catch (error) {
+        this.signal?.throwIfAborted();
+        if (!(error instanceof Error && /context was destroyed|navigat|detached/i.test(error.message))) return "unknown";
+        await frame.waitForLoadState("domcontentloaded", { timeout: Math.min(2_000, ms) }).catch(() => undefined);
+      }
+    }
+    return "unknown";
+  }
+
+  /**
    * The frames a target may live in, main frame first.
    *
    * Consent banners, cookie walls, payment fields, and captcha widgets are
@@ -786,31 +815,6 @@ export class BrowserRuntime {
    *
    * Ad and analytics pages can attach dozens of frames, so the list is bounded.
    */
-  /**
-   * Whether any frame of the page holds a filled secret field. Every frame,
-   * not the bounded set a snapshot reads: a selector can enter any of them.
-   * "unknown" when some frame could not answer, which a read must not take
-   * for "clear".
-   */
-  private async secretFieldFilled(page: Page): Promise<"filled" | "clear" | "unknown"> {
-    const answers = await Promise.all(page.frames().map((frame) => this.frameHoldsSecret(frame)));
-    return answers.includes("filled") ? "filled" : answers.includes("unknown") ? "unknown" : "clear";
-  }
-
-  /** A frame mid-navigation is asked again once its next document has loaded; a detached one holds nothing. */
-  private async frameHoldsSecret(frame: Frame): Promise<"filled" | "clear" | "unknown"> {
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      if (frame.isDetached()) return "clear";
-      try {
-        return (await this.call(frame.evaluate(filledSecretField), "secret_check")) ? "filled" : "clear";
-      } catch (error) {
-        if (!(error instanceof Error && /context was destroyed|navigat|detached/i.test(error.message))) return "unknown";
-        await frame.waitForLoadState("domcontentloaded", { timeout: 2_000 }).catch(() => undefined);
-      }
-    }
-    return "unknown";
-  }
-
   private frames(page: Page): Frame[] {
     return page.frames().slice(0, MAX_FRAMES);
   }
@@ -896,11 +900,16 @@ export class BrowserRuntime {
   ): Promise<void> {
     const negated = state === "hidden" || state === "detached";
     const deadline = Date.now() + timeoutMs;
+    let looked = false;
     for (;;) {
       // Asked on every poll: someone can fill a secret field while this waits.
       // A poll that cannot tell resolves nothing and waits for the next one.
-      const secret = await this.secretFieldFilled(page);
+      // The question gets what is left of the wait, but at least a second, so
+      // the last poll is not starved into "unknown".
+      this.signal?.throwIfAborted();
+      const secret = await this.secretFieldFilled(page, Math.max(1_000, deadline - Date.now()));
       if (secret === "filled") throw new Error("browser_secret_field_filled");
+      looked ||= secret === "clear";
       let reached = negated && secret === "clear";
       for (const candidate of secret === "clear" ? this.candidates(page, target) : []) {
         const element = candidate.first();
@@ -922,6 +931,8 @@ export class BrowserRuntime {
       }
       if (reached) return;
       if (Date.now() >= deadline) {
+        // Not the target's fault when no poll could look for it.
+        if (!looked) throw new Error("browser_secret_check_unavailable");
         throw new Error(
           `browser_wait_timeout:${state}:${JSON.stringify(target)}`,
         );
@@ -1181,11 +1192,11 @@ export class BrowserRuntime {
     // No list of selector spellings closes that, so while any frame holds a
     // filled secret field a read may look at the whole page but not aim at
     // part of it. The refusal depends on the page, never on the guess.
-    if (["inspect", "wait", "scroll", "screenshot"].includes(operation.action) && operation.target !== undefined) {
+    // `wait` asks on every poll instead, within its own deadline.
+    if (["inspect", "scroll", "screenshot"].includes(operation.action) && operation.target !== undefined) {
       const secret = await this.secretFieldFilled(page);
       if (secret === "filled") throw new Error("browser_secret_field_filled");
-      // `wait` asks again on every poll; a single read cannot, and refuses.
-      if (secret === "unknown" && operation.action !== "wait") throw new Error("browser_secret_check_unavailable");
+      if (secret === "unknown") throw new Error("browser_secret_check_unavailable");
     }
     // Anywhere but on the way to it, a url names the page the action acts on:
     // the active page, or for `close` and `tab_switch` the tab they name.

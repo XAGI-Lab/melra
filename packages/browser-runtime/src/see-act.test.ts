@@ -264,6 +264,57 @@ describe("browser see/act loop", () => {
     }
   }, 120_000);
 
+  it("refuses, and does not wait out, a read whose secret-field check gets no answer", async () => {
+    const context = await fixture(`<!doctype html><html><body><p id="here">here</p></body></html>`);
+    if (context === undefined) return;
+    const { runtime, url } = context;
+    const run = (operation: Record<string, unknown>) =>
+      runtime.execute(BrowserOperationSchema.parse({ kind: "browser", ...operation }));
+    try {
+      await run({ action: "navigate", url });
+      // As if some frame never answered: "unknown" is not "clear".
+      (runtime as unknown as { secretFieldFilled: () => Promise<string> }).secretFieldFilled = async () => "unknown";
+      await expect(run({ action: "inspect", target: { selector: "#here" } })).rejects.toThrow(
+        "browser_secret_check_unavailable",
+      );
+      // Nothing resolves on a poll that could not look, not even absence.
+      const started = Date.now();
+      await expect(
+        run({ action: "wait", target: { selector: "#gone" }, state: "hidden", timeoutMs: 800 }),
+      ).rejects.toThrow("browser_secret_check_unavailable");
+      expect(Date.now() - started).toBeLessThan(5_000);
+    } finally {
+      await runtime.close();
+    }
+  }, 120_000);
+
+  it("stops a targeted wait as soon as its task is cancelled", async () => {
+    const context = await fixture(`<!doctype html><html><body><p>nothing to find</p></body></html>`);
+    if (context === undefined) return;
+    const { runtime, url } = context;
+    try {
+      await runtime.execute(BrowserOperationSchema.parse({ kind: "browser", action: "navigate", url }));
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(new Error("task_cancelled")), 300);
+      const started = Date.now();
+      await expect(
+        runtime.execute(
+          BrowserOperationSchema.parse({
+            kind: "browser",
+            action: "wait",
+            target: { selector: "#never" },
+            state: "attached",
+            timeoutMs: 20_000,
+          }),
+          controller.signal,
+        ),
+      ).rejects.toThrow("task_cancelled");
+      expect(Date.now() - started).toBeLessThan(5_000);
+    } finally {
+      await runtime.close();
+    }
+  }, 120_000);
+
   it("matches text through surrounding whitespace instead of failing exact", async () => {
     const context = await fixture();
     if (context === undefined) return;
