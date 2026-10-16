@@ -426,10 +426,14 @@ export class BrowserRuntime {
   /** Target ids already looked up; a page keeps its id across navigations. */
   private targetIds = new WeakMap<Page, string>();
   /**
-   * Windows Chromium created while an action was running: that action's
-   * popups, whenever Playwright gets round to handing them over.
+   * Windows Chromium created while an action was running, with that action's
+   * number: its popups, whenever Playwright gets round to handing them over.
    */
-  private createdActing = new Set<string>();
+  private createdActing = new Map<string, number>();
+  /** Counts actions, so a popup reported by a later one says so. */
+  private actions = 0;
+  /** The page the running action acts on, once it has one. */
+  private actingOn: Page | undefined;
   /**
    * Browser-level session that hears about a new window the moment Chromium
    * creates it, which is what lets an action wait for a popup it knows exists
@@ -747,7 +751,7 @@ export class BrowserRuntime {
     this.ownTargets = new Set();
     this.drivenTarget = undefined;
     this.targetIds = new WeakMap();
-    this.createdActing = new Set();
+    this.createdActing = new Map();
     // A session left from a context that closed under us would count into the
     // fresh map below and make every action wait for windows that never come.
     if (this.targets !== undefined) {
@@ -766,9 +770,14 @@ export class BrowserRuntime {
         if (targetInfo.type !== "page" || targetInfo.subtype !== undefined) return;
         const id = targetInfo.browserContextId ?? "";
         this.windowsCreated.set(id, (this.windowsCreated.get(id) ?? 0) + 1);
-        if (this.acting) this.createdActing.add(targetInfo.targetId);
+        if (this.acting) this.createdActing.set(targetInfo.targetId, this.actions);
+        // A window an action's popup opens, before that popup is even judged,
+        // is the runtime's like the popup.
         const opener = targetInfo.openerId;
-        if (opener !== undefined && (this.ownTargets.has(opener) || opener === this.drivenTarget)) {
+        if (
+          opener !== undefined &&
+          (this.ownTargets.has(opener) || opener === this.drivenTarget || this.createdActing.has(opener))
+        ) {
           this.ownTargets.add(targetInfo.targetId);
         }
       });
@@ -789,6 +798,8 @@ export class BrowserRuntime {
       // Playwright had them before the `page` handler did, so they are owed no
       // event here.
       this.windowsCreated.clear();
+      // Nor are they an action's popups: they were there before it.
+      this.createdActing.clear();
       this.targets = targets;
     } catch {
       this.targets = undefined;
@@ -883,17 +894,23 @@ export class BrowserRuntime {
 
   /**
    * Whether to treat a new window as this runtime's, in a browser it is
-   * attached to: one created while an action ran, or one of `ownTargets`.
-   * Asked twice before giving up. One that closed before it could be asked is
-   * reported, as everywhere else; one still open that cannot be asked counts
-   * by when Playwright handed it over.
+   * attached to: one created while an action ran, which then counts as the
+   * runtime's for the windows it opens, or one of `ownTargets`. `during`
+   * says whether the action reporting it is the one it came in; any other
+   * reports it as between actions. Asked twice before giving up. One that
+   * closed before it could be asked is reported, as everywhere else; that
+   * one, and one still open that cannot be asked, count by when Playwright
+   * handed it over.
    */
   private async adoptable(page: Page, acting: boolean): Promise<{ adopt: boolean; during: boolean }> {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
         const id = await this.targetOf(page);
-        const during = this.createdActing.delete(id);
-        return { adopt: during || this.ownTargets.has(id), during };
+        const createdIn = this.createdActing.get(id);
+        if (createdIn === undefined) return { adopt: this.ownTargets.has(id), during: false };
+        this.createdActing.delete(id);
+        this.ownTargets.add(id);
+        return { adopt: true, during: this.acting && createdIn === this.actions };
       } catch {
         if (page.isClosed()) return { adopt: true, during: acting };
       }
@@ -1441,13 +1458,24 @@ export class BrowserRuntime {
     this.signal = signal;
     this.callMs = operation.timeoutMs;
     this.dispatched = false;
+    this.actingOn = undefined;
+    // Chromium reports a window's creation on the browser-level session,
+    // ahead of any later reply there; one round trip before the action
+    // starts takes every window created until now as created between
+    // actions, however late that report would otherwise be handled.
+    if (this.options.cdpEndpoint !== undefined && this.targets !== undefined) {
+      await bounded(this.targets.send("Browser.getVersion"), operation.timeoutMs, "cdp:Browser.getVersion", signal).catch(
+        () => undefined,
+      );
+    }
+    this.actions += 1;
     this.acting = true;
     try {
       const ran = await this.run(operation);
       // An input action that went through, or a step back or forward that
       // moved, drove its page; windows it opened meanwhile are the action's
       // anyway (`createdActing`). Navigations mark it before they are sent.
-      if (DRIVING_ACTIONS.has(operation.action) && ran.moved !== false) await this.drive(this.activePage).catch(() => undefined);
+      if (DRIVING_ACTIONS.has(operation.action) && ran.moved !== false) await this.drive(this.actingOn).catch(() => undefined);
       await this.awaitOpenedWindows(operation.timeoutMs);
       // A blocked popup is closed from an event handler, which has no way to
       // join the action that provoked it. Waiting here is what stops the next
@@ -1475,8 +1503,14 @@ export class BrowserRuntime {
       // nothing was sent, and for a read the controller may simply retry.
       // The message is stored on the task record and shown in the console.
       if (error instanceof Error) error.message = withoutColour(error.message);
-      if (!this.dispatched && !inputSent(error)) throw error;
-      await this.drive(this.activePage).catch(() => undefined);
+      const sent = this.dispatched || inputSent(error);
+      // So did one that failed after its input went out, or a step back or
+      // forward that may have moved before it ran out of time. A `close`
+      // drives nothing, whatever page it leaves active.
+      if (DRIVING_ACTIONS.has(operation.action) && (sent || operation.action === "back" || operation.action === "forward")) {
+        await this.drive(this.actingOn).catch(() => undefined);
+      }
+      if (!sent) throw error;
       throw outcomeUnknown(error instanceof Error ? error.message : String(error));
     } finally {
       this.acting = false;
@@ -1485,6 +1519,7 @@ export class BrowserRuntime {
 
   private async run(operation: BrowserOperation): Promise<Record<string, unknown>> {
     const page = await this.page();
+    this.actingOn = page;
     // Anywhere but on the way to it, a url names the page the action acts on:
     // the active page, or for `close` and `tab_switch` the tab they name.
     // Policy shows it to the approver as the target and matches grants against
