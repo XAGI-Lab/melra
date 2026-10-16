@@ -352,7 +352,7 @@ describe("approval console", () => {
     const task = runtime.controller.plan(
       TaskRequestSchema.parse({
         goal: "Save the config\u0301\u0302\u0303\u0304\ufff0",
-        operation: { kind: "file", action: "write", path: "cfg/‮crhsab.", content: "x" },
+        operation: { kind: "file", action: "write", path: "cfg/‮crhsab.\ufff0", content: "x" },
       }),
     );
     const browser = await chromium.launch({ executablePath, headless: true });
@@ -381,6 +381,8 @@ describe("approval console", () => {
       expect(drawn).not.toMatch(/\p{Cf}/u);
       expect(drawn).toContain("config\u0301\u0302\\u0303\\u0304\\ufff0");
       expect(drawn).not.toMatch(/[\p{Mn}\p{Me}]{3}/u);
+      // Raw nowhere, including what the page draws on its own (the list row).
+      expect(drawn).not.toMatch(/\p{Cn}/u);
     } finally {
       await browser.close();
     }

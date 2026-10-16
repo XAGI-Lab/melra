@@ -54,10 +54,24 @@ export async function approvalConsole(
       else held = line;
     },
   });
-  if (!(await terminal.open(endpoint.url))) {
+  let opened: boolean;
+  try {
+    opened = await terminal.open(endpoint.url);
+  } catch (error) {
+    // An opener that throws must not leave the console listening behind it.
+    if (held !== undefined) terminal.say(held);
+    await endpoint.close();
+    throw error;
+  }
+  if (!opened) {
+    // A tab can have paired while the opener ran and still report failure:
+    // that is exactly what the operator must hear about.
+    if (held !== undefined) terminal.say(held);
     await endpoint.close();
     throw new Error(
-      "console_needs_a_browser: nothing here opens a browser, and the console's pairing code is never printed; use 'melra approve <task-id>'",
+      held === undefined
+        ? "console_needs_a_browser: nothing here opens a browser, and the console's pairing code is never printed; use 'melra approve <task-id>'"
+        : "console_needs_a_browser: the browser opener reported failure, yet a tab paired while it ran; check pending approvals and receipts ('melra tasks') before trusting them, and use 'melra approve <task-id>'",
     );
   }
   terminal.say(

@@ -940,7 +940,7 @@ preflight, which the console never answers, and a GET never decides.
 | Started without a terminal: by a harness, systemd, launchd or compose, or with stdin or stderr piped | refused: `console_needs_a_terminal` |
 | Nothing here opens a browser | refused: `console_needs_a_browser`, and the URL is not printed instead |
 | Inside a Docker container | refused, as one of the two rows above: use `docker exec -it <container> node /opt/melra/dist/bin.js approve <task-id>`, with the container's id from `docker ps` |
-| Served on a Unix socket or off loopback (`serveHttp` with `approver`) | refused: `approval_console_loopback_only` |
+| The console itself on a Unix socket or off loopback (`serveHttp` with `approver`); an agent server on a socket is fine | refused: `approval_console_loopback_only` |
 
 **Same root of trust as `melra approve --yes`.** That command needs no
 terminal, so anything running as your OS user against the data directory can

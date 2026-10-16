@@ -347,6 +347,35 @@ describe("melra CLI", () => {
       }
     });
 
+    it("reports a pairing made while an opener ran, even when the opener then fails", async () => {
+      const { env, melra, terminal, seen } = await start();
+      const failing: ConsoleTerminal = {
+        ...terminal,
+        open: async (address) => {
+          const url = new URL(address);
+          await call(url, "/pair", { body: { code: url.hash.slice("#pair=".length) } });
+          return false;
+        },
+      };
+      try {
+        await expect(approvalConsole(env, melra, failing)).rejects.toThrow(/console_needs_a_browser: .*a tab paired/);
+        expect(seen.said).toMatch(/Paired with a browser tab at \d\d:\d\d/);
+        // And one that throws leaves nothing listening behind it.
+        let address = "";
+        const throwing: ConsoleTerminal = {
+          ...terminal,
+          open: async (url) => {
+            address = url;
+            throw new Error("opener exploded");
+          },
+        };
+        await expect(approvalConsole(env, melra, throwing)).rejects.toThrow("opener exploded");
+        await expect(call(new URL(address), "/pair", { body: { code: "x" } })).rejects.toThrow();
+      } finally {
+        await melra.close();
+      }
+    });
+
     it("hands its pairing code to the browser and nothing else, and records console approvals", async () => {
       const { env, melra, terminal, seen } = await start();
       const endpoint = await approvalConsole(env, melra, terminal);
