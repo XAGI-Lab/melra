@@ -4,8 +4,8 @@
 // Builds `melra` as a single executable with Node inside (#76): one file that
 // runs where Node is not installed. Bundles the built CLI with esbuild, then
 // wraps it with Node's own `--build-sea`, so the binary carries the Node that
-// runs this script. Experimental: unsigned beyond an ad-hoc macOS signature,
-// and not yet attached to releases.
+// runs this script. Experimental: unsigned beyond an ad-hoc macOS signature.
+// Releases attach the build for each platform (single-executable.yml).
 //
 //   pnpm build:sea            -> dist-sea/melra (melra.exe on Windows)
 

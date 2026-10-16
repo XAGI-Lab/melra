@@ -175,7 +175,21 @@ Use `pnpm melra` in place of `melra` in the configurations below.
 ### Single executable (experimental)
 
 One file with Node inside, for machines that should not need Node installed.
-Built from source for the platform you build on; releases do not ship it yet:
+Each GitHub release attaches one per platform: `melra-<version>-linux-x64`,
+`-linux-arm64`, `-darwin-arm64` (Apple silicon; there is no Intel macOS
+build), and `-win-x64.exe`. They are covered by the release's `SHA256SUMS` and
+its signed provenance attestation, so check one before running it:
+
+```bash
+sha256sum --check --ignore-missing SHA256SUMS
+gh attestation verify melra-<version>-linux-x64 --repo XAGI-Lab/melra
+chmod +x melra-<version>-linux-x64 && ./melra-<version>-linux-x64 doctor
+```
+
+They are not code-signed. macOS quarantines a downloaded copy until you clear
+it (`xattr -d com.apple.quarantine melra-<version>-darwin-arm64`, after
+checking it as above), and Windows SmartScreen warns before the first run. To
+build one yourself instead, for the platform you build on:
 
 ```bash
 pnpm build:sea          # needs Node 25+ to build; the result needs no Node
@@ -185,11 +199,11 @@ pnpm build:sea          # needs Node 25+ to build; the result needs no Node
 The binary is about 150 MB and carries the Node that built it. `melra setup`
 run from it writes the binary's absolute path into client configs, since a
 client may not launch with it on `PATH`. On macOS the build adds an ad-hoc
-signature, the minimum Apple Silicon will run; a copy downloaded from elsewhere
-would still meet Gatekeeper, which is why signed release binaries are tracked
-separately ([#76](https://github.com/XAGI-Lab/melra/issues/76)). CI builds it
-on Linux, macOS, and Windows and checks `doctor` and conformance L3 against
-it with only the system directories on `PATH`.
+signature, the minimum Apple Silicon will run; Developer ID signing and
+notarization would let a downloaded copy past Gatekeeper without the step
+above. CI builds it for all four platforms on every change and checks `doctor`
+and conformance L3 against it with only the system directories on `PATH`; a
+release attaches exactly those builds.
 
 ## Local configuration
 

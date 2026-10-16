@@ -29,8 +29,11 @@ The tag workflow:
 - creates a portable Node runtime archive;
 - creates Python wheel and source distributions;
 - creates a source archive;
+- builds the single executable for linux-x64, linux-arm64, darwin-arm64 and
+  win-x64 with the same workflow every pull request runs, smoke-tests each, and
+  attaches them unsigned (ad-hoc signed on macOS);
 - generates an SPDX JSON SBOM;
-- writes SHA-256 checksums;
+- writes SHA-256 checksums, the single executables included;
 - generates signed Sigstore-backed GitHub provenance attestations;
 - publishes every public `@melra/*` package to npm by **trusted publishing**
   (see below), with provenance;

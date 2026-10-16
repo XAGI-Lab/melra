@@ -6,6 +6,15 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Each GitHub release attaches the single executable (Node inside, no Node
+  install needed) for linux-x64, linux-arm64, darwin-arm64 and win-x64, built
+  and smoke-tested by the same workflow every pull request runs, and covered by
+  the release's `SHA256SUMS` and provenance attestation. The binaries are not
+  code-signed: macOS quarantines a downloaded copy and Windows SmartScreen
+  warns, and `docs/INSTALLATION.md` shows how to verify one first. (#76)
+
 ### Changed
 
 - The hardened deployment recipes name Docker Desktop and WSL2 as the way to
