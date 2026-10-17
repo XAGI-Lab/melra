@@ -49,10 +49,10 @@ const inlinePlaywrightJson = {
 
 // The CLI links node:sqlite statically, and esbuild hoists every external
 // import of the single file above all of its code, so in the binary that
-// import would link before bin.ts's own checks run: its load-time hint for a
-// node:sqlite that is turned off, and its patch for the warning the module
-// emits. Served from the builtin when first used instead, the module loads
-// inside the lazily initialised graph that bin.ts imports, after both.
+// import would link before bin.ts's own checks run, and a node:sqlite that is
+// turned off would crash it at load instead of getting bin.ts's hint. Served
+// from process.getBuiltinModule instead, the module is read inside the lazily
+// initialised graph that bin.ts imports, after those checks.
 const lazySqlite = {
   name: "lazy-node-sqlite",
   setup(context) {

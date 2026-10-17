@@ -33,8 +33,8 @@ process.emitWarning = ((warning: string | Error, ...rest: unknown[]): void => {
 // (before 22.13, or 23.0 to 23.3), or a supported one where it was turned off
 // or left out of the build, would otherwise end every command, `doctor`
 // included, at load with a bare ERR_UNKNOWN_BUILTIN_MODULE. `getBuiltinModule`
-// asks without linking anything, and is itself missing before 22.3, where
-// `node:sqlite` is too.
+// asks without linking anything; it is itself missing before 20.16 and, on
+// the 22 line, before 22.3, where `node:sqlite` is too.
 if (process.getBuiltinModule?.("node:sqlite") === undefined) {
   const { sqliteUnavailable } = await import("./node-support.js");
   process.stderr.write(`${sqliteUnavailable(process.versions.node)}\n`);
