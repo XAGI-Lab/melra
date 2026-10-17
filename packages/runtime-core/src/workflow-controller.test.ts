@@ -190,6 +190,31 @@ describe("WorkflowController planning", () => {
     expect(advanced.run.nodes.click?.status).not.toBe("pending");
   });
 
+  it("refuses a semantic question in any node until a workflow can wait on one (#54)", async () => {
+    const { controller, store } = await setup();
+    const semantic = { type: "semantic", question: "Is it right?" } as const;
+    const asking = { ...request("Ask"), requiredEvidence: [semantic] };
+    const nodes = [
+      { id: "op", type: "operation", request: asking },
+      { id: "undo", type: "compensation", forNodeId: "first", request: asking },
+      { id: "fan", type: "parallel", branches: [[asking], [request("Other")]] },
+      { id: "if", type: "condition", sourceNodeId: "first", dependsOn: ["first"], predicate: semantic, whenTrue: [], whenFalse: [] },
+      { id: "loop", type: "bounded_loop", body: [request("Again")], maxIterations: 2, until: semantic },
+      { id: "elsewhere", type: "delegation", assignee: "agent:helper", goal: "Do it", requiredEvidence: [semantic] },
+    ];
+    for (const [index, node] of nodes.entries()) {
+      const definition = WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: `00000000-0000-4000-8000-00000000005${index}`,
+        version: 1,
+        name: "Semantic",
+        nodes: [{ id: "first", type: "operation", request: request("First") }, node],
+      });
+      expect(() => controller.plan(definition), node.id).toThrow(`workflow_semantic_evidence_unsupported:${node.id}`);
+    }
+    expect(store.listTasks()).toEqual([]);
+  });
+
   it("rejects a denied nested request before writing anything", async () => {
     const { controller, store } = await setup();
     const denied = WorkflowDefinitionSchema.parse({

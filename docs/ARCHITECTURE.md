@@ -395,7 +395,7 @@ rather than flattening it into a boolean:
 | 0 | **Execution** | The adapter's own report | exit code `0`, HTTP 200, no exception | ✓ |
 | 1 | **State** | MELRA re-reads the target itself | `file_exists`, `file_hash` re-reading the workspace | ✓ |
 | 2 | **Independent** | A different channel to the same fact | `http_resource_matches`: execute via `POST /refund`, verify via `GET /refund/:id` | ✓ |
-| 3 | **Semantic** | A judgement about meaning | "the summary is accurate" | roadmap, and **probabilistic** |
+| 3 | **Semantic** | A judgement about meaning | "the summary is accurate" | posed and recorded; a verdict from outside is next (#54); **probabilistic** |
 
 Execution evidence is the weakest: it says the call returned, not that the world
 changed. Independent verification is much stronger precisely because the channel
@@ -411,10 +411,16 @@ type — an older receipt, or a predicate added without a decision in that table
 reads as `execution`, the weakest claim, rather than silently borrowing a
 stronger one.
 
-Semantic verification will be labelled probabilistic wherever it appears, and
-will never be the sole evidence for a destructive effect. A verifier that
-guesses is useful; a verifier that guesses while presenting itself as proof is
-worse than none.
+Semantic verification is labelled probabilistic wherever it appears (strength
+`semantic`), and is never the deciding evidence for a destructive effect: one
+whose evidence has a `semantic` predicate but nothing at the state or
+independent level is refused at planning (`semantic_only_destructive`). The
+kernel never answers the question itself. A task waits in `waiting_user` for a
+verdict from outside, and settles closed when none comes: `recovery_required`
+for a change, `partial` for a read. A waiting task is not interrupted work, so
+restart recovery leaves it alone; the startup pass and the 30 s sweep settle one
+past its expiry. A verifier that guesses is useful; a verifier that guesses
+while presenting itself as proof is worse than none.
 
 ## Execution guarantees
 
@@ -506,6 +512,7 @@ safe thing:
 | no such effect | `failed`, `reconciliation_confirms_effect_not_applied` |
 | nothing — unreachable | stays `recovery_required`, `reconciliation_inconclusive` |
 | *(none declared)* | stays `recovery_required`, `reconciliation_not_declared` |
+| *(a `semantic` predicate declared)* | stays `recovery_required`, its cause unchanged: a provider can say whether an effect happened, not whether it is right |
 
 An unreachable provider did not say no, so nothing is concluded from silence.
 The same path runs on restart: `recoverInterrupted` reconciles a crashed

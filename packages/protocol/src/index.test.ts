@@ -181,4 +181,26 @@ describe("effect contract", () => {
     expect(write.executionGuarantee).toBe("at-most-once");
     expect(allowsRetry(write.executionGuarantee)).toBe(false);
   });
+
+  it("takes a semantic question, bounded, naming result paths and never content", () => {
+    const request = (predicate: Record<string, unknown>) => ({
+      goal: "Ask about a result",
+      operation: { kind: "system", action: "info" },
+      requiredEvidence: [predicate],
+    });
+    const parsed = TaskRequestSchema.parse(request({ type: "semantic", question: "Is the total right?" }));
+    expect(parsed.requiredEvidence[0]).toEqual({ type: "semantic", question: "Is the total right?", artifacts: [] });
+    for (const bad of [
+      { type: "semantic", question: "" },
+      { type: "semantic", question: "x".repeat(2_001) },
+      { type: "semantic", question: "q", expiresInMs: 60_000 },
+      { type: "semantic", question: "q", artifacts: Array.from({ length: 11 }, () => "a") },
+      { type: "semantic", question: "q", artifacts: [""] },
+      { type: "semantic", question: "q", artifacts: ["a b"] },
+      { type: "semantic", question: "q", artifacts: ["../x"] },
+      { type: "semantic", question: "q", artifacts: ["a".repeat(513)] },
+    ]) {
+      expect(TaskRequestSchema.safeParse(request(bad)).success, JSON.stringify(bad).slice(0, 80)).toBe(false);
+    }
+  });
 });

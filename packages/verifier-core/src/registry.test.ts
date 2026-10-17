@@ -127,4 +127,27 @@ describe("pluggable verifiers", () => {
       "verifier_type_taken:custom",
     );
   });
+
+  it("never answers a semantic question, and lets no verifier answer one", async () => {
+    const verifier = await Verifier.create(await workspace());
+    expect(verifier.supports({ type: "semantic", question: "q", artifacts: [] })).toBe(true);
+    expect(verifier.supports({ type: "custom", verifier: "semantic", params: {} })).toBe(false);
+    const result = await verifier.verify([{ type: "semantic", question: "Is it right?", artifacts: [] }], { ok: true });
+    expect(result).toEqual({
+      verified: false,
+      evidence: [
+        {
+          type: "semantic",
+          passed: false,
+          inconclusive: true,
+          strength: "semantic",
+          summary: "semantic_judgement_unanswered",
+        },
+      ],
+    });
+    const named = { type: "semantic", check: async () => ({ passed: true, summary: "looks right" }) };
+    await expect(Verifier.create(await workspace(), { verifiers: [named] })).rejects.toThrow(
+      "verifier_type_taken:semantic",
+    );
+  });
 });

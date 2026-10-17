@@ -315,7 +315,9 @@ none, and an operator approves with
 `"mutations": "deny"` for a read-only install. A challenge stays open for
 `approvalTtlMs`: 5 minutes by default in developer mode and 30 in enforced
 mode, where an operator approves out of band; a value the policy file sets
-(a whole number of milliseconds, at most 24 hours) applies in either mode. A
+(a whole number of milliseconds, at most 24 hours) applies in either mode. It
+also bounds how long a task waits on a `semantic` question before it settles
+closed. A
 `policy.json` that `melra init` or `melra setup` wrote with an earlier release
 pins `"approvalTtlMs": 300000`; delete that key to get the mode's default.
 
@@ -397,9 +399,11 @@ block bounds money:
 
 Amounts are minor units — `5000` is $50.00. `amountMax` caps a single call and
 `dailyMax` the declared amounts committed in the last 24 hours. The counts are
-durable and are drawn down at one point only: where a verified task commits. An
-operation that was refused, failed verification, was cancelled, or collapsed
-into a duplicate costs nothing, and a restart does not refill the budget.
+durable and are drawn down at one point only: where a task whose every kernel
+check held commits, a verified task or one waiting on a `semantic` question,
+whose effect ran. An operation that was refused, failed a check, was cancelled,
+or collapsed into a duplicate costs nothing, and a restart does not refill the
+budget.
 
 A `provider` block makes the grant cover *only* operations that declare a
 matching `spend` (see [CAPABILITIES.md](CAPABILITIES.md#http)):

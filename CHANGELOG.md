@@ -8,6 +8,23 @@ All notable changes are documented here. The format follows
 
 ### Added
 
+- A `semantic` evidence predicate (#54): a yes/no `question` about meaning,
+  with `artifacts` naming result paths, for a judge outside MELRA. The kernel
+  runs no model and never answers it; its item has strength `semantic` and
+  fails as inconclusive. Once the effect has run and every other predicate has
+  held, the task waits in `waiting_user`, its `judgements` saying what it waits
+  on and until when (`approvalTtlMs`). Nothing can answer a judgement in this
+  release, so at expiry the task settles closed: `recovery_required` for a
+  change, whose effect did happen, `partial` for a read, error
+  `semantic_judgement_expired`, settled by the startup pass and the 30 s
+  recovery sweep. A destructive effect whose evidence has a `semantic`
+  predicate but nothing at the state or independent level is refused at
+  planning (`semantic_only_destructive`). `semantic` is refused beside
+  `reconciliation` (`semantic_evidence_not_reconcilable`), which cannot settle
+  a question about meaning, and in any workflow node
+  (`workflow_semantic_evidence_unsupported:<node>`) until a workflow can wait on a
+  verdict. `pnpm evals` has two new scenarios (54).
+
 - Each GitHub release attaches the single executable (Node inside, no Node
   install needed) for linux-x64, linux-arm64, darwin-arm64 and win-x64, built
   and smoke-tested by the same workflow every pull request runs, and covered by
@@ -55,6 +72,17 @@ All notable changes are documented here. The format follows
   (`approval_console_loopback_only`) on every platform and in every mode.
 
 ### Changed
+
+- A grant is now drawn down, and an idempotency key committed, when a task's
+  every kernel check has held: when it is verified, as before, and also when
+  it enters `waiting_user` on a `semantic` question, since its effect ran. A
+  key that ran does not run again, and a grant does not fund a second effect
+  while the first waits. (#54)
+
+- **Breaking:** `semantic` is now a built-in verifier type, so
+  `createMelraRuntime` refuses an `evidenceVerifiers` entry of that type
+  (`verifier_type_taken:semantic`) and the runtime does not start. Rename such
+  a verifier, and the `custom` predicates that name it. (#54)
 
 - **Breaking:** in enforced mode, a browser action that drives a page
   (`click`, `type`, `fill_form`, `select`, `press`, `upload`, `download`,

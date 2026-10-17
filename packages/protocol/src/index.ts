@@ -451,6 +451,28 @@ export const EvidencePredicateSchema = z.discriminatedUnion("type", [
         .default({}),
     })
     .strict(),
+  /**
+   * A question about meaning, which MELRA poses and never answers: the kernel
+   * runs no model (#54). The task waits in `waiting_user` for a verdict from
+   * outside and fails closed when none comes. Its strength is always
+   * `semantic`, and it is never the only evidence for a destructive effect
+   * that the actor did not report itself.
+   */
+  z
+    .object({
+      type: z.literal("semantic"),
+      question: z
+        .string()
+        .min(1)
+        .max(2_000)
+        .describe("A yes/no question about this effect's result, for a judge outside MELRA. Stored and shown as written, minus secret shapes."),
+      artifacts: z
+        .array(z.string().max(512).regex(/^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$/))
+        .max(10)
+        .default([])
+        .describe("Dotted paths into this operation's recorded result (json.total, path), never content."),
+    })
+    .strict(),
 ]);
 
 export type EvidencePredicate = z.infer<typeof EvidencePredicateSchema>;
@@ -572,7 +594,7 @@ export const TaskRequestSchema = z
       .max(20)
       .default([])
       .describe(
-        "Predicates that must hold after execution for the task to be verified_success. Required for any non-read operation: a mutation with none is denied with mutation_requires_evidence. An adapter that succeeded while a predicate failed is partial, never success.",
+        "Predicates that must hold after execution for the task to be verified_success. Required for any non-read operation: a mutation with none is denied with mutation_requires_evidence. An adapter that succeeded while a predicate failed is partial, never success. A semantic predicate is never answered by MELRA: the task waits in waiting_user and fails closed at expiry. Beside semantic, a destructive effect also needs file_exists, file_absent, file_hash or http_resource_matches, or it is denied with semantic_only_destructive; semantic beside reconciliation is denied with semantic_evidence_not_reconcilable.",
       ),
     reconciliation: z
       .array(EvidencePredicateSchema)
@@ -1198,6 +1220,18 @@ export interface ApprovalDecision {
   decidedAt: string;
 }
 
+/**
+ * One per semantic predicate, written in the save that moves a task to
+ * `waiting_user` and kept after it settles. `predicateIndex` indexes
+ * `request.requiredEvidence` and the action receipt's evidence; the question
+ * itself stays in the request, redacted once.
+ */
+export interface SemanticJudgement {
+  judgementId: string;
+  predicateIndex: number;
+  expiresAt: string;
+}
+
 export interface TaskRecord {
   id: string;
   request: TaskRequest;
@@ -1219,6 +1253,8 @@ export interface TaskRecord {
   attempts?: number;
   receiptIds: string[];
   certificateId?: string;
+  /** The semantic questions a `waiting_user` task waits on (#54). */
+  judgements?: SemanticJudgement[];
   createdAt: string;
   updatedAt: string;
 }

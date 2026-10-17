@@ -354,7 +354,14 @@ export class SqliteStore {
     });
   }
 
-  private transaction<T>(action: () => T): T {
+  /**
+   * Runs `action` under `BEGIN IMMEDIATE`, so a re-read, a decision and the
+   * writes it leads to settle once across processes sharing the database.
+   * `action` must be synchronous and must not call a method that opens its
+   * own transaction (`saveTaskExecutionResult`, `createWorkflow`,
+   * `transitionWorkflow`, `takeWorkflowLease`, `compactMemories`).
+   */
+  transaction<T>(action: () => T): T {
     this.database.exec("BEGIN IMMEDIATE");
     try {
       const result = action();
@@ -506,6 +513,25 @@ export class SqliteStore {
             )
             .all(status, limit)
     ) as unknown as JsonRow[];
+    return rows.map((row) => JSON.parse(row.data) as TaskRecord);
+  }
+
+  /**
+   * Tasks waiting on a semantic judgement (#54) whose wait is over, oldest
+   * first, and only those: the sweep that settles them should neither parse
+   * every waiting row nor let newer ones crowd out the oldest. A task's
+   * judgements share one `expiresAt`, which the kernel writes as an ISO
+   * string, so the comparison is a string one; a row with none is due.
+   */
+  listExpiredJudgements(now: string): TaskRecord[] {
+    const rows = this.database
+      .prepare(`
+        SELECT data FROM tasks
+        WHERE json_extract(data, '$.status') = 'waiting_user'
+          AND coalesce(json_extract(data, '$.judgements[0].expiresAt'), '') <= ?
+        ORDER BY updated_at ASC
+      `)
+      .all(now) as unknown as JsonRow[];
     return rows.map((row) => JSON.parse(row.data) as TaskRecord);
   }
 

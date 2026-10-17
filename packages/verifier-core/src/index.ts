@@ -279,6 +279,19 @@ const httpResourceMatches: Built<"http_resource_matches"> = {
   },
 };
 
+/**
+ * A question about meaning. The kernel runs no model, so it never answers one:
+ * the item fails as inconclusive, and the controller parks the task for a
+ * verdict from outside (#54). Built in so planning supports the type and no
+ * embedder can register a verifier that answers it.
+ */
+const semantic: Built<"semantic"> = {
+  type: "semantic",
+  async check() {
+    return { passed: false, inconclusive: true, summary: "semantic_judgement_unanswered" };
+  },
+};
+
 const BUILT_IN: ReadonlyArray<RegisteredVerifier> = [
   resultEquals,
   resultContains,
@@ -289,6 +302,7 @@ const BUILT_IN: ReadonlyArray<RegisteredVerifier> = [
   fileAbsent,
   fileHash,
   httpResourceMatches,
+  semantic,
 ];
 const BUILT_IN_TYPES: ReadonlySet<string> = new Set(BUILT_IN.map((verifier) => verifier.type));
 
