@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 600" width="960" height="600" role="img" aria-labelledby="t d">
   <title id="t">Where MELRA sits</title>
-  <desc id="d">The model reasons, the agent harness runs the loop, and every effect the agent wants passes down through MELRA, which types, classifies, authorises, gates, records, deduplicates, runs, verifies and receipts it, before the effect adapters touch your systems.</desc>
+  <desc id="d">The model reasons, the agent harness runs the loop, and tool calls routed through MELRA pass its policy and approval stages before effect adapters touch your systems; those that complete are checked against their declared evidence, and each that runs to an outcome is receipted. Calls made outside MELRA are not governed by it.</desc>
   <defs>
     <linearGradient id="kernel" x1="0" y1="0" x2="1" y2="0">
       <stop offset="0" stop-color="#2bb8a8"/>
@@ -59,14 +59,14 @@
   </g>
 
   <path class="flow" d="M480 240 V276" marker-end="url(#arrow)"/>
-  <text class="flowlabel" x="494" y="264">every action it wants to take</text>
+  <text class="flowlabel" x="494" y="264">tool calls you route through MELRA</text>
 
   <!-- Layer 3: MELRA -->
   <rect x="40" y="280" width="880" height="154" rx="16" fill="url(#kernel)"/>
   <rect class="accent" x="40" y="280" width="8" height="154" rx="4"/>
-  <text class="ksub" x="68" y="308" style="letter-spacing:.08em;font-weight:700;font-size:12px">OWNS EVERY EFFECT</text>
+  <text class="ksub" x="68" y="308" style="letter-spacing:.08em;font-weight:700;font-size:12px">GOVERNS ROUTED EFFECTS</text>
   <text class="ktitle" x="68" y="338">MELRA</text>
-  <text class="ksub" x="160" y="338">checks it, asks you when it matters, runs it once, proves it worked</text>
+  <text class="ksub" x="160" y="338">checks policy, gates approval, runs mutations at most once, verifies declared evidence</text>
   <g transform="translate(68 356)">
     <rect class="kchip" x="0" y="0" width="84" height="28" rx="14"/><text class="kchiptext" x="42" y="19" text-anchor="middle">type</text>
     <rect class="kchip" x="94" y="0" width="84" height="28" rx="14"/><text class="kchiptext" x="136" y="19" text-anchor="middle">classify</text>

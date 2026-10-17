@@ -270,15 +270,23 @@ the operator's unless it is the runtime's: one it opened, a window one of those
 opened (down any chain), or one opened by the tab it is driving, which a tab it
 merely landed on becomes only once it navigates it or sends it input (an
 action refused, or one whose target was never found, does not count). The
-operator's is left open and not reported, so a tab you open yourself, or one
-`melra console` opens, survives as long as no action is running when it is
-created. One created while an action runs is closed and reported like any
-popup, so open the console while the agent is idle, or use `melra approve`. A
-tab a link opens with a modifier or middle click has no opener, so between
-actions it counts as the operator's whichever page it came from: it is left
-open and not reported, but it is listed by `tabs` and its loads are still
-checked. A window that closes before the runtime can tell whose it is, such as
-a tab that turns into a download, is reported either way. What is the
+operator's is left open and not reported. While an action runs, a new window
+is that action's popup, closed and reported like any, unless Chromium names one
+of the operator's tabs as its opener, or it has no opener and Chromium creates
+it blank or at one of its own pages: a tab another CDP client opens, or one you
+open from the toolbar. No page can have the browser open one of those. A tab
+that starts at a web address is the action's, because a page can have the
+browser open one for it (a sign-in window, say), and so is one `melra console`
+or another app hands the browser while an action runs: open the console while
+the agent is idle, or use `melra approve`. A tab the runtime only landed on
+stays yours while it reads it; what that tab opens while the runtime navigates
+it or sends it input is the action's. A tab a link opens with a modifier or
+middle click has no opener and starts out empty, whichever page it came from,
+so it counts by when it is created: between actions as the operator's, left
+open and not reported but listed by `tabs` with its loads still checked, and
+while an action runs as that action's popup. A window that closes before the
+runtime can tell whose it is, such as a tab that turns into a download, is
+reported either way. What is the
 runtime's lasts as long as it stays attached: after MELRA restarts, or
 reconnects to the browser, the tabs it opened before count as the operator's
 until it navigates one or sends it input again.
