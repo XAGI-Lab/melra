@@ -977,12 +977,14 @@ export class BrowserRuntime {
       while (this.windowsAdopted < created() && Date.now() < deadline && this.signal?.aborted !== true) {
         await new Promise((done) => setTimeout(done, WINDOW_POLL_MS));
       }
-      this.giveUpOwedWindows();
     } catch {
       // The browser went away mid-action, or stopped answering within the
       // action's bound; either way nothing more will be delivered in time, and
       // this wait only ever decides which action reports a window, so it is
       // not worth failing an action over.
+    } finally {
+      // However the wait ended, what is still owed is no later action's to wait for.
+      this.giveUpOwedWindows();
     }
   }
 

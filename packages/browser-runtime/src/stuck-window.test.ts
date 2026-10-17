@@ -103,17 +103,40 @@ describe("a window whose first response never comes (#226)", () => {
 
       // Nor does an action that fails after opening one pass its wait on.
       const cancel = new AbortController();
+      const opened = hung.length;
       const failing = runtime.execute(
         BrowserOperationSchema.parse({ kind: "browser", action: "click", target: { selector: "#stuck" }, settleQuietMs: 2_000 }),
         cancel.signal,
       );
       failing.catch(() => undefined);
-      while (hung.length < 2) await new Promise((done) => setTimeout(done, 25));
+      // Once its window exists, so the cancel lands in the settle after it.
+      while (hung.length <= opened) await new Promise((done) => setTimeout(done, 25));
       cancel.abort(new Error("task_cancelled"));
-      await expect(failing).rejects.toThrow();
+      await expect(failing).rejects.toThrow("task_cancelled");
       const next = Date.now();
       await run({ action: "inspect", timeoutMs: 5_000 });
       expect(Date.now() - next).toBeLessThan(2_500);
+
+      // Nor does one whose wait could not ask the browser in time.
+      type Send = (method: string, ...rest: unknown[]) => Promise<unknown>;
+      const targets = (runtime as unknown as { targets: { send: Send } }).targets;
+      const send = targets.send.bind(targets);
+      let stalled = false;
+      targets.send = async (method, ...rest) => {
+        if (method === "Browser.getVersion" && !stalled) {
+          stalled = true;
+          await new Promise((done) => setTimeout(done, 1_500));
+        }
+        return await send(method, ...rest);
+      };
+      const before = hung.length;
+      const stalledClick = await run({ action: "click", target: { selector: "#stuck" }, timeoutMs: 1_000 });
+      expect(stalled).toBe(true);
+      expect(stalledClick.success).toBe(true);
+      expect(hung.length).toBeGreaterThan(before);
+      const then = Date.now();
+      await run({ action: "inspect", timeoutMs: 5_000 });
+      expect(Date.now() - then).toBeLessThan(2_500);
     } finally {
       hung.splice(0).forEach((answer) => answer());
       await runtime.close();
