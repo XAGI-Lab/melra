@@ -6,7 +6,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BrowserOperationSchema } from "@melra/protocol";
-import { chromium, type Page } from "playwright-core";
+import { chromium, type BrowserContext, type Page } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { APPROVAL_SURFACE, BrowserRuntime, detectBrowserExecutable } from "./index.js";
 
@@ -597,6 +597,19 @@ describe("browser see/act loop", () => {
       await run({ action: "tab_new", url: origin });
       await mine.evaluate(() => window.open(`${location.origin}/?later`));
       await leftAlone("?later");
+      // A window handed over while the runtime opens a tab of its own is
+      // judged like any other: one at a web address is that action's popup.
+      const context = (runtime as unknown as { context: BrowserContext }).context;
+      const newPage = context.newPage.bind(context);
+      context.newPage = async () => {
+        context.newPage = newPage;
+        const handed = context.waitForEvent("page");
+        await fetch(`http://127.0.0.1:${port}/json/new?${origin}/?duringnew`, { method: "PUT" });
+        await handed;
+        return await newPage();
+      };
+      const opening = ((await run({ action: "tab_new" })).popups as unknown[] | undefined) ?? [];
+      expect(opening).toEqual([expect.objectContaining({ url: expect.stringContaining("?duringnew"), blocked: true })]);
     } finally {
       answerAll();
       loading.splice(0).forEach((answer) => answer());

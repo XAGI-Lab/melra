@@ -767,9 +767,9 @@ export class BrowserRuntime {
       const adopted = (id: string | undefined) => {
         if (id === undefined || !this.theirs.delete(id)) this.windowsAdopted += 1;
       };
-      if (opened === this.activePage || this.openingTab) {
-        if (attached) void this.targetOf(opened).then(adopted, () => adopted(undefined));
-        else this.windowsAdopted += 1;
+      const own = opened === this.activePage || this.openingTab;
+      if (own && !attached) {
+        this.windowsAdopted += 1;
         return;
       }
       const acting = this.acting;
@@ -803,10 +803,21 @@ export class BrowserRuntime {
       // first response can be during the next action.
       if (attached) {
         this.closing.push(
-          this.adoptable(opened, acting).then(({ adopt: yes, during, id }) => {
+          (async () => {
+            // The tab this runtime is opening starts blank with no opener, so
+            // it is among `theirs`, which no wait counted: taken back here, it
+            // is neither counted nor judged. Any other window handed over in
+            // that instant is judged like any other, and one that cannot be
+            // looked up is counted, as before.
+            if (own) {
+              const id = await this.targetOf(opened).catch(() => undefined);
+              if (id === undefined) return adopted(undefined);
+              if (this.theirs.delete(id)) return;
+            }
+            const { adopt: yes, during, id } = await this.adoptable(opened, acting);
             adopted(id);
             return yes ? adopt(during) : undefined;
-          }),
+          })(),
         );
         return;
       }
