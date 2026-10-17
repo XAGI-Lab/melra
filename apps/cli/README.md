@@ -43,5 +43,5 @@ task-scoped approval before it runs: a phrase echoed back in developer mode, or
 an operator's `melra approve <task-id>` in enforced mode, where the agent is
 given no phrase and one it sends is refused.
 
-Requires Node.js 22.13 or newer. Full documentation:
+Requires Node.js 22.13 or newer, or 23.4 or newer. Full documentation:
 [github.com/XAGI-Lab/melra](https://github.com/XAGI-Lab/melra)

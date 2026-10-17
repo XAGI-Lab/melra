@@ -39,7 +39,7 @@ on the provider.
 <img src="https://img.shields.io/badge/macOS-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS" />
 <img src="https://img.shields.io/badge/Linux-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux" />
 <img src="https://img.shields.io/badge/Windows-0078D4?style=flat-square&logo=windows&logoColor=white" alt="Windows" />
-<img src="https://img.shields.io/badge/Node.js-22%20%7C%2024-5FA04E?style=flat-square&logo=nodedotjs&logoColor=white" alt="Node.js 22 and 24" />
+<img src="https://img.shields.io/badge/Node.js-22.13%2B%20%7C%2023.4%2B-5FA04E?style=flat-square&logo=nodedotjs&logoColor=white" alt="Node.js 22.13 or newer, or 23.4 or newer" />
 <img src="https://img.shields.io/badge/Python-3.11--3.14-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.11 to 3.14" />
 <img src="https://img.shields.io/badge/Docker-hardened-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Hardened Docker image" />
 
@@ -137,7 +137,7 @@ underneath your agent, the way an operating system sits underneath your apps:
 
 ## Quick start
 
-You need **Node.js 22.13 or newer**. One command sets everything up:
+You need **Node.js 22.13 or newer, or 23.4 or newer**. One command sets everything up:
 
 ```bash
 npx @melra/cli@alpha setup
