@@ -91,6 +91,13 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- On a Node.js release whose `node:sqlite` needs a flag (before 22.13, or
+  23.0 to 23.3), every `melra` command, `doctor` included, now exits 1 with a
+  line naming the Node.js versions it needs, instead of an unhandled
+  `ERR_UNKNOWN_BUILTIN_MODULE` before any check could run. `melra doctor`'s
+  hint for a `node:sqlite` that loads but cannot open a database no longer
+  points at the Node version. (#230)
+
 - In a browser the runtime is attached to over CDP, it no longer closes tabs it
   did not open between its actions: a tab Chromium creates then is the
   operator's (one they opened, or a console `melra console` opened), left

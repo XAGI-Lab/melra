@@ -1022,6 +1022,19 @@ describe("melra CLI", () => {
     expect(JSON.parse(doctor.stdout).ready).toBe(true);
   });
 
+  it("names the Node.js it needs when node:sqlite will not load, instead of crashing", async (context) => {
+    // Turning the module off stands in for a release where it needs a flag.
+    if (!process.allowedNodeEnvironmentFlags.has("--no-experimental-sqlite")) context.skip();
+    const failed = await execute(process.execPath, ["--no-experimental-sqlite", entry, "doctor"]).then(
+      () => undefined,
+      (error: { code?: number; stderr?: string }) => error,
+    );
+    expect(failed?.code).toBe(1);
+    expect(failed?.stderr).toBe(
+      `melra: Node.js ${process.versions.node} cannot load node:sqlite without a flag; use Node.js 22.13 or newer, or 23.4 or newer\n`,
+    );
+  });
+
   it("explains bad input instead of leaking parser internals", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-cli-"));
     roots.push(root);

@@ -29,4 +29,17 @@ process.emitWarning = ((warning: string | Error, ...rest: unknown[]): void => {
   (emitWarning as (...args: unknown[]) => void)(warning, ...rest);
 }) as typeof process.emitWarning;
 
+// The CLI links `node:sqlite` statically, and a release where it needs a flag
+// (before 22.13, or 23.0 to 23.3) would otherwise end every command, `doctor`
+// included, at load with a bare ERR_UNKNOWN_BUILTIN_MODULE. `getBuiltinModule`
+// asks without linking anything, and is itself missing before 22.3, where
+// `node:sqlite` is too.
+if (process.getBuiltinModule?.("node:sqlite") === undefined) {
+  process.stderr.write(
+    `melra: Node.js ${process.versions.node} cannot load node:sqlite without a flag; ` +
+      "use Node.js 22.13 or newer, or 23.4 or newer\n",
+  );
+  process.exit(1);
+}
+
 await import("./index.js");
