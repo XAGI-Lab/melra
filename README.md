@@ -335,9 +335,9 @@ never blindly retry an unknown outcome, without anyone prompt-engineering it.
 
 ## See what it is doing
 
-You can see each action MELRA handled and its policy decision, and for each that ran its
-evidence and receipt, from the terminal or the browser. Nothing here can approve or start work, and approval
-phrases are never displayed.
+You can see each action MELRA handled and its policy decision, and, for each that ran
+to an outcome, its evidence and receipt, from the terminal or the browser. Nothing here
+can approve or start work, and approval phrases are never displayed.
 
 <table>
 <tr>
