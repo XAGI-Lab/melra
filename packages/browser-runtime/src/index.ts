@@ -926,11 +926,12 @@ export class BrowserRuntime {
   /**
    * Makes `page` the one actions land on. It is not driven yet: it may be a
    * tab of the operator's the runtime only picked up, and what it opens stays
-   * theirs until the runtime navigates it or sends it input (`drive`).
+   * theirs until the runtime navigates it or sends it input (`drive`). The
+   * page already active stays driven if it was.
    */
   private activate(page: Page | undefined): void {
+    if (page !== this.activePage) this.drivenTarget = undefined;
     this.activePage = page;
-    this.drivenTarget = undefined;
   }
 
   /**

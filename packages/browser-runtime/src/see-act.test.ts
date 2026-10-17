@@ -497,6 +497,12 @@ describe("browser see/act loop", () => {
       await release();
       await requested("?popup");
       await reported(["?popup"]);
+      // Switching to it again leaves it driven: it is still the active tab.
+      const again = ((await run({ action: "tabs" })) as { tabs: Array<{ url: string }> }).tabs;
+      await run({ action: "tab_switch", tabIndex: again.findIndex((tab) => tab.url.includes("?opens")) });
+      await mine.evaluate((url) => window.open(url), `${origin}/?again`);
+      await requested("?again");
+      await reported(["?again"]);
       await run({ action: "tab_new", url: origin });
       await mine.evaluate(() => window.open(`${location.origin}/?later`));
       await leftAlone("?later");
