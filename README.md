@@ -10,10 +10,10 @@
 
 An open-source local execution runtime for agent tool calls you route through MELRA.
 It checks each call against policy, requests approval when needed, verifies declared
-evidence, and keeps a redacted receipt. For each task, MELRA dispatches mutations at
-most once; uncertain outcomes are parked for reconciliation instead of replay.
-Exactly-once external effects still depend on the provider. Calls made through other
-tools remain outside MELRA's control.
+evidence, and keeps a redacted receipt of what runs. For each task, MELRA dispatches
+mutations at most once; uncertain outcomes are parked for reconciliation instead of
+replay. Exactly-once external effects still depend on the provider. Calls made through
+other tools remain outside MELRA's control.
 
 <br />
 
@@ -115,7 +115,7 @@ cannot settle waits in `recovery_required` and is never replayed.
 
 ### 🧾 What happened?
 
-Every action MELRA handles leaves a **redacted, hash-linked receipt**, so you can audit
+Every action MELRA runs leaves a **redacted, hash-linked receipt**, so you can audit
 what ran, who asked, and why it was allowed.
 
 </td>
@@ -259,9 +259,10 @@ OpenAI Agents SDK, the Vercel AI SDK, and the official MCP SDKs.
 
 ## How it works
 
-An **effect** is a tool call an agent routes through MELRA: `file.write`,
+An **effect** is one bounded operation an agent routes through MELRA: `file.write`,
 `terminal.run`, `browser.click`, `http.request`, and so on. MELRA handles each routed
-effect in nine stages, split across two calls so that **nothing runs at planning time**:
+effect in nine stages, split across two calls (`melra_plan`, then `melra_execute`) so
+that **nothing runs at planning time**:
 
 <p align="center">
   <img src="docs/assets/readme/pipeline.svg" alt="The nine stages: melra_plan types, classifies, authorises, issues an approval challenge and records the task; melra_execute checks policy again, deduplicates, runs under a budget, verifies evidence and writes a receipt." width="100%" />
@@ -334,8 +335,8 @@ never blindly retry an unknown outcome, without anyone prompt-engineering it.
 
 ## See what it is doing
 
-You can see each action MELRA handled, its policy decision, evidence and receipt, from
-the terminal or the browser. Nothing here can approve or start work, and approval
+You can see each action MELRA handled and its policy decision, and for each that ran its
+evidence and receipt, from the terminal or the browser. Nothing here can approve or start work, and approval
 phrases are never displayed.
 
 <table>
