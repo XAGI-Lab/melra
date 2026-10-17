@@ -990,9 +990,16 @@ export class BrowserRuntime {
    */
   private async learnContextId(): Promise<boolean> {
     if (this.contextId !== undefined) return true;
+    // A cancelled action does not open a session it would only abandon.
+    if (this.signal?.aborted === true) return false;
     const page = this.context?.pages()[0];
     if (page === undefined) return false;
-    const session = await this.call(page.context().newCDPSession(page), "cdp_session");
+    const opening = page.context().newCDPSession(page);
+    const session = await this.call(opening, "cdp_session").catch((error: unknown) => {
+      // One that attaches after the bound or a cancel is let go, not left on the page.
+      void opening.then((late) => late.detach()).catch(() => undefined);
+      throw error;
+    });
     try {
       const { targetInfo } = await this.call(session.send("Target.getTargetInfo"), "cdp:Target.getTargetInfo");
       this.contextId = targetInfo.browserContextId ?? "";
