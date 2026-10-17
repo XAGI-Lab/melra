@@ -135,8 +135,7 @@ All notable changes are documented here. The format follows
   input is the action's. Windows the agent's pages open are still closed and
   reported. A tab a link opens with a modifier or middle click has no opener
   and starts out empty whichever page clicked it, so while an action runs it
-  is still taken for the action's, and so is a tab the operator opens in the
-  instant the runtime opens one of its own (`tab_new`). (#223)
+  is still taken for the action's. (#223)
 
 - The y/N question `melra approve` and `melra run` ask in a terminal takes
   input that ends before an answer as a no: both say `Not approved.` and

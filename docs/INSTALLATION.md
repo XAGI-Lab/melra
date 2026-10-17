@@ -284,9 +284,9 @@ it or sends it input is the action's. A tab a link opens with a modifier or
 middle click has no opener and starts out empty, whichever page it came from,
 so it counts by when it is created: between actions as the operator's, left
 open and not reported but listed by `tabs` with its loads still checked, and
-while an action runs as that action's popup. A tab you open in the instant the runtime opens one of its
-own (`tab_new`) is taken for the runtime's too. A window that closes before the runtime can tell whose it is, such as
-a tab that turns into a download, is reported either way. What is the
+while an action runs as that action's popup. A window that closes before the
+runtime can tell whose it is, such as a tab that turns into a download, is
+reported either way. What is the
 runtime's lasts as long as it stays attached: after MELRA restarts, or
 reconnects to the browser, the tabs it opened before count as the operator's
 until it navigates one or sends it input again.

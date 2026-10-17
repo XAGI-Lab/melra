@@ -441,7 +441,7 @@ describe("browser see/act loop", () => {
       for (const index of there.keys()) await leftAlone(`?prechild${index}`);
       await landed.evaluate((url) => window.open(url), `${origin}/?fromread`);
       await leftAlone("?fromread");
-      // So does what it opens while a read on it runs: a read sends it nothing.
+      // So does what it opens while a read on it runs, as between actions.
       type Run = (operation: unknown) => Promise<Record<string, unknown>>;
       const prototype = BrowserRuntime.prototype as unknown as { run: Run };
       const runOne = prototype.run;

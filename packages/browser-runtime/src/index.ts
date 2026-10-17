@@ -495,8 +495,9 @@ export class BrowserRuntime {
    * The target id of the page an action that navigates it or sends it input
    * acts on, in a browser this runtime is attached to, once looked up: what
    * it opens while the action runs is the action's, even if the runtime has
-   * not driven it yet. A read sends the page nothing, so a tab the runtime
-   * only landed on stays the operator's.
+   * not driven it yet. A read leaves it out: like between actions, what a tab
+   * the runtime only landed on opens while the runtime reads it is the
+   * operator's, though the read's own calls into the page give it activation.
    */
   private actingTarget: string | undefined;
   /** Counts actions, so a popup reported by a later one says so. */
@@ -885,7 +886,6 @@ export class BrowserRuntime {
           const action = this.action;
           const theirs =
             this.options.cdpEndpoint !== undefined &&
-            !this.openingTab &&
             (this.acting
               ? opener === undefined
                 ? targetInfo.url === "about:blank" || targetInfo.url.startsWith("chrome://")
