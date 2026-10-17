@@ -218,6 +218,19 @@ const DRIVING_ACTIONS: ReadonlySet<BrowserOperation["action"]> = new Set([
 const timedOut = (error: unknown): boolean =>
   error instanceof BrowserCallTimeoutError || (error instanceof Error && error.name === "TimeoutError");
 
+/**
+ * A wait that ran out at an action's deadline, named for the action's whole
+ * `timeout`: whichever call held the last of it (a re-find's slice, a check
+ * of the page, the input's own wait) is no measure of how long it waited.
+ */
+function ranOut(error: unknown, timeout: number): unknown {
+  if (error instanceof Error && error.name === "TimeoutError") {
+    error.message = error.message.replace(/Timeout \d+ms exceeded/, `Timeout ${timeout}ms exceeded`);
+    return error;
+  }
+  return Object.assign(new Error(`Timeout ${timeout}ms exceeded.`), { name: "TimeoutError" });
+}
+
 /** Playwright's word for an element its document no longer holds. */
 const detached = (error: unknown): boolean =>
   error instanceof Error && error.message.includes("Element is not attached to the DOM");
@@ -1362,6 +1375,8 @@ export class BrowserRuntime {
    * document is held: a page may rewrite its own path in answer, as it may
    * while it is typed into. A target found again after a re-render is not
    * waited for twice, so one re-rendered faster than that can still be hit.
+   * Whatever runs out at the deadline is reported as the action's `timeout`
+   * running out (`ranOut`).
    *
    * ponytail: Playwright's own hit-target check and dispatch come after this,
    * so a navigation that commits in that instant can still receive the one
@@ -1384,7 +1399,7 @@ export class BrowserRuntime {
           found === undefined
             ? // Bounded by its own timeout; the call only adds the cancel.
               await this.handle(locator.first().elementHandle({ timeout: left() }), "count", Infinity)
-            : await this.refind(pin, locator, found, deadline, timeout);
+            : await this.refind(pin, locator, found, deadline);
         try {
           let moved: boolean;
           if (found === undefined) {
@@ -1432,6 +1447,9 @@ export class BrowserRuntime {
         }
         throw new Error(`browser_page_changed: the page is now at ${pageAddress(pin.page.url())}`);
       }
+    } catch (error) {
+      if (timedOut(error) && Date.now() >= deadline) throw ranOut(error, timeout);
+      throw error;
     } finally {
       void found?.dispose().catch(() => undefined);
     }
@@ -1443,10 +1461,9 @@ export class BrowserRuntime {
    * in (a frame's), has left: a page that takes the target away and then
    * navigates to a document without it would otherwise be waited on until
    * the timeout. A slice cut short, by a frame detaching as the page around
-   * it leaves, is asked about the same way. A wait that runs out names the
-   * action's `timeout`, not its last slice.
+   * it leaves, is asked about the same way.
    */
-  private async refind(pin: Pin, locator: Locator, found: JSHandle, deadline: number, timeout: number): Promise<ElementHandle> {
+  private async refind(pin: Pin, locator: Locator, found: JSHandle, deadline: number): Promise<ElementHandle> {
     const left = () => Math.max(1, deadline - Date.now());
     for (;;) {
       let failure: unknown;
@@ -1457,12 +1474,7 @@ export class BrowserRuntime {
         if (this.signal?.aborted === true || pin.page.isClosed()) throw error;
         failure = error;
       }
-      if (Date.now() >= deadline) {
-        if (timedOut(failure) && failure instanceof Error) {
-          failure.message = failure.message.replace(/Timeout \d+ms exceeded/, `Timeout ${timeout}ms exceeded`);
-        }
-        throw failure;
-      }
+      if (Date.now() >= deadline) throw failure;
       if (await this.moved(pin, !this.dispatched, left())) {
         throw new Error(`browser_page_changed: the page is now at ${pageAddress(pin.page.url())}`);
       }
