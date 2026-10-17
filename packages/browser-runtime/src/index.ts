@@ -964,20 +964,7 @@ export class BrowserRuntime {
     const context = this.context;
     if (targets === undefined || context === undefined) return;
     try {
-      if (this.contextId === undefined) {
-        const page = context.pages()[0];
-        if (page === undefined) return;
-        const session = await this.call(context.newCDPSession(page), "cdp_session");
-        try {
-          const { targetInfo } = await this.call(
-            session.send("Target.getTargetInfo"),
-            "cdp:Target.getTargetInfo",
-          );
-          this.contextId = targetInfo.browserContextId ?? "";
-        } finally {
-          await this.call(session.detach(), "cdp_detach").catch(() => undefined);
-        }
-      }
+      if (!(await this.learnContextId())) return;
       // Events arrive ahead of the reply on the same session, so after this
       // every window created before now has been counted.
       await this.call(targets.send("Browser.getVersion"), "cdp:Browser.getVersion");
@@ -998,16 +985,36 @@ export class BrowserRuntime {
   }
 
   /**
+   * This context's id in CDP, looked up once: what the window counts are kept
+   * under. False when there is no page yet to ask.
+   */
+  private async learnContextId(): Promise<boolean> {
+    if (this.contextId !== undefined) return true;
+    const page = this.context?.pages()[0];
+    if (page === undefined) return false;
+    const session = await this.call(page.context().newCDPSession(page), "cdp_session");
+    try {
+      const { targetInfo } = await this.call(session.send("Target.getTargetInfo"), "cdp:Target.getTargetInfo");
+      this.contextId = targetInfo.browserContextId ?? "";
+      return true;
+    } finally {
+      await this.call(session.detach(), "cdp_detach").catch(() => undefined);
+    }
+  }
+
+  /**
    * A window handed over after the wait that owed it gave up on it
    * (`giveUpOwedWindows`) is owed by no one now, and counting it would end the
    * next wait early, so the surplus is dropped before each action and each
    * wait.
    *
-   * ponytail: one handed over during a later action, before its wait ends,
-   * still cancels out a window that action opened: no action waits for that
-   * window, and it is reported by whichever action runs when it is handed
-   * over. Matching windows by target id would tell them apart, at a lookup
-   * per window in a launched browser.
+   * ponytail: the counts cannot tell windows apart. One handed over during a
+   * later action, before its wait ends, stands in for a window that action
+   * opened: no action waits for that window, it is reported by whichever
+   * action runs when it is handed over, and if that is during another
+   * action's wait, it stands in for that action's window in turn, until one is
+   * handed over between actions. Matching windows by target id would end
+   * this, at a lookup per window in a launched browser (#234).
    */
   private forgetLateWindows(): void {
     if (this.contextId === undefined) return;
@@ -1844,6 +1851,9 @@ export class BrowserRuntime {
         () => undefined,
       );
     }
+    // Known before the clamp, so one a context's failed first action gave up
+    // on (`giveUpOwedWindows`) and that was handed over since is dropped too.
+    if (this.contextId === undefined && this.targets !== undefined) await this.learnContextId().catch(() => false);
     this.forgetLateWindows();
     this.actions += 1;
     this.acting = true;

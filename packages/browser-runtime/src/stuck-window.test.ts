@@ -142,4 +142,53 @@ describe("a window whose first response never comes (#226)", () => {
       await runtime.close();
     }
   });
+
+  it("drops a late window after a context's failed first action, so it takes nothing from the next", { timeout: 60_000 }, async () => {
+    const executablePath = await detectBrowserExecutable();
+    if (executablePath === undefined) return;
+    const asked: string[] = [];
+    const slow = await listen(
+      createServer((request, response) => {
+        asked.push(request.url ?? "");
+        setTimeout(() => response.end("<!doctype html><title>slow</title>"), request.url?.includes("first") ? 2_000 : 1_500);
+      }),
+    );
+    // A page that opens a slow window as soon as it loads, and can open another.
+    const origin = await listen(
+      createServer((_request, response) => {
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        response.end(`<!doctype html><title>opens</title><script>window.open("${slow}/?first")</script>
+          <button id="slow" onclick="window.open('${slow}/?slow')">slow</button>`);
+      }),
+    );
+    const root = await mkdtemp(join(tmpdir(), "melra-late-first-"));
+    roots.push(root);
+    const runtime = new BrowserRuntime({
+      workspaceRoot: root,
+      artifactDirectory: join(root, "artifacts"),
+      executablePath,
+      allowedDomains: ["127.0.0.1"],
+      allowLocalhost: true,
+    });
+    const run = (operation: Record<string, unknown>, signal?: AbortSignal) =>
+      runtime.execute(BrowserOperationSchema.parse({ kind: "browser", ...operation }), signal);
+    try {
+      // The fresh context's first action is cancelled once its window exists,
+      // before any wait ran, and the window is handed over afterwards.
+      const cancel = new AbortController();
+      const first = run({ action: "navigate", url: origin, settleQuietMs: 2_000 }, cancel.signal);
+      first.catch(() => undefined);
+      while (!asked.some((url) => url.includes("first"))) await new Promise((done) => setTimeout(done, 25));
+      const context = (runtime as unknown as { context: BrowserContext }).context;
+      const late = context.waitForEvent("page", { predicate: (page) => page.url().includes("?first") });
+      cancel.abort(new Error("task_cancelled"));
+      await expect(first).rejects.toThrow();
+      await late;
+      // The next click still waits for its own window and reports it.
+      const clicked = await run({ action: "click", target: { selector: "#slow" }, timeoutMs: 10_000 });
+      expect(JSON.stringify(clicked.popups)).toContain("?slow");
+    } finally {
+      await runtime.close();
+    }
+  });
 });
