@@ -440,6 +440,10 @@ export class BrowserRuntime {
   private closing: Promise<unknown>[] = [];
   /** True only while `tab_new` is opening the tab the caller asked for. */
   private openingTab = false;
+  /** Pages handed over while `openPage` is in flight, queued until `newPage` resolves. */
+  private openingPagesQueue: Page[] | undefined = undefined;
+  /** Pages known to have been opened by MELRA itself. */
+  private ownPages = new WeakSet<Page>();
   /**
    * The windows this runtime owns, by CDP target id: tabs it opened, and every
    * window one it owns or the tab it is driving opened. Decided when Chromium
@@ -767,7 +771,11 @@ export class BrowserRuntime {
       const adopted = (id: string | undefined) => {
         if (id === undefined || !this.theirs.delete(id)) this.windowsAdopted += 1;
       };
-      const own = opened === this.activePage || this.openingTab;
+      if (!attached && this.openingPagesQueue !== undefined) {
+        this.openingPagesQueue.push(opened);
+        return;
+      }
+      const own = opened === this.activePage || this.ownPages.has(opened) || this.openingTab;
       if (own && !attached) {
         this.windowsAdopted += 1;
         return;
@@ -775,26 +783,7 @@ export class BrowserRuntime {
       const acting = this.acting;
       // `during`: whether the window came while an action ran, which in a
       // browser this runtime is attached to is known from when it was created.
-      const adopt = (during = acting) => {
-        // Closing a window the page opened is MELRA's judgement about what
-        // the caller should be looking at, so unhinged mode drops it.
-        // Reporting it is not a judgement — that stays on, like every other
-        // receipt.
-        const allowed = this.options.popups === "allow" || this.options.unhinged === true;
-        if (this.popups.length < MAX_POPUPS) {
-          this.popups.push({
-            // Without its fragment: a console opened by the operator carries
-            // its one-time pairing code there until its first script runs.
-            url: withoutFragment(opened.url()),
-            blocked: !allowed,
-            ...(during ? {} : { betweenActions: true }),
-          });
-        }
-        if (allowed) return;
-        // A popup that closed on its own, or whose opener navigated away
-        // first, must not turn into the action's error.
-        return opened.close().catch(() => undefined);
-      };
+      const adopt = (during = acting) => this.adopt(opened, during);
       // In a browser this runtime is attached to, a tab Chromium created
       // between its actions is the operator's (one they opened, a console
       // `melra console` opened) unless it is one of this runtime's
@@ -996,21 +985,55 @@ export class BrowserRuntime {
   }
 
   /**
+   * Adopts a window opened by a page, recording it in popups and closing it by
+   * default unless popups are allowed or unhinged mode is enabled.
+   */
+  private adopt(opened: Page, during = this.acting): Promise<void> | undefined {
+    const allowed = this.options.popups === "allow" || this.options.unhinged === true;
+    if (this.popups.length < MAX_POPUPS) {
+      this.popups.push({
+        url: withoutFragment(opened.url()),
+        blocked: !allowed,
+        ...(during ? {} : { betweenActions: true }),
+      });
+    }
+    if (allowed) return;
+    return opened.close().catch(() => undefined);
+  }
+
+  /**
    * Opens a page MELRA asked for, not one the site opened by itself.
    *
-   * The popup handler cannot tell the two apart — both arrive as a `page`
-   * event — so this flag is the difference, and it is held across exactly the
-   * await that emits the event.
+   * In a launched browser, any window handed over while `newPage` is in flight
+   * is queued. Once `newPage` resolves, the page it returned is counted as its
+   * own, and any other queued window is treated as an unexpected popup and sent
+   * through the normal adopt path.
    */
   private async openPage(context: BrowserContext): Promise<Page> {
     let opened: Page;
+    const queued: Page[] = [];
     this.openingTab = true;
+    this.openingPagesQueue = queued;
     try {
       opened = await this.call(context.newPage(), "new_page");
     } finally {
       this.openingTab = false;
+      this.openingPagesQueue = undefined;
     }
     if (this.options.cdpEndpoint !== undefined) this.ownTargets.add(await this.targetOf(opened));
+
+    this.ownPages.add(opened);
+    if (this.options.cdpEndpoint === undefined || this.targets === undefined) {
+      for (const page of queued) {
+        if (page === opened) {
+          this.windowsAdopted += 1;
+        } else {
+          this.windowsAdopted += 1;
+          const closing = this.adopt(page);
+          if (closing !== undefined) this.closing.push(closing);
+        }
+      }
+    }
     return opened;
   }
 

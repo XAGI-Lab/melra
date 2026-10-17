@@ -91,6 +91,13 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- In a launched browser, a popup handed over while `tab_new` is opening its tab
+  is no longer mistaken for the runtime's own tab: windows handed over while
+  `newPage` is in flight are queued, and once `newPage` resolves the returned tab
+  is counted as its own while any other queued window is reported and closed in
+  block mode. (#233)
+
+
 - On a Node.js release whose `node:sqlite` needs a flag (before 22.13, or
   23.0 to 23.3), every `melra` command, `doctor` included, now exits 1 with a
   line naming the Node.js versions it needs, instead of an unhandled

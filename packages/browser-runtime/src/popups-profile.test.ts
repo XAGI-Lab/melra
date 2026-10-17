@@ -213,6 +213,35 @@ describe("browser popups", () => {
       await session.close();
     }
   }, 120_000);
+
+  it("closes and reports a popup handed over while tab_new is opening its tab", async () => {
+    const executablePath = await detectBrowserExecutable();
+    if (executablePath === undefined) return;
+    const url = await serve();
+    const session = runtime(await root("popup-tab-new-race"), executablePath);
+    try {
+      await session.execute(op({ action: "navigate", url }));
+      const context = (session as unknown as { context: { newPage: () => Promise<unknown> } }).context;
+      const realNewPage = context.newPage.bind(context);
+      context.newPage = async () => {
+        const existingPage = (session as unknown as { activePage: { evaluate: (fn: () => void) => Promise<void> } }).activePage;
+        await existingPage.evaluate(() => window.open("/read", "_blank"));
+        await new Promise((done) => setTimeout(done, 150));
+        return await realNewPage();
+      };
+
+      const opened = await session.execute(
+        op({ action: "tab_new", url: `${url}/set` }),
+      );
+      expect(opened.popups).toEqual([
+        expect.objectContaining({ url: `${url}/read`, blocked: true }),
+      ]);
+      const tabs = await session.execute(op({ action: "tabs" }));
+      expect((tabs.tabs as Tab[]).length).toBe(2);
+    } finally {
+      await session.close();
+    }
+  }, 120_000);
 });
 
 describe("persistent browser profile", () => {
