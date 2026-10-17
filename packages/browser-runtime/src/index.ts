@@ -998,7 +998,9 @@ export class BrowserRuntime {
       this.contextId = targetInfo.browserContextId ?? "";
       return true;
     } finally {
-      await this.call(session.detach(), "cdp_detach").catch(() => undefined);
+      // Not waited for, as in `targetOf`: a detach waits on the page's main
+      // thread, which a page busy with a long script holds.
+      void session.detach().catch(() => undefined);
     }
   }
 
@@ -1854,6 +1856,9 @@ export class BrowserRuntime {
     // Known before the clamp, so one a context's failed first action gave up
     // on (`giveUpOwedWindows`) and that was handed over since is dropped too.
     if (this.contextId === undefined && this.targets !== undefined) await this.learnContextId().catch(() => false);
+    // Both round trips above swallow a cancel, and nothing has run yet. (The
+    // check at the top narrowed `aborted`, which an await can change.)
+    if ((signal?.aborted as boolean | undefined) === true) throw new Error("task_cancelled");
     this.forgetLateWindows();
     this.actions += 1;
     this.acting = true;
