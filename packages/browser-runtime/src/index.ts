@@ -1375,8 +1375,8 @@ export class BrowserRuntime {
    * document is held: a page may rewrite its own path in answer, as it may
    * while it is typed into. A target found again after a re-render is not
    * waited for twice, so one re-rendered faster than that can still be hit.
-   * Whatever runs out at the deadline is reported as the action's `timeout`
-   * running out (`ranOut`).
+   * Whatever runs out is reported as the action's `timeout` running out
+   * (`ranOut`).
    *
    * ponytail: Playwright's own hit-target check and dispatch come after this,
    * so a navigation that commits in that instant can still receive the one
@@ -1448,7 +1448,10 @@ export class BrowserRuntime {
         throw new Error(`browser_page_changed: the page is now at ${pageAddress(pin.page.url())}`);
       }
     } catch (error) {
-      if (timedOut(error) && Date.now() >= deadline) throw ranOut(error, timeout);
+      // Every bound in here is the action's deadline (typing's, which starts
+      // later, is as long), so whatever timed out ran out the action's time.
+      // Not read off the clock: a 1 ms bound can fire just before it ticks.
+      if (timedOut(error)) throw ranOut(error, timeout);
       throw error;
     } finally {
       void found?.dispose().catch(() => undefined);
