@@ -91,6 +91,13 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- A popup the runtime waits for whose first response never arrives now holds
+  up only the action that opened it, which still waits its `timeoutMs` for
+  it, as for any window it opened. Every later action used to wait out its
+  whole `timeoutMs` too, for as long as that window stayed open, in a
+  launched browser and an attached one. A window given up on is still
+  reported, by the action running if it is ever handed over. (#226)
+
 - In a browser the runtime is attached to over CDP, it no longer closes tabs it
   did not open between its actions: a tab Chromium creates then is the
   operator's (one they opened, or a console `melra console` opened), left

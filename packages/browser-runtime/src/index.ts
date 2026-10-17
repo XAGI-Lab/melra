@@ -901,7 +901,8 @@ export class BrowserRuntime {
    * Costs one round trip when nothing was opened. Waits only while a window is
    * known to exist and is still unreported, bounded by the action's own
    * timeout: the window is part of what the action did. A window still pending
-   * after that is reported by the action running when Playwright delivers it.
+   * after that is given up on, so no later action waits for it, and is
+   * reported by the action running when Playwright delivers it, if it ever does.
    */
   private async awaitOpenedWindows(timeoutMs: number): Promise<void> {
     const targets = this.targets;
@@ -925,13 +926,22 @@ export class BrowserRuntime {
       // Events arrive ahead of the reply on the same session, so after this
       // every window created before now has been counted.
       await this.call(targets.send("Browser.getVersion"), "cdp:Browser.getVersion");
+      const contextId = this.contextId ?? "";
+      const created = () => this.windowsCreated.get(contextId) ?? 0;
+      // A window handed over after the wait that owed it gave up on it (below)
+      // is owed by no one now, and counting it would end this wait early.
+      // ponytail: one handed over during this wait still can, if a new window
+      // is created in the same instant; ids would tell them apart.
+      if (this.windowsAdopted > created()) this.windowsAdopted = created();
       const deadline = Date.now() + timeoutMs;
-      while (
-        this.windowsAdopted < (this.windowsCreated.get(this.contextId) ?? 0) &&
-        Date.now() < deadline
-      ) {
+      while (this.windowsAdopted < created() && Date.now() < deadline) {
         await new Promise((done) => setTimeout(done, WINDOW_POLL_MS));
       }
+      // Still owed when the action's time runs out: given up on, or a window
+      // whose first response never comes would hold every later action to
+      // its whole timeout (#226). One handed over later is still reported, by
+      // the action running then.
+      if (this.windowsAdopted < created()) this.windowsCreated.set(contextId, this.windowsAdopted);
     } catch {
       // The browser went away mid-action, or stopped answering within the
       // action's bound; either way nothing more will be delivered in time, and
