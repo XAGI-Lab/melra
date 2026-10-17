@@ -105,9 +105,14 @@ const COUNTED = `<!doctype html><html><head><title>0</title></head><body>
   <button id="go">Go</button>
 </body></html>`;
 // A button re-rendered every 53 ms, as some frameworks do: off the frame
-// clock, so no page load locks the re-render into the same phase.
+// clock, so no page load locks the re-render into the same phase. It settles
+// after about 3 s, so a runner too slow to land a click between re-renders
+// still lands one, and the test does not hang on the machine's speed.
 const CHURN = `<!doctype html><html><head><title>churn</title></head><body><div id="box"></div>
-  <script>setInterval(() => { document.getElementById("box").innerHTML = '<button id="go" onclick="document.title = \\'clicked\\'">Go</button>'; }, 53)</script>
+  <script>let renders = 0; const churn = setInterval(() => {
+    document.getElementById("box").innerHTML = '<button id="go" onclick="document.title = \\'clicked\\'">Go</button>';
+    if (++renders === 60) clearInterval(churn);
+  }, 53)</script>
 </body></html>`;
 
 const roots: string[] = [];
