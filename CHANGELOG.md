@@ -116,22 +116,41 @@ All notable changes are documented here. The format follows
   during the next action. A tab a link opens with a modifier or middle click
   has no opener, so between actions it counts as the operator's whoever
   clicked; it is still listed by `tabs`, and its loads are still checked. A
-  tab created while an action runs is still closed and reported, so open the
-  console while the agent is idle, or use `melra approve`. A window that closes
-  before it can be looked up, such as a tab that turns into a download, is
-  reported either way. Ownership lasts for one attach: after MELRA restarts or
-  reconnects, the tabs it opened before count as the operator's until it
-  drives one again. A reported popup's URL no longer carries its fragment,
-  where a console keeps its one-time pairing code until its page has read it.
-  (#203)
+  tab created while an action runs is judged as the #223 entry below says.
+  A window that closes before it can be looked up, such as a tab that turns
+  into a download, is reported either way. Ownership lasts for one attach:
+  after MELRA restarts or reconnects, the tabs it opened before count as the
+  operator's until it drives one again. A reported popup's URL no longer
+  carries its fragment, where a console keeps its one-time pairing code until
+  its page has read it. (#203)
 
 - In a browser the runtime is attached to, a window the operator opens
   between the runtime's actions whose first response never arrives no longer
   makes every later action wait out its whole `timeoutMs`, before or after
   they close it. The wait after an action, for windows Chromium has
   created and Playwright has not yet handed over, now counts only the ones the
-  runtime will report: those created while an action runs and those its own
-  tabs open. A launched browser waits as before. (#221)
+  runtime will report: its actions' popups and what its own tabs open. A
+  launched browser waits as before. (#221)
+
+- In a browser the runtime is attached to, a tab the operator opens while an
+  action runs is no longer always closed and reported as that action's popup.
+  While an action runs, a new window is the action's unless Chromium names one
+  of the operator's tabs as its opener, or it has no opener and Chromium
+  creates it blank or at one of its own pages: a tab another CDP client opens,
+  or one from the toolbar. No page can have the browser open one of those, so,
+  like the operator's windows between actions, they are left open, not
+  reported, and not waited for. A tab that starts at a web address is still
+  the action's, because a page can have the browser open one for it (a sign-in
+  window, say), and so is one `melra console` or another app hands the browser
+  while an action runs. A tab the runtime only landed on stays the operator's
+  during a read; what it opens while the runtime navigates it or sends it
+  input is the action's. Windows the agent's pages open are still closed and
+  reported. A tab a link opens with a modifier or middle click has no opener
+  and starts out empty whichever page clicked it, so while an action runs it
+  is still taken for the action's. A window handed over in the instant the
+  runtime opens a tab of its own (`tab_new`) is now judged like any other;
+  it used to be taken silently for the runtime's new tab, neither closed nor
+  reported, and what it opened later counted as the runtime's. (#223)
 
 - The y/N question `melra approve` and `melra run` ask in a terminal takes
   input that ends before an answer as a no: both say `Not approved.` and
