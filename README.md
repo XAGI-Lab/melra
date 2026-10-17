@@ -10,10 +10,10 @@
 
 An open-source local execution runtime for agent tool calls you route through MELRA.
 It checks each call against policy, requests approval when needed, verifies declared
-evidence, and keeps a redacted receipt of what runs. For each task, MELRA dispatches
-mutations at most once; uncertain outcomes are parked for reconciliation instead of
-replay. Exactly-once external effects still depend on the provider. Calls made through
-other tools remain outside MELRA's control.
+evidence, and keeps a redacted receipt of what runs to an outcome. For each task, MELRA
+dispatches mutations at most once; uncertain outcomes are parked for reconciliation
+instead of replay. Exactly-once external effects still depend on the provider. Calls
+made through other tools remain outside MELRA's control.
 
 <br />
 
@@ -115,8 +115,8 @@ cannot settle waits in `recovery_required` and is never replayed.
 
 ### 🧾 What happened?
 
-Every action MELRA runs leaves a **redacted, hash-linked receipt**, so you can audit
-what ran, who asked, and why it was allowed.
+Every action MELRA runs to an outcome leaves a **redacted, hash-linked receipt**, so
+you can audit what ran, who asked, and why it was allowed.
 
 </td>
 </tr>
