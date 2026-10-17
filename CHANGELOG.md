@@ -97,9 +97,11 @@ All notable changes are documented here. The format follows
   whole `timeoutMs` too, for as long as that window stayed open, in a
   launched browser and an attached one. An action that fails or is cancelled
   after opening one gives it up as well. A window given up on is still
-  reported, by the action running if it is ever handed over; one handed over
-  during a later action's wait can end that wait early, and the window that
-  action opened is then reported by the next one. (#226)
+  reported, by the action running if it is ever handed over. Two limits: one
+  handed over during a later action, before that action's wait ends, cancels
+  out a window that action opened, which is then not waited for and is
+  reported whenever it is handed over; and a window a page opens between
+  actions that never loads still holds up the next action once. (#226)
 
 - In a browser the runtime is attached to over CDP, it no longer closes tabs it
   did not open between its actions: a tab Chromium creates then is the

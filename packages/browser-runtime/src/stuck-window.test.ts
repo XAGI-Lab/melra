@@ -31,12 +31,11 @@ describe("a window whose first response never comes (#226)", () => {
     // Never answers until the test ends, as a dead link's server can.
     const hung: Array<() => void> = [];
     const stuck = await listen(createServer((_request, response) => void hung.push(() => response.end())));
-    // Answers after a while, as a slow site does: after 1.5 s, or as long as
-    // the path says.
+    // Answers after a while, as a slow site does: after 1.5 s, or 2.5 s for
+    // the window the test means to give up on.
     const slow = await listen(
       createServer((request, response) => {
-        const ms = Number(new URL(request.url ?? "/", "http://x").searchParams.get("ms") ?? 1_500);
-        setTimeout(() => response.end("<!doctype html><title>slow</title>"), ms);
+        setTimeout(() => response.end("<!doctype html><title>slow</title>"), request.url?.includes("late") ? 2_500 : 1_500);
       }),
     );
     const origin = await listen(
@@ -45,7 +44,7 @@ describe("a window whose first response never comes (#226)", () => {
         response.end(`<!doctype html><title>opener</title>
           <button id="stuck" onclick="window.open('${stuck}/?stuck')">stuck</button>
           <button id="slow" onclick="window.open('${slow}/?slow')">slow</button>
-          <button id="late" onclick="window.open('${slow}/?late&ms=2500')">late</button>`);
+          <button id="late" onclick="window.open('${slow}/?late')">late</button>`);
       }),
     );
     const root = await mkdtemp(join(tmpdir(), "melra-stuck-window-"));
@@ -95,6 +94,48 @@ describe("a window whose first response never comes (#226)", () => {
       await expect(failing).rejects.toThrow();
       const next = Date.now();
       await run({ action: "inspect", timeoutMs: 5_000 });
+      expect(Date.now() - next).toBeLessThan(2_500);
+    } finally {
+      hung.splice(0).forEach((answer) => answer());
+      await runtime.close();
+    }
+  });
+
+  it("gives up what a context's first action opened when that action fails", { timeout: 60_000 }, async () => {
+    const executablePath = await detectBrowserExecutable();
+    if (executablePath === undefined) return;
+    const hung: Array<() => void> = [];
+    const stuck = await listen(createServer((_request, response) => void hung.push(() => response.end())));
+    // A page that opens a window that never loads as soon as it loads.
+    const origin = await listen(
+      createServer((_request, response) => {
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        response.end(`<!doctype html><title>opens</title><script>window.open("${stuck}/?onload")</script>`);
+      }),
+    );
+    const root = await mkdtemp(join(tmpdir(), "melra-stuck-first-"));
+    roots.push(root);
+    const runtime = new BrowserRuntime({
+      workspaceRoot: root,
+      artifactDirectory: join(root, "artifacts"),
+      executablePath,
+      allowedDomains: ["127.0.0.1"],
+      allowLocalhost: true,
+    });
+    try {
+      // The fresh context's first action is cancelled after the window is
+      // created, before any wait has run.
+      const cancel = new AbortController();
+      const first = runtime.execute(
+        BrowserOperationSchema.parse({ kind: "browser", action: "navigate", url: origin, settleQuietMs: 2_000 }),
+        cancel.signal,
+      );
+      first.catch(() => undefined);
+      while (hung.length < 1) await new Promise((done) => setTimeout(done, 25));
+      cancel.abort(new Error("task_cancelled"));
+      await expect(first).rejects.toThrow();
+      const next = Date.now();
+      await runtime.execute(BrowserOperationSchema.parse({ kind: "browser", action: "inspect", timeoutMs: 5_000 }));
       expect(Date.now() - next).toBeLessThan(2_500);
     } finally {
       hung.splice(0).forEach((answer) => answer());

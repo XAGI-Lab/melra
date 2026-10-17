@@ -480,7 +480,7 @@ export class BrowserRuntime {
    * created when it closes, whichever of the two comes first.
    *
    * ponytail: were Playwright ever to drop such a window without its `page`
-   * event, each wait after it would run to its bound; #226 would bound that.
+   * event, the next wait would run to its bound and then give it up (#226).
    */
   private theirs = new Map<string, string>();
   /** Counts actions, so a popup reported by a later one says so. */
@@ -948,10 +948,11 @@ export class BrowserRuntime {
    * next wait early, so the surplus is dropped before each action and each
    * wait.
    *
-   * ponytail: one handed over during a later action's wait still cancels out
-   * a window that action opened, whose wait then ends early and whose report
-   * goes to the next action; matching windows by target id would tell them
-   * apart, at a lookup per window in a launched browser.
+   * ponytail: one handed over during a later action, before its wait ends,
+   * still cancels out a window that action opened: no action waits for that
+   * window, and it is reported by whichever action runs when it is handed
+   * over. Matching windows by target id would tell them apart, at a lookup
+   * per window in a launched browser.
    */
   private forgetLateWindows(): void {
     if (this.contextId === undefined) return;
@@ -964,12 +965,18 @@ export class BrowserRuntime {
    * fails before it waits, are given up on: kept owed, one whose first
    * response never comes would hold every later action to its whole timeout
    * (#226). One handed over later is still reported, by the action running
-   * then.
+   * then. Before the context's id is known (its first action failed before
+   * any wait), every count is lowered; only that context's is ever read.
+   *
+   * ponytail: a window a page opens between actions is owed to the next
+   * action, so one that never loads still holds that action up once.
    */
   private giveUpOwedWindows(): void {
-    if (this.contextId === undefined) return;
-    if (this.windowsAdopted < (this.windowsCreated.get(this.contextId) ?? 0)) {
-      this.windowsCreated.set(this.contextId, this.windowsAdopted);
+    const contexts = this.contextId === undefined ? [...this.windowsCreated.keys()] : [this.contextId];
+    for (const context of contexts) {
+      if (this.windowsAdopted < (this.windowsCreated.get(context) ?? 0)) {
+        this.windowsCreated.set(context, this.windowsAdopted);
+      }
     }
   }
 
