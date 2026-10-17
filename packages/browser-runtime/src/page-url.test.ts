@@ -6,7 +6,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BrowserOperationSchema } from "@melra/protocol";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { BrowserRuntime, detectBrowserExecutable, pageAddress } from "./index.js";
 
 const PAGE = `<!doctype html><html><head><title>untouched</title></head><body>
@@ -75,6 +75,17 @@ const LEAVES = `<!doctype html><html><head><title>leaves</title></head><body>
   <button id="go" hidden>Go</button>
   <script>fetch("/release").then(() => { location.href = "/landed"; })</script>
 </body></html>`;
+// A page, and a frame, that take their target away when released and leave
+// a moment later for a document that never had it.
+const UNMOUNTS = `<!doctype html><html><head><title>unmounts</title></head><body>
+  <button id="view" hidden>Go</button>
+  <script>fetch("/release").then(() => { document.getElementById("view").remove(); setTimeout(() => { location.href = "/away"; }, 1000); })</script>
+</body></html>`;
+const FRAMED_UNMOUNTS = `<!doctype html><html><head><title>framed-unmounts</title></head><body>
+  <iframe src="/unmounts-inner"></iframe>
+</body></html>`;
+const UNMOUNTS_INNER = `<!doctype html><button id="view" hidden>Go</button>
+  <script>fetch("/release").then(() => { document.getElementById("view").remove(); setTimeout(() => { location.href = "/away"; }, 1000); })</script>`;
 // A search field that, once cleared, rewrites the path and mounts a fresh
 // field in its place, then rewrites the path again as it is typed into.
 const REMOUNT = `<!doctype html><html><head><title>remount</title></head><body><div id="box"></div>
@@ -207,6 +218,10 @@ describe("a url on an action that does not navigate", () => {
         "/counted": COUNTED,
         "/remount": REMOUNT,
         "/leaves": LEAVES,
+        "/unmounts": UNMOUNTS,
+        "/framed-unmounts": FRAMED_UNMOUNTS,
+        "/unmounts-inner": UNMOUNTS_INNER,
+        "/away": "<!doctype html><title>away</title>",
         "/churn": CHURN,
       };
       const inner = load === 1 ? FRAMED_FIRST : FRAMED_LATER;
@@ -229,14 +244,28 @@ describe("a url on an action that does not navigate", () => {
     const run = (operation: Record<string, unknown>) =>
       runtime.execute(BrowserOperationSchema.parse({ kind: "browser", ...operation }));
     const title = async () => ((await run({ action: "inspect" })) as { title?: string }).title;
-    // Starts the action, lets the page change while it waits, and hands back
-    // its outcome.
+    // Starts the action, lets the page change once the action has found its
+    // target in the document it checked, and hands back its outcome.
     const meanwhile = async (operation: Record<string, unknown>) => {
-      const acting = run(operation);
-      acting.catch(() => undefined);
-      await new Promise((done) => setTimeout(done, 500));
-      release();
-      return acting;
+      type Handle = (pending: Promise<unknown>, what: string, ms?: number) => Promise<unknown>;
+      const prototype = BrowserRuntime.prototype as unknown as { handle: Handle };
+      const handle = prototype.handle;
+      let foundTarget = () => {};
+      const finding = new Promise<void>((done) => (foundTarget = done));
+      const spy = vi.spyOn(prototype, "handle").mockImplementation((pending, what, ms) => {
+        const handled = handle.call(runtime, pending, what, ms);
+        if (what === "count") void handled.then(foundTarget, foundTarget);
+        return handled;
+      });
+      try {
+        const acting = run(operation);
+        acting.catch(() => undefined);
+        await Promise.race([finding, acting.catch(() => undefined)]);
+        release();
+        return await acting;
+      } finally {
+        spy.mockRestore();
+      }
     };
     try {
       // Each action waits for its hidden target while the page reloads itself
@@ -276,6 +305,17 @@ describe("a url on an action that does not navigate", () => {
         "browser_page_changed",
       );
       expect(Date.now() - started).toBeLessThan(8_000);
+      // So is one that takes the target away first and leaves a moment later,
+      // and a frame that does.
+      for (const [path, left] of [["/unmounts", "away"], ["/framed-unmounts", "framed-unmounts"]]) {
+        await run({ action: "navigate", url: `${origin}${path}` });
+        const unmounted = Date.now();
+        await expect(meanwhile({ action: "click", target: { selector: "#view" }, timeoutMs: 15_000 }), path).rejects.toThrow(
+          "browser_page_changed",
+        );
+        expect(Date.now() - unmounted, path).toBeLessThan(8_000);
+        await expect.poll(title, { timeout: 5_000 }).toBe(left);
+      }
       // A target in a frame is held to the frame's document it was found in:
       // the frame reloading into one where it shows gets nothing either.
       await run({ action: "navigate", url: `${origin}/framed` });

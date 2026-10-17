@@ -213,6 +213,9 @@ const timedOut = (error: unknown): boolean =>
 const detached = (error: unknown): boolean =>
   error instanceof Error && error.message.includes("Element is not attached to the DOM");
 
+/** How long a target found again is searched for before the page is asked whether it left. */
+const REFIND_SLICE_MS = 500;
+
 /** What a click waits for, short of the hit-target check only the click itself makes. */
 const CLICKABLE = ["visible", "enabled", "stable"] as const;
 
@@ -1206,8 +1209,11 @@ export class BrowserRuntime {
     let found: JSHandle | undefined;
     try {
       for (;;) {
-        // Bounded by its own timeout; the call only adds the cancel.
-        const element = await this.handle(locator.first().elementHandle({ timeout: left() }), "count", Infinity);
+        const element =
+          found === undefined
+            ? // Bounded by its own timeout; the call only adds the cancel.
+              await this.handle(locator.first().elementHandle({ timeout: left() }), "count", Infinity)
+            : await this.refind(pin, locator, found, deadline);
         try {
           let moved: boolean;
           if (found === undefined) {
@@ -1244,8 +1250,9 @@ export class BrowserRuntime {
             // hit-target guard stops the events that did not reach the
             // element, which is why its locator retries this too. The page is
             // asked first every time, so one that navigated is refused at
-            // once, and a target first found in a document that came in after
-            // the checks is never acted on.
+            // once, one that leaves while the target is searched for again
+            // within a slice, and a target first found in a document that
+            // came in after the checks is never acted on.
             if (detached(error)) continue;
             throw error;
           }
@@ -1256,6 +1263,34 @@ export class BrowserRuntime {
       }
     } finally {
       void found?.dispose().catch(() => undefined);
+    }
+  }
+
+  /**
+   * The target found again after it went away, searched for in slices that
+   * each end by asking whether the page, or the frame it was found in, has
+   * left: a page that takes the target away and then navigates to a document
+   * without it would otherwise be waited on until the timeout.
+   */
+  private async refind(pin: Pin, locator: Locator, found: JSHandle, deadline: number): Promise<ElementHandle> {
+    const left = () => Math.max(1, deadline - Date.now());
+    for (;;) {
+      try {
+        return await this.handle(locator.first().elementHandle({ timeout: Math.min(REFIND_SLICE_MS, left()) }), "count", Infinity);
+      } catch (error) {
+        if (!timedOut(error) || Date.now() >= deadline) throw error;
+      }
+      if (await this.moved(pin, !this.dispatched, left())) {
+        throw new Error(`browser_page_changed: the page is now at ${pageAddress(pin.page.url())}`);
+      }
+      const there = await this.call(found.evaluate((first: Document) => first.defaultView?.document === first), "evaluate", left()).catch(
+        (error: unknown) => {
+          // No answer is not a different document, and a closed page has its own error.
+          if (timedOut(error) || this.signal?.aborted === true || pin.page.isClosed()) throw error;
+          return false;
+        },
+      );
+      if (!there) throw new Error("browser_page_changed: the target's frame is now at another document");
     }
   }
 

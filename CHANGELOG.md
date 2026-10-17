@@ -56,13 +56,15 @@ All notable changes are documented here. The format follows
 
 ### Changed
 
-- In enforced mode, a browser action that drives a page (`click`, `type`,
-  `fill_form`, `select`, `press`, `upload`, `download`, `close`, `tab_switch`)
-  must name it with `url`, or it is refused at planning with
-  `browser_action_requires_url`, ahead of any grant check. The operator
+- **Breaking:** in enforced mode, a browser action that drives a page
+  (`click`, `type`, `fill_form`, `select`, `press`, `upload`, `download`,
+  `close`, `tab_switch`) must name it with `url`, or it is refused at planning
+  with `browser_action_requires_url`, ahead of any grant check. The operator
   approving it always sees which page it lands on, and a grant always has a
-  page to match. The harness tools `browser_click` and `browser_type` take a
-  `url` for it. Developer mode does not require one. In every mode, the url
+  page to match. A harness in enforced mode sends the page's url, from `tabs`
+  or the last `inspect`, with each of these actions; the harness tools
+  `browser_click` and `browser_type` take a `url` for it. Developer mode does
+  not require one. In every mode, the url
   of `close` and `tab_switch` names the tab, which can be `about:blank` or off
   the allowlist, since neither loads anything. (#196)
 
