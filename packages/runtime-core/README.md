@@ -40,7 +40,7 @@ Workflow durability, briefly:
 - Definitions and adapter results are sealed with AES-256-GCM bound to record
   identity and purpose.
 
-Requires Node.js 22.13 or newer. Full documentation:
+Requires Node.js 22.13 or newer, or 23.4 or newer. Full documentation:
 [github.com/XAGI-Lab/melra](https://github.com/XAGI-Lab/melra)
 
 Apache-2.0

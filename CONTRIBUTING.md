@@ -36,7 +36,7 @@ pnpm build          # required before tests: they import siblings through dist/
 pnpm check          # the full CI gate
 ```
 
-Use Node.js 22.13 or newer and pnpm 9.5.
+Use Node.js 22.13 or newer, or 23.4 or newer, and pnpm 9.5.
 
 **[docs/CONTRIBUTING_GUIDE.md](docs/CONTRIBUTING_GUIDE.md) is the map**: which
 files a given kind of change touches, the non-obvious policy defaults, the house

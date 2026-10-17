@@ -66,7 +66,7 @@ export function nextStep(report: DoctorReport): string | undefined {
       case "node":
         return "install Node.js 22 or newer";
       case "sqlite":
-        return "use Node.js 22.13 or newer, which ships node:sqlite";
+        return "use Node.js 22.13 or newer, or 23.4 or newer, where node:sqlite needs no flag";
       case "workspace":
         return "point MELRA_WORKSPACE at a directory you can read and write";
       case "data-directory":
