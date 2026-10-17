@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 600" width="960" height="600" role="img" aria-labelledby="t d">
   <title id="t">Where MELRA sits</title>
-  <desc id="d">The model reasons, the agent harness runs the loop, and tool calls routed through MELRA pass its policy and approval stages before effect adapters touch your systems; those that run to an outcome are then verified and receipted. Calls made outside MELRA are not governed by it.</desc>
+  <desc id="d">The model reasons, the agent harness runs the loop, and tool calls routed through MELRA pass its policy and approval stages before effect adapters touch your systems; those that complete are checked against their declared evidence, and each that runs to an outcome is receipted. Calls made outside MELRA are not governed by it.</desc>
   <defs>
     <linearGradient id="kernel" x1="0" y1="0" x2="1" y2="0">
       <stop offset="0" stop-color="#2bb8a8"/>
