@@ -470,6 +470,19 @@ export class BrowserRuntime {
    * number: its popups, whenever Playwright gets round to handing them over.
    */
   private createdActing = new Map<string, number>();
+  /**
+   * In a browser this runtime is attached to, the windows Chromium created
+   * between its actions that are none of its own, the operator's, with their
+   * browser context. No wait counts them, so one whose first response never
+   * comes holds up no action; each is dropped once Playwright hands it over.
+   * One that closes first is still handed over, as a closed page whose id can
+   * no longer be looked up and so is counted as adopted: it is counted as
+   * created when it closes, whichever of the two comes first.
+   *
+   * ponytail: were Playwright ever to drop such a window without its `page`
+   * event, each wait after it would run to its bound; #226 would bound that.
+   */
+  private theirs = new Map<string, string>();
   /** Counts actions, so a popup reported by a later one says so. */
   private actions = 0;
   /** The page the running action acts on, once it has one. */
@@ -728,11 +741,20 @@ export class BrowserRuntime {
      * this governs whether it stays.
      */
     this.context.on("page", (opened) => {
-      // Counted before the early return: every window Chromium creates raises
-      // exactly one of these, including tabs MELRA opened and windows that
-      // closed before Playwright finished with them.
-      this.windowsAdopted += 1;
-      if (opened === this.activePage || this.openingTab) return;
+      // Counted on every path, the early return included: every window
+      // Chromium creates raises exactly one of these, including tabs MELRA
+      // opened and windows that closed before Playwright finished with them.
+      // In a browser this runtime is attached to, not until the window is
+      // known not to be the operator's, which no wait counted (`theirs`).
+      const attached = this.options.cdpEndpoint !== undefined && this.targets !== undefined;
+      const adopted = (id: string | undefined) => {
+        if (id === undefined || !this.theirs.delete(id)) this.windowsAdopted += 1;
+      };
+      if (opened === this.activePage || this.openingTab) {
+        if (attached) void this.targetOf(opened).then(adopted, () => adopted(undefined));
+        else this.windowsAdopted += 1;
+        return;
+      }
       const acting = this.acting;
       // `during`: whether the window came while an action ran, which in a
       // browser this runtime is attached to is known from when it was created.
@@ -762,10 +784,16 @@ export class BrowserRuntime {
       // (`ownTargets`): that tab is left alone and not reported. Judged by when
       // it was created, not by when Playwright hands it over, which for a slow
       // first response can be during the next action.
-      if (this.options.cdpEndpoint !== undefined && this.targets !== undefined) {
-        this.closing.push(this.adoptable(opened, acting).then(({ adopt: yes, during }) => (yes ? adopt(during) : undefined)));
+      if (attached) {
+        this.closing.push(
+          this.adoptable(opened, acting).then(({ adopt: yes, during, id }) => {
+            adopted(id);
+            return yes ? adopt(during) : undefined;
+          }),
+        );
         return;
       }
+      this.windowsAdopted += 1;
       const closing = adopt();
       if (closing !== undefined) this.closing.push(closing);
     });
@@ -794,6 +822,7 @@ export class BrowserRuntime {
     this.drivenTarget = undefined;
     this.targetIds = new WeakMap();
     this.createdActing = new Map();
+    this.theirs = new Map();
     // A session left from a context that closed under us would count into the
     // fresh map below and make every action wait for windows that never come.
     if (this.targets !== undefined) {
@@ -814,18 +843,24 @@ export class BrowserRuntime {
         // `browser_ui`, workers, and prerenders never become Playwright pages.
         if (targetInfo.type !== "page" || targetInfo.subtype !== undefined) return;
         const id = targetInfo.browserContextId ?? "";
-        this.windowsCreated.set(id, (this.windowsCreated.get(id) ?? 0) + 1);
-        if (!announced) return;
-        if (this.acting) this.createdActing.set(targetInfo.targetId, this.actions);
-        // A window an action's popup opens, before that popup is even judged,
-        // is the runtime's like the popup.
-        const opener = targetInfo.openerId;
-        if (
-          opener !== undefined &&
-          (this.ownTargets.has(opener) || opener === this.drivenTarget || this.createdActing.has(opener))
-        ) {
-          this.ownTargets.add(targetInfo.targetId);
+        if (announced) {
+          if (this.acting) this.createdActing.set(targetInfo.targetId, this.actions);
+          // A window an action's popup opens, before that popup is even judged,
+          // is the runtime's like the popup.
+          const opener = targetInfo.openerId;
+          if (
+            opener !== undefined &&
+            (this.ownTargets.has(opener) || opener === this.drivenTarget || this.createdActing.has(opener))
+          ) {
+            this.ownTargets.add(targetInfo.targetId);
+          }
+          // The operator's, which no action reports, so no wait counts it.
+          if (this.options.cdpEndpoint !== undefined && !this.acting && !this.ownTargets.has(targetInfo.targetId)) {
+            this.theirs.set(targetInfo.targetId, id);
+            return;
+          }
         }
+        this.windowsCreated.set(id, (this.windowsCreated.get(id) ?? 0) + 1);
       });
       // Ids stay after their window closes: one that closes itself as soon as
       // it loads is still to be judged when Playwright hands it over.
@@ -834,6 +869,12 @@ export class BrowserRuntime {
       // ever matters.
       targets.on("Target.targetDestroyed", ({ targetId }) => {
         if (this.drivenTarget === targetId) this.drivenTarget = undefined;
+        // One of theirs gone before Playwright handed it over: it still will,
+        // and that counts it as adopted (`theirs`).
+        const context = this.theirs.get(targetId);
+        if (context !== undefined && this.theirs.delete(targetId)) {
+          this.windowsCreated.set(context, (this.windowsCreated.get(context) ?? 0) + 1);
+        }
       });
       await this.call(
         targets.send("Target.setDiscoverTargets", { discover: true }),
@@ -947,15 +988,15 @@ export class BrowserRuntime {
    * one, and one still open that cannot be asked, count by when Playwright
    * handed it over.
    */
-  private async adoptable(page: Page, acting: boolean): Promise<{ adopt: boolean; during: boolean }> {
+  private async adoptable(page: Page, acting: boolean): Promise<{ adopt: boolean; during: boolean; id?: string }> {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
         const id = await this.targetOf(page);
         const createdIn = this.createdActing.get(id);
-        if (createdIn === undefined) return { adopt: this.ownTargets.has(id), during: false };
+        if (createdIn === undefined) return { adopt: this.ownTargets.has(id), during: false, id };
         this.createdActing.delete(id);
         this.ownTargets.add(id);
-        return { adopt: true, during: this.acting && createdIn === this.actions };
+        return { adopt: true, during: this.acting && createdIn === this.actions, id };
       } catch {
         if (page.isClosed()) return { adopt: true, during: acting };
       }
