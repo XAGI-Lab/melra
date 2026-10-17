@@ -70,7 +70,9 @@ action digest (or, in enforced mode, requires an operator's out-of-band
 decision), runs the adapter under an `AbortSignal` armed with the task's
 duration budget, then verifies. A task is `verified_success` only when the
 adapter succeeded *and* every declared evidence predicate passed — an adapter
-that claimed success with failing evidence is `partial`.
+that claimed success with failing evidence is `partial`, unless the only unmet
+evidence is a `semantic` question, which waits in `waiting_user` and settles
+closed at expiry (#54).
 
 Paths and terminal working directories stay inside the configured root. The
 browser runtime independently rejects non-`http(s)` protocols, URL credentials,

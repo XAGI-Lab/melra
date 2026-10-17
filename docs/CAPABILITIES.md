@@ -57,7 +57,7 @@ Node types: `operation`, `approval`, `condition`, `parallel`, `bounded_loop`,
 - Definitions allow at most 500 nodes, 100 dependencies per node, 20 parallel
   branches, and 100 loop iterations.
 - A `semantic` predicate is refused in any node
-  (`workflow_semantic_evidence_unsupported`) until a workflow can wait on a
+  (`workflow_semantic_evidence_unsupported:<node>`) until a workflow can wait on a
   verdict.
 - Competing advances for the same workflow are serialized inside one process,
   and across processes by an expiring SQLite lease.
@@ -392,7 +392,7 @@ predicate but nothing the kernel re-reads (`file_exists`, `file_absent`,
 `file_hash`) or asks another channel (`http_resource_matches`) is refused at
 planning (`semantic_only_destructive`). A task cannot declare `semantic`
 beside `reconciliation` (`semantic_evidence_not_reconcilable`), and a workflow
-cannot declare it in any node (`workflow_semantic_evidence_unsupported`). The
+cannot declare it in any node (`workflow_semantic_evidence_unsupported:<node>`). The
 question is stored and shown as written, minus secret shapes.
 
 `http_resource_matches` is the only predicate whose answer does not come from

@@ -22,7 +22,7 @@ All notable changes are documented here. The format follows
   planning (`semantic_only_destructive`). `semantic` is refused beside
   `reconciliation` (`semantic_evidence_not_reconcilable`), which cannot settle
   a question about meaning, and in any workflow node
-  (`workflow_semantic_evidence_unsupported`) until a workflow can wait on a
+  (`workflow_semantic_evidence_unsupported:<node>`) until a workflow can wait on a
   verdict. `pnpm evals` has two new scenarios (54).
 
 - Each GitHub release attaches the single executable (Node inside, no Node

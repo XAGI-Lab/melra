@@ -172,20 +172,32 @@ describe("semantic evidence (#54)", () => {
 
   it("settles the oldest expired waits first and reads no wait that is still open", async () => {
     const { controller, store } = await setup();
-    const older = await run(controller, write([{ type: "file_exists", path: "out.txt" }, SEMANTIC]));
-    const newer = await run(controller, write([{ type: "file_exists", path: "out.txt" }, SEMANTIC]));
-    const at = Date.parse(older.task.judgements![0]!.expiresAt) + 1;
-    // The newer one waits longer, as a later task with a longer TTL would.
-    store.saveTask({
-      ...controller.status(newer.task.id),
-      judgements: [{ ...newer.task.judgements![0]!, expiresAt: new Date(at + 60_000).toISOString() }],
-    });
-    expect(store.listExpiredJudgements(new Date(at).toISOString()).map((task) => task.id)).toEqual([older.task.id]);
+    const tasks = [];
+    for (let index = 0; index < 3; index += 1) {
+      tasks.push((await run(controller, write([{ type: "file_exists", path: "out.txt" }, SEMANTIC]))).task);
+    }
+    const [newer, open, older] = tasks as [(typeof tasks)[0], (typeof tasks)[0], (typeof tasks)[0]];
+    const at = Date.parse(newer.judgements![0]!.expiresAt) + 1;
+    // Saved out of order: `older` was last updated first, and `open` waits longer.
+    const saved = (task: typeof newer, updatedAt: number, expiresAt: number) =>
+      store.saveTask({
+        ...controller.status(task.id),
+        updatedAt: new Date(updatedAt).toISOString(),
+        judgements: [{ ...task.judgements![0]!, expiresAt: new Date(expiresAt).toISOString() }],
+      });
+    saved(newer, at - 1_000, at - 1);
+    saved(open, at - 3_000, at + 60_000);
+    saved(older, at - 2_000, at - 1);
+    expect(store.listExpiredJudgements(new Date(at).toISOString()).map((task) => task.id)).toEqual([
+      older.id,
+      newer.id,
+    ]);
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(at);
     await controller.recoverInterrupted();
-    expect(controller.status(older.task.id).status).toBe("recovery_required");
-    expect(controller.status(newer.task.id).status).toBe("waiting_user");
+    expect(controller.status(older.id).status).toBe("recovery_required");
+    expect(controller.status(newer.id).status).toBe("recovery_required");
+    expect(controller.status(open.id).status).toBe("waiting_user");
   });
 
   it("is refused where nothing could settle it", async () => {

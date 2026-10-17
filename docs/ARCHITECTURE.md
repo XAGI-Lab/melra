@@ -512,6 +512,7 @@ safe thing:
 | no such effect | `failed`, `reconciliation_confirms_effect_not_applied` |
 | nothing — unreachable | stays `recovery_required`, `reconciliation_inconclusive` |
 | *(none declared)* | stays `recovery_required`, `reconciliation_not_declared` |
+| *(a `semantic` predicate declared)* | stays `recovery_required`, its cause unchanged: a provider can say whether an effect happened, not whether it is right |
 
 An unreachable provider did not say no, so nothing is concluded from silence.
 The same path runs on restart: `recoverInterrupted` reconciles a crashed
