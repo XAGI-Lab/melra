@@ -79,6 +79,28 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- In a browser the runtime is attached to over CDP, it no longer closes tabs it
+  did not open between its actions: a tab Chromium creates then is the
+  operator's (one they opened, or a console `melra console` opened), left
+  open and not reported as a popup, unless it is the runtime's. The
+  runtime's are the tabs it opened, every window one of those opened, down
+  any chain, and what the tab it is driving opens: a tab it picked up becomes
+  its own only once it navigates it or sends it input (an action refused, or
+  one whose target was never found, does not count), and stops being so when
+  it moves on. That is decided when Chromium creates the window, from the
+  opener it names, and holds even when Playwright hands the window over
+  during the next action. A tab a link opens with a modifier or middle click
+  has no opener, so between actions it counts as the operator's whoever
+  clicked; it is still listed by `tabs`, and its loads are still checked. A
+  tab created while an action runs is still closed and reported, so open the
+  console while the agent is idle, or use `melra approve`. A window that closes
+  before it can be looked up, such as a tab that turns into a download, is
+  reported either way. Ownership lasts for one attach: after MELRA restarts or
+  reconnects, the tabs it opened before count as the operator's until it
+  drives one again. A reported popup's URL no longer carries its fragment,
+  where a console keeps its one-time pairing code until its page has read it.
+  (#203)
+
 - The y/N question `melra approve` and `melra run` ask in a terminal takes
   input that ends before an answer as a no: both say `Not approved.` and
   exit with status 1. Ctrl-D or Ctrl-C there used to stop with `melra:

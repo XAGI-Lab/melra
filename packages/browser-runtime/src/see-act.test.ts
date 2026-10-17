@@ -262,6 +262,257 @@ describe("browser see/act loop", () => {
     }
   }, 120_000);
 
+  it("leaves the operator's own new tabs alone in a browser it is attached to", async () => {
+    const executablePath = await detectBrowserExecutable();
+    if (executablePath === undefined) return;
+    // The site the runtime's pages and the operator's tabs load. Each page
+    // that opens windows of its own opens them only when the test releases
+    // it, so they come between actions however loaded the machine is, and
+    // the server notes every page asked for, so the test can wait for one.
+    const PAGE = `<!doctype html><html><body><p>page</p>
+      <a id="link" href="/?linked">link</a><button id="mod">mod</button>
+      <button id="busy" onclick="window.open(new URLSearchParams(location.search).get('busy'))">busy</button><script>
+      const released = () => fetch("/release");
+      const later = (path, features) => released().then(() => window.open(location.origin + path, "_blank", features));
+      if (location.search === "?opens") later("/?popup#pair=secret");
+      if (location.search === "?chain") later("/?p1");
+      if (location.search === "?p1") window.open(location.origin + "/?p2");
+      if (location.search === "?pre1") window.open(location.origin + "/?pre2");
+      if (location.search === "?noopener") later("/?np", "noopener");
+      if (location.search === "?busy") { later("/?busypop"); setInterval(() => document.body.append("."), 50); }
+      // Windows that close themselves as soon as they load.
+      if (location.search === "?selfclose") released().then(() => [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].forEach((i) => window.open(location.origin + "/?closes" + i)));
+      if (location.search.startsWith("?closes")) setTimeout(() => window.close(), Number(location.search.slice(7)));
+      // A link opened with a modifier click: Chromium gives that tab no opener.
+      document.getElementById("mod").onclick = () => released().then(() => document.getElementById("link")
+        .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, ctrlKey: true, metaKey: true })));
+    </script></body></html>`;
+    const asked: string[] = [];
+    const held: Array<() => void> = [];
+    const answerAll = () => held.splice(0).forEach((answer) => answer());
+    const site = createServer((request, response) => {
+      if (request.url === "/release") {
+        held.push(() => response.end("ok"));
+        return;
+      }
+      asked.push(request.url ?? "");
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(PAGE);
+    });
+    servers.push(site);
+    await new Promise<void>((done) => site.listen(0, "127.0.0.1", done));
+    const origin = `http://127.0.0.1:${(site.address() as { port: number }).port}`;
+    // A site that answers slowly, as one an operator's popup goes to can.
+    const slow = createServer((request, response) => {
+      asked.push(request.url ?? "");
+      setTimeout(() => {
+        response.writeHead(200, { "content-type": "text/html" });
+        response.end("<!doctype html><title>slow</title>");
+      }, 2_000);
+    });
+    servers.push(slow);
+    await new Promise<void>((done) => slow.listen(0, "127.0.0.1", done));
+    const slowUrl = `http://127.0.0.1:${(slow.address() as { port: number }).port}/?slow`;
+    // And one on another site, whose page keeps its process busy as it loads.
+    const heavy = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html" });
+      response.end("<!doctype html><script>const end = Date.now() + 4000; while (Date.now() < end) {}</script>");
+    });
+    servers.push(heavy);
+    await new Promise<void>((done) => heavy.listen(0, done));
+    const heavyUrl = `http://localhost:${(heavy.address() as { port: number }).port}/?busyload`;
+    const root = await mkdtemp(join(tmpdir(), "melra-see-act-cdp-"));
+    roots.push(root);
+    const port = await new Promise<number>((done) => {
+      const probe = createServer().listen(0, "127.0.0.1", () => {
+        const { port: free } = probe.address() as { port: number };
+        probe.close(() => done(free));
+      });
+    });
+    // The operator's own browser: one profile, whose tabs and the runtime's
+    // share a single context, as in a Chrome the runtime is attached to.
+    const profile = await mkdtemp(join(tmpdir(), "melra-see-act-operator-"));
+    roots.push(profile);
+    const operator = await chromium.launchPersistentContext(profile, {
+      executablePath,
+      headless: true,
+      args: [`--remote-debugging-port=${port}`],
+    });
+    const first = operator.pages()[0] ?? (await operator.newPage());
+    const runtime = new BrowserRuntime({
+      workspaceRoot: root,
+      artifactDirectory: join(root, "artifacts"),
+      allowedDomains: ["127.0.0.1", "localhost"],
+      allowLocalhost: true,
+      cdpEndpoint: `http://127.0.0.1:${port}`,
+    });
+    const run = (operation: Record<string, unknown>) =>
+      runtime.execute(BrowserOperationSchema.parse({ kind: "browser", ...operation }));
+    const until = async (what: string, met: () => Promise<boolean> | boolean) => {
+      const deadline = Date.now() + 15_000;
+      while (!(await met())) {
+        if (Date.now() > deadline) throw new Error(`never: ${what}`);
+        await new Promise((done) => setTimeout(done, 100));
+      }
+    };
+    // What the runtime itself sees open, which the operator's own connection
+    // does not list.
+    const open = async () =>
+      ((await run({ action: "tabs" })) as { tabs: Array<{ url: string }> }).tabs.map((tab) => new URL(tab.url).search);
+    const requested = (search: string) => until(`${search} requested`, () => asked.some((url) => url.includes(search)));
+    // Lets the page that is waiting open its windows, once it is waiting.
+    const release = async () => {
+      await until("a page waiting to be released", () => held.length > 0);
+      answerAll();
+    };
+    // Left open and unreported: listed by the runtime, in no action's popups.
+    // Its page is asked for first, so it exists before any action runs to
+    // look: a window created while one runs is that action's popup.
+    const leftAlone = async (search: string, seen: unknown[] = []) => {
+      await requested(search);
+      await until(`${search} listed`, async () => (await open()).includes(search));
+      seen.push(...(((await run({ action: "inspect" })).popups as unknown[] | undefined) ?? []));
+      expect(JSON.stringify(seen), search).not.toContain(search);
+    };
+    // Playwright can hand a window over after the next action has returned,
+    // and the action running then reports it, so gather a few actions' worth.
+    const gather = async (searches: string[]) => {
+      const popups: unknown[] = [];
+      const missing = () => searches.some((search) => !JSON.stringify(popups).includes(search));
+      for (let attempt = 0; attempt < 10 && missing(); attempt += 1) {
+        popups.push(...(((await run({ action: "inspect" })).popups as unknown[] | undefined) ?? []));
+        if (missing()) await new Promise((done) => setTimeout(done, 300));
+      }
+      return popups;
+    };
+    // Reported as opened between actions, and closed.
+    const reported = async (searches: string[]) => {
+      const popups = await gather(searches);
+      expect(popups).toEqual(
+        expect.arrayContaining(
+          searches.map((search) =>
+            expect.objectContaining({ url: expect.stringContaining(search), blocked: true, betweenActions: true }),
+          ),
+        ),
+      );
+      const listed = await open();
+      for (const search of searches) expect(listed, search).not.toContain(search);
+      return popups;
+    };
+    try {
+      // Tabs the operator opened before the runtime attached, one from
+      // another, stay theirs, and so does what they open afterwards.
+      await first.evaluate((url) => window.open(url), `${origin}/?pre1`);
+      await requested("?pre2");
+      // A read lands on one of the operator's tabs, which does not make it the
+      // runtime's: what the operator opens from it stays theirs. Which tab it
+      // lands on follows the order Chromium announced them in, so each tab
+      // that was there opens one, and the one landed on is used below.
+      const read = (await run({ action: "tabs" })) as { tabs: Array<{ url: string; active: boolean }> };
+      const at = read.tabs.find((tab) => tab.active)!.url;
+      await until("?pre1 and ?pre2 open", () =>
+        ["?pre1", "?pre2"].every((search) => operator.pages().some((page) => page.url().includes(search))),
+      );
+      const there = [...operator.pages()];
+      const landed = there.find((page) => page.url() === at)!;
+      for (const [index, page] of there.entries()) await page.evaluate((url) => window.open(url), `${origin}/?prechild${index}`);
+      for (const index of there.keys()) await leftAlone(`?prechild${index}`);
+      await landed.evaluate((url) => window.open(url), `${origin}/?fromread`);
+      await leftAlone("?fromread");
+      // Nor does an action on it that is refused, or whose target is never
+      // found: nothing reached the tab.
+      await expect(run({ action: "navigate", url: "http://example.com/" })).rejects.toThrow();
+      await expect(run({ action: "click", target: { selector: "#nothing" }, timeoutMs: 500 })).rejects.toThrow();
+      await landed.evaluate((url) => window.open(url), `${origin}/?afterrefusal`);
+      await leftAlone("?afterrefusal");
+      // So does a step back refused before it was sent.
+      await expect(run({ action: "back", url: `${origin}/elsewhere` })).rejects.toThrow("browser_page_not_at_url");
+      await landed.evaluate((url) => window.open(url), `${origin}/?afterback`);
+      await leftAlone("?afterback");
+      await run({ action: "tab_new", url: origin });
+      // A tab the operator opens between the runtime's actions is theirs.
+      const mine = await operator.newPage();
+      await mine.goto(`${origin}/?mine`);
+      await leftAlone("?mine");
+      expect(mine.isClosed()).toBe(false);
+      // So is one they open just before the runtime's next action, though
+      // Playwright only hands it over during that action, once it loads.
+      await mine.evaluate((url) => window.open(url), slowUrl);
+      await new Promise((done) => setTimeout(done, 300));
+      const during = await run({ action: "navigate", url: slowUrl.replace("?slow", "?self") });
+      await leftAlone("?slow", [...((during.popups as unknown[] | undefined) ?? [])]);
+      // Windows the runtime's own page opens between actions are its own,
+      // down a chain of them, whose opener has closed by the time Playwright
+      // hands over the next, and whatever the page cut it off from; reported
+      // without the fragment, where a console keeps its pairing code.
+      for (const [path, ...windows] of [["?opens", "?popup"], ["?chain", "?p1", "?p2"], ["?noopener", "?np"]]) {
+        await run({ action: "navigate", url: `${origin}/${path}` });
+        await release();
+        await requested(windows.at(-1)!);
+        const popups = await reported(windows);
+        expect(JSON.stringify(popups)).not.toContain("#");
+      }
+      // Windows that close themselves as soon as they load are still reported,
+      // all ten: one that closed before its first page committed has no
+      // address to report, so they are counted rather than named.
+      await run({ action: "navigate", url: `${origin}/?selfclose` });
+      await release();
+      await requested("?closes9");
+      const closing: unknown[] = [];
+      await until("ten self-closing windows reported", async () => {
+        closing.push(...(((await run({ action: "inspect" })).popups as unknown[] | undefined) ?? []));
+        return closing.length >= 10;
+      });
+      expect(closing).toHaveLength(10);
+      expect(closing).toEqual(Array.from({ length: 10 }, () => expect.objectContaining({ blocked: true })));
+      // A window whose page is busy as it loads holds up nothing.
+      await run({ action: "navigate", url: `${origin}/?busy=${encodeURIComponent(heavyUrl)}` });
+      const busy = await run({ action: "click", target: { selector: "#busy" }, timeoutMs: 2_500 });
+      expect(JSON.stringify(busy.popups ?? [])).toContain("?busyload");
+      // A tab a link opens with a modifier click has no opener to judge it by,
+      // so between actions it is taken for the operator's, whoever clicked:
+      // left open and not reported, but still listed.
+      await run({ action: "navigate", url: origin });
+      await run({ action: "click", target: { selector: "#mod" } });
+      await release();
+      await leftAlone("?linked");
+      // An action cancelled midway leaves nothing stale behind for the
+      // windows that come after it.
+      const cancel = new AbortController();
+      setTimeout(() => cancel.abort(), 600);
+      await expect(
+        runtime.execute(BrowserOperationSchema.parse({ kind: "browser", action: "navigate", url: `${origin}/?busy` }), cancel.signal),
+      ).rejects.toThrow();
+      await release();
+      await requested("?busypop");
+      await reported(["?busypop"]);
+      // A tab of the operator's the runtime switches to is its own only once
+      // it drives the tab, and only while that tab stays active.
+      const tabs = ((await run({ action: "tabs" })) as { tabs: Array<{ url: string }> }).tabs;
+      await run({ action: "tab_switch", tabIndex: tabs.findIndex((tab) => tab.url.includes("?mine")) });
+      await mine.evaluate((url) => window.open(url), `${origin}/?undriven`);
+      await leftAlone("?undriven");
+      asked.length = 0;
+      await run({ action: "navigate", url: `${origin}/?opens` });
+      await release();
+      await requested("?popup");
+      await reported(["?popup"]);
+      // Switching to it again leaves it driven: it is still the active tab.
+      const again = ((await run({ action: "tabs" })) as { tabs: Array<{ url: string }> }).tabs;
+      await run({ action: "tab_switch", tabIndex: again.findIndex((tab) => tab.url.includes("?opens")) });
+      await mine.evaluate((url) => window.open(url), `${origin}/?again`);
+      await requested("?again");
+      await reported(["?again"]);
+      await run({ action: "tab_new", url: origin });
+      await mine.evaluate(() => window.open(`${location.origin}/?later`));
+      await leftAlone("?later");
+    } finally {
+      answerAll();
+      await runtime.close();
+      await operator.close();
+    }
+  }, 180_000);
+
   it("closes its tabs freely in a browser it launched, where no operator's console can be", async () => {
     const context = await fixture(`<!doctype html><html><head><meta name="${APPROVAL_SURFACE}" content="operator-only">
       <title>marked</title></head><body></body></html>`);
