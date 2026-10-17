@@ -480,7 +480,7 @@ export class BrowserRuntime {
    * created when it closes, whichever of the two comes first.
    *
    * ponytail: were Playwright ever to drop such a window without its `page`
-   * event, each wait after it would run to its bound; #226 would bound that.
+   * event, the next wait would run to its bound and then give it up (#226).
    */
   private theirs = new Map<string, string>();
   /**
@@ -956,35 +956,25 @@ export class BrowserRuntime {
    * Costs one round trip when nothing was opened. Waits only while a window is
    * known to exist and is still unreported, bounded by the action's own
    * timeout: the window is part of what the action did. A window still pending
-   * after that is reported by the action running when Playwright delivers it.
+   * after that is given up on, so no later action waits for it, and is
+   * reported by the action running when Playwright delivers it, if it ever does.
    */
   private async awaitOpenedWindows(timeoutMs: number): Promise<void> {
     const targets = this.targets;
     const context = this.context;
     if (targets === undefined || context === undefined) return;
     try {
-      if (this.contextId === undefined) {
-        const page = context.pages()[0];
-        if (page === undefined) return;
-        const session = await this.call(context.newCDPSession(page), "cdp_session");
-        try {
-          const { targetInfo } = await this.call(
-            session.send("Target.getTargetInfo"),
-            "cdp:Target.getTargetInfo",
-          );
-          this.contextId = targetInfo.browserContextId ?? "";
-        } finally {
-          await this.call(session.detach(), "cdp_detach").catch(() => undefined);
-        }
-      }
+      if (!(await this.learnContextId())) return;
       // Events arrive ahead of the reply on the same session, so after this
       // every window created before now has been counted.
       await this.call(targets.send("Browser.getVersion"), "cdp:Browser.getVersion");
+      const contextId = this.contextId ?? "";
+      const created = () => this.windowsCreated.get(contextId) ?? 0;
+      this.forgetLateWindows();
       const deadline = Date.now() + timeoutMs;
-      while (
-        this.windowsAdopted < (this.windowsCreated.get(this.contextId) ?? 0) &&
-        Date.now() < deadline
-      ) {
+      // A cancel ends the wait at once: what is still owed is given up below,
+      // and the queue behind this action is not held to its deadline.
+      while (this.windowsAdopted < created() && Date.now() < deadline && this.signal?.aborted !== true) {
         await new Promise((done) => setTimeout(done, WINDOW_POLL_MS));
       }
     } catch {
@@ -992,6 +982,77 @@ export class BrowserRuntime {
       // action's bound; either way nothing more will be delivered in time, and
       // this wait only ever decides which action reports a window, so it is
       // not worth failing an action over.
+    } finally {
+      // However the wait ended, what is still owed is no later action's to wait for.
+      this.giveUpOwedWindows();
+    }
+  }
+
+  /**
+   * This context's id in CDP, looked up once: what the window counts are kept
+   * under. False when there is no page yet to ask.
+   */
+  private async learnContextId(): Promise<boolean> {
+    if (this.contextId !== undefined) return true;
+    // A cancelled action does not open a session it would only abandon.
+    if (this.signal?.aborted === true) return false;
+    const page = this.context?.pages()[0];
+    if (page === undefined) return false;
+    const opening = page.context().newCDPSession(page);
+    const session = await this.call(opening, "cdp_session").catch((error: unknown) => {
+      // One that attaches after the bound or a cancel is let go, not left on the page.
+      void opening.then((late) => late.detach()).catch(() => undefined);
+      throw error;
+    });
+    try {
+      const { targetInfo } = await this.call(session.send("Target.getTargetInfo"), "cdp:Target.getTargetInfo");
+      this.contextId = targetInfo.browserContextId ?? "";
+      return true;
+    } finally {
+      // Not waited for, as in `targetOf`: a detach waits on the page's main
+      // thread, which a page busy with a long script holds.
+      void session.detach().catch(() => undefined);
+    }
+  }
+
+  /**
+   * A window handed over after the wait that owed it gave up on it
+   * (`giveUpOwedWindows`) is owed by no one now, and counting it would end the
+   * next wait early, so the surplus is dropped before each action and each
+   * wait.
+   *
+   * ponytail: the counts cannot tell windows apart. One handed over during a
+   * later action, before its wait ends, stands in for a window that action
+   * opened: no action waits for that window, it is reported by whichever
+   * action runs when it is handed over, and if that is during another
+   * action's wait, it stands in for that action's window in turn, until one is
+   * handed over between actions. Matching windows by target id would end
+   * this, at a lookup per window in a launched browser (#234).
+   */
+  private forgetLateWindows(): void {
+    if (this.contextId === undefined) return;
+    const created = this.windowsCreated.get(this.contextId) ?? 0;
+    if (this.windowsAdopted > created) this.windowsAdopted = created;
+  }
+
+  /**
+   * Windows still owed when an action's wait ends, however it ends (it runs
+   * out, is cancelled, cannot ask the browser, or finds no page), or when the
+   * action fails before it waits, are given up on: kept owed, one whose first
+   * response never comes would hold every later action to its whole timeout
+   * (#226). One handed over later is still reported, by the action running
+   * then. Before the context's id is known (no lookup in this context has
+   * succeeded yet), every count is lowered; only that context's is ever read.
+   *
+   * ponytail: a window a page opens between actions is owed to the next
+   * action, so one that never loads still holds that action up once.
+   */
+  private giveUpOwedWindows(): void {
+    const contexts = this.contextId === undefined ? [...this.windowsCreated.keys()] : [this.contextId];
+    for (const context of contexts) {
+      if (this.windowsAdopted < (this.windowsCreated.get(context) ?? 0)) {
+        this.windowsCreated.set(context, this.windowsAdopted);
+      }
     }
   }
 
@@ -1804,6 +1865,13 @@ export class BrowserRuntime {
         () => undefined,
       );
     }
+    // Known before the clamp, so one a context's failed first action gave up
+    // on (`giveUpOwedWindows`) and that was handed over since is dropped too.
+    if (this.contextId === undefined && this.targets !== undefined) await this.learnContextId().catch(() => false);
+    // Both round trips above swallow a cancel, and nothing has run yet. (The
+    // check at the top narrowed `aborted`, which an await can change.)
+    if ((signal?.aborted as boolean | undefined) === true) throw new Error("task_cancelled");
+    this.forgetLateWindows();
     this.actions += 1;
     this.acting = true;
     try {
@@ -1838,6 +1906,8 @@ export class BrowserRuntime {
       // including a timeout resolving the target, is an ordinary failure:
       // nothing was sent, and for a read the controller may simply retry.
       // The message is stored on the task record and shown in the console.
+      // An action that failed before its wait gives up on what it opened here.
+      this.giveUpOwedWindows();
       if (error instanceof Error) error.message = withoutColour(error.message);
       const sent = this.dispatched || inputSent(error);
       // So did one that failed after its input went out, or a step back or
