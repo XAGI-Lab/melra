@@ -96,7 +96,9 @@ All notable changes are documented here. The format follows
   line naming the Node.js versions it needs, instead of an unhandled
   `ERR_UNKNOWN_BUILTIN_MODULE` before any check could run. On a supported
   release with the module turned off or built without it, the line says so
-  and points at `NODE_OPTIONS`. `melra doctor`'s
+  and points at `NODE_OPTIONS`. The single executable does the same: its
+  bundle now loads `node:sqlite` when first used rather than at load, which
+  also keeps Node's SQLite warning out of its output. `melra doctor`'s
   hint for a `node:sqlite` that loads but cannot open a database no longer
   points at the Node version. (#230)
 
