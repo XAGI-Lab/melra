@@ -1036,12 +1036,13 @@ export class BrowserRuntime {
   }
 
   /**
-   * Windows still owed when an action's wait runs out, or when the action
-   * fails before it waits, are given up on: kept owed, one whose first
+   * Windows still owed when an action's wait ends, however it ends (it runs
+   * out, is cancelled, cannot ask the browser, or finds no page), or when the
+   * action fails before it waits, are given up on: kept owed, one whose first
    * response never comes would hold every later action to its whole timeout
    * (#226). One handed over later is still reported, by the action running
-   * then. Before the context's id is known (its first action failed before
-   * any wait), every count is lowered; only that context's is ever read.
+   * then. Before the context's id is known (no lookup in this context has
+   * succeeded yet), every count is lowered; only that context's is ever read.
    *
    * ponytail: a window a page opens between actions is owed to the next
    * action, so one that never loads still holds that action up once.
