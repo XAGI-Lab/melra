@@ -432,11 +432,17 @@ export class BrowserRuntime {
   private createdActing = new Map<string, number>();
   /**
    * In a browser this runtime is attached to, the windows Chromium created
-   * between its actions that are none of its own: the operator's. No wait
-   * counts them, so one whose first response never comes holds up no action;
-   * each is dropped once Playwright hands it over.
+   * between its actions that are none of its own, the operator's, with their
+   * browser context. No wait counts them, so one whose first response never
+   * comes holds up no action; each is dropped once Playwright hands it over.
+   * One that closes first is still handed over, as a closed page whose id can
+   * no longer be looked up and so is counted as adopted: it is counted as
+   * created when it closes, whichever of the two comes first.
+   *
+   * ponytail: were Playwright ever to drop such a window without its `page`
+   * event, each wait after it would run to its bound; #226 would bound that.
    */
-  private theirs = new Set<string>();
+  private theirs = new Map<string, string>();
   /** Counts actions, so a popup reported by a later one says so. */
   private actions = 0;
   /** The page the running action acts on, once it has one. */
@@ -700,8 +706,13 @@ export class BrowserRuntime {
       // opened and windows that closed before Playwright finished with them.
       // In a browser this runtime is attached to, not until the window is
       // known not to be the operator's, which no wait counted (`theirs`).
+      const attached = this.options.cdpEndpoint !== undefined && this.targets !== undefined;
+      const adopted = (id: string | undefined) => {
+        if (id === undefined || !this.theirs.delete(id)) this.windowsAdopted += 1;
+      };
       if (opened === this.activePage || this.openingTab) {
-        this.windowsAdopted += 1;
+        if (attached) void this.targetOf(opened).then(adopted, () => adopted(undefined));
+        else this.windowsAdopted += 1;
         return;
       }
       const acting = this.acting;
@@ -733,14 +744,10 @@ export class BrowserRuntime {
       // (`ownTargets`): that tab is left alone and not reported. Judged by when
       // it was created, not by when Playwright hands it over, which for a slow
       // first response can be during the next action.
-      if (this.options.cdpEndpoint !== undefined && this.targets !== undefined) {
+      if (attached) {
         this.closing.push(
           this.adoptable(opened, acting).then(({ adopt: yes, during, id }) => {
-            // ponytail: one that closed before it could be looked up is
-            // counted, so an operator's window doing that lets one later wait
-            // end early, and the window it waited for is reported by the next
-            // action; match closed windows by id if that ever matters.
-            if (id === undefined || !this.theirs.delete(id)) this.windowsAdopted += 1;
+            adopted(id);
             return yes ? adopt(during) : undefined;
           }),
         );
@@ -775,7 +782,7 @@ export class BrowserRuntime {
     this.drivenTarget = undefined;
     this.targetIds = new WeakMap();
     this.createdActing = new Map();
-    this.theirs = new Set();
+    this.theirs = new Map();
     // A session left from a context that closed under us would count into the
     // fresh map below and make every action wait for windows that never come.
     if (this.targets !== undefined) {
@@ -809,7 +816,7 @@ export class BrowserRuntime {
           }
           // The operator's, which no action reports, so no wait counts it.
           if (this.options.cdpEndpoint !== undefined && !this.acting && !this.ownTargets.has(targetInfo.targetId)) {
-            this.theirs.add(targetInfo.targetId);
+            this.theirs.set(targetInfo.targetId, id);
             return;
           }
         }
@@ -822,6 +829,12 @@ export class BrowserRuntime {
       // ever matters.
       targets.on("Target.targetDestroyed", ({ targetId }) => {
         if (this.drivenTarget === targetId) this.drivenTarget = undefined;
+        // One of theirs gone before Playwright handed it over: it still will,
+        // and that counts it as adopted (`theirs`).
+        const context = this.theirs.get(targetId);
+        if (context !== undefined && this.theirs.delete(targetId)) {
+          this.windowsCreated.set(context, (this.windowsCreated.get(context) ?? 0) + 1);
+        }
       });
       await this.call(
         targets.send("Target.setDiscoverTargets", { discover: true }),
