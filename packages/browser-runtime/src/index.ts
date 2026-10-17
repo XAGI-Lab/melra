@@ -928,25 +928,48 @@ export class BrowserRuntime {
       await this.call(targets.send("Browser.getVersion"), "cdp:Browser.getVersion");
       const contextId = this.contextId ?? "";
       const created = () => this.windowsCreated.get(contextId) ?? 0;
-      // A window handed over after the wait that owed it gave up on it (below)
-      // is owed by no one now, and counting it would end this wait early.
-      // ponytail: one handed over during this wait still can, if a new window
-      // is created in the same instant; ids would tell them apart.
-      if (this.windowsAdopted > created()) this.windowsAdopted = created();
+      this.forgetLateWindows();
       const deadline = Date.now() + timeoutMs;
       while (this.windowsAdopted < created() && Date.now() < deadline) {
         await new Promise((done) => setTimeout(done, WINDOW_POLL_MS));
       }
-      // Still owed when the action's time runs out: given up on, or a window
-      // whose first response never comes would hold every later action to
-      // its whole timeout (#226). One handed over later is still reported, by
-      // the action running then.
-      if (this.windowsAdopted < created()) this.windowsCreated.set(contextId, this.windowsAdopted);
+      this.giveUpOwedWindows();
     } catch {
       // The browser went away mid-action, or stopped answering within the
       // action's bound; either way nothing more will be delivered in time, and
       // this wait only ever decides which action reports a window, so it is
       // not worth failing an action over.
+    }
+  }
+
+  /**
+   * A window handed over after the wait that owed it gave up on it
+   * (`giveUpOwedWindows`) is owed by no one now, and counting it would end the
+   * next wait early, so the surplus is dropped before each action and each
+   * wait.
+   *
+   * ponytail: one handed over during a later action's wait still cancels out
+   * a window that action opened, whose wait then ends early and whose report
+   * goes to the next action; matching windows by target id would tell them
+   * apart, at a lookup per window in a launched browser.
+   */
+  private forgetLateWindows(): void {
+    if (this.contextId === undefined) return;
+    const created = this.windowsCreated.get(this.contextId) ?? 0;
+    if (this.windowsAdopted > created) this.windowsAdopted = created;
+  }
+
+  /**
+   * Windows still owed when an action's wait runs out, or when the action
+   * fails before it waits, are given up on: kept owed, one whose first
+   * response never comes would hold every later action to its whole timeout
+   * (#226). One handed over later is still reported, by the action running
+   * then.
+   */
+  private giveUpOwedWindows(): void {
+    if (this.contextId === undefined) return;
+    if (this.windowsAdopted < (this.windowsCreated.get(this.contextId) ?? 0)) {
+      this.windowsCreated.set(this.contextId, this.windowsAdopted);
     }
   }
 
@@ -1757,6 +1780,7 @@ export class BrowserRuntime {
         () => undefined,
       );
     }
+    this.forgetLateWindows();
     this.actions += 1;
     this.acting = true;
     try {
@@ -1791,6 +1815,8 @@ export class BrowserRuntime {
       // including a timeout resolving the target, is an ordinary failure:
       // nothing was sent, and for a read the controller may simply retry.
       // The message is stored on the task record and shown in the console.
+      // An action that failed before its wait gives up on what it opened here.
+      this.giveUpOwedWindows();
       if (error instanceof Error) error.message = withoutColour(error.message);
       const sent = this.dispatched || inputSent(error);
       // So did one that failed after its input went out, or a step back or
