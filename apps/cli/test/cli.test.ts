@@ -1030,8 +1030,9 @@ describe("melra CLI", () => {
       (error: { code?: number; stderr?: string }) => error,
     );
     expect(failed?.code).toBe(1);
+    // Every Node.js CI runs is a supported one, where the module was turned off.
     expect(failed?.stderr).toBe(
-      `melra: Node.js ${process.versions.node} cannot load node:sqlite without a flag; use Node.js 22.13 or newer, or 23.4 or newer\n`,
+      `melra: Node.js ${process.versions.node} has node:sqlite turned off or built without it; check NODE_OPTIONS for --no-experimental-sqlite\n`,
     );
   });
 
