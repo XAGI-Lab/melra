@@ -75,17 +75,11 @@ const LEAVES = `<!doctype html><html><head><title>leaves</title></head><body>
   <button id="go" hidden>Go</button>
   <script>fetch("/release").then(() => { location.href = "/landed"; })</script>
 </body></html>`;
-// A page, and a frame, that take their target away when released and leave
-// a moment later for a document that never had it.
-const UNMOUNTS = `<!doctype html><html><head><title>unmounts</title></head><body>
-  <button id="view" hidden>Go</button>
-  <script>fetch("/release").then(() => { document.getElementById("view").remove(); setTimeout(() => { location.href = "/away"; }, 1000); })</script>
-</body></html>`;
-const FRAMED_UNMOUNTS = `<!doctype html><html><head><title>framed-unmounts</title></head><body>
-  <iframe src="/unmounts-inner"></iframe>
-</body></html>`;
-const UNMOUNTS_INNER = `<!doctype html><button id="view" hidden>Go</button>
-  <script>fetch("/release").then(() => { document.getElementById("view").remove(); setTimeout(() => { location.href = "/away"; }, 1000); })</script>`;
+// A document that takes its target away when released and, a moment later,
+// does `then`: as a page, or as a frame inside one titled for it.
+const UNMOUNTS = (then: string) => `<!doctype html><title>unmounts</title><button id="view" hidden>Go</button>
+  <script>fetch("/release").then(() => { document.getElementById("view").remove(); setTimeout(() => { ${then} }, 1000); })</script>`;
+const AROUND = (title: string) => `<!doctype html><title>${title}</title><iframe src="/${title}-inner"></iframe>`;
 // A search field that, once cleared, rewrites the path and mounts a fresh
 // field in its place, then rewrites the path again as it is typed into.
 const REMOUNT = `<!doctype html><html><head><title>remount</title></head><body><div id="box"></div>
@@ -218,9 +212,14 @@ describe("a url on an action that does not navigate", () => {
         "/counted": COUNTED,
         "/remount": REMOUNT,
         "/leaves": LEAVES,
-        "/unmounts": UNMOUNTS,
-        "/framed-unmounts": FRAMED_UNMOUNTS,
-        "/unmounts-inner": UNMOUNTS_INNER,
+        "/unmounts": UNMOUNTS('location.href = "/away"'),
+        "/vanishes": UNMOUNTS(""),
+        "/framed-unmounts": AROUND("framed-unmounts"),
+        "/framed-unmounts-inner": UNMOUNTS('location.href = "/away"'),
+        "/framed-top-leaves": AROUND("framed-top-leaves"),
+        "/framed-top-leaves-inner": UNMOUNTS('parent.location.href = "/away"'),
+        "/framed-removed": AROUND("framed-removed"),
+        "/framed-removed-inner": UNMOUNTS("frameElement.remove()"),
         "/away": "<!doctype html><title>away</title>",
         "/churn": CHURN,
       };
@@ -306,8 +305,14 @@ describe("a url on an action that does not navigate", () => {
       );
       expect(Date.now() - started).toBeLessThan(8_000);
       // So is one that takes the target away first and leaves a moment later,
-      // and a frame that does.
-      for (const [path, left] of [["/unmounts", "away"], ["/framed-unmounts", "framed-unmounts"]]) {
+      // and a frame that does, sends the page around it away, or is removed.
+      const unmounts = [
+        ["/unmounts", "away"],
+        ["/framed-unmounts", "framed-unmounts"],
+        ["/framed-top-leaves", "away"],
+        ["/framed-removed", "framed-removed"],
+      ];
+      for (const [path, left] of unmounts) {
         await run({ action: "navigate", url: `${origin}${path}` });
         const unmounted = Date.now();
         await expect(meanwhile({ action: "click", target: { selector: "#view" }, timeoutMs: 15_000 }), path).rejects.toThrow(
@@ -316,6 +321,11 @@ describe("a url on an action that does not navigate", () => {
         expect(Date.now() - unmounted, path).toBeLessThan(8_000);
         await expect.poll(title, { timeout: 5_000 }).toBe(left);
       }
+      // A target that never comes back runs out the action's own timeout.
+      await run({ action: "navigate", url: `${origin}/vanishes` });
+      await expect(meanwhile({ action: "click", target: { selector: "#view" }, timeoutMs: 2_000 })).rejects.toThrow(
+        "Timeout 2000ms exceeded",
+      );
       // A target in a frame is held to the frame's document it was found in:
       // the frame reloading into one where it shows gets nothing either.
       await run({ action: "navigate", url: `${origin}/framed` });

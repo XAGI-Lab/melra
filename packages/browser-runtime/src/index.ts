@@ -1213,7 +1213,7 @@ export class BrowserRuntime {
           found === undefined
             ? // Bounded by its own timeout; the call only adds the cancel.
               await this.handle(locator.first().elementHandle({ timeout: left() }), "count", Infinity)
-            : await this.refind(pin, locator, found, deadline);
+            : await this.refind(pin, locator, found, deadline, timeout);
         try {
           let moved: boolean;
           if (found === undefined) {
@@ -1268,17 +1268,29 @@ export class BrowserRuntime {
 
   /**
    * The target found again after it went away, searched for in slices that
-   * each end by asking whether the page, or the frame it was found in, has
-   * left: a page that takes the target away and then navigates to a document
-   * without it would otherwise be waited on until the timeout.
+   * each end by asking whether the page, or the document it was first found
+   * in (a frame's), has left: a page that takes the target away and then
+   * navigates to a document without it would otherwise be waited on until
+   * the timeout. A slice cut short, by a frame detaching as the page around
+   * it leaves, is asked about the same way. A wait that runs out names the
+   * action's `timeout`, not its last slice.
    */
-  private async refind(pin: Pin, locator: Locator, found: JSHandle, deadline: number): Promise<ElementHandle> {
+  private async refind(pin: Pin, locator: Locator, found: JSHandle, deadline: number, timeout: number): Promise<ElementHandle> {
     const left = () => Math.max(1, deadline - Date.now());
     for (;;) {
+      let failure: unknown;
       try {
         return await this.handle(locator.first().elementHandle({ timeout: Math.min(REFIND_SLICE_MS, left()) }), "count", Infinity);
       } catch (error) {
-        if (!timedOut(error) || Date.now() >= deadline) throw error;
+        // A cancel, or a page that closed, has its own error.
+        if (this.signal?.aborted === true || pin.page.isClosed()) throw error;
+        failure = error;
+      }
+      if (Date.now() >= deadline) {
+        if (timedOut(failure) && failure instanceof Error) {
+          failure.message = failure.message.replace(/Timeout \d+ms exceeded/, `Timeout ${timeout}ms exceeded`);
+        }
+        throw failure;
       }
       if (await this.moved(pin, !this.dispatched, left())) {
         throw new Error(`browser_page_changed: the page is now at ${pageAddress(pin.page.url())}`);
@@ -1290,7 +1302,8 @@ export class BrowserRuntime {
           return false;
         },
       );
-      if (!there) throw new Error("browser_page_changed: the target's frame is now at another document");
+      if (!there) throw new Error("browser_page_changed: the target's frame has left the document it was found in");
+      if (!timedOut(failure)) throw failure;
     }
   }
 
