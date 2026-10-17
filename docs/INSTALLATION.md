@@ -57,7 +57,7 @@ paths, every environment variable, and the hardened Docker invocation.
 
 ## Requirements
 
-- Node.js 22 or newer.
+- Node.js 22.13 or newer.
 - Chrome, Chromium, or Edge for browser tasks.
 - pnpm 9.5 only when building from source.
 - Python 3.11 or newer only when using the Python SDK.

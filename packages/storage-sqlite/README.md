@@ -36,7 +36,7 @@ running server.
 Schema changes need a new migration rather than an edit to an existing one.
 
 Uses `node:sqlite`, which emits an experimental warning on Node 22 and 24.
-Requires Node.js 22 or newer. Full documentation:
+Requires Node.js 22.13 or newer. Full documentation:
 [github.com/XAGI-Lab/melra](https://github.com/XAGI-Lab/melra)
 
 Apache-2.0

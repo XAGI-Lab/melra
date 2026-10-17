@@ -18,7 +18,7 @@ migration commitments, and stable receipt verification behavior.
 
 | Component | Compatibility target | Current evidence |
 |---|---|---|
-| Node.js | 22 and 24 | CI matrix defined for Linux, macOS, and Windows; the packed `0.3.0-alpha.12` tarballs also installed and run on Node 26.8.2 (macOS arm64), see [MCP and SDK compatibility](#mcp-and-sdk-compatibility) |
+| Node.js | 22 (22.13 or newer) and 24 | CI matrix defined for Linux, macOS, and Windows; the packed `0.3.0-alpha.12` tarballs also installed and run on Node 26.8.2 (macOS arm64), see [MCP and SDK compatibility](#mcp-and-sdk-compatibility) |
 | pnpm | 9.5 for repository builds | Local and CI commands |
 | Python SDK | CPython 3.11+ | CI against live stdio, loopback HTTP, and Unix-socket servers (socket skipped on Windows): 3.11 on Linux, macOS, and Windows; 3.12, 3.13, and 3.14 on Linux; type-checked with pyright |
 | Container | Linux OCI, AMD64 and ARM64 build targets, on a Node 24 LTS base | Docker workflow; release-candidate smoke required |
@@ -124,6 +124,31 @@ sanitized note (what the client showed, a task id, a receipt's
 
 A record with every step passing marks that client and version verified; any
 failure keeps it unverified until a maintainer has looked at the record.
+
+#### Hermes Agent v0.21.5+8877.g865ba90 — 2026-10-17
+
+- OS: Debian GNU/Linux 13.7 (Trixie), Linux aarch64 on Raspberry Pi; MELRA:
+  `@melra/cli@0.3.0-alpha.14` via `npx`; Node.js `22.15.0`
+- Configured with `npx --yes @melra/cli@0.3.0-alpha.14 setup --client hermes
+  --write` under a temporary `HOME`/`HERMES_HOME` and a throwaway workspace.
+  The generated `mcp_servers.melra` entry was inspected before use; it pins
+  `@melra/cli@0.3.0-alpha.14` and points MELRA workspace and data paths into
+  that throwaway environment. All 12 MELRA setup readiness checks passed.
+
+| Step | Result | Evidence |
+|---|---|---|
+| The client loads MELRA and lists its tools | blocked | `hermes mcp test melra` did not return within 45 seconds. Hermes printed that it was completing source-update dependencies and installing Python dependencies; no MCP result or tool list was returned. |
+| A read task planned and run from the client | not run | MCP discovery did not complete. |
+| A mutation planned, approved, and executed | not run | MCP discovery did not complete. |
+| Its receipt retrieved from the client | not run | No client task was created. |
+| A workflow resumed after the server restarted | not run | No client workflow was created. |
+| A running task cancelled from the client | not run | No client task was created. |
+
+Hermes reported its version successfully, but its first MCP command entered its
+own dependency-recovery path and timed out. The configuration/setup result is
+not evidence of an in-client connection. Hermes Agent on this environment is
+therefore **not verified**; retry after its dependency recovery completes and
+repeat the full client checklist.
 
 ## Data compatibility
 

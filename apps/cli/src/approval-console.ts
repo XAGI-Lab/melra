@@ -1,7 +1,15 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
-import { serveHttp, type MelraHttpServer, type MelraRuntime } from "@melra/server";
+import { once } from "node:events";
+import { createInterface } from "node:readline/promises";
+import {
+  approvalScreen,
+  serveHttp,
+  type ApprovalScreenView,
+  type MelraHttpServer,
+  type MelraRuntime,
+} from "@melra/server";
 import { approverLabel, type CliEnvironment } from "./environment.js";
 
 /** What `melra console` needs from the terminal it was started in. */
@@ -12,6 +20,56 @@ export interface ConsoleTerminal {
   open(url: string): Promise<boolean>;
   /** Writes to the operator, on stderr. */
   say(text: string): void;
+}
+
+/**
+ * The approval screen on the terminal it is written to, wrapped to that
+ * terminal's width: taken from any other stream, a piped stdout say, the
+ * width is missing and the terminal wraps the screen itself (#210).
+ */
+export function showApprovalScreen(view: ApprovalScreenView, terminal: { columns?: number; write(text: string): unknown }): void {
+  terminal.write(approvalScreen(view, true, terminal.columns));
+}
+
+/**
+ * `melra run`'s and `melra approve`'s question: the effect as an approver
+ * needs to see it, then y/N, on the operator's terminal (stderr, answered on
+ * stdin), so nothing an agent reads from stdout carries it. Anything but a
+ * yes is answered there with "Not approved.".
+ */
+export async function confirmInTerminal(
+  view: ApprovalScreenView,
+  input: NodeJS.ReadableStream = process.stdin,
+  output: NodeJS.WritableStream & { columns?: number } = process.stderr,
+): Promise<boolean> {
+  showApprovalScreen(view, output);
+  const prompt = createInterface({ input, output });
+  try {
+    // Input that ends before an answer (Ctrl-D or Ctrl-C, or the end of a
+    // stdin that is not a terminal) is a no, never a question left open.
+    let answered = false;
+    const answer = await Promise.race([
+      prompt.question("Approve this effect? [y/N] ").then(
+        (said) => {
+          answered = true;
+          return said;
+        },
+        () => "",
+      ),
+      once(prompt, "close").then(
+        () => "",
+        () => "",
+      ),
+    ]);
+    // Nothing was typed to end the line, so end it here.
+    if (!answered) output.write("\n");
+    const said = answer.trim().toLowerCase();
+    const approved = said === "y" || said === "yes";
+    if (!approved) output.write("Not approved.\n");
+    return approved;
+  } finally {
+    prompt.close();
+  }
 }
 
 /** Refuses anywhere but an operator's terminal, before anything is opened. */

@@ -56,6 +56,13 @@ All notable changes are documented here. The format follows
 
 ### Changed
 
+- Node.js 22.13 is the stated and declared minimum, the first 22.x where
+  `node:sqlite` needs no flag (23.4 on the 23 line). `@melra/cli`,
+  `@melra/server`, `@melra/storage-sqlite`, and `@melra/memory` and
+  `@melra/runtime-core`, which work only with a SQLite store, declare it in
+  `engines`, so npm and pnpm warn, and Yarn 1 refuses, on an older Node; their
+  docs say 22.13 where they said 22. (#218)
+
 - The hardened deployment recipes name Docker Desktop and WSL2 as the way to
   get OS isolation on Windows, and `melra doctor`'s `isolation` line on native
   Windows says so instead of mentioning a Job Object. A Job Object limits
@@ -94,6 +101,13 @@ All notable changes are documented here. The format follows
   where a console keeps its one-time pairing code until its page has read it.
   (#203)
 
+- The y/N question `melra approve` and `melra run` ask in a terminal takes
+  input that ends before an answer as a no: both say `Not approved.` and
+  exit with status 1. Ctrl-D or Ctrl-C there used to stop with `melra:
+  Aborted with Ctrl+D` (or `Ctrl+C`). With stderr redirected, Ctrl-D or the
+  end of input, and on Node before 22.15 (23.8 on the 23 line) either key,
+  left the question open and the command exited 0 without a word.
+
 - A release run that fails after publishing to npm can be re-run: packages
   already on the registry at that version are skipped instead of stopping the
   run. The provenance check waits up to 15 minutes per package for the
@@ -110,6 +124,16 @@ All notable changes are documented here. The format follows
   MCP Registry publish step.
 
 ### Security
+
+- The terminal approval screen (`melra approve`, `melra run`'s prompt) wraps
+  every line to the terminal's width when it is printed, indenting each
+  continuation and counting anything past ASCII as two columns, so the
+  terminal has no line of its own to wrap: its wrap could start agent text,
+  padded to the right length, at column 0, where it read like a line MELRA
+  wrote, its `Effect:` line included. A terminal narrower than 20 columns, or
+  one narrowed after the screen is printed, still wraps it; piped output is
+  unchanged. `approvalScreen` takes the terminal's width as a third
+  argument. (#210)
 
 - `browser.inspect` no longer returns what was typed into a secret field (a
   password input, or one masked with CSS): neither the field list nor a
