@@ -47,6 +47,23 @@ const inlinePlaywrightJson = {
   },
 };
 
+// The CLI links node:sqlite statically, and esbuild hoists every external
+// import of the single file above all of its code, so in the binary that
+// import would link before bin.ts's own checks run, and a node:sqlite that is
+// turned off would crash it at load instead of getting bin.ts's hint. Served
+// from process.getBuiltinModule instead, the module is read inside the lazily
+// initialised graph that bin.ts imports, after those checks.
+const lazySqlite = {
+  name: "lazy-node-sqlite",
+  setup(context) {
+    context.onResolve({ filter: /^node:sqlite$/ }, () => ({ path: "node:sqlite", namespace: "melra-lazy-sqlite" }));
+    context.onLoad({ filter: /.*/, namespace: "melra-lazy-sqlite" }, () => ({
+      contents: 'export const { DatabaseSync } = process.getBuiltinModule("node:sqlite");',
+      loader: "js",
+    }));
+  },
+};
+
 await rm(out, { recursive: true, force: true });
 await mkdir(out, { recursive: true });
 await build({
@@ -59,7 +76,7 @@ await build({
   logLevel: "error",
   // WebDriver BiDi, which MELRA does not use: it drives Chrome over CDP.
   external: ["chromium-bidi", "chromium-bidi/*", "electron"],
-  plugins: [inlinePlaywrightJson],
+  plugins: [inlinePlaywrightJson, lazySqlite],
   // Bundled CommonJS dependencies still reach for these.
   banner: {
     js: [
@@ -72,6 +89,11 @@ await build({
     ].join(" "),
   },
 });
+
+// Fail the build rather than ship a binary that links node:sqlite at load.
+if (/from\s*["']node:sqlite["']/.test(await readFile(bundle, "utf8"))) {
+  throw new Error("node:sqlite is still imported at the top of the bundle");
+}
 
 const config = join(out, "sea.json");
 await writeFile(

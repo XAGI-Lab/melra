@@ -2,8 +2,9 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
-// The `melra` executable. Its only job is to silence one Node warning before
-// the rest of the CLI loads, then hand over to `index.ts`.
+// The `melra` executable. Before the rest of the CLI loads it does two things,
+// then hands over to `index.ts`: it silences one Node warning, and it refuses
+// to start, with a one-line cause, when `node:sqlite` cannot be loaded.
 //
 // `node:sqlite` emits an ExperimentalWarning the first time it is linked, which
 // meant two lines of Node noise on every invocation — `melra help` and
@@ -28,5 +29,17 @@ process.emitWarning = ((warning: string | Error, ...rest: unknown[]): void => {
   if (SQLITE_EXPERIMENTAL.test(text)) return;
   (emitWarning as (...args: unknown[]) => void)(warning, ...rest);
 }) as typeof process.emitWarning;
+
+// The CLI links `node:sqlite` statically, and a release where it needs a flag
+// (before 22.13, or 23.0 to 23.3), or a supported one where it was turned off
+// or left out of the build, would otherwise end every command, `doctor`
+// included, at load with a bare ERR_UNKNOWN_BUILTIN_MODULE. `getBuiltinModule`
+// asks without linking anything; it is itself missing before 20.16 and, on
+// the 22 line, before 22.3, where `node:sqlite` is too.
+if (process.getBuiltinModule?.("node:sqlite") === undefined) {
+  const { sqliteUnavailable } = await import("./node-support.js");
+  process.stderr.write(`${sqliteUnavailable(process.versions.node)}\n`);
+  process.exit(1);
+}
 
 await import("./index.js");
