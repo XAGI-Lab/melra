@@ -354,7 +354,14 @@ export class SqliteStore {
     });
   }
 
-  private transaction<T>(action: () => T): T {
+  /**
+   * Runs `action` under `BEGIN IMMEDIATE`, so a re-read, a decision and the
+   * writes it leads to settle once across processes sharing the database.
+   * `action` must be synchronous and must not call a method that opens its
+   * own transaction (`saveTaskExecutionResult`, `createWorkflow`,
+   * `transitionWorkflow`, `takeWorkflowLease`, `compactMemories`).
+   */
+  transaction<T>(action: () => T): T {
     this.database.exec("BEGIN IMMEDIATE");
     try {
       const result = action();

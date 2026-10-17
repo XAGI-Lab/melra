@@ -212,7 +212,8 @@ export class TaskController {
 
   /**
    * Draws by tasks between their re-check and their record, per grant and
-   * task. The durable draw is written only once work is verified, so without
+   * task. The durable draw is written only once work has passed every check
+   * the kernel can make (#54: verified, or waiting on a semantic verdict), so without
    * this two tasks running at once both saw the grant unspent: two operations
    * against `maxOperations: 1`, a parallel workflow node overspending
    * `dailyMax`.
@@ -316,6 +317,15 @@ export class TaskController {
           `evidence_verifier_unavailable:${predicate.type === "custom" ? predicate.verifier : predicate.type}`,
         );
       }
+    }
+    // Reconciliation settles whether an effect happened; it cannot settle a
+    // question about meaning, and a contract promising reconciliation would
+    // then be false (#54).
+    if (
+      parsed.reconciliation.length > 0 &&
+      [...parsed.requiredEvidence, ...parsed.reconciliation].some((predicate) => predicate.type === "semantic")
+    ) {
+      throw new Error("semantic_evidence_not_reconcilable");
     }
     return evaluatePolicy(
       "00000000-0000-4000-8000-000000000000",
@@ -509,8 +519,18 @@ export class TaskController {
       const verified =
         actionSucceeded &&
         (request.requiredEvidence.length === 0 || verification.verified);
+      // Every check the kernel can make held; what is left is a question only
+      // someone outside answers (#54).
+      const awaitingJudgement =
+        actionSucceeded &&
+        evidence.some((item) => item.type === "semantic") &&
+        evidence.every((item) => item.passed || item.type === "semantic");
+      // The effect ran and passed every kernel check, so it is committed and
+      // metered now: a key that ran must not run again, and a grant must not
+      // fund a second effect while the first waits for its verdict.
+      const checksHeld = verified || awaitingJudgement;
       if (
-        verified &&
+        checksHeld &&
         task.idempotencyKey !== undefined &&
         !this.store.commitIdempotency(
           task.idempotencyKey,
@@ -523,11 +543,12 @@ export class TaskController {
         task.error = "duplicate_attempt_prevented";
       }
       // Metered here and nowhere else: the same point idempotency commits, so a
-      // grant is drawn down by work that actually happened and was verified.
-      // A refusal, a failed verification, a duplicate collapsed just above —
-      // none of them reach this line, and none of them cost the caller a draw.
+      // grant is drawn down by work that actually happened and passed every
+      // check the kernel can make (verified, or waiting on a semantic verdict).
+      // A refusal, a failed check, a duplicate collapsed just above — none of
+      // them reach this line, and none of them cost the caller a draw.
       if (
-        verified &&
+        checksHeld &&
         task.status !== "cancelled" &&
         rechecked.grantId !== undefined
       ) {
@@ -554,9 +575,19 @@ export class TaskController {
       if (task.status !== "cancelled") {
         task.status = verified
           ? "verified_success"
-          : actionSucceeded
-            ? "partial"
-            : "failed";
+          : awaitingJudgement
+            ? "waiting_user"
+            : actionSucceeded
+              ? "partial"
+              : "failed";
+      }
+      // Written in the same save as the status, so a waiting row always says
+      // what it waits on, and until when.
+      if (task.status === "waiting_user") {
+        const expiresAt = new Date(Date.now() + approvalTtl(this.policy)).toISOString();
+        task.judgements = request.requiredEvidence.flatMap((predicate, predicateIndex) =>
+          predicate.type === "semantic" ? [{ judgementId: randomUUID(), predicateIndex, expiresAt }] : [],
+        );
       }
       task.updatedAt = now();
       this.store.saveTask(task);
@@ -688,6 +719,10 @@ export class TaskController {
       throw new Error(`task_not_reconcilable:${task.status}`);
     }
     const request = this.loadRequest(taskId);
+    // A provider can say whether an effect happened, never whether it is
+    // right: a task that declared a semantic predicate stays parked with its
+    // cause unchanged (#54).
+    if (request.requiredEvidence.some((predicate) => predicate.type === "semantic")) return { task };
     const classified = classifyOperation(request.operation);
     const park = (reason: string): ExecutionResult => {
       task.error = reason;
@@ -840,8 +875,48 @@ export class TaskController {
         this.store.inFlight.delete(task.id);
       }
     }
+    this.expireJudgements(failures);
     if (failed === undefined && failures.size > 0) throw failures.values().next().value;
     return recovered;
+  }
+
+  /**
+   * No answer is not a yes (#54). A waiting task whose judgements are past
+   * their `expiresAt` settles closed: its effect ran, so a change is
+   * `recovery_required` (never `failed`) and a read is `partial`. Nothing ran
+   * here, so no receipt is written; the certificate is replaced. Re-read and
+   * written in one transaction, so a peer settling the same task wins once.
+   *
+   * ponytail: runs on the startup pass and the 30 s recovery sweep, so a wait
+   * can outlive its `expiresAt` by one interval, or until a runtime next opens
+   * this data directory; a verdict tool must check `expiresAt` itself.
+   */
+  private expireJudgements(failures: Map<string, unknown>): void {
+    const at = Date.now();
+    for (const listed of this.store.listTasks(100_000, "waiting_user")) {
+      const open = listed.judgements ?? [];
+      // No judgement, or an unreadable time, is no reason to keep waiting.
+      if (open.length > 0 && open.every((judgement) => Date.parse(judgement.expiresAt) > at)) continue;
+      try {
+        this.store.transaction(() => {
+          const task = this.store.getTask(listed.id);
+          if (task?.status !== "waiting_user") return;
+          const last = task.receiptIds[task.receiptIds.length - 1];
+          const receipt = last === undefined ? undefined : this.store.getReceipt(last);
+          const evidence = (receipt?.evidence ?? []).map((item) =>
+            item.type === "semantic"
+              ? { ...item, passed: false, inconclusive: true, summary: "semantic_judgement_expired" }
+              : item,
+          );
+          task.status = task.policyDecision.effect === "read" ? "partial" : "recovery_required";
+          task.error = "semantic_judgement_expired";
+          task.updatedAt = now();
+          this.createAndSaveCertificate(task, evidence);
+        });
+      } catch (error) {
+        failures.set(listed.id, error);
+      }
+    }
   }
 
   private async recoverTask(task: TaskRecord): Promise<TaskRecord> {

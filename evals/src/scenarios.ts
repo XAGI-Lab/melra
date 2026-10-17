@@ -262,6 +262,57 @@ export const scenarios: EvaluationScenario[] = [
     expectedFinal: "verified_success",
   },
   {
+    // A question about meaning never decides a delete on its own (#54): with
+    // nothing the kernel re-reads beside it, the plan is refused.
+    id: "semantic-only-destructive-denied",
+    category: "policy",
+    fixtures: [{ path: "semantic-only.txt", content: "kept" }],
+    request: {
+      goal: "Delete a file judged only by a semantic question",
+      operation: {
+        kind: "file",
+        action: "delete",
+        path: "semantic-only.txt",
+        encoding: "utf8",
+        recursive: false,
+      },
+      constraints: [],
+      forbiddenEffects: [],
+      budget: { maxSteps: 2, maxDurationMs: 5_000, maxRetries: 0 },
+      requiredEvidence: [{ type: "semantic", question: "Was the right file removed?" }],
+    },
+    expectedPlan: "policy_blocked",
+    expectedFinal: "policy_blocked",
+  },
+  {
+    // Beside evidence the kernel re-reads, it is allowed, and the task waits
+    // for a verdict from outside once every check MELRA can make has held.
+    id: "semantic-beside-state-waits-for-judgement",
+    category: "verification",
+    fixtures: [{ path: "semantic-state.txt", content: "remove after approval" }],
+    request: {
+      goal: "Delete a file, prove it is absent, and ask whether it was the right one",
+      operation: {
+        kind: "file",
+        action: "delete",
+        path: "semantic-state.txt",
+        encoding: "utf8",
+        recursive: false,
+      },
+      constraints: [],
+      forbiddenEffects: [],
+      budget: { maxSteps: 2, maxDurationMs: 5_000, maxRetries: 0 },
+      requiredEvidence: [
+        { type: "file_absent", path: "semantic-state.txt" },
+        { type: "semantic", question: "Was the right file removed?" },
+      ],
+    },
+    expectedPlan: "awaiting_approval",
+    approve: true,
+    expectedFinal: "waiting_user",
+    expectedEvidenceStrengths: ["state", "semantic"],
+  },
+  {
     id: "file-traversal-blocked-at-runtime",
     category: "file",
     request: {

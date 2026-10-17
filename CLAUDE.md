@@ -49,7 +49,7 @@ pnpm build                  # tsc -p per package; required before tests (see bel
 pnpm typecheck              # builds, then tsc -p tsconfig.test.json per package (src + tests, no emit)
 pnpm check                  # versions:check + docs:check + typecheck + check-dist (no tests in dist/) + README examples + test + python:check — the CI gate
 pnpm docs:check             # every relative link and #anchor in every *.md resolves; every MELRA_* variable has a row in docs/INSTALLATION.md; CHANGELOG.md is in Keep a Changelog shape
-pnpm evals                  # 52 deterministic policy/execution scenarios → evals/results/latest.json
+pnpm evals                  # 54 deterministic policy/execution scenarios → evals/results/latest.json
 pnpm e2e                    # packages/server/test/e2e.test.ts against a live stdio server
 pnpm pack:check              # npm pack --dry-run for the published CLI
 pnpm readme:check           # typecheck every ```ts block in every package README
@@ -129,6 +129,7 @@ defaults that trip people up:
 
 - A non-empty `constraints` array is an outright **deny** (`freeform_constraints_not_enforceable`) — freeform prose is not enforceable, so leave it `[]`.
 - Any non-`read` effect with empty `requiredEvidence` is denied (`mutation_requires_evidence`).
+- A `destructive` effect whose `requiredEvidence` has a `semantic` predicate but no `state` or `independent` one is denied (`semantic_only_destructive`): a judgement about meaning is never the deciding vote (#54).
 - Terminal commands must be in `allowedCommands` by basename; shells and `sudo`/`su` are denied unconditionally. `git`'s effect is `read` only for a small read-only subcommand set; `npm`/`npx`/`pnpm` are high-risk mutations.
 - Browser destinations default to `allowedDomains: ["*"]` with `allowLocalhost: true`, so browsing works without a policy JSON. The allowlist is a narrowing control; `assertSafeUrl` in `browser-runtime` is the actual boundary and independently rejects non-http(s) protocols, URL credentials, private/link-local ranges, and cloud metadata, resolving DNS first so a public name cannot be rebound.
 - Effect/risk classification lives in one place, `classifyOperation`. Adding an action without updating it silently mis-classifies (usually as a mutation).
@@ -169,7 +170,9 @@ New evidence predicate types need `EvidencePredicateSchema` plus a `PredicateVer
 `packages/verifier-core`'s `BUILT_IN` list; strength is stamped from the type in `verify`, never by
 the verifier. The verifier resolves every path through `realpath` and rejects
 anything outside the workspace root, including the root itself — keep that confinement when
-adding predicates.
+adding predicates. `semantic` is the one built-in that never passes: the kernel runs no model,
+so `TaskController` parks such a task in `waiting_user` for a verdict from outside, and the
+recovery sweep settles it closed at expiry (#54).
 
 Redaction happens at multiple layers: `redactStructuredValue` on task requests, results, and
 error messages before persistence, plus `redactMemoryValue` inside the memory package and

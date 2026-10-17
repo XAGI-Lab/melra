@@ -4,6 +4,7 @@
 import { readFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, normalize, relative, resolve, sep } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
+import { evidenceStrength } from "@melra/receipt-schema";
 import { hostOf } from "./network-policy.js";
 import type {
   ApprovalChallenge,
@@ -52,6 +53,7 @@ export interface LocalPolicy {
    * How long an approval challenge stays open, and a recorded decision usable.
    * Absent, it follows the mode (`approvalTtl`): an operator approving out of
    * band in enforced mode needs longer than someone answering in the chat.
+   * It also bounds how long a semantic judgement waits (#54).
    */
   approvalTtlMs?: number;
   maxFileBytes: number;
@@ -1255,6 +1257,18 @@ export function evaluatePolicy(
 
   if (classified.effect !== "read" && request.requiredEvidence.length === 0) {
     return { decision: decide("deny", "mutation_requires_evidence") };
+  }
+
+  // A judgement about meaning is never the deciding vote on a destructive
+  // effect (#54): beside it there must be evidence the kernel re-read itself
+  // or got from another channel. The actor's own report (result_equals,
+  // exit_code, custom) does not count.
+  if (
+    classified.effect === "destructive" &&
+    request.requiredEvidence.some((predicate) => predicate.type === "semantic") &&
+    !request.requiredEvidence.some((predicate) => ["state", "independent"].includes(evidenceStrength(predicate.type)))
+  ) {
+    return { decision: decide("deny", "semantic_only_destructive") };
   }
 
   if (classified.effect === "read") {
