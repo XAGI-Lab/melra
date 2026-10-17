@@ -369,7 +369,8 @@ Action: `info`. Returns local runtime capability information without mutation.
 | `semantic` | a yes/no `question` about meaning, with `artifacts` naming result paths, for a judge outside MELRA; strength is always `semantic`; nothing answers it in this release |
 
 URL globs are anchored and schema-bounded. A completed action with unmet
-required evidence returns `partial`, never `verified_success`.
+required evidence returns `partial`, never `verified_success`; one whose only
+unmet evidence is a `semantic` question waits in `waiting_user` instead (below).
 
 `custom` is for effects no built-in can confirm, such as a database row or a
 ticket in some SaaS. The verifier is code passed to `createMelraRuntime` as

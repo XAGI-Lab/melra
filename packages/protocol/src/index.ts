@@ -594,7 +594,7 @@ export const TaskRequestSchema = z
       .max(20)
       .default([])
       .describe(
-        "Predicates that must hold after execution for the task to be verified_success. Required for any non-read operation: a mutation with none is denied with mutation_requires_evidence. An adapter that succeeded while a predicate failed is partial, never success. A semantic predicate is never answered by MELRA: the task waits in waiting_user and fails closed at expiry, and it is never enough alone for a destructive effect.",
+        "Predicates that must hold after execution for the task to be verified_success. Required for any non-read operation: a mutation with none is denied with mutation_requires_evidence. An adapter that succeeded while a predicate failed is partial, never success. A semantic predicate is never answered by MELRA: the task waits in waiting_user and fails closed at expiry. Beside semantic, a destructive effect also needs file_exists, file_absent, file_hash or http_resource_matches, or it is denied with semantic_only_destructive; semantic beside reconciliation is denied with semantic_evidence_not_reconcilable.",
       ),
     reconciliation: z
       .array(EvidencePredicateSchema)

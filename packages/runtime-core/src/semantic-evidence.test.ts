@@ -170,21 +170,37 @@ describe("semantic evidence (#54)", () => {
     expect(executor.execute).toHaveBeenCalledTimes(1);
   });
 
+  it("settles the oldest expired waits first and reads no wait that is still open", async () => {
+    const { controller, store } = await setup();
+    const older = await run(controller, write([{ type: "file_exists", path: "out.txt" }, SEMANTIC]));
+    const newer = await run(controller, write([{ type: "file_exists", path: "out.txt" }, SEMANTIC]));
+    const at = Date.parse(older.task.judgements![0]!.expiresAt) + 1;
+    // The newer one waits longer, as a later task with a longer TTL would.
+    store.saveTask({
+      ...controller.status(newer.task.id),
+      judgements: [{ ...newer.task.judgements![0]!, expiresAt: new Date(at + 60_000).toISOString() }],
+    });
+    expect(store.listExpiredJudgements(new Date(at).toISOString()).map((task) => task.id)).toEqual([older.task.id]);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(at);
+    await controller.recoverInterrupted();
+    expect(controller.status(older.task.id).status).toBe("recovery_required");
+    expect(controller.status(newer.task.id).status).toBe("waiting_user");
+  });
+
   it("is refused where nothing could settle it", async () => {
     const { controller } = await setup();
     // Beside reconciliation, which asks a provider whether the effect happened.
-    expect(() =>
-      controller.plan(
-        write([{ type: "file_exists", path: "out.txt" }, SEMANTIC], {
-          reconciliation: [{ type: "file_exists", path: "out.txt" }],
-        }),
-      ),
-    ).toThrow("semantic_evidence_not_reconcilable");
-    expect(() =>
-      controller.plan(
-        write([{ type: "file_exists", path: "out.txt" }], { reconciliation: [SEMANTIC] }),
-      ),
-    ).toThrow("semantic_evidence_not_reconcilable");
+    for (const request of [
+      write([{ type: "file_exists", path: "out.txt" }, SEMANTIC], {
+        reconciliation: [{ type: "file_exists", path: "out.txt" }],
+      }),
+      write([{ type: "file_exists", path: "out.txt" }], { reconciliation: [SEMANTIC] }),
+    ]) {
+      const planned = controller.plan(request);
+      expect(planned.status).toBe("policy_blocked");
+      expect(planned.policyDecision.reason).toBe("semantic_evidence_not_reconcilable");
+    }
     // As the deciding vote on a delete.
     const deletion = controller.plan(
       TaskRequestSchema.parse({

@@ -267,7 +267,7 @@ but not in the shape the protocol should eventually name.
 | Durable effect runtime | ✓ | `@melra/runtime-core` over SQLite |
 | Idempotency | ✓ | `idempotency_commits`, unique per committed attempt |
 | Recovery engine | ✓ | Conservative rules plus explicit `recovery_required` |
-| Verification framework | partial | Execution, state, and independent levels ship; semantic does not ([P3](#p3--verification-framework)) |
+| Verification framework | partial | Execution, state, and independent levels ship; semantic questions are posed and fail closed, and the verdict that answers them is next ([P3](#p3--verification-framework)) |
 | Evidence system | ✓ | Redacted receipts and SHA-256 certificates |
 | Effect adapters | partial | Files, terminal, browser, computer, HTTP; database, cloud, SaaS pending ([P4](#p4--credentials-and-api-effects)) |
 | Harness adapters | ✓ | Ordinary tool names over the same pipeline (`MELRA_HARNESS_TOOLS=1`), proven against three mismatched clients on one data directory |
@@ -409,8 +409,10 @@ alternative, not asking the harness not to use it.
       ([#53](https://github.com/XAGI-Lab/melra/issues/53),
       [#139](https://github.com/XAGI-Lab/melra/issues/139))
 - [ ] Semantic verification, labelled probabilistic everywhere it appears, and
-      never the sole evidence for a destructive effect. Design proposal under
-      discussion on the issue.
+      never the sole evidence for a destructive effect. The first slice ships
+      the `semantic` predicate, `semantic_only_destructive`, and `waiting_user`
+      with a wait that fails closed at expiry; the verdict tool and the check
+      that the judge is not the actor are next.
       ([#54](https://github.com/XAGI-Lab/melra/issues/54))
 
 ### P4 — credentials and API effects

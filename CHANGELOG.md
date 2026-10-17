@@ -77,8 +77,12 @@ All notable changes are documented here. The format follows
   every kernel check has held: when it is verified, as before, and also when
   it enters `waiting_user` on a `semantic` question, since its effect ran. A
   key that ran does not run again, and a grant does not fund a second effect
-  while the first waits. An embedder verifier named `semantic` is refused
-  (`verifier_type_taken:semantic`). (#54)
+  while the first waits. (#54)
+
+- **Breaking:** `semantic` is now a built-in verifier type, so
+  `createMelraRuntime` refuses an `evidenceVerifiers` entry of that type
+  (`verifier_type_taken:semantic`) and the runtime does not start. Rename such
+  a verifier, and the `custom` predicates that name it. (#54)
 
 - **Breaking:** in enforced mode, a browser action that drives a page
   (`click`, `type`, `fill_form`, `select`, `press`, `upload`, `download`,

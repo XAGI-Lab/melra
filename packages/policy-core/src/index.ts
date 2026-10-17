@@ -1194,6 +1194,17 @@ export function evaluatePolicy(
     return { decision: decide("deny", "effect_forbidden_by_request") };
   }
 
+  // Reconciliation settles whether an effect happened; it cannot settle a
+  // question about meaning, so a contract promising reconciliation beside one
+  // would be false (#54). A rule about the request's own shape, not MELRA's
+  // judgement of it, so unhinged mode keeps it.
+  if (
+    request.reconciliation.length > 0 &&
+    [...request.requiredEvidence, ...request.reconciliation].some((predicate) => predicate.type === "semantic")
+  ) {
+    return { decision: decide("deny", "semantic_evidence_not_reconcilable") };
+  }
+
   // Unhinged mode allows everything the operator did not forbid in this very
   // request. It sits after the `forbiddenEffects` check on purpose: that field
   // is the caller declaring a limit on its own task, not a guardrail MELRA

@@ -109,6 +109,25 @@ describe("local policy", () => {
     expect(decide(deletion, [semantic], { ...createDefaultPolicy(root), unhinged: true }).outcome).toBe("allow");
   });
 
+  it("refuses a semantic question beside reconciliation, which cannot settle one, in every mode (#54)", () => {
+    const semantic = { type: "semantic", question: "Is it right?" };
+    const write = { kind: "file", action: "write", path: "result.txt", content: "x" };
+    for (const policy of [createDefaultPolicy(root), { ...createDefaultPolicy(root), unhinged: true }]) {
+      for (const [requiredEvidence, reconciliation] of [
+        [[{ type: "file_exists", path: "result.txt" }, semantic], [{ type: "file_exists", path: "result.txt" }]],
+        [[{ type: "file_exists", path: "result.txt" }], [semantic]],
+      ]) {
+        expect(
+          evaluatePolicy(
+            "b47dded2-4e20-4d96-a993-fdf6b0034666",
+            TaskRequestSchema.parse({ goal: "Judge and reconcile", operation: write, requiredEvidence, reconciliation }),
+            policy,
+          ).decision.reason,
+        ).toBe("semantic_evidence_not_reconcilable");
+      }
+    }
+  });
+
   it("requires evidence and approval for mutation", () => {
     const missingEvidence = TaskRequestSchema.parse({
       goal: "Write a file",

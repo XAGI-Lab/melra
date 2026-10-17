@@ -318,15 +318,6 @@ export class TaskController {
         );
       }
     }
-    // Reconciliation settles whether an effect happened; it cannot settle a
-    // question about meaning, and a contract promising reconciliation would
-    // then be false (#54).
-    if (
-      parsed.reconciliation.length > 0 &&
-      [...parsed.requiredEvidence, ...parsed.reconciliation].some((predicate) => predicate.type === "semantic")
-    ) {
-      throw new Error("semantic_evidence_not_reconcilable");
-    }
     return evaluatePolicy(
       "00000000-0000-4000-8000-000000000000",
       parsed,
@@ -892,11 +883,7 @@ export class TaskController {
    * this data directory; a verdict tool must check `expiresAt` itself.
    */
   private expireJudgements(failures: Map<string, unknown>): void {
-    const at = Date.now();
-    for (const listed of this.store.listTasks(100_000, "waiting_user")) {
-      const open = listed.judgements ?? [];
-      // No judgement, or an unreadable time, is no reason to keep waiting.
-      if (open.length > 0 && open.every((judgement) => Date.parse(judgement.expiresAt) > at)) continue;
+    for (const listed of this.store.listExpiredJudgements(now())) {
       try {
         this.store.transaction(() => {
           const task = this.store.getTask(listed.id);
