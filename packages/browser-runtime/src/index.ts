@@ -807,12 +807,14 @@ export class BrowserRuntime {
             // The tab this runtime is opening starts blank with no opener, so
             // it is among `theirs`, which no wait counted: taken back here, it
             // is neither counted nor judged. Any other window handed over in
-            // that instant is judged like any other, and one that cannot be
-            // looked up is counted, as before.
+            // that instant is judged like any other. The runtime's own tab is
+            // never closed when it is handed over, so one that has closed is
+            // judged too (and reported, as a closed window is everywhere); one
+            // still open that cannot be looked up is counted, as before.
             if (own) {
               const id = await this.targetOf(opened).catch(() => undefined);
-              if (id === undefined) return adopted(undefined);
-              if (this.theirs.delete(id)) return;
+              if (id === undefined && !opened.isClosed()) return adopted(undefined);
+              if (id !== undefined && this.theirs.delete(id)) return;
             }
             const { adopt: yes, during, id } = await this.adoptable(opened, acting);
             adopted(id);

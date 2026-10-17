@@ -598,18 +598,32 @@ describe("browser see/act loop", () => {
       await mine.evaluate(() => window.open(`${location.origin}/?later`));
       await leftAlone("?later");
       // A window handed over while the runtime opens a tab of its own is
-      // judged like any other: one at a web address is that action's popup.
+      // judged like any other: one at a web address is that action's popup,
+      // and so is each window the agent's page opens then, closed or not.
       const context = (runtime as unknown as { context: BrowserContext }).context;
+      const agent = (runtime as unknown as { activePage: Page }).activePage;
       const newPage = context.newPage.bind(context);
       context.newPage = async () => {
         context.newPage = newPage;
-        const handed = context.waitForEvent("page");
+        let seen = 0;
+        const handed = new Promise<void>((done) => {
+          const counted = () => {
+            seen += 1;
+            if (seen < 6) return;
+            context.off("page", counted);
+            done();
+          };
+          context.on("page", counted);
+        });
         await fetch(`http://127.0.0.1:${port}/json/new?${origin}/?duringnew`, { method: "PUT" });
+        await agent.evaluate((url) => [0, 1, 2, 3, 4].forEach((i) => window.open(url + i)), `${origin}/?closes`);
         await handed;
         return await newPage();
       };
       const opening = ((await run({ action: "tab_new" })).popups as unknown[] | undefined) ?? [];
-      expect(opening).toEqual([expect.objectContaining({ url: expect.stringContaining("?duringnew"), blocked: true })]);
+      expect(opening).toHaveLength(6);
+      expect(opening).toEqual(expect.arrayContaining([expect.objectContaining({ url: expect.stringContaining("?duringnew") })]));
+      expect(opening).toEqual(Array.from({ length: 6 }, () => expect.objectContaining({ blocked: true })));
     } finally {
       answerAll();
       loading.splice(0).forEach((answer) => answer());

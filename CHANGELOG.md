@@ -104,13 +104,13 @@ All notable changes are documented here. The format follows
   during the next action. A tab a link opens with a modifier or middle click
   has no opener, so between actions it counts as the operator's whoever
   clicked; it is still listed by `tabs`, and its loads are still checked. A
-  tab created while an action runs is judged as the entry below says. A
-  window that closes before it can be looked up, such as a tab that turns into a download, is
-  reported either way. Ownership lasts for one attach: after MELRA restarts or
-  reconnects, the tabs it opened before count as the operator's until it
-  drives one again. A reported popup's URL no longer carries its fragment,
-  where a console keeps its one-time pairing code until its page has read it.
-  (#203)
+  tab created while an action runs is judged as the #223 entry below says.
+  A window that closes before it can be looked up, such as a tab that turns
+  into a download, is reported either way. Ownership lasts for one attach:
+  after MELRA restarts or reconnects, the tabs it opened before count as the
+  operator's until it drives one again. A reported popup's URL no longer
+  carries its fragment, where a console keeps its one-time pairing code until
+  its page has read it. (#203)
 
 - In a browser the runtime is attached to, a window the operator opens
   between the runtime's actions whose first response never arrives no longer
