@@ -56,6 +56,18 @@ All notable changes are documented here. The format follows
 
 ### Changed
 
+- **Breaking:** in enforced mode, a browser action that drives a page
+  (`click`, `type`, `fill_form`, `select`, `press`, `upload`, `download`,
+  `close`, `tab_switch`) must name it with `url`, or it is refused at planning
+  with `browser_action_requires_url`, ahead of any grant check. The operator
+  approving it always sees which page it lands on, and a grant always has a
+  page to match. A harness in enforced mode sends the page's url, from `tabs`
+  or the last `inspect`, with each of these actions; the harness tools
+  `browser_click` and `browser_type` take a `url` for it. Developer mode does
+  not require one. In every mode, the url
+  of `close` and `tab_switch` names the tab, which can be `about:blank` or off
+  the allowlist, since neither loads anything. (#196)
+
 - Node.js 22.13 is the stated and declared minimum, the first 22.x where
   `node:sqlite` needs no flag (23.4 on the 23 line). `@melra/cli`,
   `@melra/server`, `@melra/storage-sqlite`, and `@melra/memory` and
@@ -132,6 +144,25 @@ All notable changes are documented here. The format follows
   MCP Registry publish step.
 
 ### Security
+
+- A browser input action (`click`, `type`, `fill_form`, `select`, `press`,
+  `upload`, `download`) is held to the page its checks read, the `url` it
+  names and the approval-surface marker, and its target to the document it
+  was found in (a frame's, for a target in a frame). The input goes through
+  that element, and the target is found again only in the same document, so a
+  page or frame that navigates itself while the action waits for its target,
+  even to the same address, gets nothing: the action is refused with
+  `browser_page_changed`. The page, and its address until the action's first
+  input, are checked again after the target is first waited for (as the
+  action would wait for it, sending nothing), just before the input, and
+  typing stops at the first key after the page reports a new document: a page
+  may rewrite its own path as it is typed into, or between a form's fields.
+  What is left: a navigation that commits in the instant Playwright
+  dispatches can still receive that one click or key; the address is not
+  checked again during Playwright's own waits after that check (for a target
+  found again after a re-render, or its hit-target retries); keys go wherever
+  the page has put focus, a frame inside it included; and the checks read the
+  top-level page, not a frame's content. (#196)
 
 - The terminal approval screen (`melra approve`, `melra run`'s prompt) wraps
   every line to the terminal's width when it is printed, indenting each

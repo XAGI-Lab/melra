@@ -41,6 +41,12 @@ const target = z
   })
   .strict()
   .describe("How to find the element: a CSS selector, or a role plus its accessible name, or visible text.");
+const pageUrl = z
+  .string()
+  .url()
+  .max(8_192)
+  .optional()
+  .describe("The page the action acts on, as policy and the approver see it.");
 
 interface HarnessTool<Shape extends z.ZodRawShape> {
   title: string;
@@ -174,16 +180,18 @@ export const HARNESS_TOOLS: Record<string, HarnessTool<z.ZodRawShape>> = {
   }),
   browser_click: tool({
     title: "Click an element",
-    description: "Click one element on the current page. Needs approval.",
-    input: { target },
+    description:
+      "Click one element on the current page. Needs approval. `url` names that page: the click is refused anywhere else, and in enforced mode it is required.",
+    input: { target, url: pageUrl },
     readOnly: false,
     goal: () => "Click an element",
-    operation: (a) => ({ kind: "browser", action: "click", target: a.target }),
+    operation: (a) => ({ kind: "browser", action: "click", target: a.target, ...(a.url === undefined ? {} : { url: a.url }) }),
   }),
   browser_type: tool({
     title: "Type into a field",
-    description: "Type text into one field on the current page. Needs approval.",
-    input: { target, value: z.string().max(100_000) },
+    description:
+      "Type text into one field on the current page. Needs approval. `url` names that page: typing is refused anywhere else, and in enforced mode it is required.",
+    input: { target, value: z.string().max(100_000), url: pageUrl },
     readOnly: false,
     goal: () => "Type into a field",
     operation: (a) => ({
@@ -191,6 +199,7 @@ export const HARNESS_TOOLS: Record<string, HarnessTool<z.ZodRawShape>> = {
       action: "type",
       target: a.target,
       value: a.value,
+      ...(a.url === undefined ? {} : { url: a.url }),
     }),
   }),
   remember: tool({

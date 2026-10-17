@@ -11,6 +11,7 @@ import type {
   CDPSession,
   ElementHandle,
   Frame,
+  JSHandle,
   Locator,
   Page,
   Route,
@@ -193,12 +194,8 @@ export function inputSent(error: unknown): boolean {
   return error instanceof Error && /^\s*- performing .+ action$/m.test(withoutColour(error.message));
 }
 
-/** The actions that navigate the active page or send it input. */
-const DRIVING_ACTIONS: ReadonlySet<BrowserOperation["action"]> = new Set([
-  "navigate",
-  "back",
-  "forward",
-  "reload",
+/** The actions that send a page input, each pinned to the document it was checked on. */
+const INPUT_ACTIONS: ReadonlySet<BrowserOperation["action"]> = new Set([
   "click",
   "type",
   "fill_form",
@@ -207,6 +204,49 @@ const DRIVING_ACTIONS: ReadonlySet<BrowserOperation["action"]> = new Set([
   "upload",
   "download",
 ]);
+
+/** The actions that navigate the active page or send it input. */
+const DRIVING_ACTIONS: ReadonlySet<BrowserOperation["action"]> = new Set([
+  "navigate",
+  "back",
+  "forward",
+  "reload",
+  ...INPUT_ACTIONS,
+]);
+
+/** A Playwright wait, or one of ours, that ran out. */
+const timedOut = (error: unknown): boolean =>
+  error instanceof BrowserCallTimeoutError || (error instanceof Error && error.name === "TimeoutError");
+
+/**
+ * A wait that ran out at an action's deadline, named for the action's whole
+ * `timeout`: whichever call held the last of it (a re-find's slice, a check
+ * of the page, the input's own wait) is no measure of how long it waited.
+ */
+function ranOut(error: unknown, timeout: number): unknown {
+  if (error instanceof Error && error.name === "TimeoutError") {
+    error.message = error.message.replace(/Timeout \d+ms exceeded/, `Timeout ${timeout}ms exceeded`);
+    return error;
+  }
+  return Object.assign(new Error(`Timeout ${timeout}ms exceeded.`), { name: "TimeoutError" });
+}
+
+/** Playwright's word for an element its document no longer holds. */
+const detached = (error: unknown): boolean =>
+  error instanceof Error && error.message.includes("Element is not attached to the DOM");
+
+/** How long a target found again is searched for before the page is asked whether it left. */
+const REFIND_SLICE_MS = 500;
+
+/** What a click waits for, short of the hit-target check only the click itself makes. */
+const CLICKABLE = ["visible", "enabled", "stable"] as const;
+
+/** The document an input action was checked against, and the address, if it named one. */
+interface Pin {
+  page: Page;
+  document: JSHandle;
+  address: string | undefined;
+}
 
 /** A URL without its fragment. */
 function withoutFragment(url: string): string {
@@ -1310,26 +1350,217 @@ export class BrowserRuntime {
    * `.fill("")` is still how the field gets cleared, because it empties one
    * reliably no matter what is in it.
    */
-  private async typeInto(
-    locator: Locator,
-    value: string,
-    operation: BrowserOperation,
-  ): Promise<void> {
-    const field = locator.first();
-    if (operation.clearFirst) {
-      await field.fill("", { timeout: operation.timeoutMs });
+  private async typeInto(pin: Pin, locator: Locator, value: string, operation: BrowserOperation): Promise<void> {
+    const ready = operation.clearFirst ? (["visible", "editable"] as const) : (["visible"] as const);
+    await this.actOn(pin, locator, operation.timeoutMs, async (field, timeout) => {
+      if (operation.clearFirst) {
+        await field.fill("", { timeout });
+        this.dispatched = true;
+      }
+      // Found first, then counted as sent before the first key: typing is one
+      // key per round trip, so a deadline can land after some keys (an Enter
+      // among them) reached the page, and that is not "nothing happened".
+      await field.waitForElementState("visible", { timeout });
       this.dispatched = true;
+      // Focused as `pressSequentially` focuses it (typing nothing does just
+      // that), then typed as it types, one key at a time, each only while the
+      // page is still the checked document: keys go wherever focus is, so a
+      // page that navigates midway would otherwise get the rest. Its address
+      // was checked before the first input; a page may rewrite its own path as
+      // it is typed into. Once the keys start, nothing here fails on the field
+      // going away.
+      await field.type("", { timeout });
+      // The value gets the whole timeout once typing starts, as
+      // `pressSequentially` gave it; a key still going then is not waited for.
+      // A new document shows up as Playwright's `framenavigated` for the main
+      // frame, which costs no round trip, so the document is asked about only
+      // then (a page rewriting its own path raises it too): asking before
+      // every key halved how fast a long value went in.
+      const deadline = Date.now() + operation.timeoutMs;
+      let navigated = false;
+      const onNavigated = (frame: Frame) => {
+        if (frame === pin.page.mainFrame()) navigated = true;
+      };
+      pin.page.on("framenavigated", onNavigated);
+      try {
+        for (const character of value) {
+          const left = deadline - Date.now();
+          if (left <= 0) throw new BrowserCallTimeoutError("type");
+          if (navigated) {
+            navigated = false;
+            if (await this.moved(pin, false, left)) throw new Error("browser_page_changed");
+          }
+          await this.call(pin.page.keyboard.type(character, { delay: operation.delayMs }), "type", Math.max(1, deadline - Date.now()));
+        }
+      } finally {
+        pin.page.off("framenavigated", onNavigated);
+      }
+      this.dispatched = true;
+    }, ready);
+  }
+
+  /**
+   * An input action on its target's element, held to the documents it was
+   * checked on: the page's, and the one the target was first found in, which
+   * for a target inside a frame is that frame's. The input goes through the
+   * element, which a navigation takes away, so a page or frame that navigates
+   * itself while the action waits (for the element to show, say) fails the
+   * action rather than having the target found, and acted on, in the new
+   * document. The target is found again only in the document it was found
+   * in, and only before any input reached it.
+   *
+   * The element is first waited for as the action would wait (`ready`: the
+   * states named, which sends the page nothing), so the check after that is
+   * the last thing before the input, the address it named included. Once the
+   * action has sent input (an earlier field of a form, say), only its
+   * document is held: a page may rewrite its own path in answer, as it may
+   * while it is typed into. A target found again after a re-render is not
+   * waited for twice, so one re-rendered faster than that can still be hit.
+   * Whatever runs out is reported as the action's `timeout` running out
+   * (`ranOut`).
+   *
+   * ponytail: Playwright's own hit-target check and dispatch come after this,
+   * so a navigation that commits in that instant can still receive the one
+   * click or key; closing it needs input that names its document, which CDP
+   * lacks.
+   */
+  private async actOn<T>(
+    pin: Pin,
+    locator: Locator,
+    timeout: number,
+    act: (element: ElementHandle, timeout: number) => Promise<T>,
+    ready: readonly ("visible" | "enabled" | "editable" | "stable")[] = [],
+  ): Promise<T> {
+    const deadline = Date.now() + timeout;
+    const left = () => Math.max(1, deadline - Date.now());
+    let found: JSHandle | undefined;
+    try {
+      for (;;) {
+        const element =
+          found === undefined
+            ? // Bounded by its own timeout; the call only adds the cancel.
+              await this.handle(locator.first().elementHandle({ timeout: left() }), "count", Infinity)
+            : await this.refind(pin, locator, found, deadline);
+        try {
+          let moved: boolean;
+          if (found === undefined) {
+            found = await this.handle(element.evaluateHandle((node) => node.ownerDocument), "evaluate", left());
+            for (const state of ready) await element.waitForElementState(state, { timeout: left() });
+            moved = await this.moved(pin, !this.dispatched, left());
+          } else {
+            const same = await this.call(element.evaluate((node, first) => node.ownerDocument === first, found), "evaluate", left()).catch(
+              (error: unknown) => {
+                // No answer is not a different document.
+                if (timedOut(error) || this.signal?.aborted === true) throw error;
+                return false;
+              },
+            );
+            if (!same) {
+              throw new Error("browser_page_changed: the target's frame is now at another document");
+            }
+            // Still in the document it was found in, so the page has not
+            // navigated either: a navigation takes its frames' documents with
+            // it. Only the address is left, and that needs no round trip.
+            moved = !this.dispatched && pin.address !== undefined && pageAddress(pin.page.url()) !== pin.address;
+          }
+          if (!moved) return await act(element, left());
+        } catch (error) {
+          // Replaced below, so what `execute` reads from it is kept here.
+          if (inputSent(error)) this.dispatched = true;
+          // A wait that ran out is the answer; the page is not asked again.
+          if (timedOut(error) || Date.now() >= deadline) throw error;
+          if (!(await this.moved(pin, !this.dispatched, left()))) {
+            // Re-rendered, or its frame reloaded, while the page stayed: found
+            // again, as Playwright's own locator would, in the same document
+            // or not at all, which the next pass checks before it acts. That
+            // holds even after Playwright logged the click as performed: its
+            // hit-target guard stops the events that did not reach the
+            // element, which is why its locator retries this too. The page is
+            // asked first every time, so one that navigated is refused at
+            // once, one that leaves while the target is searched for again
+            // within a slice, and a target first found in a document that
+            // came in after the checks is never acted on.
+            if (detached(error)) continue;
+            throw error;
+          }
+        } finally {
+          await element.dispose().catch(() => undefined);
+        }
+        throw new Error(`browser_page_changed: the page is now at ${pageAddress(pin.page.url())}`);
+      }
+    } catch (error) {
+      // Every bound in here is the action's deadline (typing's, which starts
+      // later, is as long), so whatever timed out ran out the action's time.
+      // Not read off the clock: a 1 ms bound can fire just before it ticks.
+      if (timedOut(error)) throw ranOut(error, timeout);
+      throw error;
+    } finally {
+      void found?.dispose().catch(() => undefined);
     }
-    // Found first, then counted as sent before the first key: typing is one
-    // key per round trip, so a deadline can land after some keys (an Enter
-    // among them) reached the page, and that is not "nothing happened".
-    await field.waitFor({ state: "visible", timeout: operation.timeoutMs });
-    this.dispatched = true;
-    await field.pressSequentially(value, {
-      delay: operation.delayMs,
-      timeout: operation.timeoutMs,
+  }
+
+  /**
+   * The target found again after it went away, searched for in slices that
+   * each end by asking whether the page, or the document it was first found
+   * in (a frame's), has left: a page that takes the target away and then
+   * navigates to a document without it would otherwise be waited on until
+   * the timeout. A slice cut short, by a frame detaching as the page around
+   * it leaves, is asked about the same way.
+   */
+  private async refind(pin: Pin, locator: Locator, found: JSHandle, deadline: number): Promise<ElementHandle> {
+    const left = () => Math.max(1, deadline - Date.now());
+    for (;;) {
+      let failure: unknown;
+      try {
+        return await this.handle(locator.first().elementHandle({ timeout: Math.min(REFIND_SLICE_MS, left()) }), "count", Infinity);
+      } catch (error) {
+        // A cancel, or a page that closed, has its own error.
+        if (this.signal?.aborted === true || pin.page.isClosed()) throw error;
+        failure = error;
+      }
+      if (Date.now() >= deadline) throw failure;
+      if (await this.moved(pin, !this.dispatched, left())) {
+        throw new Error(`browser_page_changed: the page is now at ${pageAddress(pin.page.url())}`);
+      }
+      const there = await this.call(found.evaluate((first: Document) => first.defaultView?.document === first), "evaluate", left()).catch(
+        (error: unknown) => {
+          // No answer is not a different document, and a closed page has its own error.
+          if (timedOut(error) || this.signal?.aborted === true || pin.page.isClosed()) throw error;
+          return false;
+        },
+      );
+      if (!there) throw new Error("browser_page_changed: the target's frame has left the document it was found in");
+      if (!timedOut(failure)) throw failure;
+    }
+  }
+
+  /** `call` for a handle: one that arrives after the bound or a cancel is released, not left in the page. */
+  private handle<H extends JSHandle>(pending: Promise<H>, what: string, ms?: number): Promise<H> {
+    return this.call(pending, what, ms).catch((error: unknown) => {
+      void pending.then(
+        (late) => late.dispose().catch(() => undefined),
+        () => undefined,
+      );
+      throw error;
     });
-    this.dispatched = true;
+  }
+
+  /**
+   * Whether the page has left the document an input action was checked on,
+   * or, with `address`, the address it named. A navigation destroys the old
+   * document's context, so asking its handle fails. A call that timed out or
+   * was cancelled is no answer either way and is passed on, and a closed page
+   * has not moved anywhere: the action's own error says what happened.
+   */
+  private async moved(pin: Pin, address = true, ms = this.callMs): Promise<boolean> {
+    if (pin.page.isClosed()) return false;
+    if (address && pin.address !== undefined && pageAddress(pin.page.url()) !== pin.address) return true;
+    try {
+      return !(await this.call(pin.document.evaluate((checked) => checked === document), "evaluate", ms));
+    } catch (error) {
+      if (error instanceof BrowserCallTimeoutError || this.signal?.aborted === true) throw error;
+      return true;
+    }
   }
 
   /**
@@ -1568,15 +1799,30 @@ export class BrowserRuntime {
   private async run(operation: BrowserOperation): Promise<Record<string, unknown>> {
     const page = await this.page();
     this.actingOn = page;
+    // Taken before the checks below, so an input action that passes them
+    // reaches the document they read or nothing (`actOn`).
+    const pin = INPUT_ACTIONS.has(operation.action)
+      ? {
+          page,
+          document: await this.handle(page.evaluateHandle(() => document), "evaluate"),
+          address: operation.url === undefined ? undefined : pageAddress(operation.url),
+        }
+      : undefined;
+    try {
+      return await this.act(operation, page, pin);
+    } finally {
+      void pin?.document.dispose().catch(() => undefined);
+    }
+  }
+
+  private async act(operation: BrowserOperation, page: Page, pin: Pin | undefined): Promise<Record<string, unknown>> {
     // Anywhere but on the way to it, a url names the page the action acts on:
     // the active page, or for `close` and `tab_switch` the tab they name.
     // Policy shows it to the approver as the target and matches grants against
     // it, so the action is refused, before anything is sent, when that page is
-    // elsewhere. Compared as policy shows it, without query or fragment.
-    //
-    // ponytail: checked when the action starts. A page that navigates itself
-    // while the action waits for its target can still receive it; pinning
-    // each action to the checked document would close that.
+    // elsewhere. Compared as policy shows it, without query or fragment. An
+    // input action stays on the page checked here: one that navigates itself
+    // while the action waits is refused with `browser_page_changed`.
     const acted =
       (operation.action === "close" || operation.action === "tab_switch") && operation.tabIndex !== undefined
         ? (await this.ensureContext()).pages()[operation.tabIndex]
@@ -1596,7 +1842,7 @@ export class BrowserRuntime {
     // in a browser this runtime is attached to, Playwright's focus emulation
     // makes every page report itself visible and focused, so the console never
     // sees being raised. Whatever of ours could raise it is refused instead.
-    // Same ponytail as above: checked at the start.
+    // An input action is then held to the document checked here, as above.
     if (
       (operation.action === "tab_switch" ||
         operation.action === "scroll" ||
@@ -1750,9 +1996,13 @@ export class BrowserRuntime {
         };
       }
       case "click": {
-        await (await this.locator(page, operation.target)).first().click({
-          timeout: operation.timeoutMs,
-        });
+        await this.actOn(
+          pin!,
+          await this.locator(page, operation.target),
+          operation.timeoutMs,
+          (element, timeout) => element.click({ timeout }),
+          CLICKABLE,
+        );
         // Set after the click returns, not before: Playwright's own timeout
         // mostly fires while it waits for the element to become clickable,
         // and reporting that as "may have clicked" would park every covered
@@ -1766,11 +2016,7 @@ export class BrowserRuntime {
       }
       case "type": {
         if (operation.value === undefined) throw new Error("browser_type_requires_value");
-        await this.typeInto(
-          await this.locator(page, operation.target),
-          operation.value,
-          operation,
-        );
+        await this.typeInto(pin!, await this.locator(page, operation.target), operation.value, operation);
         return {
           typed: true,
           ...(await this.settledSnapshot(page, operation)),
@@ -1790,17 +2036,17 @@ export class BrowserRuntime {
           throw new Error("browser_fill_form_requires_fields");
         }
         for (const field of operation.fields) {
-          await this.typeInto(
-            await this.locator(page, field.target),
-            field.value,
-            operation,
-          );
+          await this.typeInto(pin!, await this.locator(page, field.target), field.value, operation);
         }
         const submitted = operation.target !== undefined;
         if (submitted) {
-          await (await this.locator(page, operation.target)).first().click({
-            timeout: operation.timeoutMs,
-          });
+          await this.actOn(
+            pin!,
+            await this.locator(page, operation.target),
+            operation.timeoutMs,
+            (element, timeout) => element.click({ timeout }),
+            CLICKABLE,
+          );
           this.dispatched = true;
         }
         return {
@@ -1811,9 +2057,14 @@ export class BrowserRuntime {
       }
       case "select": {
         if (operation.values === undefined) throw new Error("browser_select_requires_values");
-        const selected = await (await this.locator(page, operation.target))
-          .first()
-          .selectOption(operation.values, { timeout: operation.timeoutMs });
+        const values = operation.values;
+        const selected = await this.actOn(
+          pin!,
+          await this.locator(page, operation.target),
+          operation.timeoutMs,
+          (element, timeout) => element.selectOption(values, { timeout }),
+          ["visible", "enabled"],
+        );
         this.dispatched = true;
         return {
           selected,
@@ -1822,11 +2073,14 @@ export class BrowserRuntime {
       }
       case "press": {
         if (operation.key === undefined) throw new Error("browser_press_requires_key");
+        const key = operation.key;
         const locator =
           operation.target === undefined
             ? page.locator("body")
             : await this.locator(page, operation.target);
-        await locator.first().press(operation.key, { timeout: operation.timeoutMs });
+        await this.actOn(pin!, locator, operation.timeoutMs, (element, timeout) =>
+          element.press(key, { timeout }),
+        );
         this.dispatched = true;
         return {
           pressed: operation.key,
@@ -1894,9 +2148,9 @@ export class BrowserRuntime {
           throw new Error("browser_upload_requires_file_paths");
         }
         const files = await this.uploadPaths(operation.filePaths);
-        await (await this.locator(page, operation.target)).first().setInputFiles(files, {
-          timeout: operation.timeoutMs,
-        });
+        await this.actOn(pin!, await this.locator(page, operation.target), operation.timeoutMs, (element, timeout) =>
+          element.setInputFiles(files, { timeout }),
+        );
         this.dispatched = true;
         return {
           uploaded: files.length,
@@ -1911,9 +2165,13 @@ export class BrowserRuntime {
         // download wait, and its own timeout would surface as an unhandled
         // rejection long after this action failed.
         downloadPromise.catch(() => undefined);
-        await (await this.locator(page, operation.target)).first().click({
-          timeout: operation.timeoutMs,
-        });
+        await this.actOn(
+          pin!,
+          await this.locator(page, operation.target),
+          operation.timeoutMs,
+          (element, timeout) => element.click({ timeout }),
+          CLICKABLE,
+        );
         this.dispatched = true;
         const download = await downloadPromise;
         const suggested = download.suggestedFilename().replaceAll(/[^A-Za-z0-9._-]/g, "_");

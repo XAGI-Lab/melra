@@ -142,8 +142,30 @@ Actions: `navigate`, `back`, `forward`, `reload`, `inspect`, `wait`, `click`,
   shows it as the action's target and matches grants against it, so the runtime
   refuses the action, before sending anything, when that page is elsewhere
   (`browser_page_not_at_url`). It is compared as policy shows it, without query
-  or fragment. The check is made when the action starts: a page that navigates
-  itself while the action waits for its target can still receive it.
+  or fragment. An input action (`click`, `type`, `fill_form`, `select`,
+  `press`, `upload`, `download`) is then held to the document this check read,
+  and its target to the document it was found in, a frame's for a target in a
+  frame: the input goes through that element, and the target is found again
+  only in the same document if the page re-renders it, so a page or frame that
+  navigates itself while the action waits, even to the same address, gets
+  nothing, and the action is refused with `browser_page_changed`. The page and
+  its address are checked again after the target is waited for, as the action
+  would wait for it (visible, enabled and stable for a click), sending
+  nothing, just before the input. Once the action has sent input, only its
+  document is checked, before each of a form's fields and, while it types,
+  whenever the page reports a new document, at the next key: a page may
+  rewrite its own path as it is typed into. What this does not cover: a
+  navigation that commits in the instant Playwright dispatches can still
+  receive that one click or key; the address is not checked again during
+  Playwright's own waits after the check (for a target found again after a
+  re-render, or its hit-target retries), so a same-document path change then
+  is not caught; keys go wherever the page has put focus, a frame inside it
+  included; and the check reads the top-level page, not the content of its
+  frames. `close` and
+  `tab_switch` are checked when they start. In enforced mode these actions,
+  `close` and `tab_switch` must name a `url` (`browser_action_requires_url`);
+  for those two it names the tab, so `about:blank` and pages off the
+  allowlist are accepted.
 - A page carrying `<meta name="melra-approval-surface">`, which is how
   [`melra console`](INSTALLATION.md#approving-in-a-browser) serves its approval
   page, is sent no input: `click`, `type`, `fill_form`, `select`, `press`,
@@ -162,7 +184,8 @@ Actions: `navigate`, `back`, `forward`, `reload`, `inspect`, `wait`, `click`,
   `browser_approval_surface_check_unavailable` naming its tab, which can be
   closed itself unless another tab does not answer either. This
   matters when the runtime is attached over CDP to a browser the operator also
-  uses. The check is made when the action starts, like the `url` check above.
+  uses. An input action is held to the document checked, with the same limits
+  as the `url` check above.
 - `tab_new` accepts an optional `url` and runs the same destination checks
   `navigate` does. Every tab action returns the renumbered tab list, because
   opening, switching, and closing all shift the indices.

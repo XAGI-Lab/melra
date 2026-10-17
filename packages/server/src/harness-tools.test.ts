@@ -153,6 +153,18 @@ describe("harness tools in enforced mode", () => {
     expect(await readFile(join(workspace, "w.txt"), "utf8")).toBe("x");
   });
 
+  it("asks the browser tools for the page they act on", async () => {
+    for (const [name, args] of [
+      ["browser_click", { target: { selector: "#go" } }],
+      ["browser_type", { target: { selector: "#q" }, value: "x" }],
+    ] as const) {
+      expect(await call(tools, name, args), name).toMatchObject({ status: "blocked", reason: "browser_action_requires_url" });
+      const held = await call(tools, name, { ...args, url: "https://example.com/" });
+      expect(held.status, name).toBe("approval_required");
+      expect(runtime.controller.status(String(held.taskId)).request.operation, name).toMatchObject({ url: "https://example.com/" });
+    }
+  });
+
   it("tells the model an operator approves, and leaves developer mode's words alone", async () => {
     const instructions = async (server: ReturnType<typeof createMcpServer>) => {
       const [left, right] = InMemoryTransport.createLinkedPair();

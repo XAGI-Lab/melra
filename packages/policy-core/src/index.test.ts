@@ -620,6 +620,75 @@ describe("enforced-mode reads that leave the workspace", () => {
   });
 });
 
+describe("enforced-mode browser actions", () => {
+  const enforced = { ...createDefaultPolicy(root), mode: "enforced" as const };
+  const target = { selector: "#go" };
+  const driving: Array<Record<string, unknown>> = [
+    { action: "click", target },
+    { action: "type", target, value: "x" },
+    { action: "fill_form", fields: [{ target, value: "x" }] },
+    { action: "select", target, values: ["a"] },
+    { action: "press", key: "Enter" },
+    { action: "upload", target, filePaths: ["a.txt"] },
+    { action: "download", target },
+    { action: "close", tabIndex: 1 },
+    { action: "tab_switch", tabIndex: 1 },
+  ];
+  const plan = (operation: Record<string, unknown>, policy: LocalPolicy = enforced) =>
+    evaluatePolicy(
+      "00000000-0000-4000-8000-000000000000",
+      TaskRequestSchema.parse({
+        goal: "Drive a page",
+        operation: { kind: "browser", ...operation },
+        requiredEvidence: [{ type: "result_equals", path: "clicked", value: true }],
+      }),
+      policy,
+    ).decision.reason;
+
+  it("refuses an action that drives a page without naming it", () => {
+    for (const operation of driving) {
+      expect(plan(operation), String(operation.action)).toBe("browser_action_requires_url");
+      expect(plan({ ...operation, url: "https://example.com/" }), String(operation.action)).not.toBe(
+        "browser_action_requires_url",
+      );
+      // Developer mode is as it was.
+      expect(plan(operation, createDefaultPolicy(root)), String(operation.action)).not.toBe(
+        "browser_action_requires_url",
+      );
+    }
+    // Reads that drive nothing need no url.
+    for (const operation of [{ action: "inspect" }, { action: "scroll" }, { action: "tabs" }]) {
+      expect(plan(operation), String(operation.action)).not.toBe("browser_action_requires_url");
+    }
+  });
+
+  it("says so before a grant scoped to pages could refuse the request as ungranted", () => {
+    const scoped = {
+      ...enforced,
+      capabilities: [
+        { id: "g1", capability: "browser.click", effects: ["mutate"], target: "https://example.com/*", principal: "*" },
+      ] as never,
+    };
+    expect(plan({ action: "click", target }, scoped)).toBe("browser_action_requires_url");
+    expect(plan({ action: "click", target, url: "https://example.com/pay" }, scoped)).toBe("explicit_approval_required");
+  });
+
+  it("takes the url of `close` and `tab_switch` for the tab, not a destination", () => {
+    for (const action of ["close", "tab_switch"]) {
+      for (const url of ["about:blank", "http://10.0.0.1/", "https://elsewhere.example/"]) {
+        const tight = { ...enforced, allowedDomains: ["example.com"] };
+        expect(plan({ action, tabIndex: 1, url }, tight), `${action} ${url}`).not.toBe("destination_domain_not_allowed");
+      }
+    }
+    // So in developer mode too.
+    expect(plan({ action: "close", tabIndex: 1, url: "about:blank" }, createDefaultPolicy(root))).not.toBe(
+      "destination_domain_not_allowed",
+    );
+    // A page an input action names is still a destination.
+    expect(plan({ action: "click", target, url: "about:blank" })).toBe("destination_domain_not_allowed");
+  });
+});
+
 describe("interactive terminal input", () => {
   const send = (jobId?: string) =>
     evaluatePolicy(
