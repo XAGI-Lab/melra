@@ -450,7 +450,7 @@ export class BrowserRuntime {
    *
    * ponytail: a tab a link opens with a modifier or middle click has no
    * opener at all, so between actions it counts as the operator's whichever
-   * page clicked it. A page's request for one (`Page.frameRequestedNavigation`)
+   * page clicked it, and while an action runs as the action's. A page's request for one (`Page.frameRequestedNavigation`)
    * cannot be tied to the tab that follows: a refused request leaves nothing
    * to match, and claiming the next opener-less tab would let a page have the
    * operator's tabs, a console's among them, closed. Closing that gap needs a
@@ -472,7 +472,7 @@ export class BrowserRuntime {
   private createdActing = new Map<string, number>();
   /**
    * In a browser this runtime is attached to, the windows Chromium created
-   * between its actions that are none of its own, the operator's, with their
+   * that are the operator's (`Target.targetCreated` says which), with their
    * browser context. No wait counts them, so one whose first response never
    * comes holds up no action; each is dropped once Playwright hands it over.
    * One that closes first is still handed over, as a closed page whose id can
@@ -483,6 +483,18 @@ export class BrowserRuntime {
    * event, each wait after it would run to its bound; #226 would bound that.
    */
   private theirs = new Map<string, string>();
+  /**
+   * The page targets of this context Chromium has announced and not yet
+   * destroyed, the operator's among them, so an opener can be known for a tab
+   * rather than, say, a frame of one.
+   */
+  private pageTargets = new Set<string>();
+  /**
+   * The target id of the page the running action acts on, in a browser this
+   * runtime is attached to, once looked up: what it opens while the action
+   * runs is the action's, even if the runtime has not driven it yet.
+   */
+  private actingTarget: string | undefined;
   /** Counts actions, so a popup reported by a later one says so. */
   private actions = 0;
   /** The page the running action acts on, once it has one. */
@@ -823,6 +835,7 @@ export class BrowserRuntime {
     this.targetIds = new WeakMap();
     this.createdActing = new Map();
     this.theirs = new Map();
+    this.pageTargets = new Set();
     // A session left from a context that closed under us would count into the
     // fresh map below and make every action wait for windows that never come.
     if (this.targets !== undefined) {
@@ -842,23 +855,40 @@ export class BrowserRuntime {
       targets.on("Target.targetCreated", ({ targetInfo }) => {
         // `browser_ui`, workers, and prerenders never become Playwright pages.
         if (targetInfo.type !== "page" || targetInfo.subtype !== undefined) return;
+        this.pageTargets.add(targetInfo.targetId);
         const id = targetInfo.browserContextId ?? "";
         if (announced) {
-          if (this.acting) this.createdActing.set(targetInfo.targetId, this.actions);
+          const opener = targetInfo.openerId;
           // A window an action's popup opens, before that popup is even judged,
           // is the runtime's like the popup.
-          const opener = targetInfo.openerId;
-          if (
-            opener !== undefined &&
-            (this.ownTargets.has(opener) || opener === this.drivenTarget || this.createdActing.has(opener))
-          ) {
-            this.ownTargets.add(targetInfo.targetId);
-          }
+          const runtimes = (target: string) =>
+            this.ownTargets.has(target) ||
+            target === this.drivenTarget ||
+            target === this.actingTarget ||
+            this.createdActing.has(target);
+          // Between actions, a window is the operator's unless the runtime's
+          // own tab opened it. While an action runs, it is that action's
+          // popup unless it is plainly the operator's: one Chromium says an
+          // operator's tab opened, or one the browser opened rather than a
+          // page (a client's new tab, one from the toolbar or another app),
+          // which Chromium shows at its address from the start, where a page's
+          // new tab starts out empty. A frame's opener, or a page's tab the
+          // action's page is not known for yet, is the action's.
+          const theirs =
+            this.options.cdpEndpoint !== undefined &&
+            !this.openingTab &&
+            (this.acting
+              ? opener === undefined
+                ? targetInfo.url !== ""
+                : this.actingTarget !== undefined && this.pageTargets.has(opener) && !runtimes(opener)
+              : opener === undefined || !runtimes(opener));
           // The operator's, which no action reports, so no wait counts it.
-          if (this.options.cdpEndpoint !== undefined && !this.acting && !this.ownTargets.has(targetInfo.targetId)) {
+          if (theirs) {
             this.theirs.set(targetInfo.targetId, id);
             return;
           }
+          if (this.acting) this.createdActing.set(targetInfo.targetId, this.actions);
+          else if (opener !== undefined && runtimes(opener)) this.ownTargets.add(targetInfo.targetId);
         }
         this.windowsCreated.set(id, (this.windowsCreated.get(id) ?? 0) + 1);
       });
@@ -869,6 +899,7 @@ export class BrowserRuntime {
       // ever matters.
       targets.on("Target.targetDestroyed", ({ targetId }) => {
         if (this.drivenTarget === targetId) this.drivenTarget = undefined;
+        this.pageTargets.delete(targetId);
         // One of theirs gone before Playwright handed it over: it still will,
         // and that counts it as adopted (`theirs`).
         const context = this.theirs.get(targetId);
@@ -1737,6 +1768,7 @@ export class BrowserRuntime {
     this.callMs = operation.timeoutMs;
     this.dispatched = false;
     this.actingOn = undefined;
+    this.actingTarget = undefined;
     this.stepped = false;
     // Chromium reports a window's creation on the browser-level session,
     // ahead of any later reply there; one round trip before the action
@@ -1793,12 +1825,18 @@ export class BrowserRuntime {
       throw outcomeUnknown(error instanceof Error ? error.message : String(error));
     } finally {
       this.acting = false;
+      this.actingTarget = undefined;
     }
   }
 
   private async run(operation: BrowserOperation): Promise<Record<string, unknown>> {
     const page = await this.page();
     this.actingOn = page;
+    // What it opens while this action runs is the action's, which in a browser
+    // this runtime is attached to is judged by target id (`Target.targetCreated`).
+    if (this.options.cdpEndpoint !== undefined && this.targets !== undefined) {
+      this.actingTarget = await this.targetOf(page).catch(() => undefined);
+    }
     // Taken before the checks below, so an input action that passes them
     // reaches the document they read or nothing (`actOn`).
     const pin = INPUT_ACTIONS.has(operation.action)

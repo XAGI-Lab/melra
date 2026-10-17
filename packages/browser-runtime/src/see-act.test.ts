@@ -271,7 +271,8 @@ describe("browser see/act loop", () => {
     // the server notes every page asked for, so the test can wait for one.
     const PAGE = `<!doctype html><html><body><p>page</p>
       <a id="link" href="/?linked">link</a><button id="mod">mod</button>
-      <button id="busy" onclick="window.open(new URLSearchParams(location.search).get('busy'))">busy</button><script>
+      <button id="busy" onclick="window.open(new URLSearchParams(location.search).get('busy'))">busy</button>
+      <button id="pop" onclick="window.open(location.origin + '/?clickpop')">pop</button><script>
       const released = () => fetch("/release");
       const later = (path, features) => released().then(() => window.open(location.origin + path, "_blank", features));
       if (location.search === "?opens") later("/?popup#pair=secret");
@@ -279,6 +280,7 @@ describe("browser see/act loop", () => {
       if (location.search === "?p1") window.open(location.origin + "/?p2");
       if (location.search === "?pre1") window.open(location.origin + "/?pre2");
       if (location.search === "?noopener") later("/?np", "noopener");
+      if (location.search === "?inaction") later("/?agentpop");
       if (location.search === "?busy") { later("/?busypop"); setInterval(() => document.body.append("."), 50); }
       // Windows that close themselves as soon as they load.
       if (location.search === "?selfclose") released().then(() => [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].forEach((i) => window.open(location.origin + "/?closes" + i)));
@@ -290,12 +292,22 @@ describe("browser see/act loop", () => {
     const asked: string[] = [];
     const held: Array<() => void> = [];
     const answerAll = () => held.splice(0).forEach((answer) => answer());
+    // A page that loads only once the test lets it, so an action navigating
+    // to it is still running meanwhile.
+    const loading: Array<() => void> = [];
     const site = createServer((request, response) => {
       if (request.url === "/release") {
         held.push(() => response.end("ok"));
         return;
       }
       asked.push(request.url ?? "");
+      if (request.url === "/?held") {
+        loading.push(() => {
+          response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+          response.end(PAGE);
+        });
+        return;
+      }
       response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       response.end(PAGE);
     });
@@ -468,6 +480,26 @@ describe("browser see/act loop", () => {
       await new Promise((done) => setTimeout(done, 300));
       const during = await run({ action: "navigate", url: slowUrl.replace("?slow", "?self") });
       await leftAlone("?slow", [...((during.popups as unknown[] | undefined) ?? [])]);
+      // While an action runs, a tab the operator opens and a window their tab
+      // opens stay theirs, and what the agent's page opens meanwhile is the
+      // action's popup: the action is a navigation held until all three exist.
+      await run({ action: "navigate", url: `${origin}/?inaction` });
+      const navigating = run({ action: "navigate", url: `${origin}/?held` });
+      navigating.catch(() => undefined);
+      await requested("?held");
+      const opened = await operator.newPage();
+      await mine.evaluate((url) => window.open(url), `${origin}/?opchild`);
+      await requested("?opchild");
+      await release();
+      await requested("?agentpop");
+      loading.splice(0).forEach((answer) => answer());
+      const inAction = ((await navigating).popups as unknown[] | undefined) ?? [];
+      expect(inAction).toEqual([expect.objectContaining({ url: expect.stringContaining("?agentpop"), blocked: true })]);
+      expect(JSON.stringify(inAction)).not.toContain("betweenActions");
+      expect(opened.isClosed()).toBe(false);
+      await opened.goto(`${origin}/?optab`);
+      await leftAlone("?optab", [...inAction]);
+      await leftAlone("?opchild", [...inAction]);
       // Windows the runtime's own page opens between actions are its own,
       // down a chain of them, whose opener has closed by the time Playwright
       // hands over the next, and whatever the page cut it off from; reported
@@ -519,6 +551,10 @@ describe("browser see/act loop", () => {
       await run({ action: "tab_switch", tabIndex: tabs.findIndex((tab) => tab.url.includes("?mine")) });
       await mine.evaluate((url) => window.open(url), `${origin}/?undriven`);
       await leftAlone("?undriven");
+      // What it opens while an action on it runs is that action's, though the
+      // runtime had not driven it before.
+      const clicked = ((await run({ action: "click", target: { selector: "#pop" } })).popups as unknown[] | undefined) ?? [];
+      expect(clicked).toEqual([expect.objectContaining({ url: expect.stringContaining("?clickpop"), blocked: true })]);
       asked.length = 0;
       await run({ action: "navigate", url: `${origin}/?opens` });
       await release();
@@ -535,6 +571,7 @@ describe("browser see/act loop", () => {
       await leftAlone("?later");
     } finally {
       answerAll();
+      loading.splice(0).forEach((answer) => answer());
       hung.splice(0).forEach((answer) => answer());
       await runtime.close();
       await operator.close();

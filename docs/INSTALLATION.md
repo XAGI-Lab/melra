@@ -270,14 +270,18 @@ the operator's unless it is the runtime's: one it opened, a window one of those
 opened (down any chain), or one opened by the tab it is driving, which a tab it
 merely landed on becomes only once it navigates it or sends it input (an
 action refused, or one whose target was never found, does not count). The
-operator's is left open and not reported, so a tab you open yourself, or one
-`melra console` opens, survives as long as no action is running when it is
-created. One created while an action runs is closed and reported like any
-popup, so open the console while the agent is idle, or use `melra approve`. A
-tab a link opens with a modifier or middle click has no opener, so between
-actions it counts as the operator's whichever page it came from: it is left
-open and not reported, but it is listed by `tabs` and its loads are still
-checked. A window that closes before the runtime can tell whose it is, such as
+operator's is left open and not reported. While an action runs, a new window
+is that action's popup, closed and reported like any, unless Chromium names one
+of the operator's tabs as its opener or the browser opened it rather than a
+page: a tab you open from the toolbar, the address bar or another app, one
+`melra console` opens, or one another CDP client opens. Those stay open and
+unreported too, so the console can be opened while the agent works. A tab a
+link opens with a modifier or middle click has no opener and starts out like
+any tab a page opens, so it counts by when it is created, whichever page it
+came from: between actions as the operator's, left open and not reported but
+listed by `tabs` with its loads still checked, and while an action runs as
+that action's popup. A tab you open in the instant the runtime opens one of its
+own (`tab_new`) is taken for the runtime's too. A window that closes before the runtime can tell whose it is, such as
 a tab that turns into a download, is reported either way. What is the
 runtime's lasts as long as it stays attached: after MELRA restarts, or
 reconnects to the browser, the tabs it opened before count as the operator's
