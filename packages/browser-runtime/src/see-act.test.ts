@@ -321,6 +321,14 @@ describe("browser see/act loop", () => {
     servers.push(heavy);
     await new Promise<void>((done) => heavy.listen(0, done));
     const heavyUrl = `http://localhost:${(heavy.address() as { port: number }).port}/?busyload`;
+    // And one that never answers until the test ends, as a dead link's can.
+    const hung: Array<() => void> = [];
+    const hanging = createServer((_request, response) => {
+      hung.push(() => response.end());
+    });
+    servers.push(hanging);
+    await new Promise<void>((done) => hanging.listen(0, "127.0.0.1", done));
+    const hungUrl = `http://127.0.0.1:${(hanging.address() as { port: number }).port}/?hung`;
     const root = await mkdtemp(join(tmpdir(), "melra-see-act-cdp-"));
     roots.push(root);
     const port = await new Promise<number>((done) => {
@@ -435,6 +443,13 @@ describe("browser see/act loop", () => {
       await mine.goto(`${origin}/?mine`);
       await leftAlone("?mine");
       expect(mine.isClosed()).toBe(false);
+      // One of theirs whose first response never comes holds up none of the
+      // actions after it.
+      await mine.evaluate((url) => window.open(url), hungUrl);
+      await until("the hung window requested", () => hung.length > 0);
+      const unheld = Date.now();
+      await run({ action: "inspect", timeoutMs: 5_000 });
+      expect(Date.now() - unheld).toBeLessThan(2_500);
       // So is one they open just before the runtime's next action, though
       // Playwright only hands it over during that action, once it loads.
       await mine.evaluate((url) => window.open(url), slowUrl);
@@ -508,6 +523,7 @@ describe("browser see/act loop", () => {
       await leftAlone("?later");
     } finally {
       answerAll();
+      hung.splice(0).forEach((answer) => answer());
       await runtime.close();
       await operator.close();
     }

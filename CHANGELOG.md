@@ -101,6 +101,13 @@ All notable changes are documented here. The format follows
   where a console keeps its one-time pairing code until its page has read it.
   (#203)
 
+- In a browser the runtime is attached to, a window the operator opens whose
+  first response never arrives no longer makes every later action wait out
+  its whole `timeoutMs`. The wait after an action, for windows Chromium has
+  created and Playwright has not yet handed over, now counts only the ones the
+  runtime will report: those created while an action runs and those its own
+  tabs open. A launched browser waits as before. (#221)
+
 - The y/N question `melra approve` and `melra run` ask in a terminal takes
   input that ends before an answer as a no: both say `Not approved.` and
   exit with status 1. Ctrl-D or Ctrl-C there used to stop with `melra:
