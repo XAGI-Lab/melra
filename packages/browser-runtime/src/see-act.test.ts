@@ -272,8 +272,7 @@ describe("browser see/act loop", () => {
     const PAGE = `<!doctype html><html><body><p>page</p>
       <a id="link" href="/?linked">link</a><button id="mod">mod</button>
       <button id="busy" onclick="window.open(new URLSearchParams(location.search).get('busy'))">busy</button>
-      <button id="pop" onclick="window.open(location.origin + '/?clickpop')">pop</button>
-      <input id="field" oninput="if (this.value.length === 1) fetch('/typed')"><script>
+      <button id="pop" onclick="window.open(location.origin + '/?clickpop')">pop</button><script>
       const released = () => fetch("/release");
       const later = (path, features) => released().then(() => window.open(location.origin + path, "_blank", features));
       if (location.search === "?opens") later("/?popup#pair=secret");
@@ -498,9 +497,11 @@ describe("browser see/act loop", () => {
       await new Promise((done) => setTimeout(done, 300));
       const during = await run({ action: "navigate", url: slowUrl.replace("?slow", "?self") });
       await leftAlone("?slow", [...((during.popups as unknown[] | undefined) ?? [])]);
-      // While an action runs, a tab the operator opens and a window their tab
-      // opens stay theirs, and what the agent's page opens meanwhile is the
-      // action's popup: the action is a navigation held until all three exist.
+      // While an action runs, a tab the operator opens blank and a window
+      // their tab opens stay theirs. What the agent's page opens meanwhile is
+      // the action's popup, and so is a tab with no opener created at a web
+      // address, as a sign-in window the browser opens for a page is. The
+      // action is a navigation held until all four exist.
       await run({ action: "navigate", url: `${origin}/?inaction` });
       const navigating = run({ action: "navigate", url: `${origin}/?held` });
       navigating.catch(() => undefined);
@@ -508,25 +509,25 @@ describe("browser see/act loop", () => {
       const opened = await operator.newPage();
       await mine.evaluate((url) => window.open(url), `${origin}/?opchild`);
       await requested("?opchild");
+      await fetch(`http://127.0.0.1:${port}/json/new?${origin}/?webtab`, { method: "PUT" });
+      await requested("?webtab");
       await release();
       await requested("?agentpop");
       loading.splice(0).forEach((answer) => answer());
       const inAction = ((await navigating).popups as unknown[] | undefined) ?? [];
-      expect(inAction).toEqual([expect.objectContaining({ url: expect.stringContaining("?agentpop"), blocked: true })]);
+      expect(inAction).toHaveLength(2);
+      expect(inAction).toEqual(
+        expect.arrayContaining(
+          ["?agentpop", "?webtab"].map((search) =>
+            expect.objectContaining({ url: expect.stringContaining(search), blocked: true }),
+          ),
+        ),
+      );
       expect(JSON.stringify(inAction)).not.toContain("betweenActions");
       expect(opened.isClosed()).toBe(false);
       await opened.goto(`${origin}/?optab`);
       await leftAlone("?optab", [...inAction]);
       await leftAlone("?opchild", [...inAction]);
-      // While an action sends a page input, though, a tab with no opener is
-      // the action's however it came: a page given input can have the browser
-      // open one at an address, a sign-in window, say.
-      const typing = run({ action: "type", target: { selector: "#field" }, value: "abcdefgh", delayMs: 150 });
-      await requested("/typed");
-      const typedOver = await operator.newPage();
-      const typed = ((await typing).popups as unknown[] | undefined) ?? [];
-      expect(typed).toEqual([expect.objectContaining({ url: "about:blank", blocked: true })]);
-      expect(typedOver.isClosed()).toBe(true);
       // Windows the runtime's own page opens between actions are its own,
       // down a chain of them, whose opener has closed by the time Playwright
       // hands over the next, and whatever the page cut it off from; reported

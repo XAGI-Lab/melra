@@ -489,12 +489,7 @@ export class BrowserRuntime {
    * rather than, say, a frame of one.
    */
   private pageTargets = new Set<string>();
-  /**
-   * The running action. One that sends a page input can have the browser
-   * open a window for the page, at an address and with no opener (a sign-in
-   * window, say), so while it runs no opener-less window is taken for the
-   * operator's.
-   */
+  /** The running action: what its page opens is the action's if it navigates the page or sends it input. */
   private action: BrowserOperation["action"] | undefined;
   /**
    * The target id of the page an action that navigates it or sends it input
@@ -878,19 +873,22 @@ export class BrowserRuntime {
           // Between actions, a window is the operator's unless the runtime's
           // own tab opened it. While an action runs, it is that action's
           // popup unless it is plainly the operator's: one Chromium says an
-          // operator's tab opened, or, while no page is being sent input, one
-          // the browser opened rather than a page (a client's new tab, one
-          // from the toolbar or another app), which Chromium shows at its
-          // address from the start, where a page's new tab starts out empty.
-          // A frame's opener, or a page's tab while the page a navigation or
-          // an input goes to is not known yet, is the action's.
+          // operator's tab opened, or one with no opener that Chromium creates
+          // blank or at one of its own pages (a client's new tab, a tab from
+          // the toolbar), which no page can have the browser open. A page's
+          // new tab starts out empty, and a window the browser opens for a
+          // page (a sign-in window, say) starts at the provider's address, so
+          // both stay the action's, and so does any page's activation: the
+          // runtime's own calls into a page give it some. A frame's opener, or
+          // a page's tab while the page a navigation or an input goes to is
+          // not known yet, is the action's.
           const action = this.action;
           const theirs =
             this.options.cdpEndpoint !== undefined &&
             !this.openingTab &&
             (this.acting
               ? opener === undefined
-                ? !(action !== undefined && INPUT_ACTIONS.has(action)) && targetInfo.url !== ""
+                ? targetInfo.url === "about:blank" || targetInfo.url.startsWith("chrome://")
                 : !(action !== undefined && DRIVING_ACTIONS.has(action) && this.actingTarget === undefined) &&
                   this.pageTargets.has(opener) &&
                   !runtimes(opener)
