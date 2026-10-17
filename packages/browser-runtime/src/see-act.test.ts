@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BrowserOperationSchema } from "@melra/protocol";
 import { chromium, type Page } from "playwright-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { APPROVAL_SURFACE, BrowserRuntime, detectBrowserExecutable } from "./index.js";
 
 /**
@@ -272,7 +272,8 @@ describe("browser see/act loop", () => {
     const PAGE = `<!doctype html><html><body><p>page</p>
       <a id="link" href="/?linked">link</a><button id="mod">mod</button>
       <button id="busy" onclick="window.open(new URLSearchParams(location.search).get('busy'))">busy</button>
-      <button id="pop" onclick="window.open(location.origin + '/?clickpop')">pop</button><script>
+      <button id="pop" onclick="window.open(location.origin + '/?clickpop')">pop</button>
+      <input id="field" oninput="if (this.value.length === 1) fetch('/typed')"><script>
       const released = () => fetch("/release");
       const later = (path, features) => released().then(() => window.open(location.origin + path, "_blank", features));
       if (location.search === "?opens") later("/?popup#pair=secret");
@@ -441,6 +442,23 @@ describe("browser see/act loop", () => {
       for (const index of there.keys()) await leftAlone(`?prechild${index}`);
       await landed.evaluate((url) => window.open(url), `${origin}/?fromread`);
       await leftAlone("?fromread");
+      // So does what it opens while a read on it runs: a read sends it nothing.
+      type Run = (operation: unknown) => Promise<Record<string, unknown>>;
+      const prototype = BrowserRuntime.prototype as unknown as { run: Run };
+      const runOne = prototype.run;
+      let reading = () => {};
+      const readStarted = new Promise<void>((done) => (reading = done));
+      const spy = vi.spyOn(prototype, "run").mockImplementation((operation) => {
+        reading();
+        return runOne.call(runtime, operation);
+      });
+      const waiting = run({ action: "wait", value: "readnow", timeoutMs: 15_000 });
+      await readStarted;
+      spy.mockRestore();
+      await landed.evaluate((url) => window.open(url), `${origin}/?duringread`);
+      await requested("?duringread");
+      await landed.evaluate(() => document.body.append("readnow"));
+      await leftAlone("?duringread", [...(((await waiting).popups as unknown[] | undefined) ?? [])]);
       // Nor does an action on it that is refused, or whose target is never
       // found: nothing reached the tab.
       await expect(run({ action: "navigate", url: "http://example.com/" })).rejects.toThrow();
@@ -500,6 +518,15 @@ describe("browser see/act loop", () => {
       await opened.goto(`${origin}/?optab`);
       await leftAlone("?optab", [...inAction]);
       await leftAlone("?opchild", [...inAction]);
+      // While an action sends a page input, though, a tab with no opener is
+      // the action's however it came: a page given input can have the browser
+      // open one at an address, a sign-in window, say.
+      const typing = run({ action: "type", target: { selector: "#field" }, value: "abcdefgh", delayMs: 150 });
+      await requested("/typed");
+      const typedOver = await operator.newPage();
+      const typed = ((await typing).popups as unknown[] | undefined) ?? [];
+      expect(typed).toEqual([expect.objectContaining({ url: "about:blank", blocked: true })]);
+      expect(typedOver.isClosed()).toBe(true);
       // Windows the runtime's own page opens between actions are its own,
       // down a chain of them, whose opener has closed by the time Playwright
       // hands over the next, and whatever the page cut it off from; reported

@@ -490,9 +490,18 @@ export class BrowserRuntime {
    */
   private pageTargets = new Set<string>();
   /**
-   * The target id of the page the running action acts on, in a browser this
-   * runtime is attached to, once looked up: what it opens while the action
-   * runs is the action's, even if the runtime has not driven it yet.
+   * The running action. One that sends a page input can have the browser
+   * open a window for the page, at an address and with no opener (a sign-in
+   * window, say), so while it runs no opener-less window is taken for the
+   * operator's.
+   */
+  private action: BrowserOperation["action"] | undefined;
+  /**
+   * The target id of the page an action that navigates it or sends it input
+   * acts on, in a browser this runtime is attached to, once looked up: what
+   * it opens while the action runs is the action's, even if the runtime has
+   * not driven it yet. A read sends the page nothing, so a tab the runtime
+   * only landed on stays the operator's.
    */
   private actingTarget: string | undefined;
   /** Counts actions, so a popup reported by a later one says so. */
@@ -869,18 +878,22 @@ export class BrowserRuntime {
           // Between actions, a window is the operator's unless the runtime's
           // own tab opened it. While an action runs, it is that action's
           // popup unless it is plainly the operator's: one Chromium says an
-          // operator's tab opened, or one the browser opened rather than a
-          // page (a client's new tab, one from the toolbar or another app),
-          // which Chromium shows at its address from the start, where a page's
-          // new tab starts out empty. A frame's opener, or a page's tab the
-          // action's page is not known for yet, is the action's.
+          // operator's tab opened, or, while no page is being sent input, one
+          // the browser opened rather than a page (a client's new tab, one
+          // from the toolbar or another app), which Chromium shows at its
+          // address from the start, where a page's new tab starts out empty.
+          // A frame's opener, or a page's tab while the page a navigation or
+          // an input goes to is not known yet, is the action's.
+          const action = this.action;
           const theirs =
             this.options.cdpEndpoint !== undefined &&
             !this.openingTab &&
             (this.acting
               ? opener === undefined
-                ? targetInfo.url !== ""
-                : this.actingTarget !== undefined && this.pageTargets.has(opener) && !runtimes(opener)
+                ? !(action !== undefined && INPUT_ACTIONS.has(action)) && targetInfo.url !== ""
+                : !(action !== undefined && DRIVING_ACTIONS.has(action) && this.actingTarget === undefined) &&
+                  this.pageTargets.has(opener) &&
+                  !runtimes(opener)
               : opener === undefined || !runtimes(opener));
           // The operator's, which no action reports, so no wait counts it.
           if (theirs) {
@@ -1769,6 +1782,7 @@ export class BrowserRuntime {
     this.dispatched = false;
     this.actingOn = undefined;
     this.actingTarget = undefined;
+    this.action = operation.action;
     this.stepped = false;
     // Chromium reports a window's creation on the browser-level session,
     // ahead of any later reply there; one round trip before the action
@@ -1826,15 +1840,17 @@ export class BrowserRuntime {
     } finally {
       this.acting = false;
       this.actingTarget = undefined;
+      this.action = undefined;
     }
   }
 
   private async run(operation: BrowserOperation): Promise<Record<string, unknown>> {
     const page = await this.page();
     this.actingOn = page;
-    // What it opens while this action runs is the action's, which in a browser
-    // this runtime is attached to is judged by target id (`Target.targetCreated`).
-    if (this.options.cdpEndpoint !== undefined && this.targets !== undefined) {
+    // What it opens while this action navigates it or sends it input is the
+    // action's, which in a browser this runtime is attached to is judged by
+    // target id (`Target.targetCreated`).
+    if (DRIVING_ACTIONS.has(operation.action) && this.options.cdpEndpoint !== undefined && this.targets !== undefined) {
       this.actingTarget = await this.targetOf(page).catch(() => undefined);
     }
     // Taken before the checks below, so an input action that passes them
