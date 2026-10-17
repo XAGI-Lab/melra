@@ -261,8 +261,9 @@ OpenAI Agents SDK, the Vercel AI SDK, and the official MCP SDKs.
 
 An **effect** is one bounded operation an agent routes through MELRA: `file.write`,
 `terminal.run`, `browser.click`, `http.request`, and so on. MELRA handles each routed
-effect in nine stages, split across two calls (`melra_plan`, then `melra_execute`) so
-that **nothing runs at planning time**:
+effect in nine stages, split between a plan step and an execute step (on the default
+tool surface, `melra_plan` then `melra_execute`) so that **nothing runs at planning
+time**:
 
 <p align="center">
   <img src="docs/assets/readme/pipeline.svg" alt="The nine stages: melra_plan types, classifies, authorises, issues an approval challenge and records the task; melra_execute checks policy again, deduplicates, runs under a budget, verifies evidence and writes a receipt." width="100%" />
