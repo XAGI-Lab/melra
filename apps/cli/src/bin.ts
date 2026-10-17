@@ -2,8 +2,9 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
-// The `melra` executable. Its only job is to silence one Node warning before
-// the rest of the CLI loads, then hand over to `index.ts`.
+// The `melra` executable. Before the rest of the CLI loads it does two things,
+// then hands over to `index.ts`: it silences one Node warning, and it refuses
+// to start, with a one-line cause, when `node:sqlite` cannot be loaded.
 //
 // `node:sqlite` emits an ExperimentalWarning the first time it is linked, which
 // meant two lines of Node noise on every invocation — `melra help` and
