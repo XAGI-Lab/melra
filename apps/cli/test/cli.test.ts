@@ -1022,6 +1022,20 @@ describe("melra CLI", () => {
     expect(JSON.parse(doctor.stdout).ready).toBe(true);
   });
 
+  it("names the Node.js it needs when node:sqlite will not load, instead of crashing", async (context) => {
+    // Turning the module off stands in for a release where it needs a flag.
+    if (!process.allowedNodeEnvironmentFlags.has("--no-experimental-sqlite")) context.skip();
+    const failed = await execute(process.execPath, ["--no-experimental-sqlite", entry, "doctor"]).then(
+      () => undefined,
+      (error: { code?: number; stderr?: string }) => error,
+    );
+    expect(failed?.code).toBe(1);
+    // Every Node.js CI runs is a supported one, where the module was turned off.
+    expect(failed?.stderr).toBe(
+      `melra: Node.js ${process.versions.node} has node:sqlite turned off or built without it; check NODE_OPTIONS for --no-experimental-sqlite\n`,
+    );
+  });
+
   it("explains bad input instead of leaking parser internals", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-cli-"));
     roots.push(root);
