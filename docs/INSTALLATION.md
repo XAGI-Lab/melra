@@ -399,9 +399,11 @@ block bounds money:
 
 Amounts are minor units — `5000` is $50.00. `amountMax` caps a single call and
 `dailyMax` the declared amounts committed in the last 24 hours. The counts are
-durable and are drawn down at one point only: where a verified task commits. An
-operation that was refused, failed verification, was cancelled, or collapsed
-into a duplicate costs nothing, and a restart does not refill the budget.
+durable and are drawn down at one point only: where a task whose every kernel
+check held commits, a verified task or one waiting on a `semantic` question,
+whose effect ran. An operation that was refused, failed a check, was cancelled,
+or collapsed into a duplicate costs nothing, and a restart does not refill the
+budget.
 
 A `provider` block makes the grant cover *only* operations that declare a
 matching `spend` (see [CAPABILITIES.md](CAPABILITIES.md#http)):

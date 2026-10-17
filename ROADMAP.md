@@ -300,9 +300,10 @@ but not in the shape the protocol should eventually name.
       checked before any allowlist.
 - [x] Usage-bounded and provider-shaped grants — `maxOperations`, and
       `provider: { name, account, amountMax, dailyMax }` for effects that spend
-      or commit something. Drawn down where a verified task commits its
-      idempotency key, so a refusal, a failed verification, or a duplicate costs
-      nothing and a restart does not refill the count. Delivered in
+      or commit something. Drawn down where a task whose every kernel check
+      held commits its idempotency key (a verified task, or one waiting on a
+      semantic question, whose effect ran), so a refusal, a failed check, or a
+      duplicate costs nothing and a restart does not refill the count. Delivered in
       [P4](#p4--credentials-and-api-effects), as planned: metering a grant needs
       something to meter, and that arrived with the credential broker and API
       effects.
