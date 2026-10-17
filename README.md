@@ -30,6 +30,7 @@ on the provider.
 <a href="https://www.tensorblock.co/mcp/servers/github-xagi-lab-melra-62b49341"><img src="https://mcp-index.tensorblock.co/v1/servers/github-xagi-lab-melra-62b49341/badge.svg" alt="Indexed on TensorBlock MCP Index" /></a>
 <a href="https://mcpservers.org/servers/xagi-lab/melra"><img src="https://mcpservers.org/badge.svg" alt="Listed on mcpservers.org" /></a>
 <a href="https://mcp.site/servers/melra"><img src="https://mcp.site/badge/melra" alt="Listed on mcp.site" /></a>
+<a href="https://smithery.ai/servers/xagi-labs/melra"><img src="https://img.shields.io/badge/Smithery-listed-F97316?style=flat-square" alt="MELRA on Smithery" /></a>
 <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-f97316?style=flat-square" alt="Apache-2.0 license" /></a>
 <img src="https://img.shields.io/badge/evals-52%2F52-22c55e?style=flat-square&logo=checkmarx&logoColor=white" alt="52 of 52 deterministic evaluation scenarios passing" />
 <img src="https://img.shields.io/badge/telemetry-off-0f172a?style=flat-square" alt="Telemetry off" />
