@@ -321,6 +321,16 @@ describe("browser see/act loop", () => {
     servers.push(heavy);
     await new Promise<void>((done) => heavy.listen(0, done));
     const heavyUrl = `http://localhost:${(heavy.address() as { port: number }).port}/?busyload`;
+    // And one that never answers until the test ends, as a dead link's can.
+    const hung: Array<() => void> = [];
+    let hungClosed = false;
+    const hanging = createServer((_request, response) => {
+      hung.push(() => response.end());
+      response.on("close", () => (hungClosed = true));
+    });
+    servers.push(hanging);
+    await new Promise<void>((done) => hanging.listen(0, "127.0.0.1", done));
+    const hungUrl = `http://127.0.0.1:${(hanging.address() as { port: number }).port}/?hung`;
     const root = await mkdtemp(join(tmpdir(), "melra-see-act-cdp-"));
     roots.push(root);
     const port = await new Promise<number>((done) => {
@@ -435,6 +445,23 @@ describe("browser see/act loop", () => {
       await mine.goto(`${origin}/?mine`);
       await leftAlone("?mine");
       expect(mine.isClosed()).toBe(false);
+      // One of theirs whose first response never comes holds up none of the
+      // actions after it.
+      await mine.evaluate((url) => {
+        (window as unknown as { stuck: Window | null }).stuck = window.open(url);
+      }, hungUrl);
+      await until("the hung window requested", () => hung.length > 0);
+      const unheld = Date.now();
+      await run({ action: "inspect", timeoutMs: 5_000 });
+      expect(Date.now() - unheld).toBeLessThan(2_500);
+      // Nor once they close it: a slow popup of the runtime's own is still
+      // waited for, and reported by the action that opened it.
+      await mine.evaluate(() => (window as unknown as { stuck: Window }).stuck.close());
+      await until("the hung window closed", () => hungClosed);
+      const slowPopup = slowUrl.replace("?slow", "?slowpop");
+      await run({ action: "navigate", url: `${origin}/?after&busy=${encodeURIComponent(slowPopup)}` });
+      const waited = await run({ action: "click", target: { selector: "#busy" }, timeoutMs: 10_000 });
+      expect(JSON.stringify(waited.popups ?? [])).toContain("?slowpop");
       // So is one they open just before the runtime's next action, though
       // Playwright only hands it over during that action, once it loads.
       await mine.evaluate((url) => window.open(url), slowUrl);
@@ -508,6 +535,7 @@ describe("browser see/act loop", () => {
       await leftAlone("?later");
     } finally {
       answerAll();
+      hung.splice(0).forEach((answer) => answer());
       await runtime.close();
       await operator.close();
     }
