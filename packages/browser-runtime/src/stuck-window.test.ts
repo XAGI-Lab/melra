@@ -82,6 +82,25 @@ describe("a window whose first response never comes (#226)", () => {
       const after = await run({ action: "click", target: { selector: "#slow" }, timeoutMs: 10_000 });
       expect(JSON.stringify(after.popups)).toContain("?slow");
 
+      // A cancel during the wait for it ends the wait at once, and the action
+      // queued behind it is not held either.
+      const waiting = new AbortController();
+      const asked = hung.length;
+      const cancelled = runtime.execute(
+        BrowserOperationSchema.parse({ kind: "browser", action: "click", target: { selector: "#stuck" }, timeoutMs: 8_000 }),
+        waiting.signal,
+      );
+      cancelled.catch(() => undefined);
+      while (hung.length <= asked) await new Promise((done) => setTimeout(done, 25));
+      // Past the click's settle, so the cancel lands in the wait.
+      await new Promise((done) => setTimeout(done, 1_000));
+      const at = Date.now();
+      waiting.abort(new Error("task_cancelled"));
+      const queued = run({ action: "inspect", timeoutMs: 5_000 });
+      await expect(cancelled).rejects.toThrow();
+      await queued;
+      expect(Date.now() - at).toBeLessThan(2_000);
+
       // Nor does an action that fails after opening one pass its wait on.
       const cancel = new AbortController();
       const failing = runtime.execute(

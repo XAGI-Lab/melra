@@ -972,7 +972,9 @@ export class BrowserRuntime {
       const created = () => this.windowsCreated.get(contextId) ?? 0;
       this.forgetLateWindows();
       const deadline = Date.now() + timeoutMs;
-      while (this.windowsAdopted < created() && Date.now() < deadline) {
+      // A cancel ends the wait at once: what is still owed is given up below,
+      // and the queue behind this action is not held to its deadline.
+      while (this.windowsAdopted < created() && Date.now() < deadline && this.signal?.aborted !== true) {
         await new Promise((done) => setTimeout(done, WINDOW_POLL_MS));
       }
       this.giveUpOwedWindows();

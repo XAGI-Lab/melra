@@ -96,7 +96,8 @@ All notable changes are documented here. The format follows
   it, as for any window it opened. Every later action used to wait out its
   whole `timeoutMs` too, for as long as that window stayed open, in a
   launched browser and an attached one. An action that fails or is cancelled
-  after opening one gives it up as well. A window given up on is still
+  after opening one gives it up as well, and a cancel that comes during the
+  wait now ends it at once instead of at the deadline. A window given up on is still
   reported, by the action running if it is ever handed over. Two limits,
   because windows are tracked by count, not identity (#234): one handed over
   during a later action, before that action's wait ends, stands in for a
