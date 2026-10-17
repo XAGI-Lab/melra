@@ -8,12 +8,12 @@
 
 ### Your AI agent decides what to do. MELRA governs how tool calls are authorized, verified, and recovered.
 
-An open-source **autonomy kernel**: the layer every agent action passes through on its
-way to your files, terminal, browser, desktop and APIs. It checks each action against
-policy, requests approval when needed, verifies declared evidence, and keeps a redacted
-receipt. For each task, MELRA dispatches mutations at most once; uncertain outcomes are
-parked for reconciliation instead of replay. Exactly-once external effects still depend
-on the provider.
+An open-source local execution runtime for agent tool calls you route through MELRA.
+It checks each call against policy, requests approval when needed, verifies declared
+evidence, and keeps a redacted receipt. For each task, MELRA dispatches mutations at
+most once; uncertain outcomes are parked for reconciliation instead of replay.
+Exactly-once external effects still depend on the provider. Calls made through other
+tools remain outside MELRA's control.
 
 <br />
 
@@ -90,8 +90,8 @@ them differently, or not at all:
 
 ### 🛡️ Is it allowed?
 
-Every action is checked against **your** policy, and checked again at the moment it
-runs. Risky changes wait for your exact approval.
+Every action MELRA receives is checked against **your** policy, and checked again at
+the moment it runs. Risky changes wait for your exact approval.
 
 </td>
 <td width="25%" valign="top">
@@ -106,32 +106,33 @@ holds: the file exists, the exit code is 0, the page says what it should.
 
 ### 🔁 What if it crashes?
 
-Every change is **recorded before it runs** and runs **at most once**. After a crash,
-MELRA settles it from its evidence or the provider; what it cannot settle waits in
-`recovery_required`, and is never replayed.
+Every mutation MELRA dispatches is **recorded before it runs** and runs **at most
+once**. After a crash, MELRA settles it from its evidence or the provider; what it
+cannot settle waits in `recovery_required` and is never replayed.
 
 </td>
 <td width="25%" valign="top">
 
 ### 🧾 What happened?
 
-Every action leaves a **redacted, hash-linked receipt**, so you can audit what ran,
-who asked, and why it was allowed.
+Every action MELRA handles leaves a **redacted, hash-linked receipt**, so you can audit
+what ran, who asked, and why it was allowed.
 
 </td>
 </tr>
 </table>
 
-MELRA answers those questions once, in one place, for **every** agent. It sits
-underneath your agent, the way an operating system sits underneath your apps:
+MELRA answers those questions in one place for tool calls routed through it, across
+supported agents. It sits underneath your agent for those calls, the way an operating
+system sits underneath your apps:
 
 <p align="center">
-  <img src="docs/assets/readme/layers.svg" alt="Where MELRA sits: the model reasons, your agent runs the loop, MELRA owns every effect, and effect adapters do the work on your systems." width="100%" />
+  <img src="docs/assets/readme/layers.svg" alt="Where MELRA sits: the model reasons, your agent runs the loop, MELRA governs tool calls routed through it, and effect adapters do the work on your systems. Other agent tools remain outside MELRA's control." width="100%" />
 </p>
 
-> **The LLM reasons. The harness manages the loop. MELRA owns the effect lifecycle.**
-> Swap the model or the agent on Friday; your policies, approvals, credentials,
-> history and receipts are still there on Monday.
+> **The LLM reasons. The harness manages the loop. MELRA governs the effect lifecycle
+> for calls routed through it.** Swap the model or the agent; MELRA's policies,
+> approvals, credentials, history and receipts can stay in place.
 
 ---
 
@@ -258,10 +259,9 @@ OpenAI Agents SDK, the Vercel AI SDK, and the official MCP SDKs.
 
 ## How it works
 
-Every action an agent wants to take is called an **effect**: `file.write`,
-`terminal.run`, `browser.click`, `http.request`, and so on. MELRA does exactly nine
-things to every effect, split across two calls so that **nothing runs at planning
-time**:
+An **effect** is a tool call an agent routes through MELRA: `file.write`,
+`terminal.run`, `browser.click`, `http.request`, and so on. MELRA handles each routed
+effect in nine stages, split across two calls so that **nothing runs at planning time**:
 
 <p align="center">
   <img src="docs/assets/readme/pipeline.svg" alt="The nine stages: melra_plan types, classifies, authorises, issues an approval challenge and records the task; melra_execute checks policy again, deduplicates, runs under a budget, verifies evidence and writes a receipt." width="100%" />
@@ -334,9 +334,9 @@ never blindly retry an unknown outcome, without anyone prompt-engineering it.
 
 ## See what it is doing
 
-You can see every action, its policy decision, its evidence and its receipt, from the
-terminal or the browser. Nothing here can approve or start work, and approval phrases
-are never displayed.
+You can see each action MELRA handled, its policy decision, evidence and receipt, from
+the terminal or the browser. Nothing here can approve or start work, and approval
+phrases are never displayed.
 
 <table>
 <tr>
