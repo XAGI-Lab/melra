@@ -264,7 +264,24 @@ window's first response, so a slow popup still lands on the right result.
 setting governs whether the window survives, not whether it is reported, and
 `assertSafeUrl` still decides where it may load from. Unsafe-local mode allows
 popups, because closing one is MELRA's judgement about what the caller should be
-looking at.
+looking at. A reported popup's URL leaves out its fragment. In a browser the
+runtime is attached to over CDP, a tab Chromium creates between its actions is
+the operator's unless it is the runtime's: one it opened, a window one of those
+opened (down any chain), or one opened by the tab it is driving, which a tab it
+merely landed on becomes only once it navigates it or sends it input (an
+action refused, or one whose target was never found, does not count). The
+operator's is left open and not reported, so a tab you open yourself, or one
+`melra console` opens, survives as long as no action is running when it is
+created. One created while an action runs is closed and reported like any
+popup, so open the console while the agent is idle, or use `melra approve`. A
+tab a link opens with a modifier or middle click has no opener, so between
+actions it counts as the operator's whichever page it came from: it is left
+open and not reported, but it is listed by `tabs` and its loads are still
+checked. A window that closes before the runtime can tell whose it is, such as
+a tab that turns into a download, is reported either way. What is the
+runtime's lasts as long as it stays attached: after MELRA restarts, or
+reconnects to the browser, the tabs it opened before count as the operator's
+until it navigates one or sends it input again.
 
 Attaching over CDP and recording a HAR are mutually exclusive; setting both
 fails at startup. A HAR captures full request and response data, including
