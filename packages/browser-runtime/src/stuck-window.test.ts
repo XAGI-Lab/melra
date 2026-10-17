@@ -117,22 +117,23 @@ describe("a window whose first response never comes (#226)", () => {
       await run({ action: "inspect", timeoutMs: 5_000 });
       expect(Date.now() - next).toBeLessThan(2_500);
 
-      // Nor does one whose wait could not ask the browser in time.
+      // Nor does one whose wait could not ask the browser, as when that call
+      // runs out of its bound.
       type Send = (method: string, ...rest: unknown[]) => Promise<unknown>;
       const targets = (runtime as unknown as { targets: { send: Send } }).targets;
       const send = targets.send.bind(targets);
-      let stalled = false;
+      let refused = false;
       targets.send = async (method, ...rest) => {
-        if (method === "Browser.getVersion" && !stalled) {
-          stalled = true;
-          await new Promise((done) => setTimeout(done, 1_500));
+        if (method === "Browser.getVersion" && !refused) {
+          refused = true;
+          throw new Error("browser_call_timeout:cdp:Browser.getVersion");
         }
         return await send(method, ...rest);
       };
       const before = hung.length;
-      const stalledClick = await run({ action: "click", target: { selector: "#stuck" }, timeoutMs: 1_000 });
-      expect(stalled).toBe(true);
-      expect(stalledClick.success).toBe(true);
+      const unasked = await run({ action: "click", target: { selector: "#stuck" }, timeoutMs: 10_000 });
+      expect(refused).toBe(true);
+      expect(unasked.success).toBe(true);
       expect(hung.length).toBeGreaterThan(before);
       const then = Date.now();
       await run({ action: "inspect", timeoutMs: 5_000 });
