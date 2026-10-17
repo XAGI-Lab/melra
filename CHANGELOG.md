@@ -88,7 +88,9 @@ All notable changes are documented here. The format follows
   tab created while an action runs is still closed and reported, so open the
   console while the agent is idle, or use `melra approve`. A window that closes
   before it can be looked up, such as a tab that turns into a download, is
-  reported either way. A reported popup's URL no longer carries its fragment,
+  reported either way. Ownership lasts for one attach: after MELRA restarts or
+  reconnects, the tabs it opened before count as the operator's until it
+  drives one again. A reported popup's URL no longer carries its fragment,
   where a console keeps its one-time pairing code until its page has read it.
   (#203)
 

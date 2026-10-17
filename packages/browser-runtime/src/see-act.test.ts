@@ -404,24 +404,30 @@ describe("browser see/act loop", () => {
       // another, stay theirs, and so does what they open afterwards.
       await first.evaluate((url) => window.open(url), `${origin}/?pre1`);
       await requested("?pre2");
-      // A read lands on the operator's tab, which does not make it the
-      // runtime's: what the operator opens from it stays theirs.
-      await run({ action: "tabs" });
-      await until("?pre2 open", () => operator.pages().some((page) => page.url().includes("?pre2")));
-      const pre2 = operator.pages().find((page) => page.url().includes("?pre2"))!;
-      await pre2.evaluate((url) => window.open(url), `${origin}/?prechild`);
-      await leftAlone("?prechild");
-      await first.evaluate((url) => window.open(url), `${origin}/?fromread`);
+      // A read lands on one of the operator's tabs, which does not make it the
+      // runtime's: what the operator opens from it stays theirs. Which tab it
+      // lands on follows the order Chromium announced them in, so each tab
+      // that was there opens one, and the one landed on is used below.
+      const read = (await run({ action: "tabs" })) as { tabs: Array<{ url: string; active: boolean }> };
+      const at = read.tabs.find((tab) => tab.active)!.url;
+      await until("?pre1 and ?pre2 open", () =>
+        ["?pre1", "?pre2"].every((search) => operator.pages().some((page) => page.url().includes(search))),
+      );
+      const there = [...operator.pages()];
+      const landed = there.find((page) => page.url() === at)!;
+      for (const [index, page] of there.entries()) await page.evaluate((url) => window.open(url), `${origin}/?prechild${index}`);
+      for (const index of there.keys()) await leftAlone(`?prechild${index}`);
+      await landed.evaluate((url) => window.open(url), `${origin}/?fromread`);
       await leftAlone("?fromread");
       // Nor does an action on it that is refused, or whose target is never
       // found: nothing reached the tab.
       await expect(run({ action: "navigate", url: "http://example.com/" })).rejects.toThrow();
       await expect(run({ action: "click", target: { selector: "#nothing" }, timeoutMs: 500 })).rejects.toThrow();
-      await first.evaluate((url) => window.open(url), `${origin}/?afterrefusal`);
+      await landed.evaluate((url) => window.open(url), `${origin}/?afterrefusal`);
       await leftAlone("?afterrefusal");
       // So does a step back refused before it was sent.
       await expect(run({ action: "back", url: `${origin}/elsewhere` })).rejects.toThrow("browser_page_not_at_url");
-      await first.evaluate((url) => window.open(url), `${origin}/?afterback`);
+      await landed.evaluate((url) => window.open(url), `${origin}/?afterback`);
       await leftAlone("?afterback");
       await run({ action: "tab_new", url: origin });
       // A tab the operator opens between the runtime's actions is theirs.

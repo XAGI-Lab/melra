@@ -278,7 +278,10 @@ tab a link opens with a modifier or middle click has no opener, so between
 actions it counts as the operator's whichever page it came from: it is left
 open and not reported, but it is listed by `tabs` and its loads are still
 checked. A window that closes before the runtime can tell whose it is, such as
-a tab that turns into a download, is reported either way.
+a tab that turns into a download, is reported either way. What is the
+runtime's lasts as long as it stays attached: after MELRA restarts, or
+reconnects to the browser, the tabs it opened before count as the operator's
+until it navigates one or sends it input again.
 
 Attaching over CDP and recording a HAR are mutually exclusive; setting both
 fails at startup. A HAR captures full request and response data, including
