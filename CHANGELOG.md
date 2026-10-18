@@ -98,6 +98,11 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- `send` to an interactive terminal job whose program has closed its stdin is
+  refused as `terminal_job_stdin_closed`. It was reported as
+  `terminal_job_not_interactive`, because the failed write had already
+  destroyed the pipe before that check was reached. (#271)
+
 - The TypeScript SDK's `MelraClient.connect()` says why a `melra serve` it
   started refused to start: the error quotes the server's stderr (an invalid
   policy, an unwritable `MELRA_HOME`, a Node without `node:sqlite`) instead
