@@ -78,6 +78,9 @@ export class WorkflowController {
   // process from racing itself without touching the disk on every call.
   private readonly advances = new Map<string, Promise<WorkflowAdvanceResult>>();
   private readonly owner = `${process.pid}:${randomUUID()}`;
+  /** Whether a task's effect happened and verified, for `targetDone`. */
+  private readonly ran = (taskId: string): boolean =>
+    this.tasks.status(taskId).status === "verified_success";
   // Distinct from `owner`, so this process's own advance in flight also keeps
   // its recovery away from the run.
   private readonly recoveryOwner = `${this.owner}:recovery`;
@@ -288,7 +291,7 @@ export class WorkflowController {
                 ["pending", "awaiting_approval"].includes(
                   current.nodes[node.id]?.status ?? "",
                 ) &&
-                targetDone(definition, (id) => current.nodes[id], node.forNodeId),
+                targetDone(definition, (id) => current.nodes[id], node.forNodeId, this.ran),
             )
             .map((node) => node.id)
             .reverse()
@@ -413,7 +416,7 @@ export class WorkflowController {
         if (this.status(workflowId).stateVersion !== current.stateVersion) break;
         const stateOf = (id: string) =>
           results.find(({ nodeId }) => nodeId === id)?.result.state ?? current.nodes[id];
-        if (!targetDone(definition, stateOf, node.forNodeId)) {
+        if (!targetDone(definition, stateOf, node.forNodeId, this.ran)) {
           results.push({
             nodeId: node.id,
             result: {
@@ -1537,12 +1540,16 @@ function aggregateNodeState(
  * Whether a compensation's target step happened. An approval node runs its
  * operation's task itself, so the operation still reads `pending` for a wave
  * after its effect; skipping the compensation then would undo the steps
- * before it while this one stands.
+ * before it while this one stands. Only when that task did run, though: an
+ * approval that policy let through (unsafe-local, or a read) reads
+ * `verified_complete` with the task merely planned, and the effect is not
+ * there to undo.
  */
 function targetDone(
   definition: WorkflowDefinition,
   stateOf: (nodeId: string) => WorkflowNodeState | undefined,
   nodeId: string,
+  ran: (taskId: string) => boolean,
 ): boolean {
   return (
     stateOf(nodeId)?.status === "verified_complete" ||
@@ -1550,7 +1557,8 @@ function targetDone(
       (node) =>
         node.type === "approval" &&
         node.forNodeId === nodeId &&
-        stateOf(node.id)?.status === "verified_complete",
+        stateOf(node.id)?.status === "verified_complete" &&
+        (stateOf(node.id)?.taskIds ?? []).some(ran),
     )
   );
 }

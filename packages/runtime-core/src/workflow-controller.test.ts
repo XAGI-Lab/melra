@@ -990,6 +990,46 @@ describe("WorkflowController execution", () => {
     expect(result.run.status).toBe("failed");
   });
 
+  it("does not undo a step its approval only let through, unrun", async () => {
+    const calls: string[] = [];
+    const { controller } = await setup(
+      async (operation) => {
+        if (operation.kind !== "http") throw new Error("unexpected_operation");
+        const path = new URL(operation.url).pathname;
+        calls.push(path);
+        return { success: path !== "/notify" };
+      },
+      // The approval passes ship's task through planned; ship would run it next wave.
+      { unhinged: true },
+    );
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Charge, approve and ship, notify",
+        nodes: [
+          { id: "charge", type: "operation", request: call("Charge", `${PAYMENTS}/charges`) },
+          { id: "approve-ship", type: "approval", forNodeId: "ship", dependsOn: ["charge"] },
+          { id: "ship", type: "operation", dependsOn: ["approve-ship"], request: call("Ship", `${LOGISTICS}/shipments`) },
+          { id: "notify", type: "operation", dependsOn: ["charge"], request: call("Notify", `${PAYMENTS}/notify`) },
+          { id: "undo-charge", type: "compensation", forNodeId: "charge", request: call("Refund", `${PAYMENTS}/refunds`) },
+          { id: "undo-ship", type: "compensation", forNodeId: "ship", request: call("Cancel shipment", `${LOGISTICS}/cancellations`) },
+        ],
+      }),
+    );
+    let run = (await controller.advance(planned.id)).run;
+    for (let step = 0; step < 6 && run.status !== "failed"; step += 1) {
+      run = (await controller.advance(planned.id)).run;
+    }
+    // Notify failed in the wave the approval passed ship through: nothing was
+    // shipped, so there is nothing to cancel, only the charge to refund.
+    expect(calls).not.toContain("/shipments");
+    expect(calls).not.toContain("/cancellations");
+    expect(calls).toContain("/refunds");
+    expect(run.nodes["undo-ship"]?.status).toBe("skipped");
+  });
+
   it("stops an unwind when the run is cancelled under it", async () => {
     let cancelRun = () => {};
     const calls: string[] = [];

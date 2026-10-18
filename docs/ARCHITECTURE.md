@@ -266,8 +266,10 @@ run is `failed`, as for a step that failed, and unwinds (see
 outcome is unknown. Cancelling a step that is already running aborts it, and
 its outcome may then be unknown (`recovery_required`). A step whose record and
 effects disagree, cancelled as a duplicate of an attempt that committed or
-still running or verifying, makes the run `recovery_required` until recovery,
-which every `melra` process start runs, settles it.
+still running or verifying, makes the run `recovery_required` until recovery
+settles it. Recovery runs whenever the runtime starts: `melra serve` (each stdio
+session is one), any `melra workflow` command, `approve`, `run`, `console`,
+`inspect` and `export`. `status`, `tasks` and `watch` only read the store.
 
 Implemented event types are:
 
