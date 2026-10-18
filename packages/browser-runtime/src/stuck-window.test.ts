@@ -31,11 +31,11 @@ describe("a window whose first response never comes (#226)", () => {
     // Never answers until the test ends, as a dead link's server can.
     const hung: Array<() => void> = [];
     const stuck = await listen(createServer((_request, response) => void hung.push(() => response.end())));
-    // Answers after a while, as a slow site does: after 1.5 s, or 2.5 s for
+    // Answers after a while, as a slow site does: after 1.5 s, or 5 s for
     // the window the test means to give up on.
     const slow = await listen(
       createServer((request, response) => {
-        setTimeout(() => response.end("<!doctype html><title>slow</title>"), request.url?.includes("late") ? 2_500 : 1_500);
+        setTimeout(() => response.end("<!doctype html><title>slow</title>"), request.url?.includes("late") ? 5_000 : 1_500);
       }),
     );
     const origin = await listen(
@@ -77,7 +77,10 @@ describe("a window whose first response never comes (#226)", () => {
       // nothing from the next action's own window.
       const context = (runtime as unknown as { context: BrowserContext }).context;
       const late = context.waitForEvent("page", { predicate: (page) => page.url().includes("?late") });
-      await run({ action: "click", target: { selector: "#late" }, timeoutMs: 1_000 });
+      // Still waited on below; this only keeps a failure before then from
+      // surfacing as an unhandled rejection once the browser closes.
+      late.catch(() => undefined);
+      await run({ action: "click", target: { selector: "#late" }, timeoutMs: 2_000 });
       await late;
       const after = await run({ action: "click", target: { selector: "#slow" }, timeoutMs: 10_000 });
       expect(JSON.stringify(after.popups)).toContain("?slow");
