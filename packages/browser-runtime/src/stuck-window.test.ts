@@ -157,6 +157,70 @@ describe("a window whose first response never comes (#226)", () => {
     }
   });
 
+  it("does not let a window given up on stand in for a later action's own (#234)", { timeout: 60_000 }, async () => {
+    const executablePath = await detectBrowserExecutable();
+    if (executablePath === undefined) return;
+    // Each window answers only when the test lets it, from a server of its
+    // own: with one server, the second request did not always arrive while
+    // the first was held.
+    const held = new Map<string, () => void>();
+    const holding = (name: string) =>
+      listen(createServer((_request, response) => void held.set(name, () => response.end("<!doctype html><title>slow</title>"))));
+    const lateUrl = await holding("late");
+    const laterUrl = await holding("later");
+    const origin = await listen(
+      createServer((_request, response) => {
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        response.end(`<!doctype html><title>opener</title>
+          <button id="late" onclick="window.open('${lateUrl}/?late')">late</button>
+          <button id="later" onclick="window.open('${laterUrl}/?later')">later</button>`);
+      }),
+    );
+    const root = await mkdtemp(join(tmpdir(), "melra-stand-in-"));
+    roots.push(root);
+    const runtime = new BrowserRuntime({
+      workspaceRoot: root,
+      artifactDirectory: join(root, "artifacts"),
+      executablePath,
+      allowedDomains: ["127.0.0.1"],
+      allowLocalhost: true,
+    });
+    const run = (operation: Record<string, unknown>) =>
+      runtime.execute(BrowserOperationSchema.parse({ kind: "browser", ...operation }));
+    const release = (name: string) => {
+      held.get(name)?.();
+      held.delete(name);
+    };
+    try {
+      await run({ action: "navigate", url: origin });
+      // Given up on: its click's wait runs out before it answers.
+      await run({ action: "click", target: { selector: "#late" }, timeoutMs: 2_000 });
+      const context = (runtime as unknown as { context: BrowserContext }).context;
+      const late = context.waitForEvent("page", { predicate: (page) => page.url().includes("?late") });
+      late.catch(() => undefined);
+      // The next click opens a window of its own, and while it waits for that
+      // one (past its settle), the window given up on is handed over.
+      const clicking = run({ action: "click", target: { selector: "#later" }, timeoutMs: 15_000 });
+      clicking.catch(() => undefined);
+      while (!held.has("later")) await new Promise((done) => setTimeout(done, 25));
+      await new Promise((done) => setTimeout(done, 600));
+      release("late");
+      await late;
+      // It stands in for nothing: the click still waits for its own window.
+      const pending = Symbol("pending");
+      const first = await Promise.race([clicking, new Promise((done) => setTimeout(() => done(pending), 1_000))]);
+      expect(first).toBe(pending);
+      const at = Date.now();
+      release("later");
+      const clicked = await clicking;
+      expect(Date.now() - at).toBeLessThan(2_500);
+      expect(JSON.stringify(clicked.popups)).toContain("?later");
+    } finally {
+      for (const answer of held.values()) answer();
+      await runtime.close();
+    }
+  });
+
   it("gives up what a context's first action opened when that action fails", { timeout: 60_000 }, async () => {
     const executablePath = await detectBrowserExecutable();
     if (executablePath === undefined) return;

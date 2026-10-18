@@ -185,9 +185,13 @@ describe("browser popups", () => {
     });
     try {
       await session.execute(op({ action: "navigate", url }));
+      // The window left open is owed no longer once it is handed over (#234),
+      // so the click does not wait out its timeoutMs for it.
+      const started = Date.now();
       const clicked = await session.execute(
-        op({ action: "click", target: { selector: "#pop" } }),
+        op({ action: "click", target: { selector: "#pop" }, timeoutMs: 10_000 }),
       );
+      expect(Date.now() - started).toBeLessThan(5_000);
       expect((clicked.popups as Popup[])[0]?.blocked).toBe(false);
       const tabs = await session.execute(op({ action: "tabs" }));
       expect((tabs.tabs as Tab[]).length).toBe(2);
@@ -235,7 +239,8 @@ describe("browser popups", () => {
       };
 
       // No url, so nothing after the tab opens gives the close time to land.
-      // And the popup held is counted, so tab_new does not wait for it (#226).
+      // And the popup held stops being owed once its close destroys it, and
+      // the tab once it is looked up, so tab_new does not wait for them (#234).
       const started = Date.now();
       const opened = await session.execute(op({ action: "tab_new", timeoutMs: 10_000 }));
       expect(Date.now() - started).toBeLessThan(5_000);
