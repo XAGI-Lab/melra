@@ -107,8 +107,9 @@ describe("melra http server", () => {
         (error: Error) => error,
       );
       if (served instanceof Error) {
-        // Something on this machine already holds the default port.
-        expect(served.message).toMatch(new RegExp(`EADDRINUSE.*${DEFAULT_HTTP_PORT}`));
+        // Something on this machine holds the default port, or the OS reserves
+        // it (EACCES in a Windows excluded range): it was still the one asked for.
+        expect((served as Error & { port?: number }).port).toBe(DEFAULT_HTTP_PORT);
         continue;
       }
       try {

@@ -1197,6 +1197,23 @@ describe("melra CLI", () => {
     expect(JSON.parse(deprecated.stdout).unhinged).toBe(true);
   });
 
+  it("refuses a blank --port instead of taking a random one", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-cli-"));
+    roots.push(root);
+    const options = {
+      cwd: root,
+      env: { ...process.env, MELRA_HOME: join(root, ".melra"), MELRA_WORKSPACE: root },
+      // An unfixed serve listens until killed.
+      timeout: 10_000,
+    };
+    // What `--port "$PORT"` sends with PORT unset, and a --port with nothing after it.
+    for (const args of [["--port", ""], ["--port", " "], ["--port"]]) {
+      await expect(
+        execute(process.execPath, [entry, "serve", "--http", ...args], options),
+      ).rejects.toMatchObject({ stderr: expect.stringContaining("--port requires a port") });
+    }
+  }, 60_000);
+
   it("serves on a socket only with --socket, and doctor reports the socket's mode", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-cli-"));
     roots.push(root);
