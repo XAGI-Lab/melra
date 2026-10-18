@@ -108,14 +108,19 @@ export class HttpRuntime {
           let bytes = 0;
           let truncated = false;
           response.on("data", (chunk: Buffer) => {
-            bytes += chunk.length;
-            if (bytes > operation.maxResponseBytes) {
+            const room = operation.maxResponseBytes - bytes;
+            if (chunk.length > room) {
               // Stop reading rather than buffering an unbounded body into the
-              // host's heap. What arrived is still reported, flagged.
+              // host's heap. What arrived is still reported, flagged, up to the
+              // cap: the chunk that crosses it is cut there, not dropped, or a
+              // body that arrives in one read came back empty.
+              chunks.push(chunk.subarray(0, room));
+              bytes += room;
               truncated = true;
               response.destroy();
               return;
             }
+            bytes += chunk.length;
             chunks.push(chunk);
           });
           const finish = (): void => {

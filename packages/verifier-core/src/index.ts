@@ -262,6 +262,16 @@ const httpResourceMatches: Built<"http_resource_matches"> = {
     // any other status is as inconclusive as a dropped connection. Read as a
     // denial, a degraded provider turned a charge that went through into
     // `failed`, and the caller charged again.
+    // A body cut at the probe's size cap is not the provider saying no: the
+    // value may be past the cut, and a cut JSON body is not parsed at all.
+    if (!passed && observed.truncated === true) {
+      return {
+        passed: false,
+        inconclusive: true,
+        summary: "independent read unavailable: the response passed the size cap and was cut off",
+        source: url,
+      };
+    }
     const status = observed.status;
     if (!passed && typeof status === "number" && !(status >= 200 && status < 300) && status !== 404 && status !== 410) {
       return {

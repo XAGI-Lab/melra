@@ -329,7 +329,8 @@ Action: `request`. Fields: `method`, `url`, `headers`, `content`,
 - `idempotencyKey` is sent as `Idempotency-Key` for providers that honour it.
   MELRA cannot check that they do, so it does not change the guarantee.
 - Response bodies are capped by `maxResponseBytes` (1 MiB by default); a body
-  past the cap stops being read and the result reports `truncated: true`.
+  past the cap stops being read: the result carries the body up to the cap,
+  `bytes` counts what was delivered, and it reports `truncated: true`.
 - The request payload travels as `content`, which redaction strips before
   anything is persisted. Raw bytes reach the live caller only.
 - Credentials the operator configured under `policy.credentials` are injected at

@@ -153,6 +153,17 @@ describe("verification through a channel that did not act", () => {
     expect((await gone.verify([predicate()], created)).evidence[0]?.inconclusive).toBeUndefined();
   });
 
+  it("reads a body cut at the size cap as no answer, not as no", async () => {
+    // 200, but the JSON stops partway: the state may be past the cut, and a
+    // cut body is not parsed at all.
+    const verifier = await Verifier.create(root, {
+      probe: async () => ({ success: true, status: 200, content: '{"padding":"xxxx', truncated: true }),
+    });
+    const { verified, evidence } = await verifier.verify([predicate()], created);
+    expect(verified).toBe(false);
+    expect(evidence[0]).toMatchObject({ passed: false, inconclusive: true });
+  });
+
   it("does not call a value mismatch inconclusive", async () => {
     const verifier = await Verifier.create(root, {
       probe: probeReturning({ state: "pending" }),
