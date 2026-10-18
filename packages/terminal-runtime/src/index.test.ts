@@ -5,7 +5,7 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { TerminalOperationSchema } from "@melra/protocol";
 import { TerminalRuntime, hardenGitRead, redactTerminalOutput } from "./index.js";
 
@@ -328,6 +328,86 @@ describe("TerminalRuntime", () => {
     ).rejects.toThrow("terminal_command_not_found");
     await runtime.close();
   });
+
+  // POSIX only: Windows has no process groups to find them by.
+  it.skipIf(process.platform === "win32")("still stops what a job's program left in its group once the program exits", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-terminal-"));
+    roots.push(root);
+    const runtime = await TerminalRuntime.create({ root });
+    // The program starts a process in its own group and exits at once. That
+    // process ignores SIGTERM, as a server it started might.
+    const leftover =
+      "process.on('SIGTERM', () => {}); require('fs').writeFileSync(process.argv[1], String(process.pid)); setInterval(() => {}, 1000)";
+    const leave = async (name: string, fields: Record<string, unknown> = {}) => {
+      const started = await runtime.execute(
+        op({
+          action: "start",
+          args: ["-e", `require('child_process').spawn(process.execPath, ['-e', ${JSON.stringify(leftover)}, '${name}'], { stdio: 'ignore' }).unref()`],
+          ...fields,
+        }),
+      );
+      const status = () =>
+        runtime.execute(TerminalOperationSchema.parse({ kind: "terminal", action: "status", jobId: started.jobId }));
+      await until(() => existsSync(join(root, name)));
+      for (let waited = 0; waited < 5000 && (await status()).running === true; waited += 20) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      expect(await status()).toMatchObject({ running: false });
+      const pid = Number(await readFile(join(root, name), "utf8"));
+      expect(alive(pid)).toBe(true);
+      return { jobId: started.jobId, pid };
+    };
+    try {
+      const stopped = await leave("stopped");
+      const timed = await leave("timed", { timeoutMs: 1_000 });
+      const closed = await leave("closed");
+      await runtime.execute(TerminalOperationSchema.parse({ kind: "terminal", action: "stop", jobId: stopped.jobId }));
+      await until(() => !alive(stopped.pid) && !alive(timed.pid), 6_000);
+      expect(alive(stopped.pid)).toBe(false);
+      expect(alive(timed.pid)).toBe(false);
+      expect(alive(closed.pid)).toBe(true);
+      await runtime.close();
+      // Killed before close() resolved; macOS reaps the zombie a moment later.
+      await until(() => !alive(closed.pid), 1_000);
+      expect(alive(closed.pid)).toBe(false);
+    } finally {
+      // Whatever an early failure left running: close() stops each job's group.
+      await runtime.close();
+    }
+  }, 30_000);
+
+  it.skipIf(process.platform === "win32")("keeps a job's timeout on what it left behind across a wall-clock jump", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-terminal-"));
+    roots.push(root);
+    const runtime = await TerminalRuntime.create({ root });
+    const started = await runtime.execute(
+      op({
+        action: "start",
+        timeoutMs: 1_000,
+        args: [
+          "-e",
+          `require('child_process').spawn(process.execPath, ['-e', "process.on('SIGTERM', () => {}); require('fs').writeFileSync('left', String(process.pid)); setInterval(() => {}, 1000)"], { stdio: 'ignore' }).unref()`,
+        ],
+      }),
+    );
+    const status = () =>
+      runtime.execute(TerminalOperationSchema.parse({ kind: "terminal", action: "status", jobId: started.jobId }));
+    await until(() => existsSync(join(root, "left")));
+    for (let waited = 0; waited < 5000 && (await status()).running === true; waited += 20) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    const pid = Number(await readFile(join(root, "left"), "utf8"));
+    // A laptop waking from sleep: the wall clock leaps, the job's timer has not.
+    const now = Date.now.bind(Date);
+    const jump = vi.spyOn(Date, "now").mockImplementation(() => now() + 3_600_000);
+    try {
+      await until(() => !alive(pid), 6_000);
+      expect(alive(pid)).toBe(false);
+    } finally {
+      jump.mockRestore();
+      await runtime.close();
+    }
+  }, 30_000);
 
   it("does not resolve close until its children have actually exited", async () => {
     // A signalled-but-live child holds its cwd open on Windows, so a caller
