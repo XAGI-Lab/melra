@@ -1,17 +1,17 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   lstat,
   mkdir,
+  open,
   readFile,
   readdir,
   realpath,
   rename,
   rm,
   stat,
-  writeFile,
 } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { FileOperation } from "@melra/protocol";
@@ -278,14 +278,33 @@ export class FileRuntime {
         const buffer = Buffer.from(operation.content, operation.encoding);
         if (buffer.byteLength > this.maxFileBytes) throw new Error("file_size_limit_exceeded");
         await mkdir(dirname(path), { recursive: true });
-        const temporary = `${path}.melra-${randomUUID()}.tmp`;
-        await writeFile(temporary, buffer, { flag: "wx" });
+        // A short name beside it, not one built from it: the target's own name
+        // may already be as long as the file system allows.
+        const temporary = join(dirname(path), `.melra-${randomBytes(6).toString("hex")}.tmp`);
+        // The file it replaces keeps its permissions: a private one stays
+        // private and a script stays executable. Written private, then set
+        // exactly, past the umask; the setuid, setgid and sticky bits are not
+        // carried over. A new file gets the default mode, as before.
+        const replaced = await stat(path).catch(() => undefined);
+        const kept = replaced?.isFile() === true ? replaced.mode & 0o777 : undefined;
+        // Only the exclusive create is outside the cleanup: a name already
+        // taken is not ours to remove.
+        const handle = await open(temporary, "wx", kept === undefined ? 0o666 : 0o600);
         try {
+          try {
+            await handle.writeFile(buffer);
+            // Through the descriptor: nothing after the create looks the
+            // name up again, so a link put in its place is never followed.
+            if (kept !== undefined) await handle.chmod(kept);
+          } finally {
+            await handle.close();
+          }
           await rename(temporary, path);
         } catch (error) {
-          // A rename that failed (the target is a directory, or held open on
-          // Windows) would otherwise leave the content, secrets and all,
-          // beside it in the workspace, one copy per retry.
+          // A write that failed partway (a full disk), or a rename that failed
+          // (the target is a directory, or held open on Windows), would
+          // otherwise leave the content, secrets and all, beside it in the
+          // workspace, one copy per retry.
           await rm(temporary, { force: true });
           throw error;
         }

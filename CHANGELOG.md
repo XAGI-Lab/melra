@@ -56,6 +56,13 @@ All notable changes are documented here. The format follows
 
 ### Changed
 
+- The eleven MCP tools describe themselves fully: each says what it does,
+  when to use it instead of its siblings, what it returns and how its
+  parameters relate, and every top-level parameter now carries a description
+  (most had none). The server's instructions add that no tool lists all tasks
+  or runs, so an agent keeps the ids it is given, and that
+  `melra_workflow_control` halts a run while `melra_workflow_cancel` ends it.
+
 - **Breaking:** in enforced mode, a browser action that drives a page
   (`click`, `type`, `fill_form`, `select`, `press`, `upload`, `download`,
   `close`, `tab_switch`) must name it with `url`, or it is refused at planning
@@ -217,6 +224,11 @@ All notable changes are documented here. The format follows
   signalling them, so they could outlive the job and the server, while `stop`
   still reported `stopped: true`. POSIX only: Windows has no process groups. A
   process that leaves the group (`setsid`) is still out of reach.
+
+- `file.write` keeps the permissions of a file it replaces: a private file
+  stayed private only until it was written, when it came back with the default
+  mode, and a script lost its execute bit. A file with a name near the file
+  system's length limit can now be written too.
 
 - The Python SDK no longer passes an inherited `MELRA_UNHINGED` or
   `MELRA_SOCKET` to the server it starts, as the TypeScript SDK already did
