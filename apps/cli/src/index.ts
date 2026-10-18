@@ -217,7 +217,9 @@ function rejectUnknownFlags(args: string[], known: readonly string[]): void {
   ]);
   // A flag's own value can look like a flag (`--input node=--x`), so skip the
   // slot after any known flag that takes one.
-  const boolean = new Set(["--http", "--json", "--yes", "--deny"]);
+  // Every known flag that takes no value. One missing here had its next
+  // token skipped unchecked, so `--write --dry-run` wrote the config.
+  const boolean = new Set(["--http", "--json", "--yes", "--deny", "--write", "--open"]);
   const valued = new Set(known.filter((flag) => !boolean.has(flag)));
   for (let index = 0; index < args.length; index += 1) {
     const argument_ = args[index];
@@ -966,7 +968,7 @@ Usage:
   melra doctor [--json]
   melra conformance [--url <mcp-url> --token <token>] [--level <1|2|3>]
   melra init [--client <name>] [--write] [--json]
-  melra serve [--http] [--port <port>] [--open]
+  melra serve [--http [--port <port>] [--open]]
   melra serve --socket <path>
   melra run --request <task.json>
   melra approve <task-id> [--yes] [--deny] [--json]
@@ -1021,12 +1023,13 @@ Flags:
   --http           Serve MCP over loopback HTTP instead of stdio, alongside a
                    read-only REST API, a workflow event stream, and the console.
                    Prints a bearer token; every request must carry it.
-  --port <port>    HTTP port (default: 7457, or MELRA_HTTP_PORT).
+  --port <port>    HTTP port, with --http (default: 7457, or MELRA_HTTP_PORT).
   --socket <path>  Serve what --http serves on a Unix socket created mode 0600,
                    so only this OS user can connect; the token is still
-                   required. Not on Windows. Only this flag moves 'serve'
-                   off stdio.
-  --open           Open the console in your browser once it is listening.
+                   required. Not on Windows. This flag, not MELRA_SOCKET,
+                   moves 'serve' off stdio.
+  --open           With --http, open the console in your browser once it is
+                   listening.
   --url <mcp-url>  Endpoint for 'conformance'. Default: spawn 'melra serve'.
   --level <1|2|3>  Conformance level being claimed (default: 3). The run exits
                    non-zero if the endpoint falls short of it.
@@ -1154,6 +1157,11 @@ async function main(): Promise<void> {
         throw new Error(
           "--socket replaces --http, --port, and --open; pass one transport",
         );
+      }
+      // The same mistake the other way round: without --http, serve speaks
+      // stdio, and a port nobody listens on looks like a server that hangs.
+      if (socketPath === undefined && !http && (args.includes("--port") || args.includes("--open"))) {
+        throw new Error("--port and --open need --http; without it, serve speaks MCP over stdio");
       }
       const melra = await runtime(env);
       const server =
