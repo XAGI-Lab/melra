@@ -185,9 +185,13 @@ describe("browser popups", () => {
     });
     try {
       await session.execute(op({ action: "navigate", url }));
+      // The window left open is owed no longer once it is handed over (#234),
+      // so the click does not wait out its timeoutMs for it.
+      const started = Date.now();
       const clicked = await session.execute(
-        op({ action: "click", target: { selector: "#pop" } }),
+        op({ action: "click", target: { selector: "#pop" }, timeoutMs: 10_000 }),
       );
+      expect(Date.now() - started).toBeLessThan(5_000);
       expect((clicked.popups as Popup[])[0]?.blocked).toBe(false);
       const tabs = await session.execute(op({ action: "tabs" }));
       expect((tabs.tabs as Tab[]).length).toBe(2);

@@ -91,6 +91,13 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- A window an action gave up on that is handed over later, during another
+  action's wait, no longer stands in for a window that action opened, which
+  was then not waited for and was reported by whichever action ran when it
+  arrived. The windows an action is owed are tracked by target id rather than
+  counted: in a launched browser in block mode a popup costs no extra call, and
+  the runtime's own new tab, or a popup left open, costs one lookup. (#234)
+
 - In a launched browser, a popup handed over while `tab_new` is opening its tab
   is no longer taken for the runtime's own tab and left open and unreported.
   Windows handed over while `newPage` is in flight are held until it returns;
@@ -99,7 +106,7 @@ All notable changes are documented here. The format follows
   `newPage` fails, the windows a page opened meanwhile are closed the same way
   and reported by the next action, except one that has already closed itself
   and is handed over last: that one is taken for the tab `newPage` was
-  opening, counted but not reported (#234). (#233)
+  opening, and not reported. (#233)
 
 - A popup the runtime waits for whose first response never arrives now holds
   up only the action that opened it, which still waits its `timeoutMs` for it,
@@ -108,13 +115,9 @@ All notable changes are documented here. The format follows
   browser and an attached one. An action that fails or is cancelled after
   opening one gives it up as well, and a cancel that comes during the wait now
   ends it at once instead of at the deadline. A window given up on is still
-  reported, by the action running if it is ever handed over. Two limits,
-  because windows are tracked by count, not identity (#234): one handed over
-  during a later action, before that action's wait ends, stands in for a
-  window that action opened, which is then not waited for and is reported
-  whenever it is handed over, and may stand in for the next action's window in
-  turn; and a window a page opens between actions that never loads still holds
-  up the next action once. (#226)
+  reported, by the action running if it is ever handed over. One limit: a
+  window a page opens between actions that never loads still holds up the next
+  action once. (#226)
 
 - On a Node.js release whose `node:sqlite` needs a flag (before 22.13, or
   23.0 to 23.3), every `melra` command, `doctor` included, now exits 1 with a
