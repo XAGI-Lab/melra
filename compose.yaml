@@ -4,6 +4,8 @@ services:
       context: .
     image: melra:local
     stdin_open: true
+    # Reaps what a terminal job leaves behind; node as PID 1 does not.
+    init: true
     read_only: true
     security_opt:
       - no-new-privileges:true

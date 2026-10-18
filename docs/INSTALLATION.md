@@ -1292,7 +1292,7 @@ docker run --rm melra:local doctor
 Run the stdio server with explicit writable boundaries:
 
 ```bash
-docker run --rm -i \
+docker run --rm -i --init \
   --read-only \
   --security-opt no-new-privileges:true \
   --cap-drop ALL \
@@ -1303,7 +1303,9 @@ docker run --rm -i \
 ```
 
 For an MCP client, set `command` to `docker` and use the arguments above,
-including `-i`. Do not use `-t`; stdio MCP requires clean JSON-RPC streams.
+including `-i`. `--init` puts a minimal init in front of the server as PID 1,
+so a process a terminal job leaves behind is reaped when it exits; Node
+reaps only the processes it started itself. Do not use `-t`; stdio MCP requires clean JSON-RPC streams.
 
 To see what those flags bought, run `doctor` with the same arguments in place
 of `serve`. Its `isolation` line reads the restrictions from `/proc` inside
