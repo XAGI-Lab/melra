@@ -131,6 +131,8 @@ export interface ConformanceOptions {
    * no default, and so cannot earn L3 in enforced mode.
    */
   approve?: (taskId: string) => Promise<void>;
+  /** Enforced: a server the suite spawns runs enforced too, whatever its env says. */
+  mode?: "enforced";
 }
 
 /**
@@ -642,7 +644,12 @@ async function connect(
   // executable is its own entry point and takes the subcommand directly.
   const self = isSea() ? [] : [...process.execArgv, process.argv[1] ?? ""];
   const args = options.args ?? (options.command === undefined ? [...self, "serve"] : ["serve"]);
-  const env = options.env ?? inheritedEnvironment();
+  // `--mode enforced` reaches the server only through its env: it is a flag on
+  // this process, and the server is started without our flags.
+  const env = {
+    ...(options.env ?? inheritedEnvironment()),
+    ...(options.mode === "enforced" ? { MELRA_MODE: "enforced" } : {}),
+  };
   await client.connect(
     new StdioClientTransport({
       command,

@@ -211,6 +211,13 @@ All notable changes are documented here. The format follows
 
 ### Security
 
+- `melra setup` and `melra init` run with `--mode enforced` (or
+  `MELRA_MODE=enforced`) write `MELRA_MODE=enforced` into the client entry they
+  generate, and `"mode": "enforced"` into a policy file they create. They
+  reported enforced mode while the entry started a developer-mode server. An
+  existing policy file is left as it is. `melra conformance --mode enforced`
+  likewise starts its own server enforced; it checked a developer-mode one.
+
 - The Python SDK no longer passes an inherited `MELRA_UNHINGED` or
   `MELRA_SOCKET` to the server it starts, as the TypeScript SDK already did
   not: one left exported in a shell made every Python app's server run in

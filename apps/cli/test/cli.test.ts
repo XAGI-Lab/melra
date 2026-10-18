@@ -965,9 +965,10 @@ describe("melra CLI", () => {
     // directory inside the workspace, so this one sits beside it.
     const strictHome = await mkdtemp(join(tmpdir(), "melra-cli-home-"));
     roots.push(strictHome);
-    const strict = await execute(process.execPath, [entry, "conformance"], {
+    // By the flag, which the spawned server is not given: only its env reaches it.
+    const strict = await execute(process.execPath, [entry, "conformance", "--mode", "enforced"], {
       cwd: root,
-      env: { ...env, MELRA_MODE: "enforced", MELRA_HOME: strictHome },
+      env: { ...env, MELRA_HOME: strictHome },
     });
     const strictReport = JSON.parse(strict.stdout) as {
       level: number;
@@ -1398,6 +1399,54 @@ describe("melra CLI", () => {
     expect(policy.mutations).toBe("confirm");
     expect(policy.allowLocalhost).toBe(true);
     expect(policy.allowedDomains).toContain("*");
+  });
+
+  it("carries --mode enforced into the policy and the client config it writes", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-cli-mode-"));
+    roots.push(root);
+    // Beside the workspace: enforced mode refuses a data directory inside it.
+    const workspace = join(root, "ws");
+    await mkdir(workspace);
+    const init = async (home: string, extra: string[]) =>
+      JSON.parse(
+        (
+          await execute(process.execPath, [entry, "init", "--client", "claude", ...extra], {
+            cwd: workspace,
+            env: { ...process.env, MELRA_HOME: home, MELRA_WORKSPACE: workspace, MELRA_POLICY: "" },
+          })
+        ).stdout,
+      ) as { policyPath: string; config: { mcpServers: { melra: { env: Record<string, string> } } } };
+    // What the client will run: a process given only the config's env.
+    const modeFrom = async (config: Record<string, string>) =>
+      (
+        JSON.parse(
+          (
+            await execute(process.execPath, [entry, "doctor", "--json"], {
+              cwd: workspace,
+              env: { ...process.env, MELRA_MODE: "", ...config },
+            }).catch((error: { stdout: string }) => error)
+          ).stdout,
+        ) as { mode: string }
+      ).mode;
+
+    const strict = await init(join(root, "strict"), ["--mode", "enforced"]);
+    expect(strict.config.mcpServers.melra.env.MELRA_MODE).toBe("enforced");
+    expect(JSON.parse(await readFile(strict.policyPath, "utf8")).mode).toBe("enforced");
+    expect(await modeFrom(strict.config.mcpServers.melra.env)).toBe("enforced");
+
+    // A policy that already exists is the operator's and is left alone; the
+    // config alone still starts the server enforced.
+    const kept = join(root, "kept");
+    await init(kept, []);
+    const before = await readFile(join(kept, "policy.json"), "utf8");
+    const pinned = await init(kept, ["--mode", "enforced"]);
+    expect(await readFile(join(kept, "policy.json"), "utf8")).toBe(before);
+    expect(JSON.parse(before).mode).toBe("developer");
+    expect(await modeFrom(pinned.config.mcpServers.melra.env)).toBe("enforced");
+
+    // Developer mode adds nothing, so an existing entry stays unchanged.
+    const plain = await init(join(root, "plain"), []);
+    expect(plain.config.mcpServers.melra.env).not.toHaveProperty("MELRA_MODE");
   });
 
   it("prepares policy, config, and readiness in one setup command", async () => {
