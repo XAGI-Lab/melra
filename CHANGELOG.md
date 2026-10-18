@@ -91,6 +91,21 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- A popup the runtime waits for whose first response never arrives now holds
+  up only the action that opened it, which still waits its `timeoutMs` for
+  it, as for any window it opened. Every later action used to wait out its
+  whole `timeoutMs` too, for as long as that window stayed open, in a
+  launched browser and an attached one. An action that fails or is cancelled
+  after opening one gives it up as well, and a cancel that comes during the
+  wait now ends it at once instead of at the deadline. A window given up on is still
+  reported, by the action running if it is ever handed over. Two limits,
+  because windows are tracked by count, not identity (#234): one handed over
+  during a later action, before that action's wait ends, stands in for a
+  window that action opened, which is then not waited for and is reported
+  whenever it is handed over, and may stand in for the next action's window
+  in turn; and a window a page opens between actions that never loads still
+  holds up the next action once. (#226)
+
 - On a Node.js release whose `node:sqlite` needs a flag (before 22.13, or
   23.0 to 23.3), every `melra` command, `doctor` included, now exits 1 with a
   line naming the Node.js versions it needs, instead of an unhandled
