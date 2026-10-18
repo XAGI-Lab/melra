@@ -46,19 +46,25 @@ console.error(
     (isTest ? ` x ${maxWorkers} worker(s)` : ""),
 );
 
+// The fork cap goes to each package's `vitest run` as a flag, not as
+// VITEST_MAX_WORKERS: vitest applies that variable after
+// `--no-file-parallelism`, so it undid the one file at a time browser-runtime
+// and storage-sqlite ask for (#238). The flag is read before it, so they keep
+// one worker and every other package gets the cap. An inherited variable would
+// override both, so it is dropped.
+const { VITEST_MAX_WORKERS: _inherited, ...env } = process.env;
 const child = spawn(
   "pnpm",
-  ["-r", `--workspace-concurrency=${workspaceConcurrency}`, ...passthrough, script],
-  {
-    stdio: "inherit",
-    shell: process.platform === "win32",
-    env: {
-      ...process.env,
-      // Vitest reads this when a project sets no `maxWorkers` of its own,
-      // which is the case for every package here, whichever pool it uses.
-      VITEST_MAX_WORKERS: String(maxWorkers),
-    },
-  },
+  [
+    "-r",
+    `--workspace-concurrency=${workspaceConcurrency}`,
+    ...passthrough,
+    // `run`, so the flag reaches the script: `pnpm test` parses it as its own.
+    "run",
+    script,
+    ...(isTest ? [`--maxWorkers=${maxWorkers}`] : []),
+  ],
+  { stdio: "inherit", shell: process.platform === "win32", env },
 );
 
 child.on("exit", (code, signal) => {
