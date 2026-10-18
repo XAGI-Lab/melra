@@ -1006,11 +1006,22 @@ export class WorkflowController {
         const identity = { workflowId: run.id, nodeId: node.id, iteration: 0 };
         const started =
           state.taskIds[0] === undefined ? undefined : this.tasks.status(state.taskIds[0]).idempotencyKey;
+        // A branch whose first step committed was chosen, though the advance
+        // that chose it may have lost its commit (a pause landed) and left no
+        // task here. Asking the predicate again would read a workspace that
+        // branch already changed, and could run the other one as well.
+        const committed = (branch: "true" | "false", requests: TaskRequest[]) =>
+          requests.length > 0 &&
+          this.store.getIdempotencyCommit(
+            taskIdempotencyKey({ ...identity, branch: `${branch}:0` }, requests[0]!),
+          ) !== undefined;
         const chosen =
-          started === undefined
-            ? (await this.tasks.verifyPersisted(sourceTaskId, [node.predicate])).verified
-            : node.whenTrue.length > 0 &&
-              started === taskIdempotencyKey({ ...identity, branch: "true:0" }, node.whenTrue[0]!);
+          started !== undefined
+            ? node.whenTrue.length > 0 &&
+              started === taskIdempotencyKey({ ...identity, branch: "true:0" }, node.whenTrue[0]!)
+            : committed("true", node.whenTrue) ||
+              (!committed("false", node.whenFalse) &&
+                (await this.tasks.verifyPersisted(sourceTaskId, [node.predicate])).verified);
         return await this.runSequential(
           chosen ? node.whenTrue : node.whenFalse,
           state,

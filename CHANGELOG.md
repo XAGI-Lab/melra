@@ -117,7 +117,10 @@ All notable changes are documented here. The format follows
   A step whose effect committed though its advance's own commit was lost (a
   pause landed while it ran) is kept as done at the next advance, as recovery
   already kept it, instead of being planned again and cancelled as a
-  duplicate. (#243)
+  duplicate; a condition keeps the branch whose first step committed rather
+  than asking its predicate again, which could run the other branch too. A
+  read that committed its key before a crash recovers as verified instead of
+  running again only to be cancelled as a duplicate of itself. (#243)
 
 - In block mode (the default), a popup whose first response never arrives is
   now closed. Playwright never hands such a window over, so it used to stay

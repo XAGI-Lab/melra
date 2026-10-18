@@ -326,6 +326,40 @@ describe("a step an operator denies", () => {
     expect(done).toEqual(["pay", "next"]);
   });
 
+  it("keeps the branch a condition took though its advance did not commit", async () => {
+    const { controller, tasks, done } = await setup();
+    const planned = controller.plan(
+      workflow([
+        { id: "inspect", type: "operation", request: read() },
+        {
+          id: "choose",
+          type: "condition",
+          dependsOn: ["inspect"],
+          sourceNodeId: "inspect",
+          predicate: { type: "file_exists", path: "flag" },
+          whenTrue: [put("patch")],
+          whenFalse: [put("create")],
+        },
+      ]),
+    );
+    let run = (await controller.advance(planned.id)).run;
+    expect(run.nodes.choose?.status).toBe("pending");
+    // The true branch was taken and its first step ran and committed; its
+    // advance then lost its commit, and the branch's own effect has since
+    // made the predicate false. Nothing on the run says which branch it was.
+    const key = sha256({ workflowId: planned.id, nodeId: "choose", iteration: 0, branch: "true:0", request: put("patch") });
+    const ran = tasks.plan(put("patch"), { idempotencyKey: key, attempt: 1, stored: true });
+    await tasks.execute(ran.id, { approvalId: ran.approval!.approvalId, phrase: ran.approval!.phrase! });
+
+    for (let step = 0; step < 4 && run.status !== "verified_complete"; step += 1) {
+      run = (await controller.advance(planned.id, approvalsFor(run))).run;
+    }
+    // Asking the predicate again chose the other branch and ran it too.
+    expect(done).toEqual(["patch"]);
+    expect(run.nodes.choose?.taskIds).toEqual([ran.id]);
+    expect(run.status).toBe("verified_complete");
+  });
+
   it("flags a run an earlier version left failed past a denied compensation", async () => {
     const { controller, done } = await setup();
     const planned = controller.plan(

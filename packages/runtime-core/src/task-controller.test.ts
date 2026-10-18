@@ -306,6 +306,26 @@ describe("TaskController", () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
+  it("recovers as verified a read that committed its key before the interruption", async () => {
+    const execute = vi.fn(async () => ({ success: true }));
+    const { controller, store } = await setup({ execute });
+    const planned = controller.plan(
+      TaskRequestSchema.parse({ goal: "Inspect", operation: { kind: "system", action: "info" } }),
+      { idempotencyKey: "c".repeat(64), attempt: 1 },
+    );
+    // It verified and committed, then the process died before its final save.
+    store.commitIdempotency("c".repeat(64), planned.id, 1, new Date().toISOString());
+    const interrupted = store.getTask(planned.id)!;
+    interrupted.status = "verifying";
+    store.saveTask(interrupted);
+
+    const [recovered] = await controller.recoverInterrupted();
+    // Back to `planned` it ran again only to be cancelled as a duplicate of
+    // itself, which a workflow reads as a denial.
+    expect(recovered).toMatchObject({ status: "verified_success" });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   it("does not recover as verified an action that reported failure", async () => {
     const { controller, store } = await setup();
     const root = roots.at(-1)!;
