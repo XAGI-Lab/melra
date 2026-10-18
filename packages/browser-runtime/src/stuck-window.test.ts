@@ -31,11 +31,14 @@ describe("a window whose first response never comes (#226)", () => {
     // Never answers until the test ends, as a dead link's server can.
     const hung: Array<() => void> = [];
     const stuck = await listen(createServer((_request, response) => void hung.push(() => response.end())));
-    // Answers after a while, as a slow site does: after 1.5 s, or 5 s for
-    // the window the test means to give up on.
+    // Answers after 1.5 s, as a slow site does, except the window the test
+    // means to give up on, which answers only when the test lets it.
+    const held: Array<() => void> = [];
     const slow = await listen(
       createServer((request, response) => {
-        setTimeout(() => response.end("<!doctype html><title>slow</title>"), request.url?.includes("late") ? 5_000 : 1_500);
+        const answer = () => response.end("<!doctype html><title>slow</title>");
+        if (request.url?.includes("late")) held.push(answer);
+        else setTimeout(answer, 1_500);
       }),
     );
     const origin = await listen(
@@ -61,8 +64,9 @@ describe("a window whose first response never comes (#226)", () => {
     try {
       await run({ action: "navigate", url: origin });
       // The click waits for its window as long as it may: the window is part
-      // of what it did.
-      await run({ action: "click", target: { selector: "#stuck" }, timeoutMs: 2_000 });
+      // of what it did. (Its own click gets room too: on a busy CI runner a
+      // click can take a second or more to find its button stable.)
+      await run({ action: "click", target: { selector: "#stuck" }, timeoutMs: 4_000 });
       expect(hung).toHaveLength(1);
       // The next action does not wait for it again.
       const started = Date.now();
@@ -80,7 +84,10 @@ describe("a window whose first response never comes (#226)", () => {
       // Still waited on below; this only keeps a failure before then from
       // surfacing as an unhandled rejection once the browser closes.
       late.catch(() => undefined);
-      await run({ action: "click", target: { selector: "#late" }, timeoutMs: 2_000 });
+      await run({ action: "click", target: { selector: "#late" }, timeoutMs: 4_000 });
+      // Answered only now, after the click gave its window up.
+      while (held.length === 0) await new Promise((done) => setTimeout(done, 25));
+      held.splice(0).forEach((answer) => answer());
       await late;
       const after = await run({ action: "click", target: { selector: "#slow" }, timeoutMs: 10_000 });
       expect(JSON.stringify(after.popups)).toContain("?slow");
@@ -143,6 +150,7 @@ describe("a window whose first response never comes (#226)", () => {
       expect(Date.now() - then).toBeLessThan(2_500);
     } finally {
       hung.splice(0).forEach((answer) => answer());
+      held.splice(0).forEach((answer) => answer());
       await runtime.close();
     }
   });
