@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { randomUUID } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, rmSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { MemoryScope, TaskRecord } from "./types.js";
@@ -159,7 +159,17 @@ export class SqliteStore {
       this.database.exec("PRAGMA busy_timeout = 5000");
       return;
     }
-    if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    if (path !== ":memory:") {
+      mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+      // A new database is created private, not made so after SQLite has
+      // created it at its default mode. `wx` opens only a file it creates,
+      // never one this process may already hold SQLite locks on.
+      try {
+        closeSync(openSync(path, "wx", 0o600));
+      } catch {
+        // Already there (kept private below), or SQLite says why it cannot be.
+      }
+    }
     this.database = new DatabaseSync(path);
     if (path !== ":memory:") keepPrivate(path);
     this.database.exec("PRAGMA busy_timeout = 5000");

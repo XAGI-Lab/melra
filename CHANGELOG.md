@@ -212,9 +212,11 @@ All notable changes are documented here. The format follows
 ### Security
 
 - `MELRA_HOME` is created private (mode `0700`) by `melra setup`, `init` and
-  `doctor` and by the server's task store, which keeps the task database
-  `0600`; they could be created readable by other local users. `doctor` warns
-  when an existing `MELRA_HOME` is readable by others, and leaves it as it is.
+  `doctor`, by the server's task store, and in the container image (`/data`);
+  they could be created readable by other local users. The store creates the
+  task database `0600` and keeps it so. `doctor` warns when an existing
+  `MELRA_HOME` is readable by others, says to `chmod 700` it, and leaves it as
+  it is; a named Docker volume made by an older image keeps its old mode.
 
 - A browser input action (`click`, `type`, `fill_form`, `select`, `press`,
   `upload`, `download`) is held to the page its checks read, the `url` it
