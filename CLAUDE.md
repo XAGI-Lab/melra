@@ -92,7 +92,8 @@ each with its own V8 heap. `tsc` has one level instead of two but holds a whole 
 per process, so four builds in flight is several GiB on its own. Either one is enough to
 exhaust memory on a 16 GiB machine. The script sizes the fan-out against RAM and core count
 (≈0.4 GiB per test fork, ≈1.5 GiB per `tsc`) and passes it down as `--workspace-concurrency`
-plus `VITEST_MAX_WORKERS`. Run `pnpm test:peak-rss` to measure peak
+plus vitest's `--maxWorkers` flag (not `VITEST_MAX_WORKERS`, which vitest applies after
+`--no-file-parallelism` and so overrides it). Run `pnpm test:peak-rss` to measure peak
 resident memory before and after changing anything about how these are spawned. New recursive
 scripts should route through the same runner, not add a second cap. A package whose test
 files must not overlap uses `--no-file-parallelism` in its own `test` script (it only ever
