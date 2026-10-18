@@ -211,6 +211,13 @@ All notable changes are documented here. The format follows
 
 ### Security
 
+- A background terminal job keeps the processes its program leaves in its
+  process group under supervision until that group is empty. Once the program
+  exited, `stop`, the job's `timeoutMs` and the runtime's `close()` stopped
+  signalling them, so they could outlive the job and the server, while `stop`
+  still reported `stopped: true`. POSIX only: Windows has no process groups. A
+  process that leaves the group (`setsid`) is still out of reach.
+
 - The Python SDK no longer passes an inherited `MELRA_UNHINGED` or
   `MELRA_SOCKET` to the server it starts, as the TypeScript SDK already did
   not: one left exported in a shell made every Python app's server run in

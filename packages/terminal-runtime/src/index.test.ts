@@ -329,6 +329,58 @@ describe("TerminalRuntime", () => {
     await runtime.close();
   });
 
+  // POSIX only: Windows has no process groups to find them by.
+  it.skipIf(process.platform === "win32")("still stops what a job's program left in its group once the program exits", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-terminal-"));
+    roots.push(root);
+    const runtime = await TerminalRuntime.create({ root });
+    const pids: number[] = [];
+    // The program starts a process in its own group and exits at once. That
+    // process ignores SIGTERM, as a server it started might.
+    const leftover =
+      "process.on('SIGTERM', () => {}); require('fs').writeFileSync(process.argv[1], String(process.pid)); setInterval(() => {}, 1000)";
+    const leave = async (name: string, fields: Record<string, unknown> = {}) => {
+      const started = await runtime.execute(
+        op({
+          action: "start",
+          args: ["-e", `require('child_process').spawn(process.execPath, ['-e', ${JSON.stringify(leftover)}, '${name}'], { stdio: 'ignore' }).unref()`],
+          ...fields,
+        }),
+      );
+      const status = () =>
+        runtime.execute(TerminalOperationSchema.parse({ kind: "terminal", action: "status", jobId: started.jobId }));
+      await until(() => existsSync(join(root, name)));
+      for (let waited = 0; waited < 5000 && (await status()).running === true; waited += 20) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      expect(await status()).toMatchObject({ running: false });
+      const pid = Number(await readFile(join(root, name), "utf8"));
+      pids.push(pid);
+      expect(alive(pid)).toBe(true);
+      return { jobId: started.jobId, pid };
+    };
+    try {
+      const stopped = await leave("stopped");
+      const timed = await leave("timed", { timeoutMs: 1_000 });
+      const closed = await leave("closed");
+      await runtime.execute(TerminalOperationSchema.parse({ kind: "terminal", action: "stop", jobId: stopped.jobId }));
+      await until(() => !alive(stopped.pid) && !alive(timed.pid), 6_000);
+      expect(alive(stopped.pid)).toBe(false);
+      expect(alive(timed.pid)).toBe(false);
+      expect(alive(closed.pid)).toBe(true);
+      await runtime.close();
+      expect(alive(closed.pid)).toBe(false);
+    } finally {
+      for (const pid of pids) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          // Gone, as it should be.
+        }
+      }
+    }
+  }, 30_000);
+
   it("does not resolve close until its children have actually exited", async () => {
     // A signalled-but-live child holds its cwd open on Windows, so a caller
     // deleting the workspace right after close raced rmdir and got EBUSY.

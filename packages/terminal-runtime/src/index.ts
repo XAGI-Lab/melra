@@ -163,6 +163,8 @@ const KILL_GRACE_MS = 1_000;
 const EXIT_DRAIN_MS = 250;
 /** Jobs kept at once, running or finished; the oldest finished one makes room. */
 const MAX_JOBS = 64;
+/** How often a job whose program has exited checks whether its group is empty. */
+const GROUP_POLL_MS = 100;
 
 /**
  * Each command leads its own process group on POSIX, so a timeout, a cancel
@@ -184,6 +186,23 @@ function signalTree(child: ChildProcess, signal: NodeJS.Signals): void {
     process.kill(-child.pid, signal);
   } catch {
     // The group is already gone.
+  }
+}
+
+/**
+ * Whether anything is left in the child's process group. A background job's
+ * program can exit and leave what it started running in its group, and that
+ * is still the job's. POSIX only: Windows has no groups, and `taskkill /T`
+ * cannot find the children of a process that has already exited.
+ */
+function groupAlive(child: ChildProcess): boolean {
+  if (!OWN_GROUP || child.pid === undefined) return false;
+  try {
+    process.kill(-child.pid, 0);
+    return true;
+  } catch {
+    // ESRCH: empty. EPERM: a process we may not signal, which nothing here can stop.
+    return false;
   }
 }
 
@@ -222,6 +241,35 @@ interface BackgroundJob {
   /** Why the job's stdin stopped taking input, once it has. */
   stdinError?: string;
   timer: NodeJS.Timeout;
+  /**
+   * Set while the program has exited and processes it started are still in
+   * its group; gone once the group is empty. Only while it is set is the group
+   * signalled: an empty group's id can be reused by an unrelated one.
+   */
+  watch?: NodeJS.Timeout;
+}
+
+/** Whether the job's program has exited and left processes in its group. */
+function leftBehind(job: BackgroundJob): boolean {
+  return job.watch !== undefined && groupAlive(job.child);
+}
+
+/**
+ * Once a job's program has exited, keeps its timeout on what the program left
+ * in its group, until the group is empty.
+ */
+function releaseWhenEmpty(job: BackgroundJob): void {
+  if (!groupAlive(job.child)) {
+    clearTimeout(job.timer);
+    return;
+  }
+  job.watch = setInterval(() => {
+    if (groupAlive(job.child)) return;
+    clearTimeout(job.timer);
+    clearInterval(job.watch);
+    delete job.watch;
+  }, GROUP_POLL_MS);
+  job.watch.unref();
 }
 
 export class TerminalRuntime {
@@ -442,7 +490,10 @@ export class TerminalRuntime {
     // Jobs are kept for their output after they end, so a caller looping
     // `start` grew memory and processes for the life of the server.
     if (this.jobs.size >= MAX_JOBS) {
-      const finished = [...this.jobs.values()].find((candidate) => candidate.endedAt !== undefined);
+      // Not one whose program left processes behind: they would go unsupervised.
+      const finished = [...this.jobs.values()].find(
+        (candidate) => candidate.endedAt !== undefined && !leftBehind(candidate),
+      );
       if (finished === undefined) throw new Error("terminal_too_many_jobs");
       this.jobs.delete(finished.id);
     }
@@ -501,7 +552,7 @@ export class TerminalRuntime {
       job.exitCode = exitCode;
       job.signal = terminationSignal;
       job.endedAt = new Date().toISOString();
-      clearTimeout(timer);
+      releaseWhenEmpty(job);
     });
     // `spawn` only reports a failed start asynchronously, so returning as soon
     // as the call came back reported `started: true` for a command that never
@@ -616,7 +667,8 @@ export class TerminalRuntime {
         return this.sendInput(operation);
       case "stop": {
         const job = this.job(operation);
-        if (job.endedAt === undefined) stopTree(job.child, CLOSE_GRACE_MS);
+        // Its program may have exited and left processes in its group.
+        if (job.endedAt === undefined || leftBehind(job)) stopTree(job.child, CLOSE_GRACE_MS);
         return { stopped: true, ...this.jobResult(job, true) };
       }
     }
@@ -631,12 +683,25 @@ export class TerminalRuntime {
   async close(): Promise<void> {
     const exits = [...this.jobs.values()].map(async (job) => {
       clearTimeout(job.timer);
-      if (job.endedAt !== undefined) return;
-      const exited = new Promise<void>((done) => job.child.once("close", () => done()));
+      // Exited, but what it started may still be running in its group.
+      const left = leftBehind(job);
+      clearInterval(job.watch);
+      if (job.endedAt !== undefined && !left) return;
+      const exited =
+        job.endedAt === undefined
+          ? new Promise<void>((done) => job.child.once("close", () => done()))
+          : Promise.resolve();
       // A child is free to trap SIGTERM, and shutdown blocking forever on one
       // that does is worse than the race this replaced.
       const escalation = stopTree(job.child, CLOSE_GRACE_MS);
+      const deadline = Date.now() + CLOSE_GRACE_MS + 1_000;
       await exited;
+      // The rest of the group gets SIGKILL with the program; a process that
+      // outlasts even that (uninterruptible, or not ours to signal) is not
+      // waited on past the deadline.
+      while (groupAlive(job.child) && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, GROUP_POLL_MS));
+      }
       clearTimeout(escalation);
     });
     this.jobs.clear();
