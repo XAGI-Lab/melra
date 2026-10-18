@@ -992,16 +992,29 @@ describe("melra CLI", () => {
 
     // Unhinged is supposed to cost the governed levels and keep the typed one.
     // If it ever reached L2 the flag would not be doing what it says.
+    // By the flag, as with --mode: the spawned server gets it only as env.
     const unhinged = await execute(
       process.execPath,
-      [entry, "conformance", "--level", "1"],
-      { cwd: root, env: { ...env, MELRA_UNHINGED: "1" } },
+      [entry, "conformance", "--level", "1", "--unsafe-local"],
+      { cwd: root, env },
     );
     expect(JSON.parse(unhinged.stdout).level).toBe(1);
     // Three full suites, each spawning its own server, and the enforced one
     // two `melra approve` processes besides: a Windows runner has taken just
     // over the file's 20 s default for the lot.
   }, 90_000);
+
+  it("says why a server conformance started refused to start", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-cli-"));
+    roots.push(root);
+    // Enforced mode refuses a data directory inside the workspace; the suite
+    // used to report only that the connection closed.
+    const refused = await execute(process.execPath, [entry, "conformance", "--mode", "enforced"], {
+      cwd: root,
+      env: { ...process.env, MELRA_HOME: join(root, ".melra"), MELRA_WORKSPACE: root, MELRA_POLICY: "" },
+    }).catch((error: { stderr: string }) => error);
+    expect(refused.stderr).toContain("enforced_mode_refuses_data_inside_workspace");
+  });
 
   it("keeps Node's SQLite warning out of every invocation", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-cli-"));

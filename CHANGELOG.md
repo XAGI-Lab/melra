@@ -222,8 +222,10 @@ All notable changes are documented here. The format follows
   `MELRA_MODE=enforced`) write `MELRA_MODE=enforced` into the client entry they
   generate, and `"mode": "enforced"` into a policy file they create. They
   reported enforced mode while the entry started a developer-mode server. An
-  existing policy file is left as it is. `melra conformance --mode enforced`
-  likewise starts its own server enforced; it checked a developer-mode one.
+  existing policy file is left as it is. `melra conformance` likewise passes
+  `--mode enforced` and `--unsafe-local` to the server it starts, which ran
+  without them, and when that server refuses to start it now says why
+  instead of only "Connection closed".
 
 - `file.write` keeps the permissions of a file it replaces: a private file
   stayed private only until it was written, when it came back with the default

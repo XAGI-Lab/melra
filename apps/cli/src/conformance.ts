@@ -131,8 +131,12 @@ export interface ConformanceOptions {
    * no default, and so cannot earn L3 in enforced mode.
    */
   approve?: (taskId: string) => Promise<void>;
-  /** Enforced: a server the suite spawns runs enforced too, whatever its env says. */
-  mode?: "enforced";
+  /**
+   * Set on top of the env a server the suite spawns gets: how this process's
+   * own flags (`--mode`, `--unsafe-local`) reach it, since it is started
+   * without them.
+   */
+  serverEnv?: Record<string, string>;
 }
 
 /**
@@ -644,23 +648,29 @@ async function connect(
   // executable is its own entry point and takes the subcommand directly.
   const self = isSea() ? [] : [...process.execArgv, process.argv[1] ?? ""];
   const args = options.args ?? (options.command === undefined ? [...self, "serve"] : ["serve"]);
-  // `--mode enforced` reaches the server only through its env: it is a flag on
-  // this process, and the server is started without our flags.
-  const env = {
-    ...(options.env ?? inheritedEnvironment()),
-    ...(options.mode === "enforced" ? { MELRA_MODE: "enforced" } : {}),
-  };
-  await client.connect(
-    new StdioClientTransport({
-      command,
-      args,
-      // The SDK forwards a small allowlist by default, which would drop every
-      // MELRA_* variable and quietly check a server configured differently from
-      // the one the operator runs. The point is to check *their* endpoint.
-      env,
-      stderr: "pipe",
-    }),
-  );
+  const env = { ...(options.env ?? inheritedEnvironment()), ...options.serverEnv };
+  const transport = new StdioClientTransport({
+    command,
+    args,
+    // The SDK forwards a small allowlist by default, which would drop every
+    // MELRA_* variable and quietly check a server configured differently from
+    // the one the operator runs. The point is to check *their* endpoint.
+    env,
+    stderr: "pipe",
+  });
+  // Read, so a server that writes a lot never blocks on a full pipe, and kept,
+  // so one that refuses to start says why rather than "Connection closed".
+  let said = "";
+  transport.stderr?.on("data", (chunk: Buffer) => {
+    said = (said + chunk.toString("utf8")).slice(-2_000);
+  });
+  try {
+    await client.connect(transport);
+  } catch (error) {
+    // Its last words can land a moment after the transport reports the close.
+    await new Promise((settled) => setTimeout(settled, 50));
+    throw said.trim() === "" ? error : new Error(`${message(error)}; the server said: ${said.trim()}`);
+  }
   // Only a server this suite started is known to share this CLI's data
   // directory, so only then can its own `approve` answer for it. Always in
   // enforced mode, so it can never spend the task's one decision in band, and

@@ -1116,7 +1116,11 @@ async function main(): Promise<void> {
         ...(url === undefined ? {} : { url }),
         ...(token === undefined ? {} : { token }),
         ...(level === undefined ? {} : { claim: Number(level) }),
-        ...(env.mode === "enforced" ? { mode: "enforced" as const } : {}),
+        // This process's flags, which a server it spawns gets only as env.
+        serverEnv: {
+          ...(env.mode === "enforced" ? { MELRA_MODE: "enforced" } : {}),
+          ...(env.unhinged ? { MELRA_UNHINGED: "1" } : {}),
+        },
       });
       printJsonOrHuman(report as unknown as ConformanceReport, renderConformance, args);
       process.exitCode = failed ? 1 : 0;
