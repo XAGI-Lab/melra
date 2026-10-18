@@ -6,8 +6,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BrowserOperationSchema } from "@melra/protocol";
-import { chromium, type Page } from "playwright-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { chromium, type BrowserContext, type Page } from "playwright-core";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { APPROVAL_SURFACE, BrowserRuntime, detectBrowserExecutable } from "./index.js";
 
 /**
@@ -271,7 +271,8 @@ describe("browser see/act loop", () => {
     // the server notes every page asked for, so the test can wait for one.
     const PAGE = `<!doctype html><html><body><p>page</p>
       <a id="link" href="/?linked">link</a><button id="mod">mod</button>
-      <button id="busy" onclick="window.open(new URLSearchParams(location.search).get('busy'))">busy</button><script>
+      <button id="busy" onclick="window.open(new URLSearchParams(location.search).get('busy'))">busy</button>
+      <button id="pop" onclick="window.open(location.origin + '/?clickpop')">pop</button><script>
       const released = () => fetch("/release");
       const later = (path, features) => released().then(() => window.open(location.origin + path, "_blank", features));
       if (location.search === "?opens") later("/?popup#pair=secret");
@@ -279,6 +280,7 @@ describe("browser see/act loop", () => {
       if (location.search === "?p1") window.open(location.origin + "/?p2");
       if (location.search === "?pre1") window.open(location.origin + "/?pre2");
       if (location.search === "?noopener") later("/?np", "noopener");
+      if (location.search === "?inaction") later("/?agentpop");
       if (location.search === "?busy") { later("/?busypop"); setInterval(() => document.body.append("."), 50); }
       // Windows that close themselves as soon as they load.
       if (location.search === "?selfclose") released().then(() => [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].forEach((i) => window.open(location.origin + "/?closes" + i)));
@@ -290,12 +292,22 @@ describe("browser see/act loop", () => {
     const asked: string[] = [];
     const held: Array<() => void> = [];
     const answerAll = () => held.splice(0).forEach((answer) => answer());
+    // A page that loads only once the test lets it, so an action navigating
+    // to it is still running meanwhile.
+    const loading: Array<() => void> = [];
     const site = createServer((request, response) => {
       if (request.url === "/release") {
         held.push(() => response.end("ok"));
         return;
       }
       asked.push(request.url ?? "");
+      if (request.url === "/?held") {
+        loading.push(() => {
+          response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+          response.end(PAGE);
+        });
+        return;
+      }
       response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       response.end(PAGE);
     });
@@ -429,6 +441,23 @@ describe("browser see/act loop", () => {
       for (const index of there.keys()) await leftAlone(`?prechild${index}`);
       await landed.evaluate((url) => window.open(url), `${origin}/?fromread`);
       await leftAlone("?fromread");
+      // So does what it opens while a read on it runs, as between actions.
+      type Run = (operation: unknown) => Promise<Record<string, unknown>>;
+      const prototype = BrowserRuntime.prototype as unknown as { run: Run };
+      const runOne = prototype.run;
+      let reading = () => {};
+      const readStarted = new Promise<void>((done) => (reading = done));
+      const spy = vi.spyOn(prototype, "run").mockImplementation((operation) => {
+        reading();
+        return runOne.call(runtime, operation);
+      });
+      const waiting = run({ action: "wait", value: "readnow", timeoutMs: 15_000 });
+      await readStarted;
+      spy.mockRestore();
+      await landed.evaluate((url) => window.open(url), `${origin}/?duringread`);
+      await requested("?duringread");
+      await landed.evaluate(() => document.body.append("readnow"));
+      await leftAlone("?duringread", [...(((await waiting).popups as unknown[] | undefined) ?? [])]);
       // Nor does an action on it that is refused, or whose target is never
       // found: nothing reached the tab.
       await expect(run({ action: "navigate", url: "http://example.com/" })).rejects.toThrow();
@@ -468,6 +497,37 @@ describe("browser see/act loop", () => {
       await new Promise((done) => setTimeout(done, 300));
       const during = await run({ action: "navigate", url: slowUrl.replace("?slow", "?self") });
       await leftAlone("?slow", [...((during.popups as unknown[] | undefined) ?? [])]);
+      // While an action runs, a tab the operator opens blank and a window
+      // their tab opens stay theirs. What the agent's page opens meanwhile is
+      // the action's popup, and so is a tab with no opener created at a web
+      // address, as a sign-in window the browser opens for a page is. The
+      // action is a navigation held until all four exist.
+      await run({ action: "navigate", url: `${origin}/?inaction` });
+      const navigating = run({ action: "navigate", url: `${origin}/?held` });
+      navigating.catch(() => undefined);
+      await requested("?held");
+      const opened = await operator.newPage();
+      await mine.evaluate((url) => window.open(url), `${origin}/?opchild`);
+      await requested("?opchild");
+      await fetch(`http://127.0.0.1:${port}/json/new?${origin}/?webtab`, { method: "PUT" });
+      await requested("?webtab");
+      await release();
+      await requested("?agentpop");
+      loading.splice(0).forEach((answer) => answer());
+      const inAction = ((await navigating).popups as unknown[] | undefined) ?? [];
+      expect(inAction).toHaveLength(2);
+      expect(inAction).toEqual(
+        expect.arrayContaining(
+          ["?agentpop", "?webtab"].map((search) =>
+            expect.objectContaining({ url: expect.stringContaining(search), blocked: true }),
+          ),
+        ),
+      );
+      expect(JSON.stringify(inAction)).not.toContain("betweenActions");
+      expect(opened.isClosed()).toBe(false);
+      await opened.goto(`${origin}/?optab`);
+      await leftAlone("?optab", [...inAction]);
+      await leftAlone("?opchild", [...inAction]);
       // Windows the runtime's own page opens between actions are its own,
       // down a chain of them, whose opener has closed by the time Playwright
       // hands over the next, and whatever the page cut it off from; reported
@@ -519,6 +579,10 @@ describe("browser see/act loop", () => {
       await run({ action: "tab_switch", tabIndex: tabs.findIndex((tab) => tab.url.includes("?mine")) });
       await mine.evaluate((url) => window.open(url), `${origin}/?undriven`);
       await leftAlone("?undriven");
+      // What it opens while an action on it runs is that action's, though the
+      // runtime had not driven it before.
+      const clicked = ((await run({ action: "click", target: { selector: "#pop" } })).popups as unknown[] | undefined) ?? [];
+      expect(clicked).toEqual([expect.objectContaining({ url: expect.stringContaining("?clickpop"), blocked: true })]);
       asked.length = 0;
       await run({ action: "navigate", url: `${origin}/?opens` });
       await release();
@@ -533,8 +597,60 @@ describe("browser see/act loop", () => {
       await run({ action: "tab_new", url: origin });
       await mine.evaluate(() => window.open(`${location.origin}/?later`));
       await leftAlone("?later");
+      // A window handed over while the runtime opens a tab of its own is
+      // judged like any other: one at a web address is that action's popup,
+      // and so is each window the agent's page opens then, closed or not.
+      const context = (runtime as unknown as { context: BrowserContext }).context;
+      const agent = (runtime as unknown as { activePage: Page }).activePage;
+      const newPage = context.newPage.bind(context);
+      context.newPage = async () => {
+        context.newPage = newPage;
+        let seen = 0;
+        const handed = new Promise<void>((done) => {
+          const counted = () => {
+            seen += 1;
+            if (seen < 6) return;
+            context.off("page", counted);
+            done();
+          };
+          context.on("page", counted);
+        });
+        await fetch(`http://127.0.0.1:${port}/json/new?${origin}/?duringnew`, { method: "PUT" });
+        await agent.evaluate((url) => [0, 1, 2, 3, 4].forEach((i) => window.open(url + i)), `${origin}/?closes`);
+        await handed;
+        // And resolves a little after its tab is handed over, as Playwright
+        // may: the tab is known by then, so nothing else holds tab_new back.
+        const tab = await newPage();
+        await new Promise((done) => setTimeout(done, 100));
+        return tab;
+      };
+      const newTab = await run({ action: "tab_new" });
+      const opening = (newTab.popups as unknown[] | undefined) ?? [];
+      // Closed before tab_new lists the tabs: none of them is listed.
+      const listed = (newTab.tabs as Array<{ url: string }>).map((tab) => tab.url);
+      expect(listed.filter((url) => url.includes("?closes") || url.includes("?duringnew"))).toEqual([]);
+      expect(newTab.index).toBe(listed.length - 1);
+      expect(opening).toHaveLength(6);
+      expect(opening).toEqual(expect.arrayContaining([expect.objectContaining({ url: expect.stringContaining("?duringnew") })]));
+      expect(opening).toEqual(Array.from({ length: 6 }, () => expect.objectContaining({ blocked: true })));
+      // A window of the operator's handed over then that closes before the
+      // tab is open is still the operator's: it was looked up while it was open.
+      context.newPage = async () => {
+        context.newPage = newPage;
+        const handed = new Promise<void>((done) => context.once("page", () => done()));
+        await mine.evaluate((url) => {
+          const opened = window.open(url);
+          setTimeout(() => opened?.close(), 300);
+        }, `${origin}/?shortlived`);
+        await handed;
+        await new Promise((done) => setTimeout(done, 600));
+        return await newPage();
+      };
+      const shortlived = await run({ action: "tab_new" });
+      expect(JSON.stringify(shortlived.popups ?? [])).not.toContain("?shortlived");
     } finally {
       answerAll();
+      loading.splice(0).forEach((answer) => answer());
       hung.splice(0).forEach((answer) => answer());
       await runtime.close();
       await operator.close();
@@ -749,7 +865,9 @@ describe("browser see/act loop", () => {
     try {
       await runtime.execute(BrowserOperationSchema.parse({ kind: "browser", action: "navigate", url }));
       // While it reloads: a poll that lands on a reload says nothing about
-      // hidden, so a target on every document never reads as hidden.
+      // hidden, so a target on every document never reads as hidden. Which
+      // refusal ends the wait depends on where its last poll lands: on a
+      // reload, the secret check after it could not answer either (#236).
       await expect(
         runtime.execute(
           BrowserOperationSchema.parse({
@@ -760,7 +878,7 @@ describe("browser see/act loop", () => {
             timeoutMs: 1_200,
           }),
         ),
-      ).rejects.toThrow("browser_wait_timeout");
+      ).rejects.toThrow(/^browser_(wait_timeout|secret_check_unavailable)/);
       for (let round = 0; round < 15; round += 1) {
         const waited = await runtime.execute(
           BrowserOperationSchema.parse({

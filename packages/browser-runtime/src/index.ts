@@ -438,8 +438,13 @@ export class BrowserRuntime {
   private popups: Record<string, unknown>[] = [];
   /** Pending closes of blocked popups, awaited before the action reports. */
   private closing: Promise<unknown>[] = [];
-  /** True only while `tab_new` is opening the tab the caller asked for. */
-  private openingTab = false;
+  /**
+   * The `newPage` call in flight while `openPage` opens a tab MELRA asked for:
+   * the page it resolves to is that tab, not a window a site opened.
+   */
+  private opening: Promise<Page> | undefined;
+  /** In a launched browser, pages handed over while `openPage`'s `newPage` is in flight, held until it settles. */
+  private openingPagesQueue: Page[] | undefined = undefined;
   /**
    * The windows this runtime owns, by CDP target id: tabs it opened, and every
    * window one it owns or the tab it is driving opened. Decided when Chromium
@@ -450,7 +455,7 @@ export class BrowserRuntime {
    *
    * ponytail: a tab a link opens with a modifier or middle click has no
    * opener at all, so between actions it counts as the operator's whichever
-   * page clicked it. A page's request for one (`Page.frameRequestedNavigation`)
+   * page clicked it, and while an action runs as the action's. A page's request for one (`Page.frameRequestedNavigation`)
    * cannot be tied to the tab that follows: a refused request leaves nothing
    * to match, and claiming the next opener-less tab would let a page have the
    * operator's tabs, a console's among them, closed. Closing that gap needs a
@@ -471,18 +476,22 @@ export class BrowserRuntime {
    */
   private createdActing = new Map<string, number>();
   /**
-   * In a browser this runtime is attached to, the windows Chromium created
-   * between its actions that are none of its own, the operator's, with their
-   * browser context. No wait counts them, so one whose first response never
-   * comes holds up no action; each is dropped once Playwright hands it over.
-   * One that closes first is still handed over, as a closed page whose id can
-   * no longer be looked up and so is counted as adopted: it is counted as
-   * created when it closes, whichever of the two comes first.
-   *
-   * ponytail: were Playwright ever to drop such a window without its `page`
-   * event, each wait after it would run to its bound; #226 would bound that.
+   * The page targets of this context Chromium has announced and not yet
+   * destroyed, the operator's among them, so an opener can be known for a tab
+   * rather than, say, a frame of one.
    */
-  private theirs = new Map<string, string>();
+  private pageTargets = new Set<string>();
+  /** The running action: what its page opens is the action's if it navigates the page or sends it input. */
+  private action: BrowserOperation["action"] | undefined;
+  /**
+   * The target id of the page an action that navigates it or sends it input
+   * acts on, in a browser this runtime is attached to, once looked up: what
+   * it opens while the action runs is the action's, even if the runtime has
+   * not driven it yet. A read leaves it out: like between actions, what a tab
+   * the runtime only landed on opens while the runtime reads it is the
+   * operator's, though the read's own calls into the page give it activation.
+   */
+  private actingTarget: string | undefined;
   /** Counts actions, so a popup reported by a later one says so. */
   private actions = 0;
   /** The page the running action acts on, once it has one. */
@@ -496,10 +505,22 @@ export class BrowserRuntime {
    * not grant one; popups are then reported on Playwright's timing alone.
    */
   private targets: CDPSession | undefined;
-  /** Windows Chromium has created since tracking began, by browser context. */
-  private windowsCreated = new Map<string, number>();
-  /** Windows Playwright has handed to the `page` handler, popup or not. */
-  private windowsAdopted = 0;
+  /**
+   * The windows an action's wait is owed, by CDP target id, with their browser
+   * context: every page Chromium creates once tracking began, bar one that is
+   * the operator's in a browser this runtime is attached to. A window leaves
+   * when Playwright has handed it over and its id is looked up (`targetOf`),
+   * or when it is destroyed, which for a blocked popup is the runtime's own
+   * close. Those still owed when an action's wait ends, however it ends, or
+   * when the action fails before it waits, are given up on: kept, one whose
+   * first response never comes would hold every later action to its whole
+   * timeout (#226). One handed over later stands in for no other window
+   * (#234), and is reported by the action running then.
+   *
+   * ponytail: a window a page opens between actions is owed to the next
+   * action, so one that never loads still holds that action up once.
+   */
+  private owed = new Map<string, string>();
   /** This context's id in CDP, resolved on first use and then fixed. */
   private contextId: string | undefined;
   /**
@@ -741,43 +762,23 @@ export class BrowserRuntime {
      * this governs whether it stays.
      */
     this.context.on("page", (opened) => {
-      // Counted on every path, the early return included: every window
-      // Chromium creates raises exactly one of these, including tabs MELRA
-      // opened and windows that closed before Playwright finished with them.
-      // In a browser this runtime is attached to, not until the window is
-      // known not to be the operator's, which no wait counted (`theirs`).
       const attached = this.options.cdpEndpoint !== undefined && this.targets !== undefined;
-      const adopted = (id: string | undefined) => {
-        if (id === undefined || !this.theirs.delete(id)) this.windowsAdopted += 1;
-      };
-      if (opened === this.activePage || this.openingTab) {
-        if (attached) void this.targetOf(opened).then(adopted, () => adopted(undefined));
-        else this.windowsAdopted += 1;
+      // In a launched browser the tab `openPage` asked for and a popup handed
+      // over in the same instant look alike until `newPage` says which is the
+      // tab; `openPage` sorts them then.
+      if (!attached && this.openingPagesQueue !== undefined) {
+        this.openingPagesQueue.push(opened);
+        return;
+      }
+      const opening = this.opening;
+      if (opened === this.activePage && !attached) {
+        this.release(opened);
         return;
       }
       const acting = this.acting;
       // `during`: whether the window came while an action ran, which in a
       // browser this runtime is attached to is known from when it was created.
-      const adopt = (during = acting) => {
-        // Closing a window the page opened is MELRA's judgement about what
-        // the caller should be looking at, so unhinged mode drops it.
-        // Reporting it is not a judgement — that stays on, like every other
-        // receipt.
-        const allowed = this.options.popups === "allow" || this.options.unhinged === true;
-        if (this.popups.length < MAX_POPUPS) {
-          this.popups.push({
-            // Without its fragment: a console opened by the operator carries
-            // its one-time pairing code there until its first script runs.
-            url: withoutFragment(opened.url()),
-            blocked: !allowed,
-            ...(during ? {} : { betweenActions: true }),
-          });
-        }
-        if (allowed) return;
-        // A popup that closed on its own, or whose opener navigated away
-        // first, must not turn into the action's error.
-        return opened.close().catch(() => undefined);
-      };
+      const adopt = (during = acting) => this.adopt(opened, during);
       // In a browser this runtime is attached to, a tab Chromium created
       // between its actions is the operator's (one they opened, a console
       // `melra console` opened) unless it is one of this runtime's
@@ -786,16 +787,28 @@ export class BrowserRuntime {
       // first response can be during the next action.
       if (attached) {
         this.closing.push(
-          this.adoptable(opened, acting).then(({ adopt: yes, during, id }) => {
-            adopted(id);
+          (async () => {
+            // The tab this runtime is opening is the page `newPage` resolves
+            // to, and is not judged; any other window handed over in that
+            // instant is judged like any other, by its id looked up now, while
+            // it is still open: one that closes before `newPage` settles could
+            // no longer be looked up, and would be taken for a popup.
+            if (opening !== undefined) {
+              const looked = this.targetOf(opened).catch(() => undefined);
+              if (opened === (await opening.catch(() => undefined))) return;
+              await looked;
+            }
+            const { adopt: yes, during } = await this.adoptable(opened, acting);
             return yes ? adopt(during) : undefined;
-          }),
+          })(),
         );
         return;
       }
-      this.windowsAdopted += 1;
       const closing = adopt();
-      if (closing !== undefined) this.closing.push(closing);
+      // A blocked popup stops being owed when its close destroys it; one left
+      // open, once looked up.
+      if (closing === undefined) this.release(opened);
+      else this.closing.push(closing);
     });
     /**
      * Hear about new windows when Chromium creates them, not when Playwright
@@ -805,25 +818,20 @@ export class BrowserRuntime {
      * has committed, so a click whose window loaded slowly returned with no
      * `popups` field and the report — and, in block mode, the close — landed in
      * whatever ran next. Chromium creates the target synchronously inside
-     * `window.open` or the `target=_blank` click, so this count is already
-     * right when the action finishes and `awaitOpenedWindows` knows how many
-     * reports are still owed. It sees every way of opening a window, and the
-     * page cannot see or tamper with it, which an injected `window.open` hook
-     * could not promise.
-     *
-     * Registered after the `page` handler, so any miscount during setup is a
-     * window adopted but never counted — at worst one later wait ends early —
-     * rather than one counted and never adopted, which no wait could satisfy.
+     * `window.open` or the `target=_blank` click, so `owed` is already complete
+     * when the action finishes and `awaitOpenedWindows` knows which reports
+     * are still owed. It sees every way of opening a window, and the page
+     * cannot see or tamper with it, which an injected `window.open` hook could
+     * not promise.
      */
-    this.windowsCreated = new Map();
-    this.windowsAdopted = 0;
+    this.owed = new Map();
     this.contextId = undefined;
     this.ownTargets = new Set();
     this.drivenTarget = undefined;
     this.targetIds = new WeakMap();
     this.createdActing = new Map();
-    this.theirs = new Map();
-    // A session left from a context that closed under us would count into the
+    this.pageTargets = new Set();
+    // A session left from a context that closed under us would record into the
     // fresh map below and make every action wait for windows that never come.
     if (this.targets !== undefined) {
       await this.call(this.targets.detach(), "cdp_detach", SETUP_TIMEOUT_MS).catch(
@@ -842,25 +850,45 @@ export class BrowserRuntime {
       targets.on("Target.targetCreated", ({ targetInfo }) => {
         // `browser_ui`, workers, and prerenders never become Playwright pages.
         if (targetInfo.type !== "page" || targetInfo.subtype !== undefined) return;
+        this.pageTargets.add(targetInfo.targetId);
         const id = targetInfo.browserContextId ?? "";
         if (announced) {
-          if (this.acting) this.createdActing.set(targetInfo.targetId, this.actions);
+          const opener = targetInfo.openerId;
           // A window an action's popup opens, before that popup is even judged,
           // is the runtime's like the popup.
-          const opener = targetInfo.openerId;
-          if (
-            opener !== undefined &&
-            (this.ownTargets.has(opener) || opener === this.drivenTarget || this.createdActing.has(opener))
-          ) {
-            this.ownTargets.add(targetInfo.targetId);
-          }
-          // The operator's, which no action reports, so no wait counts it.
-          if (this.options.cdpEndpoint !== undefined && !this.acting && !this.ownTargets.has(targetInfo.targetId)) {
-            this.theirs.set(targetInfo.targetId, id);
-            return;
-          }
+          const runtimes = (target: string) =>
+            this.ownTargets.has(target) ||
+            target === this.drivenTarget ||
+            target === this.actingTarget ||
+            this.createdActing.has(target);
+          // Between actions, a window is the operator's unless the runtime's
+          // own tab opened it. While an action runs, it is that action's
+          // popup unless it is plainly the operator's: one Chromium says an
+          // operator's tab opened, or one with no opener that Chromium creates
+          // blank or at one of its own pages (a client's new tab, a tab from
+          // the toolbar), which no page can have the browser open. A page's
+          // new tab starts out empty, and a window the browser opens for a
+          // page (a sign-in window, say) starts at the provider's address, so
+          // both stay the action's, and so does any page's activation: the
+          // runtime's own calls into a page give it some. A frame's opener, or
+          // a page's tab while the page a navigation or an input goes to is
+          // not known yet, is the action's.
+          const action = this.action;
+          const theirs =
+            this.options.cdpEndpoint !== undefined &&
+            (this.acting
+              ? opener === undefined
+                ? targetInfo.url === "about:blank" || targetInfo.url.startsWith("chrome://")
+                : !(action !== undefined && DRIVING_ACTIONS.has(action) && this.actingTarget === undefined) &&
+                  this.pageTargets.has(opener) &&
+                  !runtimes(opener)
+              : opener === undefined || !runtimes(opener));
+          // The operator's, which no action reports, so no wait is owed it.
+          if (theirs) return;
+          if (this.acting) this.createdActing.set(targetInfo.targetId, this.actions);
+          else if (opener !== undefined && runtimes(opener)) this.ownTargets.add(targetInfo.targetId);
+          this.owed.set(targetInfo.targetId, id);
         }
-        this.windowsCreated.set(id, (this.windowsCreated.get(id) ?? 0) + 1);
       });
       // Ids stay after their window closes: one that closes itself as soon as
       // it loads is still to be judged when Playwright hands it over.
@@ -869,12 +897,8 @@ export class BrowserRuntime {
       // ever matters.
       targets.on("Target.targetDestroyed", ({ targetId }) => {
         if (this.drivenTarget === targetId) this.drivenTarget = undefined;
-        // One of theirs gone before Playwright handed it over: it still will,
-        // and that counts it as adopted (`theirs`).
-        const context = this.theirs.get(targetId);
-        if (context !== undefined && this.theirs.delete(targetId)) {
-          this.windowsCreated.set(context, (this.windowsCreated.get(context) ?? 0) + 1);
-        }
+        this.pageTargets.delete(targetId);
+        this.owed.delete(targetId);
       });
       await this.call(
         targets.send("Target.setDiscoverTargets", { discover: true }),
@@ -882,9 +906,7 @@ export class BrowserRuntime {
         SETUP_TIMEOUT_MS,
       );
       // Chromium announces the windows that already exist before it replies.
-      // Playwright had them before the `page` handler did, so they are owed no
-      // event here.
-      this.windowsCreated.clear();
+      // Playwright had them before the `page` handler did, so none is owed.
       announced = true;
       this.targets = targets;
     } catch {
@@ -894,42 +916,35 @@ export class BrowserRuntime {
   }
 
   /**
-   * Hold the action's result until Playwright has handed over every window
-   * Chromium created, so the action that opened a window is the one that
-   * reports it.
+   * Hold the action's result while this context's windows are still owed
+   * (`owed`), so the action that opened a window is the one that reports it.
+   * A window stops being owed once it is handed over and looked up, or once it
+   * is destroyed: in a launched browser a blocked popup when the runtime's
+   * close lands and an allowed one when its lookup returns; in one this
+   * runtime is attached to, every window once it is looked up to be judged;
+   * and one destroyed before it is handed over, at once.
    *
    * Costs one round trip when nothing was opened. Waits only while a window is
-   * known to exist and is still unreported, bounded by the action's own
-   * timeout: the window is part of what the action did. A window still pending
-   * after that is reported by the action running when Playwright delivers it.
+   * owed, bounded by the action's own timeout: the window is part of what the
+   * action did. One still owed after that is given up on, so no later action
+   * waits for it, and is reported by the action running when Playwright
+   * delivers it, if it ever does.
    */
   private async awaitOpenedWindows(timeoutMs: number): Promise<void> {
     const targets = this.targets;
     const context = this.context;
     if (targets === undefined || context === undefined) return;
     try {
-      if (this.contextId === undefined) {
-        const page = context.pages()[0];
-        if (page === undefined) return;
-        const session = await this.call(context.newCDPSession(page), "cdp_session");
-        try {
-          const { targetInfo } = await this.call(
-            session.send("Target.getTargetInfo"),
-            "cdp:Target.getTargetInfo",
-          );
-          this.contextId = targetInfo.browserContextId ?? "";
-        } finally {
-          await this.call(session.detach(), "cdp_detach").catch(() => undefined);
-        }
-      }
+      if (!(await this.learnContextId())) return;
       // Events arrive ahead of the reply on the same session, so after this
-      // every window created before now has been counted.
+      // every window created before now is in `owed`.
       await this.call(targets.send("Browser.getVersion"), "cdp:Browser.getVersion");
+      const contextId = this.contextId ?? "";
+      const owed = () => [...this.owed.values()].includes(contextId);
       const deadline = Date.now() + timeoutMs;
-      while (
-        this.windowsAdopted < (this.windowsCreated.get(this.contextId) ?? 0) &&
-        Date.now() < deadline
-      ) {
+      // A cancel ends the wait at once: what is still owed is given up below,
+      // and the queue behind this action is not held to its deadline.
+      while (owed() && Date.now() < deadline && this.signal?.aborted !== true) {
         await new Promise((done) => setTimeout(done, WINDOW_POLL_MS));
       }
     } catch {
@@ -937,24 +952,119 @@ export class BrowserRuntime {
       // action's bound; either way nothing more will be delivered in time, and
       // this wait only ever decides which action reports a window, so it is
       // not worth failing an action over.
+    } finally {
+      // However the wait ended, what is still owed is no later action's to
+      // wait for. Other contexts' windows go too: none is handed over here.
+      this.owed.clear();
     }
+  }
+
+  /**
+   * This context's id in CDP, looked up once: what owed windows are kept
+   * under. False when there is no page yet to ask.
+   */
+  private async learnContextId(): Promise<boolean> {
+    if (this.contextId !== undefined) return true;
+    // A cancelled action does not open a session it would only abandon.
+    if (this.signal?.aborted === true) return false;
+    const page = this.context?.pages()[0];
+    if (page === undefined) return false;
+    const opening = page.context().newCDPSession(page);
+    const session = await this.call(opening, "cdp_session").catch((error: unknown) => {
+      // One that attaches after the bound or a cancel is let go, not left on the page.
+      void opening.then((late) => late.detach()).catch(() => undefined);
+      throw error;
+    });
+    try {
+      const { targetInfo } = await this.call(session.send("Target.getTargetInfo"), "cdp:Target.getTargetInfo");
+      this.contextId = targetInfo.browserContextId ?? "";
+      return true;
+    } finally {
+      // Not waited for, as in `targetOf`: a detach waits on the page's main
+      // thread, which a page busy with a long script holds.
+      void session.detach().catch(() => undefined);
+    }
+  }
+
+  /** A window handed over is owed by no wait once its id is known (`owed`). */
+  private release(page: Page): void {
+    if (this.targets !== undefined) void this.targetOf(page).catch(() => undefined);
+  }
+
+  /**
+   * Reports a window a page opened and, in block mode, closes it. `during`:
+   * whether it came while an action ran.
+   */
+  private adopt(opened: Page, during = this.acting): Promise<void> | undefined {
+    // Closing a window the page opened is MELRA's judgement about what the
+    // caller should be looking at, so unhinged mode drops it. Reporting it is
+    // not a judgement — that stays on, like every other receipt.
+    const allowed = this.options.popups === "allow" || this.options.unhinged === true;
+    if (this.popups.length < MAX_POPUPS) {
+      this.popups.push({
+        // Without its fragment: a console opened by the operator carries its
+        // one-time pairing code there until its first script runs.
+        url: withoutFragment(opened.url()),
+        blocked: !allowed,
+        ...(during ? {} : { betweenActions: true }),
+      });
+    }
+    if (allowed) return;
+    // A popup that closed on its own, or whose opener navigated away first,
+    // must not turn into the action's error.
+    return opened.close().catch(() => undefined);
   }
 
   /**
    * Opens a page MELRA asked for, not one the site opened by itself.
    *
    * The popup handler cannot tell the two apart — both arrive as a `page`
-   * event — so this flag is the difference, and it is held across exactly the
-   * await that emits the event.
+   * event — so `opening` holds the `newPage` call that emits the event, and a
+   * browser this runtime is attached to compares the page with what it
+   * resolves to. A launched browser looks no window up as it is handed over,
+   * so the handler queues every page it is handed then (#233), and they are
+   * sorted here once `newPage` has said which one is the tab.
    */
   private async openPage(context: BrowserContext): Promise<Page> {
+    const queued: Page[] = [];
+    // Where the judgements of windows handed over from here on begin, in a
+    // browser this runtime is attached to.
+    const judged = this.closing.length;
+    this.openingPagesQueue = queued;
+    const opening = this.call(context.newPage(), "new_page");
+    this.opening = opening;
+    // Any page queued but the tab `newPage` returned is a window a page
+    // opened. One that failed may still have handed over the tab it was
+    // opening: Playwright does so just before it rejects, having closed it, so
+    // a closed page queued last is taken for that tab.
+    //
+    // ponytail: a window a page opened that is handed over last and closed
+    // itself already, during a `newPage` that fails, is taken for the tab and
+    // not reported: a closed page can no longer be looked up by id.
+    const sortQueued = (tab?: Page) => {
+      this.opening = undefined;
+      this.openingPagesQueue = undefined;
+      const last = queued.at(-1);
+      const mine = tab ?? (last?.isClosed() === true ? last : undefined);
+      return queued.flatMap((page) => {
+        const closing = page === mine ? undefined : this.adopt(page);
+        if (closing === undefined) this.release(page);
+        return closing ?? [];
+      });
+    };
     let opened: Page;
-    this.openingTab = true;
     try {
-      opened = await this.call(context.newPage(), "new_page");
-    } finally {
-      this.openingTab = false;
+      opened = await opening;
+    } catch (error) {
+      // Their closes are waited for like any other.
+      this.closing.push(...sortQueued());
+      throw error;
     }
+    // Closed before `tab_new` lists the tabs, so the list it returns does not
+    // show a window the same result reports as closed: those queued here, and
+    // those judged meanwhile in a browser this runtime is attached to, whose
+    // judgement waits for `newPage`.
+    await this.call(Promise.all([...sortQueued(opened), ...this.closing.slice(judged)]), "close_popup");
     if (this.options.cdpEndpoint !== undefined) this.ownTargets.add(await this.targetOf(opened));
     return opened;
   }
@@ -970,6 +1080,8 @@ export class BrowserRuntime {
     try {
       const { targetInfo } = await bounded(session.send("Target.getTargetInfo"), SETUP_TIMEOUT_MS, "cdp:Target.getTargetInfo");
       this.targetIds.set(page, targetInfo.targetId);
+      // Handed over, since there is a page to ask: owed by no wait now.
+      this.owed.delete(targetInfo.targetId);
       return targetInfo.targetId;
     } finally {
       // Not waited for: a detach waits on the page's main thread, which a
@@ -988,15 +1100,15 @@ export class BrowserRuntime {
    * one, and one still open that cannot be asked, count by when Playwright
    * handed it over.
    */
-  private async adoptable(page: Page, acting: boolean): Promise<{ adopt: boolean; during: boolean; id?: string }> {
+  private async adoptable(page: Page, acting: boolean): Promise<{ adopt: boolean; during: boolean }> {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
         const id = await this.targetOf(page);
         const createdIn = this.createdActing.get(id);
-        if (createdIn === undefined) return { adopt: this.ownTargets.has(id), during: false, id };
+        if (createdIn === undefined) return { adopt: this.ownTargets.has(id), during: false };
         this.createdActing.delete(id);
         this.ownTargets.add(id);
-        return { adopt: true, during: this.acting && createdIn === this.actions, id };
+        return { adopt: true, during: this.acting && createdIn === this.actions };
       } catch {
         if (page.isClosed()) return { adopt: true, during: acting };
       }
@@ -1737,6 +1849,8 @@ export class BrowserRuntime {
     this.callMs = operation.timeoutMs;
     this.dispatched = false;
     this.actingOn = undefined;
+    this.actingTarget = undefined;
+    this.action = operation.action;
     this.stepped = false;
     // Chromium reports a window's creation on the browser-level session,
     // ahead of any later reply there; one round trip before the action
@@ -1747,6 +1861,9 @@ export class BrowserRuntime {
         () => undefined,
       );
     }
+    // The round trip above swallows a cancel, and nothing has run yet. (The
+    // check at the top narrowed `aborted`, which an await can change.)
+    if ((signal?.aborted as boolean | undefined) === true) throw new Error("task_cancelled");
     this.actions += 1;
     this.acting = true;
     try {
@@ -1781,6 +1898,8 @@ export class BrowserRuntime {
       // including a timeout resolving the target, is an ordinary failure:
       // nothing was sent, and for a read the controller may simply retry.
       // The message is stored on the task record and shown in the console.
+      // An action that failed before its wait gives up on what it opened here.
+      this.owed.clear();
       if (error instanceof Error) error.message = withoutColour(error.message);
       const sent = this.dispatched || inputSent(error);
       // So did one that failed after its input went out, or a step back or
@@ -1793,12 +1912,20 @@ export class BrowserRuntime {
       throw outcomeUnknown(error instanceof Error ? error.message : String(error));
     } finally {
       this.acting = false;
+      this.actingTarget = undefined;
+      this.action = undefined;
     }
   }
 
   private async run(operation: BrowserOperation): Promise<Record<string, unknown>> {
     const page = await this.page();
     this.actingOn = page;
+    // What it opens while this action navigates it or sends it input is the
+    // action's, which in a browser this runtime is attached to is judged by
+    // target id (`Target.targetCreated`).
+    if (DRIVING_ACTIONS.has(operation.action) && this.options.cdpEndpoint !== undefined && this.targets !== undefined) {
+      this.actingTarget = await this.targetOf(page).catch(() => undefined);
+    }
     // Taken before the checks below, so an input action that passes them
     // reaches the document they read or nothing (`actOn`).
     const pin = INPUT_ACTIONS.has(operation.action)

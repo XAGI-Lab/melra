@@ -37,7 +37,7 @@ operational memory as a kernel service: six task tools (`melra_capabilities`,
 `melra_plan`, `melra_execute`, `melra_task_status`, `melra_task_cancel`,
 `melra_receipt`) and five durable-workflow tools (`melra_workflow_plan`,
 `melra_workflow_advance`, `melra_workflow_status`, `melra_workflow_cancel`,
-`melra_workflow_control`). pnpm workspace of TypeScript packages (Node 22.13+, ESM,
+`melra_workflow_control`). pnpm workspace of TypeScript packages (Node 22.13+ or 23.4+, ESM,
 strict tsc), plus two Python projects managed by `uv` (`sdk-py`,
 `benchmarks/browser-agent`).
 
@@ -92,7 +92,8 @@ each with its own V8 heap. `tsc` has one level instead of two but holds a whole 
 per process, so four builds in flight is several GiB on its own. Either one is enough to
 exhaust memory on a 16 GiB machine. The script sizes the fan-out against RAM and core count
 (≈0.4 GiB per test fork, ≈1.5 GiB per `tsc`) and passes it down as `--workspace-concurrency`
-plus `VITEST_MAX_WORKERS`. Run `pnpm test:peak-rss` to measure peak
+plus vitest's `--maxWorkers` flag (not `VITEST_MAX_WORKERS`, which vitest applies after
+`--no-file-parallelism` and so overrides it). Run `pnpm test:peak-rss` to measure peak
 resident memory before and after changing anything about how these are spawned. New recursive
 scripts should route through the same runner, not add a second cap. A package whose test
 files must not overlap uses `--no-file-parallelism` in its own `test` script (it only ever

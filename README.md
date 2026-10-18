@@ -8,12 +8,12 @@
 
 ### Your AI agent decides what to do. MELRA governs how tool calls are authorized, verified, and recovered.
 
-An open-source **autonomy kernel**: the layer every agent action passes through on its
-way to your files, terminal, browser, desktop and APIs. It checks each action against
-policy, requests approval when needed, verifies declared evidence, and keeps a redacted
-receipt. For each task, MELRA dispatches mutations at most once; uncertain outcomes are
-parked for reconciliation instead of replay. Exactly-once external effects still depend
-on the provider.
+An open-source local execution runtime for agent tool calls you route through MELRA.
+It checks each call against policy, requests approval when needed, verifies declared
+evidence, and keeps a redacted receipt of what runs to an outcome. For each task, MELRA
+dispatches mutations at most once; uncertain outcomes are parked for reconciliation
+instead of replay. Exactly-once external effects still depend on the provider. Calls
+made through other tools remain outside MELRA's control.
 
 <br />
 
@@ -39,7 +39,7 @@ on the provider.
 <img src="https://img.shields.io/badge/macOS-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS" />
 <img src="https://img.shields.io/badge/Linux-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux" />
 <img src="https://img.shields.io/badge/Windows-0078D4?style=flat-square&logo=windows&logoColor=white" alt="Windows" />
-<img src="https://img.shields.io/badge/Node.js-22%20%7C%2024-5FA04E?style=flat-square&logo=nodedotjs&logoColor=white" alt="Node.js 22 and 24" />
+<img src="https://img.shields.io/badge/Node.js-22.13%2B%20%7C%2023.4%2B-5FA04E?style=flat-square&logo=nodedotjs&logoColor=white" alt="Node.js 22.13 or newer, or 23.4 or newer" />
 <img src="https://img.shields.io/badge/Python-3.11--3.14-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.11 to 3.14" />
 <img src="https://img.shields.io/badge/Docker-hardened-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Hardened Docker image" />
 
@@ -90,8 +90,8 @@ them differently, or not at all:
 
 ### 🛡️ Is it allowed?
 
-Every action is checked against **your** policy, and checked again at the moment it
-runs. Risky changes wait for your exact approval.
+Every action MELRA receives is checked against **your** policy, and checked again at
+the moment it runs. Risky changes wait for your exact approval.
 
 </td>
 <td width="25%" valign="top">
@@ -106,38 +106,39 @@ holds: the file exists, the exit code is 0, the page says what it should.
 
 ### 🔁 What if it crashes?
 
-Every change is **recorded before it runs** and runs **at most once**. After a crash,
-MELRA settles it from its evidence or the provider; what it cannot settle waits in
-`recovery_required`, and is never replayed.
+Every mutation MELRA dispatches is **recorded before it runs** and runs **at most
+once**. After a crash, MELRA settles it from its evidence or the provider; what it
+cannot settle waits in `recovery_required` and is never replayed.
 
 </td>
 <td width="25%" valign="top">
 
 ### 🧾 What happened?
 
-Every action leaves a **redacted, hash-linked receipt**, so you can audit what ran,
-who asked, and why it was allowed.
+Every action MELRA runs to an outcome leaves a **redacted, hash-linked receipt**, so
+you can audit what ran, who asked, and why it was allowed.
 
 </td>
 </tr>
 </table>
 
-MELRA answers those questions once, in one place, for **every** agent. It sits
-underneath your agent, the way an operating system sits underneath your apps:
+MELRA answers those questions in one place for tool calls routed through it, across
+supported agents. It sits underneath your agent for those calls, the way an operating
+system sits underneath your apps:
 
 <p align="center">
-  <img src="docs/assets/readme/layers.svg" alt="Where MELRA sits: the model reasons, your agent runs the loop, MELRA owns every effect, and effect adapters do the work on your systems." width="100%" />
+  <img src="docs/assets/readme/layers.svg" alt="Where MELRA sits: the model reasons, your agent runs the loop, MELRA governs tool calls routed through it, and effect adapters do the work on your systems. Other agent tools remain outside MELRA's control." width="100%" />
 </p>
 
-> **The LLM reasons. The harness manages the loop. MELRA owns the effect lifecycle.**
-> Swap the model or the agent on Friday; your policies, approvals, credentials,
-> history and receipts are still there on Monday.
+> **The LLM reasons. The harness manages the loop. MELRA governs the effect lifecycle
+> for calls routed through it.** Swap the model or the agent; MELRA's policies,
+> approvals, credentials, history and receipts can stay in place.
 
 ---
 
 ## Quick start
 
-You need **Node.js 22.13 or newer**. One command sets everything up:
+You need **Node.js 22.13 or newer, or 23.4 or newer**. One command sets everything up:
 
 ```bash
 npx @melra/cli@alpha setup
@@ -258,10 +259,10 @@ OpenAI Agents SDK, the Vercel AI SDK, and the official MCP SDKs.
 
 ## How it works
 
-Every action an agent wants to take is called an **effect**: `file.write`,
-`terminal.run`, `browser.click`, `http.request`, and so on. MELRA does exactly nine
-things to every effect, split across two calls so that **nothing runs at planning
-time**:
+An **effect** is one bounded operation an agent routes through MELRA: `file.write`,
+`terminal.run`, `browser.click`, `http.request`, and so on. MELRA handles each routed
+effect in nine stages, split between a plan step and an execute step (for a single
+task, `melra_plan` then `melra_execute`) so that **nothing runs at planning time**:
 
 <p align="center">
   <img src="docs/assets/readme/pipeline.svg" alt="The nine stages: melra_plan types, classifies, authorises, issues an approval challenge and records the task; melra_execute checks policy again, deduplicates, runs under a budget, verifies evidence and writes a receipt." width="100%" />
@@ -335,9 +336,9 @@ never blindly retry an unknown outcome, without anyone prompt-engineering it.
 
 ## See what it is doing
 
-You can see every action, its policy decision, its evidence and its receipt, from the
-terminal or the browser. Nothing here can approve or start work, and approval phrases
-are never displayed.
+You can see each action MELRA handled and its policy decision, and, for each that ran
+to an outcome, its evidence and receipt, from the terminal or the browser. Nothing here
+can approve or start work, and approval phrases are never displayed.
 
 <table>
 <tr>

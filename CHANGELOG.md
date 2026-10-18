@@ -119,6 +119,44 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- A window an action gave up on that is handed over later, during another
+  action's wait, no longer stands in for a window that action opened, which
+  was then not waited for and was reported by whichever action ran when it
+  arrived. The windows an action is owed are tracked by target id rather than
+  counted: in a launched browser in block mode a popup costs no extra call, and
+  the runtime's own new tab, or a popup left open, costs one lookup. (#234)
+
+- In a launched browser, a popup handed over while `tab_new` is opening its tab
+  is no longer taken for the runtime's own tab and left open and unreported.
+  Windows handed over while `newPage` is in flight are held until it returns;
+  the tab it returned is counted as the runtime's own, and every other one is
+  reported, and closed in block mode, before `tab_new` lists the tabs. If
+  `newPage` fails, the windows a page opened meanwhile are closed the same way
+  and reported by the next action, except one that has already closed itself
+  and is handed over last: that one is taken for the tab `newPage` was
+  opening, and not reported. (#233)
+
+- A popup the runtime waits for whose first response never arrives now holds
+  up only the action that opened it, which still waits its `timeoutMs` for it,
+  as for any window it opened. Every later action used to wait out its whole
+  `timeoutMs` too, for as long as that window stayed open, in a launched
+  browser and an attached one. An action that fails or is cancelled after
+  opening one gives it up as well, and a cancel that comes during the wait now
+  ends it at once instead of at the deadline. A window given up on is still
+  reported, by the action running if it is ever handed over. One limit: a
+  window a page opens between actions that never loads still holds up the next
+  action once. (#226)
+
+- On a Node.js release whose `node:sqlite` needs a flag (before 22.13, or
+  23.0 to 23.3), every `melra` command, `doctor` included, now exits 1 with a
+  line naming the Node.js versions it needs, instead of an unhandled
+  `ERR_UNKNOWN_BUILTIN_MODULE` before any check could run. On a supported
+  release with the module turned off or built without it, the line says so
+  and points at `NODE_OPTIONS`. The single executable does the same: its
+  bundle now loads `node:sqlite` after those checks instead of before them. `melra doctor`'s
+  hint for a `node:sqlite` that loads but cannot open a database no longer
+  points at the Node version. (#230)
+
 - In a browser the runtime is attached to over CDP, it no longer closes tabs it
   did not open between its actions: a tab Chromium creates then is the
   operator's (one they opened, or a console `melra console` opened), left
@@ -132,22 +170,41 @@ All notable changes are documented here. The format follows
   during the next action. A tab a link opens with a modifier or middle click
   has no opener, so between actions it counts as the operator's whoever
   clicked; it is still listed by `tabs`, and its loads are still checked. A
-  tab created while an action runs is still closed and reported, so open the
-  console while the agent is idle, or use `melra approve`. A window that closes
-  before it can be looked up, such as a tab that turns into a download, is
-  reported either way. Ownership lasts for one attach: after MELRA restarts or
-  reconnects, the tabs it opened before count as the operator's until it
-  drives one again. A reported popup's URL no longer carries its fragment,
-  where a console keeps its one-time pairing code until its page has read it.
-  (#203)
+  tab created while an action runs is judged as the #223 entry below says.
+  A window that closes before it can be looked up, such as a tab that turns
+  into a download, is reported either way. Ownership lasts for one attach:
+  after MELRA restarts or reconnects, the tabs it opened before count as the
+  operator's until it drives one again. A reported popup's URL no longer
+  carries its fragment, where a console keeps its one-time pairing code until
+  its page has read it. (#203)
 
 - In a browser the runtime is attached to, a window the operator opens
   between the runtime's actions whose first response never arrives no longer
   makes every later action wait out its whole `timeoutMs`, before or after
   they close it. The wait after an action, for windows Chromium has
   created and Playwright has not yet handed over, now counts only the ones the
-  runtime will report: those created while an action runs and those its own
-  tabs open. A launched browser waits as before. (#221)
+  runtime will report: its actions' popups and what its own tabs open. A
+  launched browser waits as before. (#221)
+
+- In a browser the runtime is attached to, a tab the operator opens while an
+  action runs is no longer always closed and reported as that action's popup.
+  While an action runs, a new window is the action's unless Chromium names one
+  of the operator's tabs as its opener, or it has no opener and Chromium
+  creates it blank or at one of its own pages: a tab another CDP client opens,
+  or one from the toolbar. No page can have the browser open one of those, so,
+  like the operator's windows between actions, they are left open, not
+  reported, and not waited for. A tab that starts at a web address is still
+  the action's, because a page can have the browser open one for it (a sign-in
+  window, say), and so is one `melra console` or another app hands the browser
+  while an action runs. A tab the runtime only landed on stays the operator's
+  during a read; what it opens while the runtime navigates it or sends it
+  input is the action's. Windows the agent's pages open are still closed and
+  reported. A tab a link opens with a modifier or middle click has no opener
+  and starts out empty whichever page clicked it, so while an action runs it
+  is still taken for the action's. A window handed over in the instant the
+  runtime opens a tab of its own (`tab_new`) is now judged like any other;
+  it used to be taken silently for the runtime's new tab, neither closed nor
+  reported, and what it opened later counted as the runtime's. (#223)
 
 - The y/N question `melra approve` and `melra run` ask in a terminal takes
   input that ends before an answer as a no: both say `Not approved.` and

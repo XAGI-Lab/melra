@@ -47,6 +47,23 @@ try {
       timeout: 180_000,
     }),
   );
+  // With node:sqlite turned off, the binary names the cause instead of
+  // crashing at load, as the npm CLI does.
+  let refused;
+  try {
+    execFileSync(binary, ["version"], {
+      env: { ...env, NODE_OPTIONS: "--no-experimental-sqlite" },
+      cwd: home,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 60_000,
+    });
+  } catch (error) {
+    refused = error;
+  }
+  if (refused?.status !== 1 || !String(refused.stderr).includes("has node:sqlite turned off")) {
+    throw new Error(`sea_smoke_sqlite_off_failed: ${refused?.status} ${String(refused?.stderr ?? "").slice(0, 300)}`);
+  }
   const result = {
     version,
     doctorReady: doctor.ready,
