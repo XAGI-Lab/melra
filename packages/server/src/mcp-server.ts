@@ -247,7 +247,6 @@ export function createMcpServer(
     {
       title: "MELRA capabilities",
       description:
-        
         "Report what this MELRA server can run and the policy in force. Call it once before melra_plan or melra_workflow_plan; it takes no input and changes nothing. Returns product, version and protocolVersion; tools; operations (the actions each operation kind supports); customEvidence (verifier names allowed in custom evidence); workflowNodes (node types for workflow definitions); and policy, including mode, workspaceRoot, unhinged, mutations, allowedCommands, deniedTraits, allowedDomains, circuitBreaker and credential names.",
       inputSchema: MelraCapabilitiesInputSchema,
       annotations: {
@@ -265,7 +264,6 @@ export function createMcpServer(
     {
       title: "Plan a MELRA task",
       description:
-        
         "Plan one bounded operation without running it: MELRA evaluates policy and stores the task in its own records only, so nothing outside MELRA changes until it runs. Send a goal, one operation and requiredEvidence, and leave constraints empty. Returns the task with its effect contract and status planned, awaiting_approval (approval holds the challenge) or policy_blocked (a normal result; policyDecision.reason says why); an invalid request, such as one naming an unregistered verifier, fails the call instead. Keep its id: it is the taskId for melra_execute, melra_task_status, melra_task_cancel and melra_receipt. For dependent steps use melra_workflow_plan.",
       inputSchema: MelraPlanInputSchema,
       annotations: {
@@ -288,7 +286,6 @@ export function createMcpServer(
     {
       title: "Execute a planned MELRA task",
       description:
-        
         "Run one task melra_plan returned, by taskId: MELRA re-evaluates policy, so a plan made under a looser policy is still refused, then runs the operation, checks its requiredEvidence and records a receipt. If the plan returned an approval challenge with a phrase, pass approval with its approvalId and exact phrase; the phrase is scoped to that one task and expires. Only reads are retried, and a recovery_required task is reconciled, never re-run. Returns { task, output?, receipt?, certificate? } with the outcome in task.status. For workflow steps use melra_workflow_advance instead." +
         (runtime.policy.mode === "enforced" ? ` ${ENFORCED_APPROVAL}` : ""),
       inputSchema: MelraExecuteInputSchema,
@@ -311,7 +308,7 @@ export function createMcpServer(
     "melra_task_status",
     {
       title: "Inspect MELRA task status",
-      description: 
+      description:
         "Read one task's stored record by taskId (from melra_plan, or a workflow node's taskIds), in any status, policy_blocked and cancelled included, without changing or waiting on it. Returns the task: status, policyDecision, any approval challenge and approvedBy, the redacted request and result, error, attempts, receiptIds, certificateId and timestamps. Use it to re-check a task after melra_task_cancel or from another session, or to re-read a pending challenge. Use melra_receipt for receipts and the certificate, and melra_workflow_status for a whole workflow run.",
       inputSchema: MelraTaskStatusInputSchema,
       annotations: {
@@ -331,7 +328,7 @@ export function createMcpServer(
     "melra_task_cancel",
     {
       title: "Cancel a MELRA task",
-      description: 
+      description:
         "Cancel one task by taskId and return its record; nothing that already happened is undone. A planned or awaiting_approval task becomes cancelled and can no longer be executed. A task running in this MELRA process is sent an abort, which interrupts terminal run, browser, computer and http operations; the returned record predates it, so read the outcome with melra_task_status. Any other task, including one running in another process, is returned unchanged without error. Not for workflow steps: a cancelled step's node never completes and its dependents never run. End a run with melra_workflow_cancel.",
       inputSchema: MelraTaskCancelInputSchema,
       annotations: {
@@ -351,7 +348,7 @@ export function createMcpServer(
     "melra_receipt",
     {
       title: "Read MELRA evidence",
-      description: 
+      description:
         "Read a task's audit trail: returns { receipts, certificate? }. Pass taskId for all of that task's receipts plus its certificate, or receiptId for one receipt plus its task's certificate; receiptId wins if both are given. Each receipt records the capability, target, effect, principal, policy decision with any approval, timings, success, redacted observed effect and evidence; the certificate gives the overall result, such as VERIFIED_SUCCESS, PARTIAL or RECOVERY_REQUIRED. Use it to show what a task did; use melra_task_status for its current state.",
       inputSchema: MelraReceiptInputSchema,
       annotations: {
@@ -379,7 +376,6 @@ export function createMcpServer(
     {
       title: "Plan a MELRA workflow",
       description:
-        
         "Validate a multi-step workflow definition and create a new run without executing anything: MELRA writes only its own records and plans no tasks; nothing outside MELRA changes until the run is advanced. Planning fails on the graph errors it checks (workflow_* codes, such as a dependency cycle), a step melra_plan would fail on, or a step policy denies (workflow_policy_blocked:<nodeId>); steps needing approval ask during advance. Returns the run, planned with every node pending; its id is the workflowId, and no tool lists runs. For one operation use melra_plan.",
       inputSchema: WorkflowPlanInputSchema,
       annotations: {
@@ -402,7 +398,6 @@ export function createMcpServer(
     {
       title: "Advance a MELRA workflow",
       description:
-        
         "Run a workflow run's next wave; use it, not melra_execute, for workflow steps, calling again for later waves. It starts all ready nodes concurrently, each step under melra_execute's policy, approval and verification. Once a forward node has failed, only compensations run, in reverse definition order; otherwise, while nodes wait, only those are re-offered. Approval waits return challenges in tasks; human_input and delegation nodes wait with a prompt. Answer later via inputs and, outside enforced mode, approvals. Returns { run, tasks, events }, unchanged when nothing is due; a halted run fails with workflow_halted:<status>.",
       inputSchema: WorkflowAdvanceInputSchema,
       annotations: {
@@ -428,7 +423,7 @@ export function createMcpServer(
     "melra_workflow_status",
     {
       title: "Inspect a MELRA workflow",
-      description: 
+      description:
         "Read a workflow run in any status by workflowId without advancing or changing it; workflowId is the run id melra_workflow_plan returned, the same one melra_workflow_advance, melra_workflow_control and melra_workflow_cancel take. Returns the run: status (such as planned, running, awaiting_approval, awaiting_input, paused, suspended, verified_complete, failed, recovery_required or cancelled), error, stateVersion, definitionId, definitionVersion, timestamps, and nodes keyed by node id, each with its status, taskIds and, where set, approval, prompt, input, iterations and error. Check it before melra_workflow_advance to see what the run waits on; pass a node's taskIds to melra_task_status or melra_receipt for detail.",
       inputSchema: WorkflowIdInputSchema,
       annotations: {
@@ -449,7 +444,6 @@ export function createMcpServer(
     {
       title: "Cancel a MELRA workflow",
       description:
-        
         "End a workflow run by workflowId, the run id melra_workflow_plan returned. Its pending, ready and awaiting_approval nodes, compensations included, become cancelled, the tasks recorded on them are cancelled as melra_task_cancel would, and the run becomes cancelled; neither resume nor melra_workflow_advance continues it. It starts and undoes no effect: no compensation runs, other nodes keep their status, and a step already running may still finish. Works on paused, suspended and failed runs too. Returns the updated run, unchanged if already verified_complete or cancelled. To halt a run and continue later, use melra_workflow_control.",
       inputSchema: WorkflowIdInputSchema,
       annotations: {
@@ -470,7 +464,6 @@ export function createMcpServer(
     {
       title: "Pause, resume, or suspend a MELRA workflow",
       description:
-        
         "Halt a workflow run or lift the halt, without changing node state. action pause or suspend (same behaviour; only the status name differs) sets the run's status to paused or suspended unless it is verified_complete, cancelled or failed; melra_workflow_advance then fails with workflow_halted:<status> while the run is halted. Halt between advances: an advance already in flight still finishes the steps it started. resume needs a paused or suspended run, sets the status its nodes imply and runs nothing, so call melra_workflow_advance next. Returns the updated run. To end a run instead, use melra_workflow_cancel.",
       inputSchema: WorkflowControlInputSchema,
       annotations: {
