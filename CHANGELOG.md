@@ -211,6 +211,11 @@ All notable changes are documented here. The format follows
 
 ### Security
 
+- The Python SDK no longer passes an inherited `MELRA_UNHINGED` or
+  `MELRA_SOCKET` to the server it starts, as the TypeScript SDK already did
+  not: one left exported in a shell made every Python app's server run in
+  unsafe-local mode. Pass either in `environment` to mean it.
+
 - A browser input action (`click`, `type`, `fill_form`, `select`, `press`,
   `upload`, `download`) is held to the page its checks read, the `url` it
   names and the approval-surface marker, and its target to the document it
