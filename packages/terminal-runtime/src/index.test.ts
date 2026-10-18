@@ -5,7 +5,7 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { TerminalOperationSchema } from "@melra/protocol";
 import { TerminalRuntime, hardenGitRead, redactTerminalOutput } from "./index.js";
 
@@ -372,6 +372,39 @@ describe("TerminalRuntime", () => {
       expect(alive(closed.pid)).toBe(false);
     } finally {
       // Whatever an early failure left running: close() stops each job's group.
+      await runtime.close();
+    }
+  }, 30_000);
+
+  it.skipIf(process.platform === "win32")("keeps a job's timeout on what it left behind across a wall-clock jump", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-terminal-"));
+    roots.push(root);
+    const runtime = await TerminalRuntime.create({ root });
+    const started = await runtime.execute(
+      op({
+        action: "start",
+        timeoutMs: 1_000,
+        args: [
+          "-e",
+          `require('child_process').spawn(process.execPath, ['-e', "process.on('SIGTERM', () => {}); require('fs').writeFileSync('left', String(process.pid)); setInterval(() => {}, 1000)"], { stdio: 'ignore' }).unref()`,
+        ],
+      }),
+    );
+    const status = () =>
+      runtime.execute(TerminalOperationSchema.parse({ kind: "terminal", action: "status", jobId: started.jobId }));
+    await until(() => existsSync(join(root, "left")));
+    for (let waited = 0; waited < 5000 && (await status()).running === true; waited += 20) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    const pid = Number(await readFile(join(root, "left"), "utf8"));
+    // A laptop waking from sleep: the wall clock leaps, the job's timer has not.
+    const now = Date.now.bind(Date);
+    const jump = vi.spyOn(Date, "now").mockImplementation(() => now() + 3_600_000);
+    try {
+      await until(() => !alive(pid), 6_000);
+      expect(alive(pid)).toBe(false);
+    } finally {
+      jump.mockRestore();
       await runtime.close();
     }
   }, 30_000);

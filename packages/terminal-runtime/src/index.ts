@@ -248,13 +248,15 @@ interface BackgroundJob {
    */
   watch?: NodeJS.Timeout;
   /**
-   * When supervision ends regardless: the job's timeout and the SIGKILL after
-   * it have both had their turn, so whatever still answers in the group is a
-   * zombie nothing reaps (node as PID 1 in a container without an init) or a
-   * process no signal of ours can end. Waiting on it would hold the job, and
-   * its slot among MAX_JOBS, for as long as the server runs.
+   * Set once the job's timeout has sent its SIGKILL. Supervision ends there
+   * regardless: whatever still answers in the group is a zombie nothing reaps
+   * (node as PID 1 in a container without an init) or a process no signal of
+   * ours can end, and waiting on it would hold the job, and its slot among
+   * MAX_JOBS, for as long as the server runs. Set by the timer itself rather
+   * than read off the wall clock, which a sleeping laptop or a clock step
+   * moves past a timeout that has not fired.
    */
-  until: number;
+  expired?: boolean;
 }
 
 /** Whether the job's program has exited and left processes in its group. */
@@ -272,7 +274,7 @@ function releaseWhenEmpty(job: BackgroundJob): void {
     return;
   }
   job.watch = setInterval(() => {
-    if (groupAlive(job.child) && Date.now() < job.until) return;
+    if (groupAlive(job.child) && job.expired !== true) return;
     clearTimeout(job.timer);
     clearInterval(job.watch);
     delete job.watch;
@@ -516,7 +518,13 @@ export class TerminalRuntime {
       windowsVerbatimArguments: prepared.windowsVerbatimArguments,
       stdio: [prepared.interactive ? "pipe" : "ignore", "pipe", "pipe"],
     });
-    const timer = setTimeout(() => stopTree(child, KILL_GRACE_MS), prepared.timeoutMs);
+    const timer = setTimeout(() => {
+      signalTree(child, "SIGTERM");
+      setTimeout(() => {
+        signalTree(child, "SIGKILL");
+        job.expired = true;
+      }, KILL_GRACE_MS).unref();
+    }, prepared.timeoutMs);
     timer.unref();
     const job: BackgroundJob = {
       id,
@@ -529,7 +537,6 @@ export class TerminalRuntime {
       truncated: false,
       startedAt: new Date().toISOString(),
       timer,
-      until: Date.now() + prepared.timeoutMs + KILL_GRACE_MS + GROUP_POLL_MS,
     };
     const append = (current: string, chunk: string): string => {
       const next = current + chunk;
@@ -708,12 +715,14 @@ export class TerminalRuntime {
       // A child is free to trap SIGTERM, and shutdown blocking forever on one
       // that does is worse than the race this replaced.
       const escalation = stopTree(job.child, CLOSE_GRACE_MS);
-      const deadline = Date.now() + CLOSE_GRACE_MS + 1_000;
+      // Monotonic: a clock step must not cut the wait short and cancel the
+      // SIGKILL still owed to something that ignored SIGTERM.
+      const deadline = performance.now() + CLOSE_GRACE_MS + 1_000;
       await exited;
       // The rest of the group gets SIGKILL with the program; a process that
       // outlasts even that (uninterruptible, or not ours to signal) is not
       // waited on past the deadline.
-      while (groupAlive(job.child) && Date.now() < deadline) {
+      while (groupAlive(job.child) && performance.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, GROUP_POLL_MS));
       }
       clearTimeout(escalation);
