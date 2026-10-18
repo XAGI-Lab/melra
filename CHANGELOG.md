@@ -106,6 +106,12 @@ All notable changes are documented here. The format follows
   port. A blank `--port` (`--port "$PORT"` with `PORT` unset), or one with no
   value, is refused instead of taking a random port the same way. (#252)
 
+- An unknown flag after `--write` or `--open` is refused like any other: the
+  token after them was skipped unchecked, so `melra setup --client claude-code
+  --write --dry-run` wrote the client config. `melra serve --port` and `serve
+  --open` without `--http` are refused rather than serving stdio while the
+  operator waits on a port nobody listens on. (#254)
+
 - In block mode (the default), a popup whose first response never arrives is
   now closed. Playwright never hands such a window over, so it used to stay
   open for the life of the context, unreported. Once the action that opened it
