@@ -203,6 +203,15 @@ describe("TypeScript workflow SDK", () => {
 });
 
 describe("TypeScript SDK stdio connect", () => {
+  it("says why the server it started refused to start", async () => {
+    // What `melra serve` prints for a bad policy, then exits 1.
+    const refuse =
+      'process.stderr.write("melra: policy_approval_ttl_invalid: approvalTtlMs must be a whole number\\n"); process.exit(1)';
+    await expect(MelraClient.connect({ command: process.execPath, args: ["-e", refuse] })).rejects.toThrow(
+      /the server said: melra: policy_approval_ttl_invalid/,
+    );
+  });
+
   it("passes where state and policy live, and not what would redirect or widen the server", async () => {
     // A stand-in server that records what it was given and exits; connecting
     // fails, which is fine, the spawn is what is under test.
