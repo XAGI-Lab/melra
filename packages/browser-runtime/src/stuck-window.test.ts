@@ -63,10 +63,27 @@ describe("a window whose first response never comes (#226)", () => {
       runtime.execute(BrowserOperationSchema.parse({ kind: "browser", ...operation }));
     try {
       await run({ action: "navigate", url: origin });
+
+      // A window given up on and handed over later, between actions, takes
+      // nothing from the next action's own window. First, before any window
+      // hangs: on Linux and Windows a click made while one does can take
+      // seconds to find its button stable.
+      const context = (runtime as unknown as { context: BrowserContext }).context;
+      const late = context.waitForEvent("page", { predicate: (page) => page.url().includes("?late") });
+      // Still waited on below; this only keeps a failure before then from
+      // surfacing as an unhandled rejection once the browser closes.
+      late.catch(() => undefined);
+      await run({ action: "click", target: { selector: "#late" }, timeoutMs: 2_000 });
+      // Answered only now, after the click gave its window up.
+      while (held.length === 0) await new Promise((done) => setTimeout(done, 25));
+      held.splice(0).forEach((answer) => answer());
+      await late;
+      const after = await run({ action: "click", target: { selector: "#slow" }, timeoutMs: 10_000 });
+      expect(JSON.stringify(after.popups)).toContain("?slow");
+
       // The click waits for its window as long as it may: the window is part
-      // of what it did. (Its own click gets room too: on a busy CI runner a
-      // click can take a second or more to find its button stable.)
-      await run({ action: "click", target: { selector: "#stuck" }, timeoutMs: 4_000 });
+      // of what it did.
+      await run({ action: "click", target: { selector: "#stuck" }, timeoutMs: 2_000 });
       expect(hung).toHaveLength(1);
       // The next action does not wait for it again.
       const started = Date.now();
@@ -76,21 +93,6 @@ describe("a window whose first response never comes (#226)", () => {
       // that opened it.
       const clicked = await run({ action: "click", target: { selector: "#slow" }, timeoutMs: 10_000 });
       expect(clicked.popups).toEqual([expect.objectContaining({ url: expect.stringContaining("?slow"), blocked: true })]);
-
-      // A window given up on and handed over later, between actions, takes
-      // nothing from the next action's own window.
-      const context = (runtime as unknown as { context: BrowserContext }).context;
-      const late = context.waitForEvent("page", { predicate: (page) => page.url().includes("?late") });
-      // Still waited on below; this only keeps a failure before then from
-      // surfacing as an unhandled rejection once the browser closes.
-      late.catch(() => undefined);
-      await run({ action: "click", target: { selector: "#late" }, timeoutMs: 4_000 });
-      // Answered only now, after the click gave its window up.
-      while (held.length === 0) await new Promise((done) => setTimeout(done, 25));
-      held.splice(0).forEach((answer) => answer());
-      await late;
-      const after = await run({ action: "click", target: { selector: "#slow" }, timeoutMs: 10_000 });
-      expect(JSON.stringify(after.popups)).toContain("?slow");
 
       // A cancel during the wait for it ends the wait at once, and the action
       // queued behind it is not held either.
