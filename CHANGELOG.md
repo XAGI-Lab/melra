@@ -91,6 +91,15 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- In block mode (the default), a popup whose first response never arrives is
+  now closed. Playwright never hands such a window over, so it used to stay
+  open for the life of the context, unreported. Once the action that opened it
+  has given up on it, it has as long again to load, that action's
+  `timeoutMs`; one that loads is reported with its address and closed as
+  before, and one that does not is closed by its target id and reported, with
+  no address and marked `betweenActions`, by the action running then or the
+  next. With `popups: "allow"` it is left open. (#240)
+
 - A window an action gave up on that is handed over later, during another
   action's wait, no longer stands in for a window that action opened, which
   was then not waited for and was reported by whichever action ran when it
