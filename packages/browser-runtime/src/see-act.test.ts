@@ -618,14 +618,23 @@ describe("browser see/act loop", () => {
         await fetch(`http://127.0.0.1:${port}/json/new?${origin}/?duringnew`, { method: "PUT" });
         await agent.evaluate((url) => [0, 1, 2, 3, 4].forEach((i) => window.open(url + i)), `${origin}/?closes`);
         await handed;
-        return await newPage();
+        // And resolves a little after its tab is handed over, as Playwright
+        // may: the tab is known by then, so nothing else holds tab_new back.
+        const tab = await newPage();
+        await new Promise((done) => setTimeout(done, 100));
+        return tab;
       };
-      const opening = ((await run({ action: "tab_new" })).popups as unknown[] | undefined) ?? [];
+      const newTab = await run({ action: "tab_new" });
+      const opening = (newTab.popups as unknown[] | undefined) ?? [];
+      // Closed before tab_new lists the tabs: none of them is listed.
+      const listed = (newTab.tabs as Array<{ url: string }>).map((tab) => tab.url);
+      expect(listed.filter((url) => url.includes("?closes") || url.includes("?duringnew"))).toEqual([]);
+      expect(newTab.index).toBe(listed.length - 1);
       expect(opening).toHaveLength(6);
       expect(opening).toEqual(expect.arrayContaining([expect.objectContaining({ url: expect.stringContaining("?duringnew") })]));
       expect(opening).toEqual(Array.from({ length: 6 }, () => expect.objectContaining({ blocked: true })));
       // A window of the operator's handed over then that closes before the
-      // tab is open is still the operator's: it was judged while it was open.
+      // tab is open is still the operator's: it was looked up while it was open.
       context.newPage = async () => {
         context.newPage = newPage;
         const handed = new Promise<void>((done) => context.once("page", () => done()));

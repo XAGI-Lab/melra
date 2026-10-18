@@ -919,9 +919,10 @@ export class BrowserRuntime {
    * Hold the action's result while this context's windows are still owed
    * (`owed`), so the action that opened a window is the one that reports it.
    * A window stops being owed once it is handed over and looked up, or once it
-   * is destroyed: a blocked popup when the runtime's close lands, an allowed
-   * one when its lookup returns, and one destroyed before it is handed over
-   * at once.
+   * is destroyed: in a launched browser a blocked popup when the runtime's
+   * close lands and an allowed one when its lookup returns; in one this
+   * runtime is attached to, every window once it is looked up to be judged;
+   * and one destroyed before it is handed over, at once.
    *
    * Costs one round trip when nothing was opened. Waits only while a window is
    * owed, bounded by the action's own timeout: the window is part of what the
@@ -1026,6 +1027,9 @@ export class BrowserRuntime {
    */
   private async openPage(context: BrowserContext): Promise<Page> {
     const queued: Page[] = [];
+    // Where the judgements of windows handed over from here on begin, in a
+    // browser this runtime is attached to.
+    const judged = this.closing.length;
     this.openingPagesQueue = queued;
     const opening = this.call(context.newPage(), "new_page");
     this.opening = opening;
@@ -1057,8 +1061,10 @@ export class BrowserRuntime {
       throw error;
     }
     // Closed before `tab_new` lists the tabs, so the list it returns does not
-    // show a window the same result reports as closed.
-    await this.call(Promise.all(sortQueued(opened)), "close_popup");
+    // show a window the same result reports as closed: those queued here, and
+    // those judged meanwhile in a browser this runtime is attached to, whose
+    // judgement waits for `newPage`.
+    await this.call(Promise.all([...sortQueued(opened), ...this.closing.slice(judged)]), "close_popup");
     if (this.options.cdpEndpoint !== undefined) this.ownTargets.add(await this.targetOf(opened));
     return opened;
   }
