@@ -1152,7 +1152,8 @@ async function main(): Promise<void> {
       // socket only they can open and a port anyone local can is the point.
       if (
         socketPath !== undefined &&
-        (http || port !== undefined || args.includes("--open"))
+        // The flag, not its value: a --port with nothing after it is still one.
+        (http || args.includes("--port") || args.includes("--open"))
       ) {
         throw new Error(
           "--socket replaces --http, --port, and --open; pass one transport",
@@ -1162,6 +1163,13 @@ async function main(): Promise<void> {
       // stdio, and a port nobody listens on looks like a server that hangs.
       if (socketPath === undefined && !http && (args.includes("--port") || args.includes("--open"))) {
         throw new Error("--port and --open need --http; without it, serve speaks MCP over stdio");
+      }
+      // `--port "$PORT"` with PORT unset is Number(""), which is 0: a random
+      // port on every start, the bug a blank MELRA_HTTP_PORT had.
+      if (args.includes("--port") && (port === undefined || port.trim() === "")) {
+        throw new Error(
+          "--port requires a port; leave it out for the default (7457, or MELRA_HTTP_PORT), or pass 0 for any free port",
+        );
       }
       const melra = await runtime(env);
       const server =

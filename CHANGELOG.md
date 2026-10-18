@@ -105,6 +105,14 @@ All notable changes are documented here. The format follows
   for the life of the connection, so a server with a lot to say no longer
   blocks on a full pipe. (#258)
 
+- `melra serve --http` with neither `--port` nor `MELRA_HTTP_PORT` listens on
+  the documented `127.0.0.1:7457` again. An unset variable read as port `0`,
+  so the server took a random port on every start, clients set up from the
+  docs got connection refused, and `melra status` reported a running server
+  as not running. `MELRA_HTTP_PORT=0` and `--port 0` still ask for any free
+  port. A blank `--port` (`--port "$PORT"` with `PORT` unset), or one with no
+  value, is refused instead of taking a random port the same way. (#252)
+
 - An unknown flag after `--write` or `--open` is refused like any other: the
   token after them was skipped unchecked, so `melra setup --client claude-code
   --write --dry-run` wrote the client config. `melra serve --port` and `serve

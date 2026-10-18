@@ -20,9 +20,8 @@ import { classifyOperation, loadPolicy } from "@melra/policy-core";
 import { SqliteStore } from "@melra/storage-sqlite";
 import type { CliEnvironment } from "./environment.js";
 import { isHuman, paint, table } from "./output.js";
-import { printable } from "@melra/server";
+import { DEFAULT_HTTP_PORT, configuredHttpPort, printable } from "@melra/server";
 
-const DEFAULT_HTTP_PORT = 7457;
 const POLL_MS = 1_000;
 const APPROVAL_HINT = "approve with `melra approve <task-id>`";
 
@@ -338,9 +337,10 @@ function reachable(options: NetConnectOpts): Promise<boolean> {
   });
 }
 
+// Read as `serve` reads it. `0` (any free port) cannot be probed, so it falls
+// back to the default like an unset variable.
 function httpPort(): number {
-  const port = Number(process.env.MELRA_HTTP_PORT);
-  return Number.isInteger(port) && port > 0 && port < 65_536 ? port : DEFAULT_HTTP_PORT;
+  return configuredHttpPort(process.env) || DEFAULT_HTTP_PORT;
 }
 
 async function sizeOnDisk(path: string): Promise<number> {

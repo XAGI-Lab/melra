@@ -11,7 +11,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { TaskRequestSchema, WorkflowDefinitionSchema } from "@melra/protocol";
-import { createMelraRuntime, serveHttp } from "../src/index.js";
+import { DEFAULT_HTTP_PORT, configuredHttpPort, createMelraRuntime, serveHttp } from "../src/index.js";
 import type { MelraHttpServer } from "../src/http-server.js";
 import type { MelraRuntime } from "../src/runtime.js";
 
@@ -94,6 +94,30 @@ describe("melra http server", () => {
     await expect(serveHttp({ runtime, port: 0, token: "", environment: {} })).rejects.toThrow(
       "http_token_empty",
     );
+  });
+
+  it("listens on 7457 when no port is given and MELRA_HTTP_PORT is unset or blank", async () => {
+    expect(configuredHttpPort({})).toBeUndefined();
+    expect(configuredHttpPort({ MELRA_HTTP_PORT: " " })).toBeUndefined();
+    expect(configuredHttpPort({ MELRA_HTTP_PORT: "0" })).toBe(0);
+    expect(configuredHttpPort({ MELRA_HTTP_PORT: " 8080 " })).toBe(8080);
+    for (const environment of [{}, { MELRA_HTTP_PORT: "" }]) {
+      // Unset read as Number(""), which is 0: a random port every restart.
+      const served = await serveHttp({ runtime, token: "t", environment }).catch(
+        (error: Error) => error,
+      );
+      if (served instanceof Error) {
+        // Something on this machine holds the default port, or the OS reserves
+        // it (EACCES in a Windows excluded range): it was still the one asked for.
+        expect((served as Error & { port?: number }).port).toBe(DEFAULT_HTTP_PORT);
+        continue;
+      }
+      try {
+        expect(served.port).toBe(DEFAULT_HTTP_PORT);
+      } finally {
+        await served.close();
+      }
+    }
   });
 
   it("answers sign-in only to loopback names, so a rebound page gets nothing", async () => {
