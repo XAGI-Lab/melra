@@ -56,6 +56,13 @@ All notable changes are documented here. The format follows
 
 ### Changed
 
+- The eleven MCP tools describe themselves fully: each says what it does,
+  when to use it instead of its siblings, what it returns and how its
+  parameters relate, and every top-level parameter now carries a description
+  (most had none). The server's instructions add that no tool lists all tasks
+  or runs, so an agent keeps the ids it is given, and that
+  `melra_workflow_control` halts a run while `melra_workflow_cancel` ends it.
+
 - **Breaking:** in enforced mode, a browser action that drives a page
   (`click`, `type`, `fill_form`, `select`, `press`, `upload`, `download`,
   `close`, `tab_switch`) must name it with `url`, or it is refused at planning
