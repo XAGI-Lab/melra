@@ -98,6 +98,13 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- `melra serve --http` with neither `--port` nor `MELRA_HTTP_PORT` listens on
+  the documented `127.0.0.1:7457` again. An unset variable read as port `0`,
+  so the server took a random port on every start, clients set up from the
+  docs got connection refused, and `melra status` reported a running server
+  as not running. `MELRA_HTTP_PORT=0` and `--port 0` still ask for any free
+  port. (#252)
+
 - In block mode (the default), a popup whose first response never arrives is
   now closed. Playwright never hands such a window over, so it used to stay
   open for the life of the context, unreported. Once the action that opened it
