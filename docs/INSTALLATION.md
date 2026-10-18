@@ -541,7 +541,7 @@ opens the same runtime — same policy, same database, same receipts — on
 browser console:
 
 ```bash
-melra serve --http            # or --port 8080, or MELRA_HTTP_PORT=8080
+melra serve --http            # or --http --port 8080, or MELRA_HTTP_PORT=8080
 melra serve --http --open     # and open the console once it is listening
 ```
 

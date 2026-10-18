@@ -1149,6 +1149,30 @@ describe("melra CLI", () => {
       stderr: expect.not.stringContaining("unknown flag"),
     });
 
+    // An unknown flag after one that takes no value is caught too. --write
+    // and --open were read as taking a value, so the token after them was
+    // skipped unchecked and `--write --dry-run` wrote the client config. The
+    // timeout stops an unfixed `serve` from waiting on stdin for good.
+    for (const args of [
+      ["setup", "--client", "claude-code", "--write", "--dry-run"],
+      ["init", "--client", "claude-code", "--write", "--dry-run"],
+      ["serve", "--open", "--dry-run"],
+    ]) {
+      await expect(
+        execute(process.execPath, [entry, ...args], { ...options, timeout: 10_000 }),
+      ).rejects.toMatchObject({ stderr: expect.stringContaining("unknown flag --dry-run") });
+    }
+    expect(existsSync(join(root, ".mcp.json"))).toBe(false);
+
+    // Without --http, serve speaks MCP over stdio, so a port is refused rather
+    // than left looking like a server that never answers.
+    // A trailing --port too, as `--port $PORT` sends with PORT unset.
+    for (const args of [["serve", "--port", "8080"], ["serve", "--port"], ["serve", "--open"]]) {
+      await expect(
+        execute(process.execPath, [entry, ...args], { ...options, timeout: 10_000 }),
+      ).rejects.toMatchObject({ stderr: expect.stringContaining("--port and --open need --http") });
+    }
+
     // A mistyped command is the same mistake one level up, so it gets the same
     // treatment: name it, and say where the answer is.
     await expect(
@@ -1157,7 +1181,8 @@ describe("melra CLI", () => {
       code: 1,
       stderr: expect.stringContaining("unknown command: docter. Run 'melra --help'"),
     });
-  });
+    // A dozen CLI starts, each a fresh Node process.
+  }, 60_000);
 
   it("cannot run unsafe-local without saying so", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-cli-"));
@@ -1196,6 +1221,28 @@ describe("melra CLI", () => {
     expect(deprecated.stderr).toContain("--unhinged is deprecated");
     expect(JSON.parse(deprecated.stdout).unhinged).toBe(true);
   });
+
+  it("refuses a blank --port instead of taking a random one", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-cli-"));
+    roots.push(root);
+    const options = {
+      cwd: root,
+      env: { ...process.env, MELRA_HOME: join(root, ".melra"), MELRA_WORKSPACE: root },
+      // An unfixed serve listens until killed.
+      timeout: 10_000,
+    };
+    // What `--port "$PORT"` sends with PORT unset, and a --port with nothing after it.
+    for (const args of [["--port", ""], ["--port", " "], ["--port"]]) {
+      await expect(
+        execute(process.execPath, [entry, "serve", "--http", ...args], options),
+      ).rejects.toMatchObject({ stderr: expect.stringContaining("--port requires a port") });
+    }
+    // With --socket the transports conflict first, value or not: telling a
+    // socket user to pass 0 only gets them refused for mixing transports.
+    await expect(
+      execute(process.execPath, [entry, "serve", "--socket", join(root, "s.sock"), "--port"], options),
+    ).rejects.toMatchObject({ stderr: expect.stringContaining("--socket replaces") });
+  }, 60_000);
 
   it("serves on a socket only with --socket, and doctor reports the socket's mode", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-cli-"));
