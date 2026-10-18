@@ -3,16 +3,15 @@
 
 import { createHash, randomBytes } from "node:crypto";
 import {
-  chmod,
   lstat,
   mkdir,
+  open,
   readFile,
   readdir,
   realpath,
   rename,
   rm,
   stat,
-  writeFile,
 } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { FileOperation } from "@melra/protocol";
@@ -288,14 +287,24 @@ export class FileRuntime {
         // carried over. A new file gets the default mode, as before.
         const replaced = await stat(path).catch(() => undefined);
         const kept = replaced?.isFile() === true ? replaced.mode & 0o777 : undefined;
-        await writeFile(temporary, buffer, { flag: "wx", ...(kept === undefined ? {} : { mode: 0o600 }) });
+        // Only the exclusive create is outside the cleanup: a name already
+        // taken is not ours to remove.
+        const handle = await open(temporary, "wx", kept === undefined ? 0o666 : 0o600);
         try {
-          if (kept !== undefined) await chmod(temporary, kept);
+          try {
+            await handle.writeFile(buffer);
+            // Through the descriptor: nothing after the create looks the
+            // name up again, so a link put in its place is never followed.
+            if (kept !== undefined) await handle.chmod(kept);
+          } finally {
+            await handle.close();
+          }
           await rename(temporary, path);
         } catch (error) {
-          // A rename that failed (the target is a directory, or held open on
-          // Windows) would otherwise leave the content, secrets and all,
-          // beside it in the workspace, one copy per retry.
+          // A write that failed partway (a full disk), or a rename that failed
+          // (the target is a directory, or held open on Windows), would
+          // otherwise leave the content, secrets and all, beside it in the
+          // workspace, one copy per retry.
           await rm(temporary, { force: true });
           throw error;
         }
