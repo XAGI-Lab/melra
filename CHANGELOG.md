@@ -211,6 +211,11 @@ All notable changes are documented here. The format follows
 
 ### Security
 
+- The Python SDK no longer passes an inherited `MELRA_UNHINGED` or
+  `MELRA_SOCKET` to the server it starts, as the TypeScript SDK already did
+  not: one left exported in a shell made every Python app's server run in
+  unsafe-local mode. Pass either in `environment` to mean it.
+
 - `MELRA_HOME` is created private (mode `0700`) by `melra setup`, `init` and
   `doctor`, by the server's task store, and in the container image (`/data`);
   they could be created readable by other local users. The store creates the
