@@ -1274,7 +1274,7 @@ export const MelraTaskStatusInputSchema = z
   .object({ taskId: z.string().uuid().describe("The id melra_plan returned, or one of a workflow node's taskIds from melra_workflow_status. An unknown id fails with task_not_found.") })
   .strict();
 export const MelraTaskCancelInputSchema = z
-  .object({ taskId: z.string().uuid().describe("The id melra_plan returned for the task to cancel. Cancelling a workflow step's task fails its run at the next advance, which then offers its compensations; melra_workflow_cancel ends a run without them. An unknown id fails with task_not_found.") })
+  .object({ taskId: z.string().uuid().describe("The id melra_plan returned for the task to cancel. Cancelling a workflow step's task fails its run at the next advance, which then offers its compensations; cancelling a compensation's task stops the unwind (recovery_required). melra_workflow_cancel ends a run without compensating. An unknown id fails with task_not_found.") })
   .strict();
 export const MelraReceiptBaseSchema = z
   .object({

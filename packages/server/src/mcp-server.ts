@@ -329,7 +329,7 @@ export function createMcpServer(
     {
       title: "Cancel a MELRA task",
       description:
-        "Cancel one task by taskId and return its record; nothing that already happened is undone. A planned or awaiting_approval task becomes cancelled and can no longer be executed. A task running in this MELRA process is sent an abort, which interrupts terminal run, browser, computer and http operations; the returned record predates it, so read the outcome with melra_task_status. Any other task, including one running in another process, is returned unchanged without error. On a workflow step's task it acts as a denial: the next melra_workflow_advance fails the run and offers the compensations of the steps already done, each for its own approval; melra_workflow_cancel ends a run without them.",
+        "Cancel one task by taskId and return its record; nothing that already happened is undone. A planned or awaiting_approval task becomes cancelled and can no longer be executed. A task running in this MELRA process is sent an abort, which interrupts terminal run, browser, computer and http operations; the returned record predates it, so read the outcome with melra_task_status. Any other task, including one running in another process, is returned unchanged without error. On a workflow step's task it acts as a denial: the next melra_workflow_advance fails the run and offers the compensations of the steps already done, each for its own approval; on a compensation's task it stops the unwind, and the run becomes recovery_required. melra_workflow_cancel ends a run without compensating.",
       inputSchema: MelraTaskCancelInputSchema,
       annotations: {
         readOnlyHint: false,

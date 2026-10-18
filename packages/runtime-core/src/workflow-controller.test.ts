@@ -9,9 +9,11 @@ import {
   TaskRequestSchema,
   WorkflowDefinitionSchema,
   WorkflowEventSchema,
+  outcomeUnknown,
   type Operation,
   type TaskRequest,
   type WorkflowDefinition,
+  type WorkflowRun,
 } from "@melra/protocol";
 import { createDefaultPolicy } from "@melra/policy-core";
 import { sha256 } from "@melra/receipt-schema";
@@ -887,6 +889,80 @@ describe("WorkflowController execution", () => {
     expect(result.run.error).toBe("workflow_compensation_incomplete:undo-ship");
     expect(result.run.nodes["undo-ship"]?.status).toBe("cancelled");
     expect(result.run.nodes["undo-charge"]?.status).toBe("pending");
+  });
+
+  /** Charge, then ship and notify side by side; only the charge is undone. */
+  function fanOutSaga(): WorkflowDefinition {
+    return WorkflowDefinitionSchema.parse({
+      schemaVersion: "1.0.0",
+      id: definitionId,
+      version: 1,
+      name: "Charge, then ship and notify",
+      nodes: [
+        { id: "charge", type: "operation", request: call("Charge", `${PAYMENTS}/charges`) },
+        { id: "ship", type: "operation", dependsOn: ["charge"], request: call("Ship", `${LOGISTICS}/shipments`) },
+        { id: "notify", type: "operation", dependsOn: ["charge"], request: call("Notify", `${PAYMENTS}/notify`) },
+        { id: "undo-charge", type: "compensation", forNodeId: "charge", request: call("Refund", `${PAYMENTS}/refunds`) },
+      ],
+    });
+  }
+
+  it("halts rather than unwind past a step whose outcome is unknown when another is denied", async () => {
+    const calls: string[] = [];
+    const { controller, tasks } = await setup(async (operation) => {
+      if (operation.kind !== "http") throw new Error("unexpected_operation");
+      const url = new URL(operation.url);
+      calls.push(`${url.host}${url.pathname}`);
+      // The shipment may or may not exist; refunding its charge now could
+      // give the goods away.
+      if (url.pathname === "/shipments") throw outcomeUnknown("socket hang up");
+      return { success: true };
+    });
+    const planned = controller.plan(fanOutSaga());
+
+    const result = await settle(controller, planned.id, { tasks, nodeIds: ["notify"] });
+
+    expect(calls).not.toContain("payments.example.test/refunds");
+    expect(result.run.status).toBe("recovery_required");
+    expect(result.run.nodes.notify?.status).toBe("cancelled");
+    expect(result.run.nodes["undo-charge"]?.status).toBe("pending");
+  });
+
+  it("plans no compensation for a run cancelled while its advance was running", async () => {
+    let shipping!: () => void;
+    const started = new Promise<void>((resolve) => {
+      shipping = resolve;
+    });
+    const { controller, store } = await setup(async (operation, signal) => {
+      if (operation.kind === "http" && operation.url.endsWith("/shipments")) {
+        shipping();
+        await new Promise((_, reject) => signal?.addEventListener("abort", () => reject(signal.reason)));
+      }
+      return { success: true };
+    });
+    const planned = controller.plan(fanOutSaga());
+    const approve = (run: WorkflowRun, only?: string) =>
+      Object.entries(run.nodes).flatMap(([nodeId, state]) =>
+        state.status === "awaiting_approval" && state.approval !== undefined && (only === undefined || only === nodeId)
+          ? [{ approvalId: state.approval.approvalId, phrase: state.approval.phrase! }]
+          : [],
+      );
+    let run = (await controller.advance(planned.id)).run;
+    run = (await controller.advance(planned.id, approve(run))).run;
+    for (let step = 0; step < 3 && run.nodes.ship?.status !== "awaiting_approval"; step += 1) {
+      run = (await controller.advance(planned.id)).run;
+    }
+
+    // `workflow cancel` lands while the shipment runs, and aborts it.
+    const advancing = controller.advance(planned.id, approve(run, "ship"));
+    await started;
+    controller.cancel(planned.id);
+    await advancing.catch(() => undefined);
+
+    // A refund planned now would be a live challenge on a run its operator
+    // ended without compensating.
+    expect(controller.status(planned.id).status).toBe("cancelled");
+    expect(store.listTasks(100, "awaiting_approval")).toEqual([]);
   });
 });
 

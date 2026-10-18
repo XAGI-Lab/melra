@@ -299,6 +299,70 @@ describe("a step an operator denies", () => {
     expect(done).toEqual(["pay", "refund"]);
   });
 
+  it("does not read a challenge asked again as a denial when its advance did not commit", async () => {
+    const { controller, tasks, done } = await setup();
+    const planned = controller.plan(
+      workflow([
+        { id: "pay", type: "operation", request: put("pay") },
+        { id: "next", type: "operation", dependsOn: ["pay"], request: put("next") },
+        { id: "refund", type: "compensation", forNodeId: "pay", request: put("refund") },
+      ]),
+    );
+    let run = (await controller.advance(planned.id)).run;
+    for (let step = 0; step < 4 && run.nodes.next?.status !== "awaiting_approval"; step += 1) {
+      run = (await controller.advance(planned.id, approvalsFor(run))).run;
+    }
+    // What an advance does with an expired challenge: cancel it and ask again.
+    // Its commit was lost (a pause landed), so the run still names attempt 1.
+    const first = tasks.status(run.nodes.next!.taskIds[0]!);
+    tasks.cancel(first.id);
+    const again = tasks.plan(put("next"), { idempotencyKey: first.idempotencyKey!, attempt: 2, stored: true });
+
+    run = (await controller.advance(planned.id)).run;
+    expect(run.status).toBe("awaiting_approval");
+    expect(run.nodes.next?.taskIds).toEqual([again.id]);
+    run = (await controller.advance(planned.id, approvalsFor(run))).run;
+    expect(run.status).toBe("verified_complete");
+    expect(done).toEqual(["pay", "next"]);
+  });
+
+  it("flags a run an earlier version left failed past a denied compensation", async () => {
+    const { controller, done } = await setup();
+    const planned = controller.plan(
+      workflow([
+        { id: "a", type: "operation", request: put("a") },
+        { id: "b", type: "operation", dependsOn: ["a"], request: put("b") },
+        { id: "c", type: "operation", dependsOn: ["b"], request: put("c") },
+        { id: "undo-a", type: "compensation", forNodeId: "a", request: put("undo-a") },
+        { id: "undo-b", type: "compensation", forNodeId: "b", request: put("undo-b") },
+      ]),
+    );
+    let run = (await controller.advance(planned.id)).run;
+    for (let step = 0; step < 6 && run.nodes.c?.status !== "awaiting_approval"; step += 1) {
+      run = (await controller.advance(planned.id, approvalsFor(run))).run;
+    }
+    // What an earlier version recorded: c failed, undo-b denied, the run
+    // `failed`, and the next advance about to undo a past the missing undo-b.
+    type Emit = (type: string, data: Record<string, unknown>) => void;
+    const legacy = controller as unknown as {
+      transition(run: WorkflowRun, change: (draft: WorkflowRun, emit: Emit) => void): WorkflowRun;
+    };
+    legacy.transition(run, (draft, emit) => {
+      for (const [nodeId, status] of [["c", "failed"], ["undo-b", "cancelled"]] as const) {
+        const state = { status, taskIds: [] };
+        emit("workflow.node_changed", { nodeId, from: draft.nodes[nodeId]!.status, state });
+        draft.nodes[nodeId] = state;
+      }
+      emit("workflow.status_changed", { from: draft.status, to: "failed" });
+      draft.status = "failed";
+    });
+
+    run = (await controller.advance(planned.id, approvalsFor(controller.status(planned.id)))).run;
+    expect(run.status).toBe("recovery_required");
+    expect(run.error).toBe("workflow_compensation_incomplete:undo-b");
+    expect(done).toEqual(["a", "b"]);
+  });
+
   it("reads a denied branch the same way after a restart", async () => {
     const { controller, store, tasks, cipher, done } = await setup();
     const planned = controller.plan(fanOut());

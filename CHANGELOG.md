@@ -107,10 +107,14 @@ All notable changes are documented here. The format follows
   ends a run without unwinding it. Denying or cancelling a compensation now
   stops the unwind as a failed one does: the run is `recovery_required` with
   `workflow_compensation_incomplete:<node>`. It used to read `failed`, and the
-  next advance went on to undo the step before it. A parallel node with a
-  denied branch now ends at once, live and after a restart, instead of keeping
-  its other branches' approvals on offer. A run an earlier version left stuck
-  this way is repaired the next time a `melra` process starts. (#243)
+  next advance went on to undo the step before it. A run where another step's
+  outcome is unknown (`recovery_required`) halts there instead of unwinding
+  past it. A parallel node with a denied branch now ends when an advance reads
+  the denial, live and after a restart, instead of keeping its other branches'
+  approvals on offer. A run an earlier version left `running` this way is
+  repaired the next time a `melra` process starts, and one it left `failed`
+  past a denied compensation reports `recovery_required` at its next advance.
+  (#243)
 
 - In block mode (the default), a popup whose first response never arrives is
   now closed. Playwright never hands such a window over, so it used to stay
