@@ -1166,7 +1166,8 @@ describe("melra CLI", () => {
 
     // Without --http, serve speaks MCP over stdio, so a port is refused rather
     // than left looking like a server that never answers.
-    for (const args of [["serve", "--port", "8080"], ["serve", "--open"]]) {
+    // A trailing --port too, as `--port $PORT` sends with PORT unset.
+    for (const args of [["serve", "--port", "8080"], ["serve", "--port"], ["serve", "--open"]]) {
       await expect(
         execute(process.execPath, [entry, ...args], { ...options, timeout: 10_000 }),
       ).rejects.toMatchObject({ stderr: expect.stringContaining("--port and --open need --http") });
@@ -1180,7 +1181,8 @@ describe("melra CLI", () => {
       code: 1,
       stderr: expect.stringContaining("unknown command: docter. Run 'melra --help'"),
     });
-  });
+    // A dozen CLI starts, each a fresh Node process.
+  }, 60_000);
 
   it("cannot run unsafe-local without saying so", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-cli-"));

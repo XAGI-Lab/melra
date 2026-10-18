@@ -968,7 +968,7 @@ Usage:
   melra doctor [--json]
   melra conformance [--url <mcp-url> --token <token>] [--level <1|2|3>]
   melra init [--client <name>] [--write] [--json]
-  melra serve [--http] [--port <port>] [--open]
+  melra serve [--http [--port <port>] [--open]]
   melra serve --socket <path>
   melra run --request <task.json>
   melra approve <task-id> [--yes] [--deny] [--json]
@@ -1028,7 +1028,8 @@ Flags:
                    so only this OS user can connect; the token is still
                    required. Not on Windows. This flag, not MELRA_SOCKET,
                    moves 'serve' off stdio.
-  --open           Open the console in your browser once it is listening.
+  --open           With --http, open the console in your browser once it is
+                   listening.
   --url <mcp-url>  Endpoint for 'conformance'. Default: spawn 'melra serve'.
   --level <1|2|3>  Conformance level being claimed (default: 3). The run exits
                    non-zero if the endpoint falls short of it.
@@ -1159,7 +1160,7 @@ async function main(): Promise<void> {
       }
       // The same mistake the other way round: without --http, serve speaks
       // stdio, and a port nobody listens on looks like a server that hangs.
-      if (socketPath === undefined && !http && (port !== undefined || args.includes("--open"))) {
+      if (socketPath === undefined && !http && (args.includes("--port") || args.includes("--open"))) {
         throw new Error("--port and --open need --http; without it, serve speaks MCP over stdio");
       }
       const melra = await runtime(env);
