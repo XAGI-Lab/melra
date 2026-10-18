@@ -525,8 +525,10 @@ export class BrowserRuntime {
   private owed = new Map<string, { context: string; popup: boolean }>();
   /** Popups given up on in block mode, by target id, with the timer that closes them (`giveUpOwed`). */
   private lapsing = new Map<string, ReturnType<typeof setTimeout>>();
-  /** Popups those timers closed that Playwright has not handed over yet. */
-  private lapsedClosed = 0;
+  /** Popups those timers closed, until their targets are destroyed. */
+  private lapsedIds = new Set<string>();
+  /** Pages handed over closed and blank while one of those was closing: those popups. */
+  private lapsedPages = new WeakSet<Page>();
   /** This context's id in CDP, resolved on first use and then fixed. */
   private contextId: string | undefined;
   /**
@@ -768,6 +770,10 @@ export class BrowserRuntime {
      * this governs whether it stays.
      */
     this.context.on("page", (opened) => {
+      // One the runtime closed when its time ran out (`giveUpOwed`) is handed
+      // over closed and blank just before its target is destroyed: told apart
+      // now, while its id is still among those closing.
+      if (this.lapsedIds.size > 0 && opened.isClosed() && opened.url() === "") this.lapsedPages.add(opened);
       const attached = this.options.cdpEndpoint !== undefined && this.targets !== undefined;
       // In a launched browser the tab `openPage` asked for and a popup handed
       // over in the same instant look alike until `newPage` says which is the
@@ -908,6 +914,7 @@ export class BrowserRuntime {
         this.owed.delete(targetId);
         clearTimeout(this.lapsing.get(targetId));
         this.lapsing.delete(targetId);
+        this.lapsedIds.delete(targetId);
       });
       await this.call(
         targets.send("Target.setDiscoverTargets", { discover: true }),
@@ -976,8 +983,9 @@ export class BrowserRuntime {
    * is; one that never does is handed over closed, with no address, and
    * reported between actions (`adopt`). In a launched browser every window is
    * this runtime's; in one it is attached to, only a window of this context is
-   * closed, which is known by the deadline even when the action giving up
-   * failed before it learned the context.
+   * closed, checked when the timer fires. The context is known by then even
+   * when the action giving up failed before its wait: any page looked up
+   * tells it (`targetOf`), and an action that drives a page looks it up first.
    *
    * ponytail: "as long again" is the giving-up action's own `grace`
    * (its `timeoutMs`), not a setting; a window that loads later is closed
@@ -991,10 +999,8 @@ export class BrowserRuntime {
       const timer = setTimeout(() => {
         this.lapsing.delete(targetId);
         if (this.options.cdpEndpoint !== undefined && window.context !== this.contextId) return;
-        this.lapsedClosed += 1;
-        void targets.send("Target.closeTarget", { targetId }).catch(() => {
-          this.lapsedClosed -= 1;
-        });
+        this.lapsedIds.add(targetId);
+        void targets.send("Target.closeTarget", { targetId }).catch(() => this.lapsedIds.delete(targetId));
       }, grace);
       // Nothing to close once the process is done with everything else.
       timer.unref();
@@ -1006,7 +1012,7 @@ export class BrowserRuntime {
   private forgetLapsing(): void {
     for (const timer of this.lapsing.values()) clearTimeout(timer);
     this.lapsing.clear();
-    this.lapsedClosed = 0;
+    this.lapsedIds.clear();
   }
 
   /**
@@ -1050,11 +1056,9 @@ export class BrowserRuntime {
     // caller should be looking at, so unhinged mode drops it. Reporting it is
     // not a judgement — that stays on, like every other receipt.
     const allowed = this.options.popups === "allow" || this.options.unhinged === true;
-    // One the runtime closed when its time ran out (`giveUpOwed`) comes closed
-    // and blank, whatever action runs by then, and after the action that
-    // opened it returned.
-    const lapsed = this.lapsedClosed > 0 && opened.isClosed() && opened.url() === "";
-    if (lapsed) this.lapsedClosed -= 1;
+    // One the runtime closed when its time ran out (`giveUpOwed`) came after
+    // the action that opened it returned, whatever action runs by now.
+    const lapsed = this.lapsedPages.has(opened);
     if (this.popups.length < MAX_POPUPS) {
       this.popups.push({
         // Without its fragment: a console opened by the operator carries its
@@ -1137,6 +1141,8 @@ export class BrowserRuntime {
       this.targetIds.set(page, targetInfo.targetId);
       // Handed over, since there is a page to ask: owed by no wait now.
       this.owed.delete(targetInfo.targetId);
+      // Any page of this context also tells the context, if no action has yet.
+      this.contextId ??= targetInfo.browserContextId ?? "";
       return targetInfo.targetId;
     } finally {
       // Not waited for: a detach waits on the page's main thread, which a

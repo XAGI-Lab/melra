@@ -6,7 +6,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BrowserOperationSchema } from "@melra/protocol";
-import type { BrowserContext, CDPSession } from "playwright-core";
+import { chromium, type Browser, type BrowserContext, type CDPSession } from "playwright-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { BrowserRuntime, detectBrowserExecutable } from "./index.js";
 
@@ -225,82 +225,108 @@ describe("a window whose first response never comes (#226)", () => {
     }
   });
 
-  it("closes a popup that never loads once it has had as long again, in block mode only (#240)", { timeout: 60_000 }, async () => {
+  /**
+   * A window to a server that never answers (#240), opened by a click or by a
+   * context's first action, which is cancelled before its wait could learn
+   * the context. Its action's `timeoutMs` is also how much longer it has.
+   */
+  const lapsing = async ({ popups, first, attached }: { popups: "block" | "allow"; first: boolean; attached: boolean }) => {
     const executablePath = await detectBrowserExecutable();
     if (executablePath === undefined) return;
-    for (const [popups, first] of [["block", false], ["allow", false], ["block", true]] as const) {
-      // Never answers, as a dead link's server can.
-      const hung: Array<() => void> = [];
-      const stuck = await listen(createServer((_request, response) => void hung.push(() => response.end())));
-      const origin = await listen(
-        createServer((_request, response) => {
-          response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-          response.end(`<!doctype html><title>opener</title>
-            <button id="stuck" onclick="window.open('${stuck}/?stuck'); setTimeout(() => document.body.insertAdjacentHTML('beforeend', '<p id=done>done</p>'), 4000)">stuck</button>
-            ${first ? `<script>window.open("${stuck}/?onload")</script>` : ""}`);
-        }),
-      );
-      const root = await mkdtemp(join(tmpdir(), "melra-lapsed-"));
-      roots.push(root);
-      const runtime = new BrowserRuntime({
-        workspaceRoot: root,
-        artifactDirectory: join(root, "artifacts"),
-        executablePath,
-        allowedDomains: ["127.0.0.1"],
-        allowLocalhost: true,
-        popups,
-      });
-      const run = (operation: Record<string, unknown>) =>
-        runtime.execute(BrowserOperationSchema.parse({ kind: "browser", ...operation }));
-      // The windows a page opened that the browser still has, asked of it.
-      const popupsOpen = async () => {
-        const targets = (runtime as unknown as { targets: CDPSession }).targets;
-        const { targetInfos } = await targets.send("Target.getTargets");
-        return targetInfos.filter((target) => target.type === "page" && target.openerId !== undefined).length;
-      };
-      try {
-        if (first) {
-          // A context's first action, cancelled once its page has opened a
-          // window, before its wait could learn the context.
-          const cancel = new AbortController();
-          const navigating = runtime.execute(
-            BrowserOperationSchema.parse({ kind: "browser", action: "navigate", url: origin, timeoutMs: 1_000, settleQuietMs: 2_000 }),
-            cancel.signal,
-          );
-          navigating.catch(() => undefined);
-          while (hung.length < 1) await new Promise((done) => setTimeout(done, 25));
-          cancel.abort(new Error("task_cancelled"));
-          await expect(navigating).rejects.toThrow();
-        } else {
-          await run({ action: "navigate", url: origin });
-          await run({ action: "click", target: { selector: "#stuck" }, timeoutMs: 1_000 });
-        }
-        expect(hung).toHaveLength(1);
-        expect(await popupsOpen()).toBe(1);
-        // Given up on after 1 s, it has 1 s more to load before it is closed.
-        if (popups === "allow") {
-          await new Promise((done) => setTimeout(done, 3_000));
-          expect(await popupsOpen()).toBe(1);
-        } else if (first) {
-          const until = Date.now() + 4_000;
-          while ((await popupsOpen()) > 0 && Date.now() < until) await new Promise((done) => setTimeout(done, 50));
-          expect(await popupsOpen()).toBe(0);
-          // Handed over closed, it is reported by the next action.
-          const next = await run({ action: "inspect" });
-          expect(next.popups).toEqual([{ url: "", blocked: true, betweenActions: true }]);
-        } else {
-          // An action running when it is closed reports it, as one that came
-          // after the action that opened it.
-          const waited = await run({ action: "wait", target: { selector: "#done" }, state: "visible", timeoutMs: 8_000 });
-          expect(waited.popups).toEqual([{ url: "", blocked: true, betweenActions: true }]);
-          expect(await popupsOpen()).toBe(0);
-        }
-      } finally {
-        hung.splice(0).forEach((answer) => answer());
-        await runtime.close();
-      }
+    const hung: Array<() => void> = [];
+    const stuck = await listen(createServer((_request, response) => void hung.push(() => response.end())));
+    const origin = await listen(
+      createServer((_request, response) => {
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        response.end(`<!doctype html><title>opener</title>
+          <button id="stuck" onclick="window.open('${stuck}/?stuck'); setTimeout(() => document.body.insertAdjacentHTML('beforeend', '<p id=done>done</p>'), 4000)">stuck</button>
+          ${first ? `<script>window.open("${stuck}/?onload")</script>` : ""}`);
+      }),
+    );
+    const root = await mkdtemp(join(tmpdir(), "melra-lapsed-"));
+    roots.push(root);
+    let owner: Browser | undefined;
+    let cdpEndpoint: string | undefined;
+    if (attached) {
+      const debugging = await listen(createServer());
+      const port = new URL(debugging).port;
+      await new Promise<void>((done) => servers.pop()!.close(() => done()));
+      owner = await chromium.launch({ executablePath, headless: true, args: [`--remote-debugging-port=${port}`] });
+      await (await owner.newContext()).newPage();
+      cdpEndpoint = `http://127.0.0.1:${port}`;
     }
-  });
+    const runtime = new BrowserRuntime({
+      workspaceRoot: root,
+      artifactDirectory: join(root, "artifacts"),
+      executablePath,
+      allowedDomains: ["127.0.0.1"],
+      allowLocalhost: true,
+      popups,
+      ...(cdpEndpoint === undefined ? {} : { cdpEndpoint, cdpContextIndex: -1 }),
+    });
+    const run = (operation: Record<string, unknown>) =>
+      runtime.execute(BrowserOperationSchema.parse({ kind: "browser", ...operation }));
+    // The windows a page opened that the browser still has, asked of it.
+    const popupsOpen = async () => {
+      const targets = (runtime as unknown as { targets: CDPSession }).targets;
+      const { targetInfos } = await targets.send("Target.getTargets");
+      return targetInfos.filter((target) => target.type === "page" && target.openerId !== undefined).length;
+    };
+    const grace = first ? 3_000 : 1_000;
+    try {
+      if (first) {
+        const cancel = new AbortController();
+        const navigating = runtime.execute(
+          BrowserOperationSchema.parse({ kind: "browser", action: "navigate", url: origin, timeoutMs: grace, settleQuietMs: 2_000 }),
+          cancel.signal,
+        );
+        navigating.catch(() => undefined);
+        const asked = Date.now() + 20_000;
+        while (hung.length < 1 && Date.now() < asked) await new Promise((done) => setTimeout(done, 25));
+        expect(hung).toHaveLength(1);
+        cancel.abort(new Error("task_cancelled"));
+        await expect(navigating).rejects.toThrow();
+      } else {
+        await run({ action: "navigate", url: origin });
+        await run({ action: "click", target: { selector: "#stuck" }, timeoutMs: grace });
+      }
+      expect(hung).toHaveLength(1);
+      expect(await popupsOpen()).toBe(1);
+      if (popups === "allow") {
+        await new Promise((done) => setTimeout(done, grace + 2_000));
+        expect(await popupsOpen()).toBe(1);
+      } else if (first) {
+        const until = Date.now() + grace + 4_000;
+        while ((await popupsOpen()) > 0 && Date.now() < until) await new Promise((done) => setTimeout(done, 50));
+        expect(await popupsOpen()).toBe(0);
+        // Handed over closed, it is reported by the next action.
+        const next = await run({ action: "inspect" });
+        expect(next.popups).toEqual([{ url: "", blocked: true, betweenActions: true }]);
+      } else {
+        // An action running when it is closed reports it, as one that came
+        // after the action that opened it.
+        const waited = await run({ action: "wait", target: { selector: "#done" }, state: "visible", timeoutMs: 8_000 });
+        expect(waited.popups).toEqual([{ url: "", blocked: true, betweenActions: true }]);
+        expect(await popupsOpen()).toBe(0);
+      }
+    } finally {
+      hung.splice(0).forEach((answer) => answer());
+      await runtime.close();
+      await owner?.close();
+    }
+  };
+
+  it("closes a popup that never loads once it has had as long again (#240)", { timeout: 60_000 }, () =>
+    lapsing({ popups: "block", first: false, attached: false }));
+
+  it("leaves a popup that never loads open when popups are allowed (#240)", { timeout: 60_000 }, () =>
+    lapsing({ popups: "allow", first: false, attached: false }));
+
+  it("closes one that a context's failed first action opened (#240)", { timeout: 60_000 }, () =>
+    lapsing({ popups: "block", first: true, attached: false }));
+
+  it("closes one that a context's failed first action opened in a browser it is attached to (#240)", { timeout: 60_000 }, () =>
+    lapsing({ popups: "block", first: true, attached: true }));
 
   it("gives up what a context's first action opened when that action fails", { timeout: 60_000 }, async () => {
     const executablePath = await detectBrowserExecutable();
