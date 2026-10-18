@@ -329,7 +329,7 @@ export function createMcpServer(
     {
       title: "Cancel a MELRA task",
       description:
-        "Cancel one task by taskId and return its record; nothing that already happened is undone. A planned or awaiting_approval task becomes cancelled and can no longer be executed. A task running in this MELRA process is sent an abort, which interrupts terminal run, browser, computer and http operations; the returned record predates it, so read the outcome with melra_task_status. Any other task, including one running in another process, is returned unchanged without error. On a workflow step's task it acts as a denial: the next melra_workflow_advance fails the run and offers the compensations of the steps already done, each for its own approval; on a compensation's task it stops the unwind, and the run becomes recovery_required. melra_workflow_cancel ends a run without compensating.",
+        "Cancel one task by taskId and return its record; nothing that already happened is undone. A planned or awaiting_approval task becomes cancelled and can no longer be executed. A task running in this MELRA process is sent an abort, which interrupts terminal run, browser, computer and http operations; the returned record predates it, so read the outcome with melra_task_status. Any other task, including one running in another process, is returned unchanged without error. On a workflow step's task it acts as a denial: the next melra_workflow_advance fails the run and offers the compensations of the steps already done, each for its own approval, unless another step's outcome is unknown, which leaves the run recovery_required; on a compensation's task it stops the unwind, and the run becomes recovery_required. melra_workflow_cancel ends a run without compensating.",
       inputSchema: MelraTaskCancelInputSchema,
       annotations: {
         readOnlyHint: false,
@@ -398,7 +398,7 @@ export function createMcpServer(
     {
       title: "Advance a MELRA workflow",
       description:
-        "Run a workflow run's next wave; use it, not melra_execute, for workflow steps, calling again for later waves. It starts all ready nodes concurrently, each step under melra_execute's policy, approval and verification. Once a forward node has failed or been denied, only compensations run, in reverse definition order, stopping at one that fails or is denied; otherwise, while nodes wait, only those are re-offered. Approval waits return challenges in tasks; human_input and delegation nodes wait with a prompt. Answer later via inputs and, outside enforced mode, approvals. Returns { run, tasks, events }, unchanged when nothing is due; a halted run fails with workflow_halted:<status>.",
+        "Run a workflow run's next wave; use it, not melra_execute, for workflow steps, calling again for later waves. It starts all ready nodes concurrently, each step under melra_execute's policy, approval and verification. Once the run has failed (a forward node failed, or was denied while no other's outcome is unknown), only compensations run, in reverse definition order, stopping at one that fails or is denied; otherwise, while nodes wait, only those are re-offered. Approval waits return challenges in tasks; human_input and delegation nodes wait with a prompt. Answer later via inputs and, outside enforced mode, approvals. Returns { run, tasks, events }, unchanged when nothing is due; a halted run fails with workflow_halted:<status>.",
       inputSchema: WorkflowAdvanceInputSchema,
       annotations: {
         readOnlyHint: false,

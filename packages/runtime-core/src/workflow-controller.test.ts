@@ -891,6 +891,36 @@ describe("WorkflowController execution", () => {
     expect(result.run.nodes["undo-charge"]?.status).toBe("pending");
   });
 
+  it("keeps a step that ran though its advance was not committed", async () => {
+    const { calls, execute } = saga("none");
+    const { controller, tasks } = await setup(execute);
+    const definition = sagaDefinition();
+    const planned = controller.plan(definition);
+    let run = (await controller.advance(planned.id)).run;
+    const charge = run.nodes.charge!.approval!;
+    run = (await controller.advance(planned.id, [{ approvalId: charge.approvalId, phrase: charge.phrase! }])).run;
+    expect(run.nodes.ship?.status).toBe("pending");
+    // Ship ran and committed, then its advance lost its commit (a pause
+    // landed), so the run still shows it pending with no task.
+    const ship = definition.nodes.find((node) => node.id === "ship");
+    if (ship?.type !== "operation") throw new Error("expected_operation_node");
+    const key = sha256({ workflowId: planned.id, nodeId: "ship", iteration: 0, branch: "operation", request: ship.request });
+    const ran = tasks.plan(ship.request, { idempotencyKey: key, attempt: 1, stored: true });
+    await tasks.execute(ran.id, { approvalId: ran.approval!.approvalId, phrase: ran.approval!.phrase! });
+
+    const result = await settle(controller, planned.id);
+
+    // Planning it again was cancelled as a duplicate, read as a denial, and the
+    // charge refunded while the shipment stood.
+    expect(calls).toEqual([
+      "payments.example.test/charges",
+      "logistics.example.test/shipments",
+      "payments.example.test/notify",
+    ]);
+    expect(result.run.status).toBe("verified_complete");
+    expect(result.run.nodes.ship?.taskIds).toEqual([ran.id]);
+  });
+
   /** Charge, then ship and notify side by side; only the charge is undone. */
   function fanOutSaga(): WorkflowDefinition {
     return WorkflowDefinitionSchema.parse({

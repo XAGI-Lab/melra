@@ -1138,8 +1138,16 @@ export class WorkflowController {
     executePlanned = true,
     identity: TaskIdentity,
   ): Promise<NodeAdvance> {
+    // An effect already committed under this key is this slot's, whatever the
+    // run recorded, as recovery reads it: an advance whose commit was lost (a
+    // pause landed while the step ran) leaves the step pending though it ran,
+    // and planning it again would only be cancelled as a duplicate, which
+    // would then read as a denial and unwind past the step's own effect.
+    const committed = this.store.getIdempotencyCommit(taskIdempotencyKey(identity, request));
     let task =
-      existingTaskId === undefined
+      committed !== undefined
+        ? this.tasks.status(committed.taskId)
+        : existingTaskId === undefined
         ? this.tasks.plan(request, {
             idempotencyKey: taskIdempotencyKey(identity, request),
             attempt: 1,

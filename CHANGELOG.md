@@ -114,7 +114,10 @@ All notable changes are documented here. The format follows
   approvals on offer. A run an earlier version left `running` this way is
   repaired the next time a `melra` process starts, and one it left `failed`
   past a denied compensation reports `recovery_required` at its next advance.
-  (#243)
+  A step whose effect committed though its advance's own commit was lost (a
+  pause landed while it ran) is kept as done at the next advance, as recovery
+  already kept it, instead of being planned again and cancelled as a
+  duplicate. (#243)
 
 - In block mode (the default), a popup whose first response never arrives is
   now closed. Playwright never hands such a window over, so it used to stay
