@@ -326,8 +326,8 @@ describe("a step an operator denies", () => {
     expect(done).toEqual(["pay", "next"]);
   });
 
-  it("keeps the branch a condition took though its advance did not commit", async () => {
-    const { controller, tasks, done } = await setup();
+  it("does not run a condition's other branch once one branch committed", async () => {
+    const { controller, store, tasks, cipher, done } = await setup();
     const planned = controller.plan(
       workflow([
         { id: "inspect", type: "operation", request: read() },
@@ -351,13 +351,61 @@ describe("a step an operator denies", () => {
     const ran = tasks.plan(put("patch"), { idempotencyKey: key, attempt: 1, stored: true });
     await tasks.execute(ran.id, { approvalId: ran.approval!.approvalId, phrase: ran.approval!.phrase! });
 
-    for (let step = 0; step < 4 && run.status !== "verified_complete"; step += 1) {
+    for (let step = 0; step < 4 && run.status !== "recovery_required"; step += 1) {
       run = (await controller.advance(planned.id, approvalsFor(run))).run;
     }
-    // Asking the predicate again chose the other branch and ran it too.
+    // Asking the predicate again chose the other branch and ran it too. Now
+    // the committed branch is kept, its step planned again is a duplicate,
+    // and the run halts for recovery.
     expect(done).toEqual(["patch"]);
+    expect(run.status).toBe("recovery_required");
+
+    const restarted = new WorkflowController(store, tasks, cipher);
+    await restarted.recoverInterrupted();
+    run = restarted.status(planned.id);
     expect(run.nodes.choose?.taskIds).toEqual([ran.id]);
     expect(run.status).toBe("verified_complete");
+    expect(done).toEqual(["patch"]);
+  });
+
+  it("halts a loop whose iterations ran past its record, and recovery finishes it", async () => {
+    const { controller, store, tasks, cipher, done, root } = await setup();
+    const tick = put("tick");
+    const planned = controller.plan(
+      workflow([
+        { id: "spin", type: "bounded_loop", maxIterations: 3, until: { type: "file_exists", path: "flag" }, body: [tick] },
+        { id: "after", type: "operation", dependsOn: ["spin"], request: put("after") },
+      ]),
+    );
+    // Two iterations ran and committed in one advance, the second creating
+    // the flag that ends the loop; that advance then lost its commit.
+    for (const iteration of [0, 1]) {
+      const key = sha256({ workflowId: planned.id, nodeId: "spin", iteration, branch: "loop:0", request: tick });
+      const ran = tasks.plan(tick, { idempotencyKey: key, attempt: 1, stored: true });
+      await tasks.execute(ran.id, { approvalId: ran.approval!.approvalId, phrase: ran.approval!.phrase! });
+    }
+    await writeFile(join(root, "flag"), "");
+
+    let run = (await controller.advance(planned.id)).run;
+    for (let step = 0; step < 3 && run.status !== "recovery_required"; step += 1) {
+      run = (await controller.advance(planned.id, approvalsFor(run))).run;
+    }
+    // Reusing iteration 0 and asking `until` of a workspace iteration 1 had
+    // changed cut the loop short, and `after` ran on it.
+    expect(run.status).toBe("recovery_required");
+    expect(run.nodes.after?.status).toBe("pending");
+    expect(done).toEqual(["tick", "tick"]);
+
+    const restarted = new WorkflowController(store, tasks, cipher);
+    await restarted.recoverInterrupted();
+    run = restarted.status(planned.id);
+    // Both iterations kept; the next advance asks `until` of the last one.
+    expect(run.nodes.spin).toMatchObject({ status: "pending", iterations: 2 });
+    for (let step = 0; step < 3 && run.status !== "verified_complete"; step += 1) {
+      run = (await restarted.advance(planned.id, approvalsFor(run))).run;
+    }
+    expect(run.nodes.spin).toMatchObject({ status: "verified_complete", iterations: 2 });
+    expect(done).toEqual(["tick", "tick", "after"]);
   });
 
   it("flags a run an earlier version left failed past a denied compensation", async () => {

@@ -1149,16 +1149,8 @@ export class WorkflowController {
     executePlanned = true,
     identity: TaskIdentity,
   ): Promise<NodeAdvance> {
-    // An effect already committed under this key is this slot's, whatever the
-    // run recorded, as recovery reads it: an advance whose commit was lost (a
-    // pause landed while the step ran) leaves the step pending though it ran,
-    // and planning it again would only be cancelled as a duplicate, which
-    // would then read as a denial and unwind past the step's own effect.
-    const committed = this.store.getIdempotencyCommit(taskIdempotencyKey(identity, request));
     let task =
-      committed !== undefined
-        ? this.tasks.status(committed.taskId)
-        : existingTaskId === undefined
+      existingTaskId === undefined
         ? this.tasks.plan(request, {
             idempotencyKey: taskIdempotencyKey(identity, request),
             attempt: 1,
@@ -1494,7 +1486,19 @@ function nodeStateForTask(
         ...(task.error === undefined ? {} : { error: task.error }),
       };
     case "cancelled":
-      return { status: "cancelled", taskIds: [task.id] };
+      // Cancelled as a duplicate, the effect committed under an attempt this
+      // run does not record: an advance lost its commit (a pause landed while
+      // the step ran). Not a denial. The run halts, and recovery, which reads
+      // every attempt of every slot, settles it as it always has.
+      return task.error === "duplicate_attempt_prevented"
+        ? { status: "recovery_required", taskIds: [task.id], error: task.error }
+        : { status: "cancelled", taskIds: [task.id] };
+    case "running":
+    case "verifying":
+      // Still in flight elsewhere, or interrupted after its effect (its key may
+      // be committed). Never a failure: that would unwind past an effect that
+      // may stand. Task recovery settles it, and the run is derived again.
+      return { status: "recovery_required", taskIds: [task.id], error: "task_still_in_flight" };
     default:
       return {
         status: "failed",

@@ -891,9 +891,9 @@ describe("WorkflowController execution", () => {
     expect(result.run.nodes["undo-charge"]?.status).toBe("pending");
   });
 
-  it("keeps a step that ran though its advance was not committed", async () => {
+  it("halts, not unwinds, at a step that ran though its advance was not committed", async () => {
     const { calls, execute } = saga("none");
-    const { controller, tasks } = await setup(execute);
+    const { controller, tasks, store, cipher } = await setup(execute);
     const definition = sagaDefinition();
     const planned = controller.plan(definition);
     let run = (await controller.advance(planned.id)).run;
@@ -908,17 +908,50 @@ describe("WorkflowController execution", () => {
     const ran = tasks.plan(ship.request, { idempotencyKey: key, attempt: 1, stored: true });
     await tasks.execute(ran.id, { approvalId: ran.approval!.approvalId, phrase: ran.approval!.phrase! });
 
-    const result = await settle(controller, planned.id);
+    // Planned again, ship is cancelled as a duplicate. That is not a denial:
+    // read as one, it refunded the charge while the shipment stood.
+    const halted = await settle(controller, planned.id);
+    expect(halted.run.status).toBe("recovery_required");
+    expect(calls).toEqual(["payments.example.test/charges", "logistics.example.test/shipments"]);
 
-    // Planning it again was cancelled as a duplicate, read as a denial, and the
-    // charge refunded while the shipment stood.
+    // Recovery reads every attempt, keeps the one that committed, and the run
+    // carries on from there.
+    const restarted = new WorkflowController(store, tasks, cipher);
+    await restarted.recoverInterrupted();
+    expect(restarted.status(planned.id).nodes.ship).toMatchObject({ status: "verified_complete", taskIds: [ran.id] });
+    const result = await settle(restarted, planned.id);
+    expect(result.run.status).toBe("verified_complete");
     expect(calls).toEqual([
       "payments.example.test/charges",
       "logistics.example.test/shipments",
       "payments.example.test/notify",
     ]);
-    expect(result.run.status).toBe("verified_complete");
-    expect(result.run.nodes.ship?.taskIds).toEqual([ran.id]);
+  });
+
+  it("does not read a step still verifying as failed", async () => {
+    const { calls, execute } = saga("none");
+    const { controller, store } = await setup(execute);
+    const planned = controller.plan(sagaDefinition());
+    let run = (await controller.advance(planned.id)).run;
+    for (let step = 0; step < 3 && run.nodes.ship?.status !== "awaiting_approval"; step += 1) {
+      const waiting = Object.values(run.nodes).flatMap((state) =>
+        state.status === "awaiting_approval" && state.approval !== undefined
+          ? [{ approvalId: state.approval.approvalId, phrase: state.approval.phrase! }]
+          : [],
+      );
+      run = (await controller.advance(planned.id, waiting)).run;
+    }
+    // Interrupted after its effect, before its final save: it may stand.
+    const shipping = store.getTask(run.nodes.ship!.taskIds[0]!)!;
+    shipping.status = "verifying";
+    store.saveTask(shipping);
+
+    run = (await controller.advance(planned.id)).run;
+    // Read as failed, it started the unwind and offered the refund.
+    expect(run.status).toBe("recovery_required");
+    expect(run.nodes.ship?.status).toBe("recovery_required");
+    expect(run.nodes["undo-charge"]?.status).toBe("pending");
+    expect(calls).toEqual(["payments.example.test/charges"]);
   });
 
   /** Charge, then ship and notify side by side; only the charge is undone. */

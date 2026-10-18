@@ -287,7 +287,9 @@ interface is served.
 
 - Planned and approval-waiting payloads remain executable after restart.
 - Interrupted reads return to `planned` and may retry within their original
-  budget and idempotency identity.
+  budget and idempotency identity, unless the read had already verified and
+  committed its key: then it recovers as `verified_success`
+  (`committed_before_interruption`) and is not run again.
 - A mutation in `verifying` may become `verified_success` only when all
   required predicates are independent filesystem observations
   (`file_exists`, `file_absent`, or `file_hash`).
