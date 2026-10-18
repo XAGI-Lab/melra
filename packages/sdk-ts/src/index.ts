@@ -121,6 +121,15 @@ export class MelraClient {
       name: options.clientName ?? "melra-sdk",
       version: options.clientVersion ?? "0.1.0",
     });
+    // Read, so a server with a lot to say never blocks on a full pipe, and
+    // kept, so one that refuses to start says why: a bad policy, an unwritable
+    // MELRA_HOME and a missing node:sqlite all read "Connection closed".
+    let said = "";
+    if (transport instanceof StdioClientTransport) {
+      transport.stderr?.on("data", (chunk: Buffer) => {
+        said = (said + chunk.toString("utf8")).slice(-2_000);
+      });
+    }
     try {
       await client.connect(transport);
     } catch (error) {
@@ -132,6 +141,14 @@ export class MelraClient {
           "melra_unauthorized: the server refused the token; use the one `melra serve` printed or MELRA_HTTP_TOKEN",
           { cause: error },
         );
+      }
+      if (transport instanceof StdioClientTransport) {
+        // Its last words can land a moment after the transport reports the close.
+        await new Promise((settled) => setTimeout(settled, 50));
+        if (said.trim() !== "") {
+          const reason = error instanceof Error ? error.message : String(error);
+          throw new Error(`${reason}; the server said: ${said.trim()}`, { cause: error });
+        }
       }
       throw error;
     }

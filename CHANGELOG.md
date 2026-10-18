@@ -127,6 +127,13 @@ All notable changes are documented here. The format follows
   crash recovers as verified instead of running again only to be cancelled as
   a duplicate of itself. (#243)
 
+- The TypeScript SDK's `MelraClient.connect()` says why a `melra serve` it
+  started refused to start: the error quotes the server's stderr (an invalid
+  policy, an unwritable `MELRA_HOME`, a Node without `node:sqlite`) instead
+  of only `MCP error -32000: Connection closed`. It also reads that stderr
+  for the life of the connection, so a server with a lot to say no longer
+  blocks on a full pipe. (#258)
+
 - `melra serve --http` with neither `--port` nor `MELRA_HTTP_PORT` listens on
   the documented `127.0.0.1:7457` again. An unset variable read as port `0`,
   so the server took a random port on every start, clients set up from the
