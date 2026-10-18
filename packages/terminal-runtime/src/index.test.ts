@@ -124,18 +124,29 @@ describe("TerminalRuntime", () => {
     const root = await mkdtemp(join(tmpdir(), "melra-terminal-"));
     roots.push(root);
     const runtime = await TerminalRuntime.create({ root });
+    // Says when its stdin is closed, rather than the test guessing how long a
+    // loaded machine takes to start Node and get there.
     const started = await runtime.execute(
-      op({ action: "start", interactive: true, args: ["-e", "require('fs').closeSync(0); setTimeout(() => {}, 3000)"] }),
+      op({
+        action: "start",
+        interactive: true,
+        args: ["-e", "const fs = require('fs'); fs.closeSync(0); fs.writeFileSync('closed', ''); setTimeout(() => {}, 10000)"],
+      }),
     );
     const jobId = started.jobId as string;
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await until(() => existsSync(join(root, "closed")));
     const send = () =>
       runtime.execute(TerminalOperationSchema.parse({ kind: "terminal", action: "send", jobId, input: "hello" }));
     // The first write may be accepted; its EPIPE arrives afterwards. That used
-    // to be an unhandled error event, which killed this whole process.
+    // to be an unhandled error event, which killed this whole process. Asked
+    // again until refused, so the test waits for the EPIPE rather than a guess.
     await send().catch(() => undefined);
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    await expect(send()).rejects.toThrow(/terminal_job_(stdin_closed|not_interactive|not_running)/);
+    let refused: unknown;
+    for (let waited = 0; waited < 5000 && refused === undefined; waited += 50) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      refused = await send().then(() => undefined, (error: unknown) => error);
+    }
+    expect(String(refused)).toMatch(/terminal_job_(stdin_closed|not_interactive|not_running)/);
     await runtime.close();
   });
 
