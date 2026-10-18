@@ -301,15 +301,7 @@ export class WorkflowController {
     // a forward effect happened, its declared inverse did not, and no node
     // describes that. Refused here rather than left to `readyNodeIds`, which
     // would happily start an independent branch on top of it.
-    if (
-      definition.nodes.some(
-        (node) =>
-          node.type === "compensation" &&
-          ["failed", "recovery_required"].includes(
-            current.nodes[node.id]?.status ?? "",
-          ),
-      )
-    ) {
+    if (stalledCompensation(definition, current.nodes) !== undefined) {
       return { run: current, tasks: [], events: [] };
     }
     // A node parked for a human — approval or supplied input — is no
@@ -375,11 +367,12 @@ export class WorkflowController {
     // A *compensation* that failed must not open a second unwind. The saga is
     // already stranded, and undoing the next step while this inverse is still
     // outstanding is precisely what the halt exists to prevent — so only a
-    // forward node failing starts compensating.
+    // forward node failing, denied or cancelled starts compensating. A denied
+    // step is never offered again, so the run can only end by unwinding.
     if (
       results.some(
         ({ nodeId, result }) =>
-          result.state.status === "failed" &&
+          ["failed", "cancelled"].includes(result.state.status) &&
           graph.nodes.get(nodeId)?.type !== "compensation",
       )
     ) {
@@ -461,13 +454,7 @@ export class WorkflowController {
         draft.status = status;
         // Name the step, or "recovery_required" tells an operator that
         // something needs hands without saying which effect is half-undone.
-        const stalled = definition.nodes.find(
-          (node) =>
-            node.type === "compensation" &&
-            ["failed", "recovery_required"].includes(
-              draft.nodes[node.id]?.status ?? "",
-            ),
-        );
+        const stalled = stalledCompensation(definition, draft.nodes);
         if (status === "recovery_required" && stalled !== undefined) {
           draft.error = `workflow_compensation_incomplete:${stalled.id}`;
         } else {
@@ -718,11 +705,7 @@ export class WorkflowController {
       draft.status = status;
       // Named the way advanceOnce names a stalled unwind, so a run reads the
       // same whether its process died or not.
-      const stalled = definition.nodes.find(
-        (node) =>
-          node.type === "compensation" &&
-          ["failed", "recovery_required"].includes(draft.nodes[node.id]?.status ?? ""),
-      );
+      const stalled = stalledCompensation(definition, draft.nodes);
       if (status === "recovery_required") {
         draft.error =
           stalled === undefined
@@ -1329,18 +1312,18 @@ export class WorkflowController {
     // the forward effect happened and its declared inverse did not, which
     // leaves the world in a state no single node describes. Checked first, so
     // an incomplete unwind is never reported as a clean failure.
-    if (
-      definition.nodes.some(
-        (node) =>
-          node.type === "compensation" &&
-          ["failed", "recovery_required"].includes(
-            run.nodes[node.id]?.status ?? "",
-          ),
-      )
-    ) {
+    if (stalledCompensation(definition, run.nodes) !== undefined) {
       return "recovery_required";
     }
-    if (required.some((node) => run.nodes[node.id]?.status === "failed")) {
+    // A step whose task was denied or cancelled did not happen and is never
+    // offered again (`readyNodeIds` takes pending nodes, the re-offer awaiting
+    // ones), so the run cannot finish: it fails, and unwinds as for a failure.
+    // A run-level `cancelled` belongs to `cancel()`, whose runs are not derived.
+    if (
+      required.some((node) =>
+        ["failed", "cancelled"].includes(run.nodes[node.id]?.status ?? ""),
+      )
+    ) {
       return "failed";
     }
     if (
@@ -1472,16 +1455,36 @@ function aggregateNodeState(
   states: WorkflowNodeState[],
 ): WorkflowNodeState {
   const taskIds = states.flatMap((state) => state.taskIds);
+  // A denied branch ends the node before another branch's approval can run a
+  // step on a run that is already failing. An unknown outcome still ranks
+  // above it: the run halts for an operator rather than unwind past an effect
+  // that may have happened.
   for (const status of [
     "failed",
     "recovery_required",
-    "awaiting_approval",
     "cancelled",
+    "awaiting_approval",
   ] as const) {
     const state = states.find((candidate) => candidate.status === status);
     if (state !== undefined) return { ...state, taskIds };
   }
   return { status: "verified_complete", taskIds };
+}
+
+/**
+ * The compensation an unwind stopped at: it failed, its outcome is unknown, or
+ * an operator denied it (Deny cancels its task). Its step was not undone, so
+ * nothing older is undone either.
+ */
+function stalledCompensation(
+  definition: WorkflowDefinition,
+  nodes: WorkflowRun["nodes"],
+): WorkflowNode | undefined {
+  return definition.nodes.find(
+    (node) =>
+      node.type === "compensation" &&
+      ["failed", "recovery_required", "cancelled"].includes(nodes[node.id]?.status ?? ""),
+  );
 }
 
 function taskIdempotencyKey(
@@ -1621,6 +1624,9 @@ function recoveredNodeState(
       ...(recovery.error === undefined ? {} : { error: recovery.error }),
     };
   }
+  // Ranked as aggregateNodeState ranks it, so a denied branch reads the same
+  // after a restart and its sibling's challenge is not offered again.
+  if (withStatus("cancelled") !== undefined) return { status: "cancelled", taskIds };
   const awaiting = withStatus("awaiting_approval");
   if (awaiting !== undefined) {
     return {

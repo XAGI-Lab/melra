@@ -226,7 +226,7 @@ before the workflow is accepted.
 | `parallel` | Executes 2–20 independent branches concurrently, each with 1–50 sequential requests |
 | `bounded_loop` | Executes 1–50 body requests for at most 100 iterations and may stop on a persisted predicate |
 | `checkpoint` | Emits `workflow.checkpoint_saved` and stores a validated snapshot |
-| `compensation` | Runs a governed compensating request after its verified target is followed by failure |
+| `compensation` | Runs a governed compensating request after its verified target is followed by a step that fails or is denied |
 | `human_input` | Blocks in `awaiting_input` until `advance` supplies a value within `maxLength` and, where declared, within `choices` |
 | `delegation` | Blocks in `awaiting_input` until an outside worker reports back; the node's own `requiredEvidence` decides the outcome |
 
@@ -257,6 +257,11 @@ draft → planned → running → verified_complete
 and `workflow suspend`, and left by `workflow resume`; an `advance` against
 either is refused rather than queued. The public schema also reserves
 `partially_complete`, which no command enters today.
+
+`cancelled` is entered only by `workflow cancel`. A step whose task is denied
+(`melra approve --deny`, the console's Deny) or cancelled (`melra_task_cancel`)
+did not happen, so its run is `failed`, as for a step that failed, and unwinds
+(see [Sagas across providers](#sagas-across-providers)).
 
 Implemented event types are:
 
@@ -525,6 +530,12 @@ reach `compensated` — refunding while the goods are still in transit is worse
 than stopping. A stalled unwind makes the run `recovery_required` with
 `workflow_compensation_incomplete:<node>` naming the missing inverse, and
 `advance` refuses to start new work on top of it.
+
+A denied or cancelled step starts the same unwind as a failed one. Each
+compensation is still its own governed task, so one that is a mutation waits for
+its own approval, and denying it stops the unwind as a failed compensation does.
+To end a run without unwinding it, cancel the run (`workflow cancel`,
+`melra_workflow_cancel`); that also stops an unwind already under way.
 
 An interrupted mutation becomes `recovery_required` rather than being repeated,
 because the durable record can say what was in flight but not what the provider

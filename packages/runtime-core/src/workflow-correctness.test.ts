@@ -221,6 +221,104 @@ describe("workflow recovery", () => {
     expect(run.status).toBe("verified_complete");
     expect(done).toEqual(["step", "step", "step"]);
   });
+  it("repairs a run an earlier version left running after a denial", async () => {
+    const { controller, store, tasks, cipher, done } = await setup();
+    const planned = controller.plan(
+      workflow([
+        { id: "write", type: "operation", request: put("write") },
+        { id: "next", type: "operation", dependsOn: ["write"], request: put("next") },
+        { id: "undo", type: "compensation", forNodeId: "write", request: put("undo") },
+      ]),
+    );
+    let run = (await controller.advance(planned.id)).run;
+    for (let step = 0; step < 4 && run.nodes.next?.status !== "awaiting_approval"; step += 1) {
+      run = (await controller.advance(planned.id, approvalsFor(run))).run;
+    }
+    const denied = run.nodes.next!.taskIds[0]!;
+    tasks.cancel(denied);
+    // What an earlier version recorded on the next advance: the node
+    // cancelled and the run `running`, with nothing left that could run.
+    type Emit = (type: string, data: Record<string, unknown>) => void;
+    const legacy = controller as unknown as {
+      transition(run: WorkflowRun, change: (draft: WorkflowRun, emit: Emit) => void): WorkflowRun;
+    };
+    legacy.transition(run, (draft, emit) => {
+      const state = { status: "cancelled" as const, taskIds: [denied] };
+      emit("workflow.node_changed", { nodeId: "next", from: draft.nodes.next!.status, state });
+      draft.nodes.next = state;
+      emit("workflow.status_changed", { from: draft.status, to: "running" });
+      draft.status = "running";
+    });
+
+    const restarted = new WorkflowController(store, tasks, cipher);
+    await restarted.recoverInterrupted();
+    run = restarted.status(planned.id);
+    expect(run.status).toBe("failed");
+    for (let step = 0; step < 3 && run.nodes.undo?.status !== "compensated"; step += 1) {
+      run = (await restarted.advance(planned.id, approvalsFor(run))).run;
+    }
+    expect(run.nodes.undo?.status).toBe("compensated");
+    expect(done).toEqual(["write", "undo"]);
+  });
+});
+
+describe("a step an operator denies", () => {
+  // Pay, then two branches that each wait for approval; refunding pays back.
+  const fanOut = () =>
+    workflow([
+      { id: "pay", type: "operation", request: put("pay") },
+      { id: "fan", type: "parallel", dependsOn: ["pay"], branches: [[put("a")], [put("b")]] },
+      { id: "refund", type: "compensation", forNodeId: "pay", request: put("refund") },
+    ]);
+  const waitingOnBoth = async (controller: WorkflowController, id: string) => {
+    let run = (await controller.advance(id)).run;
+    for (let step = 0; step < 4 && run.nodes.fan?.status !== "awaiting_approval"; step += 1) {
+      run = (await controller.advance(id, approvalsFor(run))).run;
+    }
+    expect(run.nodes.fan?.status).toBe("awaiting_approval");
+    return run.nodes.fan!.taskIds as [string, string];
+  };
+
+  it("ends a parallel node at its denied branch and unwinds without offering the other", async () => {
+    const { controller, tasks, done } = await setup();
+    const planned = controller.plan(fanOut());
+    const [a, b] = await waitingOnBoth(controller, planned.id);
+    tasks.cancel(a);
+
+    let run = (await controller.advance(planned.id)).run;
+    // It kept b's challenge on offer, and approving it ran b on a doomed run.
+    expect(run.nodes.fan?.status).toBe("cancelled");
+    expect(run.status).toBe("failed");
+    expect(run.nodes.refund?.status).toBe("awaiting_approval");
+    const other = tasks.status(b).approval!;
+    run = (await controller.advance(planned.id, [
+      ...approvalsFor(run),
+      { approvalId: other.approvalId, phrase: other.phrase! },
+    ])).run;
+    expect(run.nodes.refund?.status).toBe("compensated");
+    expect(done).toEqual(["pay", "refund"]);
+  });
+
+  it("reads a denied branch the same way after a restart", async () => {
+    const { controller, store, tasks, cipher, done } = await setup();
+    const planned = controller.plan(fanOut());
+    const [a, b] = await waitingOnBoth(controller, planned.id);
+    tasks.cancel(a);
+
+    const restarted = new WorkflowController(store, tasks, cipher);
+    await restarted.recoverInterrupted();
+    let run = restarted.status(planned.id);
+    expect(run.nodes.fan?.status).toBe("cancelled");
+    expect(run.status).toBe("failed");
+    const other = tasks.status(b).approval!;
+    for (let step = 0; step < 3 && run.nodes.refund?.status !== "compensated"; step += 1) {
+      run = (await restarted.advance(planned.id, [
+        ...approvalsFor(run),
+        { approvalId: other.approvalId, phrase: other.phrase! },
+      ])).run;
+    }
+    expect(done).toEqual(["pay", "refund"]);
+  });
 });
 
 describe("loops across a restart", () => {

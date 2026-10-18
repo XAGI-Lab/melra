@@ -733,19 +733,23 @@ describe("WorkflowController execution", () => {
    * in one order, and the helper never volunteers an approval for a node the
    * run did not stop on.
    */
-  async function settle(controller: WorkflowController, id: string) {
+  /** Approves every challenge until nothing moves, denying those of `deny.nodeIds`. */
+  async function settle(
+    controller: WorkflowController,
+    id: string,
+    deny?: { tasks: TaskController; nodeIds: string[] },
+  ) {
     let result = await controller.advance(id);
     for (let round = 0; round < 12; round += 1) {
-      const approvals = Object.values(result.run.nodes).flatMap((state) =>
-        state.status === "awaiting_approval" && state.approval !== undefined
-          ? [
-              {
-                approvalId: state.approval.approvalId,
-                phrase: state.approval.phrase!,
-              },
-            ]
-          : [],
-      );
+      const approvals = Object.entries(result.run.nodes).flatMap(([nodeId, state]) => {
+        if (state.status !== "awaiting_approval" || state.approval === undefined) return [];
+        if (deny?.nodeIds.includes(nodeId) === true) {
+          // What Deny and melra_task_cancel reach: the step's task, cancelled.
+          deny.tasks.cancel(state.taskIds[0]!);
+          return [];
+        }
+        return [{ approvalId: state.approval.approvalId, phrase: state.approval.phrase! }];
+      });
       const next = await controller.advance(id, approvals);
       if (next.events.length === 0) return next;
       result = next;
@@ -850,6 +854,38 @@ describe("WorkflowController execution", () => {
     expect(calls).not.toContain("payments.example.test/refunds");
     expect(result.run.status).toBe("recovery_required");
     expect(result.run.error).toBe("workflow_compensation_incomplete:undo-ship");
+    expect(result.run.nodes["undo-charge"]?.status).toBe("pending");
+  });
+  it("unwinds the steps already done when an operator denies a later one", async () => {
+    const { calls, execute } = saga("none");
+    const { controller, tasks } = await setup(execute);
+    const planned = controller.plan(sagaDefinition());
+
+    const result = await settle(controller, planned.id, { tasks, nodeIds: ["ship"] });
+
+    // The shipment never happened, so only the charge is undone. The run used
+    // to read `running` for good, with nothing left that could run.
+    expect(calls).toEqual(["payments.example.test/charges", "payments.example.test/refunds"]);
+    expect(result.run.status).toBe("failed");
+    expect(result.run.nodes.ship?.status).toBe("cancelled");
+    expect(result.run.nodes.notify?.status).toBe("pending");
+    expect(result.run.nodes["undo-ship"]?.status).toBe("skipped");
+    expect(result.run.nodes["undo-charge"]?.status).toBe("compensated");
+  });
+
+  it("stops the unwind at a compensation the operator denies", async () => {
+    const { calls, execute } = saga("payments.example.test/notify");
+    const { controller, tasks } = await setup(execute);
+    const planned = controller.plan(sagaDefinition());
+
+    const result = await settle(controller, planned.id, { tasks, nodeIds: ["undo-ship"] });
+
+    // As for a compensation that fails: the shipment was not cancelled, so the
+    // charge that paid for it is not refunded either.
+    expect(calls).not.toContain("payments.example.test/refunds");
+    expect(result.run.status).toBe("recovery_required");
+    expect(result.run.error).toBe("workflow_compensation_incomplete:undo-ship");
+    expect(result.run.nodes["undo-ship"]?.status).toBe("cancelled");
     expect(result.run.nodes["undo-charge"]?.status).toBe("pending");
   });
 });

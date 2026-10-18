@@ -98,6 +98,20 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- Denying a durable workflow's step (`melra approve <id> --deny`, the
+  console's Deny) or cancelling its task (`melra_task_cancel`) no longer leaves
+  the run `running` for good with nothing left to run. The step did not
+  happen, so the run is `failed`, as when a step fails, and the compensations
+  declared for the steps already done unwind newest first, each still a
+  governed task that waits for its own approval. `melra workflow cancel` still
+  ends a run without unwinding it. Denying or cancelling a compensation now
+  stops the unwind as a failed one does: the run is `recovery_required` with
+  `workflow_compensation_incomplete:<node>`. It used to read `failed`, and the
+  next advance went on to undo the step before it. A parallel node with a
+  denied branch now ends at once, live and after a restart, instead of keeping
+  its other branches' approvals on offer. A run an earlier version left stuck
+  this way is repaired the next time a `melra` process starts. (#243)
+
 - In block mode (the default), a popup whose first response never arrives is
   now closed. Playwright never hands such a window over, so it used to stay
   open for the life of the context, unreported. Once the action that opened it
