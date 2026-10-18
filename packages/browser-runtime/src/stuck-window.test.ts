@@ -161,7 +161,8 @@ describe("a window whose first response never comes (#226)", () => {
     const executablePath = await detectBrowserExecutable();
     if (executablePath === undefined) return;
     // Each window answers only when the test lets it, from a server of its
-    // own: Chromium holds a second request to a server it is still waiting on.
+    // own: with one server, the second request did not always arrive while
+    // the first was held.
     const held = new Map<string, () => void>();
     const holding = (name: string) =>
       listen(createServer((_request, response) => void held.set(name, () => response.end("<!doctype html><title>slow</title>"))));

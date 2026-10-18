@@ -624,6 +624,21 @@ describe("browser see/act loop", () => {
       expect(opening).toHaveLength(6);
       expect(opening).toEqual(expect.arrayContaining([expect.objectContaining({ url: expect.stringContaining("?duringnew") })]));
       expect(opening).toEqual(Array.from({ length: 6 }, () => expect.objectContaining({ blocked: true })));
+      // A window of the operator's handed over then that closes before the
+      // tab is open is still the operator's: it was judged while it was open.
+      context.newPage = async () => {
+        context.newPage = newPage;
+        const handed = new Promise<void>((done) => context.once("page", () => done()));
+        await mine.evaluate((url) => {
+          const opened = window.open(url);
+          setTimeout(() => opened?.close(), 300);
+        }, `${origin}/?shortlived`);
+        await handed;
+        await new Promise((done) => setTimeout(done, 600));
+        return await newPage();
+      };
+      const shortlived = await run({ action: "tab_new" });
+      expect(JSON.stringify(shortlived.popups ?? [])).not.toContain("?shortlived");
     } finally {
       answerAll();
       loading.splice(0).forEach((answer) => answer());

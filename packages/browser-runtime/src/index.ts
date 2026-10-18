@@ -790,8 +790,14 @@ export class BrowserRuntime {
           (async () => {
             // The tab this runtime is opening is the page `newPage` resolves
             // to, and is not judged; any other window handed over in that
-            // instant is judged like any other.
-            if (opening !== undefined && opened === (await opening.catch(() => undefined))) return;
+            // instant is judged like any other, by its id looked up now, while
+            // it is still open: one that closes before `newPage` settles could
+            // no longer be looked up, and would be taken for a popup.
+            if (opening !== undefined) {
+              const looked = this.targetOf(opened).catch(() => undefined);
+              if (opened === (await opening.catch(() => undefined))) return;
+              await looked;
+            }
             const { adopt: yes, during } = await this.adoptable(opened, acting);
             return yes ? adopt(during) : undefined;
           })(),
@@ -910,15 +916,18 @@ export class BrowserRuntime {
   }
 
   /**
-   * Hold the action's result until Playwright has handed over every window
-   * Chromium created, so the action that opened a window is the one that
-   * reports it.
+   * Hold the action's result while this context's windows are still owed
+   * (`owed`), so the action that opened a window is the one that reports it.
+   * A window stops being owed once it is handed over and looked up, or once it
+   * is destroyed: a blocked popup when the runtime's close lands, an allowed
+   * one when its lookup returns, and one destroyed before it is handed over
+   * at once.
    *
    * Costs one round trip when nothing was opened. Waits only while a window is
-   * known to exist and is still unreported, bounded by the action's own
-   * timeout: the window is part of what the action did. A window still pending
-   * after that is given up on, so no later action waits for it, and is
-   * reported by the action running when Playwright delivers it, if it ever does.
+   * owed, bounded by the action's own timeout: the window is part of what the
+   * action did. One still owed after that is given up on, so no later action
+   * waits for it, and is reported by the action running when Playwright
+   * delivers it, if it ever does.
    */
   private async awaitOpenedWindows(timeoutMs: number): Promise<void> {
     const targets = this.targets;
