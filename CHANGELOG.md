@@ -97,8 +97,8 @@ All notable changes are documented here. The format follows
   has given up on it, it has as long again to load, that action's
   `timeoutMs`; one that loads is reported with its address and closed as
   before, and one that does not is closed by its target id and reported, with
-  no address, by the action running then. With `popups: "allow"` it is left
-  open. (#240)
+  no address and marked `betweenActions`, by the action running then or the
+  next. With `popups: "allow"` it is left open. (#240)
 
 - A window an action gave up on that is handed over later, during another
   action's wait, no longer stands in for a window that action opened, which

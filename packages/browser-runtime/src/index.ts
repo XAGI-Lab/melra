@@ -525,6 +525,8 @@ export class BrowserRuntime {
   private owed = new Map<string, { context: string; popup: boolean }>();
   /** Popups given up on in block mode, by target id, with the timer that closes them (`giveUpOwed`). */
   private lapsing = new Map<string, ReturnType<typeof setTimeout>>();
+  /** Popups those timers closed that Playwright has not handed over yet. */
+  private lapsedClosed = 0;
   /** This context's id in CDP, resolved on first use and then fixed. */
   private contextId: string | undefined;
   /**
@@ -967,12 +969,15 @@ export class BrowserRuntime {
   }
 
   /**
-   * Gives up on the windows still owed (`owed`). In block mode a popup of
-   * this context among them, which Playwright has not handed over to be
-   * closed, is closed by its id once it has had as long again to load (#240).
-   * One that loads in that time is handed over, reported with its address,
-   * and closed as any popup is; one that never does is handed over closed,
-   * with no address, and reported by the action running then.
+   * Gives up on the windows still owed (`owed`). In block mode a popup among
+   * them, which Playwright has not handed over to be closed, is closed by its
+   * id once it has had as long again to load (#240). One that loads in that
+   * time is handed over, reported with its address, and closed as any popup
+   * is; one that never does is handed over closed, with no address, and
+   * reported between actions (`adopt`). In a launched browser every window is
+   * this runtime's; in one it is attached to, only a window of this context is
+   * closed, which is known by the deadline even when the action giving up
+   * failed before it learned the context.
    *
    * ponytail: "as long again" is the giving-up action's own `grace`
    * (its `timeoutMs`), not a setting; a window that loads later is closed
@@ -982,10 +987,14 @@ export class BrowserRuntime {
     const targets = this.targets;
     const block = this.options.popups !== "allow" && this.options.unhinged !== true;
     for (const [targetId, window] of this.owed) {
-      if (!block || targets === undefined || !window.popup || window.context !== this.contextId) continue;
+      if (!block || targets === undefined || !window.popup) continue;
       const timer = setTimeout(() => {
         this.lapsing.delete(targetId);
-        void targets.send("Target.closeTarget", { targetId }).catch(() => undefined);
+        if (this.options.cdpEndpoint !== undefined && window.context !== this.contextId) return;
+        this.lapsedClosed += 1;
+        void targets.send("Target.closeTarget", { targetId }).catch(() => {
+          this.lapsedClosed -= 1;
+        });
       }, grace);
       // Nothing to close once the process is done with everything else.
       timer.unref();
@@ -997,6 +1006,7 @@ export class BrowserRuntime {
   private forgetLapsing(): void {
     for (const timer of this.lapsing.values()) clearTimeout(timer);
     this.lapsing.clear();
+    this.lapsedClosed = 0;
   }
 
   /**
@@ -1040,13 +1050,18 @@ export class BrowserRuntime {
     // caller should be looking at, so unhinged mode drops it. Reporting it is
     // not a judgement — that stays on, like every other receipt.
     const allowed = this.options.popups === "allow" || this.options.unhinged === true;
+    // One the runtime closed when its time ran out (`giveUpOwed`) comes closed
+    // and blank, whatever action runs by then, and after the action that
+    // opened it returned.
+    const lapsed = this.lapsedClosed > 0 && opened.isClosed() && opened.url() === "";
+    if (lapsed) this.lapsedClosed -= 1;
     if (this.popups.length < MAX_POPUPS) {
       this.popups.push({
         // Without its fragment: a console opened by the operator carries its
         // one-time pairing code there until its first script runs.
         url: withoutFragment(opened.url()),
         blocked: !allowed,
-        ...(during ? {} : { betweenActions: true }),
+        ...(during && !lapsed ? {} : { betweenActions: true }),
       });
     }
     if (allowed) return;
