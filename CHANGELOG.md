@@ -98,6 +98,13 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- The TypeScript SDK's `MelraClient.connect()` says why a `melra serve` it
+  started refused to start: the error quotes the server's stderr (an invalid
+  policy, an unwritable `MELRA_HOME`, a Node without `node:sqlite`) instead
+  of only `MCP error -32000: Connection closed`. It also reads that stderr
+  for the life of the connection, so a server with a lot to say no longer
+  blocks on a full pipe. (#258)
+
 - An unknown flag after `--write` or `--open` is refused like any other: the
   token after them was skipped unchecked, so `melra setup --client claude-code
   --write --dry-run` wrote the client config. `melra serve --port` and `serve
