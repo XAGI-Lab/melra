@@ -1,7 +1,7 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -19,6 +19,29 @@ afterEach(() => {
     rmSync(tempDirectory, { recursive: true, force: true });
     tempDirectory = undefined;
   }
+});
+
+
+describe("the database's file modes", () => {
+  it("are private, a new database and one left wider alike", () => {
+    if (process.platform === "win32") return;
+    const directory = mkdtempSync(join(tmpdir(), "melra-storage-private-"));
+    try {
+      const path = join(directory, "home", "melra.sqlite");
+      const store = new SqliteStore(path);
+      store.ownerId();
+      store.close();
+      expect(statSync(join(directory, "home")).mode & 0o777).toBe(0o700);
+      expect(statSync(path).mode & 0o777).toBe(0o600);
+      expect(statSync(`${path}-owners`).mode & 0o777).toBe(0o700);
+      // One an older version left readable by others is made private again.
+      chmodSync(path, 0o644);
+      new SqliteStore(path).close();
+      expect(statSync(path).mode & 0o777).toBe(0o600);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("SqliteStore", () => {
