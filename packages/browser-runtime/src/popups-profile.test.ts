@@ -6,7 +6,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BrowserOperationSchema } from "@melra/protocol";
-import type { BrowserContext, Page } from "playwright-core";
+import type { BrowserContext, CDPSession, Page } from "playwright-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { BrowserRuntime, detectBrowserExecutable } from "./index.js";
 
@@ -276,15 +276,20 @@ describe("browser popups", () => {
       const tabs = await session.execute(op({ action: "tabs" }));
       expect((tabs.tabs as Tab[]).map((tab) => tab.url)).toEqual([`${url}/`]);
 
-      // Nor is the tab it was opening reported, when Playwright hands it over
-      // and then fails, closing it first.
-      context.newPage = async () => {
-        const tab = await realNewPage();
-        await tab.close();
-        throw new Error("Page has been closed.");
+      // Nor is the tab it was opening reported when that tab dies while
+      // Playwright sets it up: Playwright hands it over closed, then rejects.
+      const targets = (session as unknown as { targets: CDPSession }).targets;
+      const handed: Page[] = [];
+      const collect = (page: Page) => void handed.push(page);
+      const kill = ({ targetInfo }: { targetInfo: { targetId: string; type: string } }) => {
+        if (targetInfo.type === "page") void targets.send("Target.closeTarget", { targetId: targetInfo.targetId }).catch(() => undefined);
       };
-      await expect(session.execute(op({ action: "tab_new" }))).rejects.toThrow("Page has been closed.");
-      context.newPage = realNewPage;
+      context.on("page", collect);
+      targets.on("Target.targetCreated", kill);
+      await expect(session.execute(op({ action: "tab_new" }))).rejects.toThrow();
+      targets.off("Target.targetCreated", kill);
+      context.off("page", collect);
+      expect(handed.map((page) => page.isClosed())).toEqual([true]);
       const quiet = await session.execute(op({ action: "tabs" }));
       expect(quiet.popups).toBeUndefined();
       expect((quiet.tabs as Tab[]).map((tab) => tab.url)).toEqual([`${url}/`]);

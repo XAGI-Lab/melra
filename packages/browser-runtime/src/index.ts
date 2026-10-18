@@ -1085,16 +1085,20 @@ export class BrowserRuntime {
     this.openingTab = true;
     this.openingPagesQueue = queued;
     // Every page queued is counted, and any but the tab `newPage` returned is
-    // a window a page opened. If it failed, the tab it was opening may be
-    // queued all the same: Playwright closes that one before it rejects, still
-    // blank, so a closed blank page is taken for it and not reported.
+    // a window a page opened. One that failed may still have handed over the
+    // tab it was opening: Playwright does so just before it rejects, having
+    // closed it, so a closed page queued last is taken for that tab.
+    //
+    // ponytail: a window a page opened that is handed over last and closed
+    // itself already, during a `newPage` that fails, is counted, not reported.
     const sortQueued = (tab?: Page) => {
       this.openingTab = false;
       this.openingPagesQueue = undefined;
+      const last = queued.at(-1);
+      const mine = tab ?? (last?.isClosed() === true ? last : undefined);
       return queued.flatMap((page) => {
         this.windowsAdopted += 1;
-        const mine = tab === undefined ? page.isClosed() && page.url() === "about:blank" : page === tab;
-        return (mine ? undefined : this.adopt(page)) ?? [];
+        return (page === mine ? undefined : this.adopt(page)) ?? [];
       });
     };
     let opened: Page;
