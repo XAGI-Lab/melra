@@ -515,12 +515,16 @@ export class BrowserRuntime {
    * when the action fails before it waits, are given up on: kept, one whose
    * first response never comes would hold every later action to its whole
    * timeout (#226). One handed over later stands in for no other window
-   * (#234), and is reported by the action running then.
+   * (#234), and is reported by the action running then (`giveUpOwed`).
+   * `popup`: whether it has an opener, as a page's window does and the
+   * runtime's own tab does not.
    *
    * ponytail: a window a page opens between actions is owed to the next
    * action, so one that never loads still holds that action up once.
    */
-  private owed = new Map<string, string>();
+  private owed = new Map<string, { context: string; popup: boolean }>();
+  /** Popups given up on in block mode, by target id, with the timer that closes them (`giveUpOwed`). */
+  private lapsing = new Map<string, ReturnType<typeof setTimeout>>();
   /** This context's id in CDP, resolved on first use and then fixed. */
   private contextId: string | undefined;
   /**
@@ -825,6 +829,7 @@ export class BrowserRuntime {
      * not promise.
      */
     this.owed = new Map();
+    this.forgetLapsing();
     this.contextId = undefined;
     this.ownTargets = new Set();
     this.drivenTarget = undefined;
@@ -887,7 +892,7 @@ export class BrowserRuntime {
           if (theirs) return;
           if (this.acting) this.createdActing.set(targetInfo.targetId, this.actions);
           else if (opener !== undefined && runtimes(opener)) this.ownTargets.add(targetInfo.targetId);
-          this.owed.set(targetInfo.targetId, id);
+          this.owed.set(targetInfo.targetId, { context: id, popup: opener !== undefined });
         }
       });
       // Ids stay after their window closes: one that closes itself as soon as
@@ -899,6 +904,8 @@ export class BrowserRuntime {
         if (this.drivenTarget === targetId) this.drivenTarget = undefined;
         this.pageTargets.delete(targetId);
         this.owed.delete(targetId);
+        clearTimeout(this.lapsing.get(targetId));
+        this.lapsing.delete(targetId);
       });
       await this.call(
         targets.send("Target.setDiscoverTargets", { discover: true }),
@@ -940,7 +947,7 @@ export class BrowserRuntime {
       // every window created before now is in `owed`.
       await this.call(targets.send("Browser.getVersion"), "cdp:Browser.getVersion");
       const contextId = this.contextId ?? "";
-      const owed = () => [...this.owed.values()].includes(contextId);
+      const owed = () => [...this.owed.values()].some((window) => window.context === contextId);
       const deadline = Date.now() + timeoutMs;
       // A cancel ends the wait at once: what is still owed is given up below,
       // and the queue behind this action is not held to its deadline.
@@ -955,8 +962,41 @@ export class BrowserRuntime {
     } finally {
       // However the wait ended, what is still owed is no later action's to
       // wait for. Other contexts' windows go too: none is handed over here.
-      this.owed.clear();
+      this.giveUpOwed(timeoutMs);
     }
+  }
+
+  /**
+   * Gives up on the windows still owed (`owed`). In block mode a popup of
+   * this context among them, which Playwright has not handed over to be
+   * closed, is closed by its id once it has had as long again to load (#240).
+   * One that loads in that time is handed over, reported with its address,
+   * and closed as any popup is; one that never does is handed over closed,
+   * with no address, and reported by the action running then.
+   *
+   * ponytail: "as long again" is the giving-up action's own `grace`
+   * (its `timeoutMs`), not a setting; a window that loads later is closed
+   * before it can be seen.
+   */
+  private giveUpOwed(grace: number): void {
+    const targets = this.targets;
+    const block = this.options.popups !== "allow" && this.options.unhinged !== true;
+    for (const [targetId, window] of this.owed) {
+      if (!block || targets === undefined || !window.popup || window.context !== this.contextId) continue;
+      const timer = setTimeout(() => {
+        this.lapsing.delete(targetId);
+        void targets.send("Target.closeTarget", { targetId }).catch(() => undefined);
+      }, grace);
+      // Nothing to close once the process is done with everything else.
+      timer.unref();
+      this.lapsing.set(targetId, timer);
+    }
+    this.owed.clear();
+  }
+
+  private forgetLapsing(): void {
+    for (const timer of this.lapsing.values()) clearTimeout(timer);
+    this.lapsing.clear();
   }
 
   /**
@@ -1899,7 +1939,7 @@ export class BrowserRuntime {
       // nothing was sent, and for a read the controller may simply retry.
       // The message is stored on the task record and shown in the console.
       // An action that failed before its wait gives up on what it opened here.
-      this.owed.clear();
+      this.giveUpOwed(operation.timeoutMs);
       if (error instanceof Error) error.message = withoutColour(error.message);
       const sent = this.dispatched || inputSent(error);
       // So did one that failed after its input went out, or a step back or
@@ -2393,6 +2433,7 @@ export class BrowserRuntime {
     // An attached browser outlives us; stop asking it to narrate its targets.
     if (this.targets !== undefined) await quietly(this.targets.detach(), "cdp_detach");
     this.targets = undefined;
+    this.forgetLapsing();
     if (
       connection !== undefined &&
       !connection.ownsContext &&

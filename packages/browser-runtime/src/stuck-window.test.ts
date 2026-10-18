@@ -6,7 +6,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BrowserOperationSchema } from "@melra/protocol";
-import type { BrowserContext } from "playwright-core";
+import type { BrowserContext, CDPSession } from "playwright-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { BrowserRuntime, detectBrowserExecutable } from "./index.js";
 
@@ -218,6 +218,59 @@ describe("a window whose first response never comes (#226)", () => {
     } finally {
       for (const answer of held.values()) answer();
       await runtime.close();
+    }
+  });
+
+  it("closes a popup that never loads once it has had as long again, in block mode only (#240)", { timeout: 60_000 }, async () => {
+    const executablePath = await detectBrowserExecutable();
+    if (executablePath === undefined) return;
+    for (const popups of ["block", "allow"] as const) {
+      // Never answers, as a dead link's server can.
+      const hung: Array<() => void> = [];
+      const stuck = await listen(createServer((_request, response) => void hung.push(() => response.end())));
+      const origin = await listen(
+        createServer((_request, response) => {
+          response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+          response.end(`<!doctype html><title>opener</title>
+            <button id="stuck" onclick="window.open('${stuck}/?stuck')">stuck</button>`);
+        }),
+      );
+      const root = await mkdtemp(join(tmpdir(), "melra-lapsed-"));
+      roots.push(root);
+      const runtime = new BrowserRuntime({
+        workspaceRoot: root,
+        artifactDirectory: join(root, "artifacts"),
+        executablePath,
+        allowedDomains: ["127.0.0.1"],
+        allowLocalhost: true,
+        popups,
+      });
+      const run = (operation: Record<string, unknown>) =>
+        runtime.execute(BrowserOperationSchema.parse({ kind: "browser", ...operation }));
+      // The windows a page opened that the browser still has, asked of it.
+      const popupsOpen = async () => {
+        const targets = (runtime as unknown as { targets: CDPSession }).targets;
+        const { targetInfos } = await targets.send("Target.getTargets");
+        return targetInfos.filter((target) => target.type === "page" && target.openerId !== undefined).length;
+      };
+      try {
+        await run({ action: "navigate", url: origin });
+        await run({ action: "click", target: { selector: "#stuck" }, timeoutMs: 1_000 });
+        expect(hung).toHaveLength(1);
+        expect(await popupsOpen()).toBe(1);
+        // Given up on after 1 s, it has 1 s more to load before it is closed.
+        const until = Date.now() + 4_000;
+        while ((await popupsOpen()) > 0 && Date.now() < until) await new Promise((done) => setTimeout(done, 50));
+        expect(await popupsOpen()).toBe(popups === "block" ? 0 : 1);
+        if (popups === "block") {
+          // Handed over closed, it is reported by the action running then.
+          const next = await run({ action: "inspect" });
+          expect(next.popups).toEqual([expect.objectContaining({ url: "", blocked: true })]);
+        }
+      } finally {
+        hung.splice(0).forEach((answer) => answer());
+        await runtime.close();
+      }
     }
   });
 
