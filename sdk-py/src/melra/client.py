@@ -20,6 +20,12 @@ from mcp import types as mcp_types
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
 
+# Settings of this process a spawned server must not inherit, as the TypeScript
+# SDK leaves them out: MELRA_UNHINGED unconfines the server, with a banner
+# nobody reads, and MELRA_SOCKET moved older `melra serve` off stdio, so
+# connecting hung. Pass either in `environment` to mean it.
+_NOT_INHERITED = ("MELRA_UNHINGED", "MELRA_SOCKET")
+
 
 class MelraClient:
     """Async client for the high-level MELRA task interface."""
@@ -33,7 +39,7 @@ class MelraClient:
         data_directory: str | Path | None = None,
         environment: dict[str, str] | None = None,
     ) -> None:
-        env = dict(os.environ)
+        env = {name: value for name, value in os.environ.items() if name not in _NOT_INHERITED}
         if workspace is not None:
             env["MELRA_WORKSPACE"] = str(Path(workspace).resolve())
         if data_directory is not None:

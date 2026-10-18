@@ -234,6 +234,22 @@ async def test_python_sdk_connects_to_a_running_socket_server(tmp_path: Path) ->
                 await _plan_execute_receipt(melra)
 
 
+def test_python_sdk_does_not_pass_on_an_inherited_unsafe_local_or_socket(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MELRA_UNHINGED", "1")
+    monkeypatch.setenv("MELRA_SOCKET", "/tmp/melra.sock")
+    monkeypatch.setenv("MELRA_MODE", "enforced")
+    env = MelraClient()._parameters.env or {}
+    assert "MELRA_UNHINGED" not in env
+    assert "MELRA_SOCKET" not in env
+    # A stricter mode, and everything else, still carry over.
+    assert env["MELRA_MODE"] == "enforced"
+    # Asked for in code, it is passed.
+    explicit = MelraClient(environment={"MELRA_UNHINGED": "1"})._parameters.env or {}
+    assert explicit["MELRA_UNHINGED"] == "1"
+
+
 def test_python_sdk_refuses_to_send_the_token_where_it_should_not(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
