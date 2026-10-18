@@ -1144,11 +1144,6 @@ async function main(): Promise<void> {
       const socketPath = argument("--socket", args);
       const http = args.includes("--http");
       const port = argument("--port", args);
-      // `--port "$PORT"` with PORT unset is Number(""), which is 0: a random
-      // port on every start, the bug a blank MELRA_HTTP_PORT had.
-      if (args.includes("--port") && (port === undefined || port.trim() === "")) {
-        throw new Error("--port requires a port; leave it out for 7457, or pass 0 for any free port");
-      }
       // One transport per process. Quietly preferring one would leave an
       // operator believing they had the other — and the difference between a
       // socket only they can open and a port anyone local can is the point.
@@ -1158,6 +1153,13 @@ async function main(): Promise<void> {
       ) {
         throw new Error(
           "--socket replaces --http, --port, and --open; pass one transport",
+        );
+      }
+      // `--port "$PORT"` with PORT unset is Number(""), which is 0: a random
+      // port on every start, the bug a blank MELRA_HTTP_PORT had.
+      if (args.includes("--port") && (port === undefined || port.trim() === "")) {
+        throw new Error(
+          "--port requires a port; leave it out for the default (7457, or MELRA_HTTP_PORT), or pass 0 for any free port",
         );
       }
       const melra = await runtime(env);
