@@ -211,6 +211,11 @@ All notable changes are documented here. The format follows
 
 ### Security
 
+- `file.write` keeps the permissions of a file it replaces: a private file
+  stayed private only until it was written, when it came back with the default
+  mode, and a script lost its execute bit. A file with a name near the file
+  system's length limit can now be written too.
+
 - The Python SDK no longer passes an inherited `MELRA_UNHINGED` or
   `MELRA_SOCKET` to the server it starts, as the TypeScript SDK already did
   not: one left exported in a shell made every Python app's server run in
