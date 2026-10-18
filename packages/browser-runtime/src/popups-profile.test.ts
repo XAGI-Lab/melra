@@ -6,6 +6,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BrowserOperationSchema } from "@melra/protocol";
+import type { BrowserContext, CDPSession, Page } from "playwright-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { BrowserRuntime, detectBrowserExecutable } from "./index.js";
 
@@ -209,6 +210,92 @@ describe("browser popups", () => {
       );
       expect(opened.popups).toBeUndefined();
       expect((await session.execute(op({ action: "tabs" }))).tabs).toHaveLength(2);
+    } finally {
+      await session.close();
+    }
+  }, 120_000);
+
+  it("closes and reports a popup handed over while tab_new is opening its tab", async () => {
+    const executablePath = await detectBrowserExecutable();
+    if (executablePath === undefined) return;
+    const url = await serve();
+    const session = runtime(await root("popup-tab-new-race"), executablePath);
+    try {
+      await session.execute(op({ action: "navigate", url }));
+      const internals = session as unknown as { context: BrowserContext; activePage: Page };
+      const context = internals.context;
+      const realNewPage = context.newPage.bind(context);
+      // The page opens a window, handed over (and so held) before `newPage`
+      // goes on to open the tab.
+      context.newPage = async () => {
+        const handed = new Promise((done) => context.once("page", done));
+        await internals.activePage.evaluate(() => window.open("/read", "_blank"));
+        await handed;
+        return await realNewPage();
+      };
+
+      // No url, so nothing after the tab opens gives the close time to land.
+      // And the popup held is counted, so tab_new does not wait for it (#226).
+      const started = Date.now();
+      const opened = await session.execute(op({ action: "tab_new", timeoutMs: 10_000 }));
+      expect(Date.now() - started).toBeLessThan(5_000);
+      expect(opened.popups).toEqual([
+        expect.objectContaining({ url: `${url}/read`, blocked: true }),
+      ]);
+      // The same result's tab list no longer has the popup it reports closed.
+      expect(opened.index).toBe(1);
+      expect((opened.tabs as Tab[]).map((tab) => tab.url)).toEqual([`${url}/`, "about:blank"]);
+      const tabs = await session.execute(op({ action: "tabs" }));
+      expect((tabs.tabs as Tab[]).length).toBe(2);
+    } finally {
+      await session.close();
+    }
+  }, 120_000);
+
+  it("reports and closes the popups held while tab_new opened its tab, when that fails", async () => {
+    const executablePath = await detectBrowserExecutable();
+    if (executablePath === undefined) return;
+    const url = await serve();
+    const session = runtime(await root("popup-tab-new-fails"), executablePath);
+    try {
+      await session.execute(op({ action: "navigate", url }));
+      const internals = session as unknown as { context: BrowserContext; activePage: Page };
+      const context = internals.context;
+      const realNewPage = context.newPage.bind(context);
+      context.newPage = async () => {
+        const handed = new Promise((done) => context.once("page", done));
+        await internals.activePage.evaluate(() => window.open("/read", "_blank"));
+        await handed;
+        throw new Error("new_page_failed");
+      };
+      await expect(session.execute(op({ action: "tab_new" }))).rejects.toThrow("new_page_failed");
+      context.newPage = realNewPage;
+
+      // The failed action could not report it; the next one does.
+      const next = await session.execute(op({ action: "tabs" }));
+      expect(next.popups).toEqual([
+        expect.objectContaining({ url: `${url}/read`, blocked: true }),
+      ]);
+      const tabs = await session.execute(op({ action: "tabs" }));
+      expect((tabs.tabs as Tab[]).map((tab) => tab.url)).toEqual([`${url}/`]);
+
+      // Nor is the tab it was opening reported when that tab dies while
+      // Playwright sets it up: Playwright hands it over closed, then rejects.
+      const targets = (session as unknown as { targets: CDPSession }).targets;
+      const handed: Page[] = [];
+      const collect = (page: Page) => void handed.push(page);
+      const kill = ({ targetInfo }: { targetInfo: { targetId: string; type: string } }) => {
+        if (targetInfo.type === "page") void targets.send("Target.closeTarget", { targetId: targetInfo.targetId }).catch(() => undefined);
+      };
+      context.on("page", collect);
+      targets.on("Target.targetCreated", kill);
+      await expect(session.execute(op({ action: "tab_new" }))).rejects.toThrow();
+      targets.off("Target.targetCreated", kill);
+      context.off("page", collect);
+      expect(handed.map((page) => page.isClosed())).toEqual([true]);
+      const quiet = await session.execute(op({ action: "tabs" }));
+      expect(quiet.popups).toBeUndefined();
+      expect((quiet.tabs as Tab[]).map((tab) => tab.url)).toEqual([`${url}/`]);
     } finally {
       await session.close();
     }
