@@ -259,9 +259,15 @@ either is refused rather than queued. The public schema also reserves
 `partially_complete`, which no command enters today.
 
 `cancelled` is entered only by `workflow cancel`. A step whose task is denied
-(`melra approve --deny`, the console's Deny) or cancelled (`melra_task_cancel`)
-did not happen, so its run is `failed`, as for a step that failed, and unwinds
-(see [Sagas across providers](#sagas-across-providers)).
+before it runs (`melra approve --deny`, the console's Deny, or
+`melra_task_cancel` on a task still planned or waiting) did not happen, so its
+run is `failed`, as for a step that failed, and unwinds (see
+[Sagas across providers](#sagas-across-providers)), unless another step's
+outcome is unknown. Cancelling a step that is already running aborts it, and
+its outcome may then be unknown (`recovery_required`). A step whose record and
+effects disagree, cancelled as a duplicate of an attempt that committed or
+still running or verifying, makes the run `recovery_required` until recovery,
+which every `melra` process start runs, settles it.
 
 Implemented event types are:
 
@@ -533,13 +539,14 @@ than stopping. A stalled unwind makes the run `recovery_required` with
 `workflow_compensation_incomplete:<node>` naming the missing inverse, and
 `advance` refuses to start new work on top of it.
 
-A denied or cancelled step starts the same unwind as a failed one, unless
+A step denied before it runs starts the same unwind as a failed one, unless
 another step's outcome is unknown: then the run is `recovery_required` and
 waits for an operator, rather than undo what that effect may depend on. Each
 compensation is still its own governed task, so one that is a mutation waits for
 its own approval, and denying it stops the unwind as a failed compensation does.
 To end a run without unwinding it, cancel the run (`workflow cancel`,
-`melra_workflow_cancel`); that also stops an unwind already under way.
+`melra_workflow_cancel`); that also stops an unwind already under way, before
+its next compensation.
 
 An interrupted mutation becomes `recovery_required` rather than being repeated,
 because the durable record can say what was in flight but not what the provider

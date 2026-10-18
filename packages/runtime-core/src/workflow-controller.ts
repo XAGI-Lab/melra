@@ -288,8 +288,7 @@ export class WorkflowController {
                 ["pending", "awaiting_approval"].includes(
                   current.nodes[node.id]?.status ?? "",
                 ) &&
-                current.nodes[node.forNodeId]?.status ===
-                  "verified_complete",
+                targetDone(definition, (id) => current.nodes[id], node.forNodeId),
             )
             .map((node) => node.id)
             .reverse()
@@ -409,10 +408,12 @@ export class WorkflowController {
         ) {
           continue;
         }
-        const targetState =
-          results.find(({ nodeId }) => nodeId === node.forNodeId)?.result
-            .state ?? current.nodes[node.forNodeId];
-        if (targetState?.status !== "verified_complete") {
+        // Checked again before each one: a compensation that ran without a
+        // prompt gives a cancel or pause time to land.
+        if (this.status(workflowId).stateVersion !== current.stateVersion) break;
+        const stateOf = (id: string) =>
+          results.find(({ nodeId }) => nodeId === id)?.result.state ?? current.nodes[id];
+        if (!targetDone(definition, stateOf, node.forNodeId)) {
           results.push({
             nodeId: node.id,
             result: {
@@ -929,6 +930,9 @@ export class WorkflowController {
   ): Promise<Array<{ nodeId: string; result: NodeAdvance }>> {
     const results: Array<{ nodeId: string; result: NodeAdvance }> = [];
     for (const nodeId of nodeIds) {
+      // A cancel or pause landed under this advance: its commit will fail, and
+      // a compensation started now would run for a run that no longer asks.
+      if (this.status(run.id).stateVersion !== run.stateVersion) break;
       const result = await this.advanceNode(
         graph.nodes.get(nodeId)!,
         definition,
@@ -1496,8 +1500,9 @@ function nodeStateForTask(
     case "running":
     case "verifying":
       // Still in flight elsewhere, or interrupted after its effect (its key may
-      // be committed). Never a failure: that would unwind past an effect that
-      // may stand. Task recovery settles it, and the run is derived again.
+      // be committed). Not a failure of its own: read as one, its run would
+      // unwind past an effect that may stand. Task recovery settles it, and
+      // the run is derived again.
       return { status: "recovery_required", taskIds: [task.id], error: "task_still_in_flight" };
     default:
       return {
@@ -1526,6 +1531,28 @@ function aggregateNodeState(
     if (state !== undefined) return { ...state, taskIds };
   }
   return { status: "verified_complete", taskIds };
+}
+
+/**
+ * Whether a compensation's target step happened. An approval node runs its
+ * operation's task itself, so the operation still reads `pending` for a wave
+ * after its effect; skipping the compensation then would undo the steps
+ * before it while this one stands.
+ */
+function targetDone(
+  definition: WorkflowDefinition,
+  stateOf: (nodeId: string) => WorkflowNodeState | undefined,
+  nodeId: string,
+): boolean {
+  return (
+    stateOf(nodeId)?.status === "verified_complete" ||
+    definition.nodes.some(
+      (node) =>
+        node.type === "approval" &&
+        node.forNodeId === nodeId &&
+        stateOf(node.id)?.status === "verified_complete",
+    )
+  );
 }
 
 /**
@@ -1641,7 +1668,9 @@ function preferredTask(
         Number(right.status === "verified_success") -
           Number(left.status === "verified_success") ||
         (right.attempt ?? 1) - (left.attempt ?? 1) ||
-        right.updatedAt.localeCompare(left.updatedAt),
+        // The newest planned, not the newest touched: cancelling a stale
+        // duplicate challenge must not make it the one the run names.
+        right.createdAt.localeCompare(left.createdAt),
     )[0];
 }
 

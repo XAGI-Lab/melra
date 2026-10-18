@@ -408,6 +408,39 @@ describe("a step an operator denies", () => {
     expect(done).toEqual(["tick", "tick", "after"]);
   });
 
+  it("does not read a stale duplicate challenge, once denied, as the step's denial", async () => {
+    const { controller, store, tasks, cipher, done } = await setup();
+    const planned = controller.plan(
+      workflow([
+        { id: "pay", type: "operation", request: put("pay") },
+        { id: "next", type: "operation", dependsOn: ["pay"], request: put("next") },
+        { id: "refund", type: "compensation", forNodeId: "pay", request: put("refund") },
+      ]),
+    );
+    let run = (await controller.advance(planned.id)).run;
+    run = (await controller.advance(planned.id, approvalsFor(run))).run;
+    expect(run.nodes.next?.status).toBe("pending");
+    // An advance planned next's challenge and lost its commit to a pause; the
+    // next one planned it again, under the same key and attempt.
+    const key = sha256({ workflowId: planned.id, nodeId: "next", iteration: 0, branch: "operation", request: put("next") });
+    const stale = tasks.plan(put("next"), { idempotencyKey: key, attempt: 1, stored: true });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    run = (await controller.advance(planned.id)).run;
+    const live = run.nodes.next!.taskIds[0]!;
+    expect(live).not.toBe(stale.id);
+    // The operator clears the stale one; any later melra process recovers.
+    tasks.cancel(stale.id);
+    const restarted = new WorkflowController(store, tasks, cipher);
+    await restarted.recoverInterrupted();
+    run = restarted.status(planned.id);
+    // Picked by last update, the cancelled stale task failed the run.
+    expect(run.status).toBe("awaiting_approval");
+    expect(run.nodes.next?.taskIds).toEqual([live]);
+    run = (await restarted.advance(planned.id, approvalsFor(run))).run;
+    expect(run.status).toBe("verified_complete");
+    expect(done).toEqual(["pay", "next"]);
+  });
+
   it("flags a run an earlier version left failed past a denied compensation", async () => {
     const { controller, done } = await setup();
     const planned = controller.plan(

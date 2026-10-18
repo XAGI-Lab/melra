@@ -117,8 +117,10 @@ All notable changes are documented here. The format follows
   Only an operator's or agent's cancel counts as a denial. A step cancelled as
   a duplicate (its effect committed under an attempt the run does not record,
   after a pause cost an advance its commit), or a step still running or
-  verifying, leaves the run `recovery_required` for recovery to settle, never
-  `failed`, so nothing is undone past an effect that stands. A condition no
+  verifying, leaves the run `recovery_required` for recovery to settle (any
+  `melra` process start runs it) and is not read as denied or failed. A step
+  an approval node already ran counts as done when deciding what to undo, and
+  an unwind stops when a cancel or pause lands under it. A condition no
   longer asks its predicate again once a branch's first step has committed, so
   the other branch cannot run as well. A read that committed its key before a
   crash recovers as verified instead of running again only to be cancelled as

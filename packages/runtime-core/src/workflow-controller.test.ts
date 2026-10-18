@@ -15,7 +15,7 @@ import {
   type WorkflowDefinition,
   type WorkflowRun,
 } from "@melra/protocol";
-import { createDefaultPolicy } from "@melra/policy-core";
+import { createDefaultPolicy, type LocalPolicy } from "@melra/policy-core";
 import { sha256 } from "@melra/receipt-schema";
 import { SqliteStore } from "@melra/storage-sqlite";
 import { Verifier } from "@melra/verifier-core";
@@ -41,6 +41,7 @@ async function setup(
     operation: Operation,
     signal?: AbortSignal,
   ) => Promise<Record<string, unknown>> = async () => ({ success: true }),
+  policy: Partial<LocalPolicy> = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "melra-workflow-controller-"));
   roots.push(root);
@@ -49,7 +50,7 @@ async function setup(
   const cipher = new PayloadCipher(Buffer.alloc(32, 17));
   const tasks = new TaskController(
     store,
-    createDefaultPolicy(root),
+    { ...createDefaultPolicy(root), ...policy },
     { execute },
     await Verifier.create(root),
     cipher,
@@ -952,6 +953,81 @@ describe("WorkflowController execution", () => {
     expect(run.nodes.ship?.status).toBe("recovery_required");
     expect(run.nodes["undo-charge"]?.status).toBe("pending");
     expect(calls).toEqual(["payments.example.test/charges"]);
+  });
+
+  it("does not skip the compensation of a step its approval node already ran", async () => {
+    const { calls, execute } = saga("none");
+    const { controller, tasks } = await setup(execute);
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Charge, approve and ship, notify",
+        nodes: [
+          { id: "charge", type: "operation", request: call("Charge", `${PAYMENTS}/charges`) },
+          { id: "approve-ship", type: "approval", forNodeId: "ship", dependsOn: ["charge"] },
+          { id: "ship", type: "operation", dependsOn: ["approve-ship"], request: call("Ship", `${LOGISTICS}/shipments`) },
+          { id: "notify", type: "operation", dependsOn: ["charge"], request: call("Notify", `${PAYMENTS}/notify`) },
+          { id: "undo-charge", type: "compensation", forNodeId: "charge", request: call("Refund", `${PAYMENTS}/refunds`) },
+          { id: "undo-ship", type: "compensation", forNodeId: "ship", request: call("Cancel shipment", `${LOGISTICS}/cancellations`) },
+        ],
+      }),
+    );
+
+    // The approval node runs the shipment; `ship` would only read it next wave.
+    const result = await settle(controller, planned.id, { tasks, nodeIds: ["notify"] });
+
+    // Read as not done, its cancellation was skipped and the charge refunded
+    // while the goods were on their way.
+    expect(calls).toEqual([
+      "payments.example.test/charges",
+      "logistics.example.test/shipments",
+      "logistics.example.test/cancellations",
+      "payments.example.test/refunds",
+    ]);
+    expect(result.run.nodes["undo-ship"]?.status).toBe("compensated");
+    expect(result.run.status).toBe("failed");
+  });
+
+  it("stops an unwind when the run is cancelled under it", async () => {
+    let cancelRun = () => {};
+    const calls: string[] = [];
+    const { controller } = await setup(
+      async (operation) => {
+        if (operation.kind !== "http") throw new Error("unexpected_operation");
+        const path = new URL(operation.url).pathname;
+        calls.push(path);
+        if (path === "/refunds") cancelRun();
+        return { success: path !== "/shipments" };
+      },
+      // Every compensation runs without waiting for an approval.
+      { unhinged: true },
+    );
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Reserve, charge, ship",
+        nodes: [
+          { id: "reserve", type: "operation", request: call("Reserve", `${LOGISTICS}/reservations`) },
+          { id: "charge", type: "operation", dependsOn: ["reserve"], request: call("Charge", `${PAYMENTS}/charges`) },
+          { id: "ship", type: "operation", dependsOn: ["charge"], request: call("Ship", `${LOGISTICS}/shipments`) },
+          { id: "undo-reserve", type: "compensation", forNodeId: "reserve", request: call("Release", `${LOGISTICS}/releases`) },
+          { id: "undo-charge", type: "compensation", forNodeId: "charge", request: call("Refund", `${PAYMENTS}/refunds`) },
+        ],
+      }),
+    );
+    // `workflow cancel` lands while the refund runs, the first step undone.
+    cancelRun = () => controller.cancel(planned.id);
+    for (let step = 0; step < 6 && controller.status(planned.id).status !== "cancelled"; step += 1) {
+      await controller.advance(planned.id).catch(() => undefined);
+    }
+
+    expect(controller.status(planned.id).status).toBe("cancelled");
+    expect(calls).toContain("/refunds");
+    expect(calls).not.toContain("/releases");
   });
 
   /** Charge, then ship and notify side by side; only the charge is undone. */
