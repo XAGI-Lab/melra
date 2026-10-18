@@ -70,7 +70,9 @@ export function nextStep(report: DoctorReport): string | undefined {
       case "workspace":
         return "point MELRA_WORKSPACE at a directory you can read and write";
       case "data-directory":
-        return "point MELRA_HOME at a directory you can write";
+        return check.status === "warn"
+          ? "make MELRA_HOME private with chmod 700 (see the data-directory line above)"
+          : "point MELRA_HOME at a directory you can write";
       case "data-location":
         return check.detail.startsWith("could not resolve the workspace")
           ? "point MELRA_WORKSPACE at a directory you can read and write"

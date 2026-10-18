@@ -547,12 +547,15 @@ async function doctor(env: CliEnvironment): Promise<{
     });
   }
   try {
-    await mkdir(env.dataDirectory, { recursive: true });
+    await mkdir(env.dataDirectory, { recursive: true, mode: 0o700 });
     await access(env.dataDirectory, constants.R_OK | constants.W_OK);
+    // Created private above. One that already existed is left as it is, but
+    // said to be open: the task database inside is private, its directory not.
+    const open = process.platform !== "win32" && ((await stat(env.dataDirectory)).mode & 0o077) !== 0;
     checks.push({
       name: "data-directory",
-      status: "pass",
-      detail: env.dataDirectory,
+      status: open ? "warn" : "pass",
+      detail: open ? `${env.dataDirectory} can be read by other users; run chmod 700 on it` : env.dataDirectory,
     });
   } catch {
     checks.push({
@@ -566,7 +569,7 @@ async function doctor(env: CliEnvironment): Promise<{
   // whose guardrails warning already says so.
   if (
     !env.unhinged &&
-    checks.every((check) => !["workspace", "data-directory"].includes(check.name) || check.status === "pass")
+    checks.every((check) => !["workspace", "data-directory"].includes(check.name) || check.status !== "fail")
   ) {
     try {
       const inside = await workspaceHoldsData(env.workspaceRoot, env.dataDirectory);
@@ -666,7 +669,7 @@ async function doctor(env: CliEnvironment): Promise<{
 }
 
 async function init(args: string[], env: CliEnvironment): Promise<InitResult> {
-  await mkdir(env.dataDirectory, { recursive: true });
+  await mkdir(env.dataDirectory, { recursive: true, mode: 0o700 });
   // The operator's MELRA_POLICY when there is one: writing the default path
   // into the client config instead quietly swapped their policy for ours.
   const policyPath = env.policyPath ?? join(env.dataDirectory, "policy.json");

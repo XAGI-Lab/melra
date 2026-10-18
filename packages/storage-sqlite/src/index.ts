@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, rmSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { MemoryScope, TaskRecord } from "./types.js";
@@ -115,6 +115,23 @@ function parseStored<T>(
   }
 }
 
+/**
+ * Task records, events and receipts are for the user running MELRA alone:
+ * the database, and the WAL and shared-memory files SQLite gives the same
+ * mode, are made private if anything left them wider. `chmod`, never an open:
+ * closing any descriptor to the file would drop the locks SQLite holds on it.
+ */
+function keepPrivate(path: string): void {
+  if (process.platform === "win32") return;
+  for (const file of [path, `${path}-wal`, `${path}-shm`]) {
+    try {
+      if ((statSync(file).mode & 0o077) !== 0) chmodSync(file, 0o600);
+    } catch {
+      // Not there yet, or not ours to change: SQLite creates the WAL files later, from the database's mode.
+    }
+  }
+}
+
 export class SqliteStore {
   readonly path: string;
   readonly database: DatabaseSync;
@@ -142,8 +159,19 @@ export class SqliteStore {
       this.database.exec("PRAGMA busy_timeout = 5000");
       return;
     }
-    if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
+    if (path !== ":memory:") {
+      mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+      // A new database is created private, not made so after SQLite has
+      // created it at its default mode. `wx` opens only a file it creates,
+      // never one this process may already hold SQLite locks on.
+      try {
+        closeSync(openSync(path, "wx", 0o600));
+      } catch {
+        // Already there (kept private below), or SQLite says why it cannot be.
+      }
+    }
     this.database = new DatabaseSync(path);
+    if (path !== ":memory:") keepPrivate(path);
     this.database.exec("PRAGMA busy_timeout = 5000");
     this.database.exec("PRAGMA journal_mode = WAL");
     this.database.exec("PRAGMA foreign_keys = ON");
@@ -405,7 +433,7 @@ export class SqliteStore {
     const id = randomUUID();
     if (this.path === ":memory:") return (this.owner = { id }).id;
     const directory = `${this.path}-owners`;
-    mkdirSync(directory, { recursive: true });
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
     this.pruneOwners(directory);
     const file = join(directory, id);
     const lock = new DatabaseSync(file);

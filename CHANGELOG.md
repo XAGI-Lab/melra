@@ -216,6 +216,13 @@ All notable changes are documented here. The format follows
   not: one left exported in a shell made every Python app's server run in
   unsafe-local mode. Pass either in `environment` to mean it.
 
+- `MELRA_HOME` is created private (mode `0700`) by `melra setup`, `init` and
+  `doctor`, by the server's task store, and in the container image (`/data`);
+  they could be created readable by other local users. The store creates the
+  task database `0600` and keeps it so. `doctor` warns when an existing
+  `MELRA_HOME` is readable by others, says to `chmod 700` it, and leaves it as
+  it is; a named Docker volume made by an older image keeps its old mode.
+
 - A browser input action (`click`, `type`, `fill_form`, `select`, `press`,
   `upload`, `download`) is held to the page its checks read, the `url` it
   names and the approval-surface marker, and its target to the document it

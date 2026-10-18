@@ -37,7 +37,8 @@ WORKDIR /opt/melra
 COPY --from=build --chown=node:node /release ./
 
 RUN mkdir -p /workspace /data \
-    && chown -R node:node /workspace /data
+    && chown -R node:node /workspace /data \
+    && chmod 700 /data
 
 USER node
 VOLUME ["/workspace", "/data"]

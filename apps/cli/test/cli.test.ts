@@ -3,7 +3,7 @@
 
 import { execFile, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -1510,6 +1510,28 @@ describe("melra CLI", () => {
     };
     expect(initialized.config.mcpServers.melra.env.MELRA_WORKSPACE).toBe(second);
     expect(JSON.parse(await readFile(initialized.policyPath, "utf8"))).not.toHaveProperty("workspaceRoot");
+  });
+
+  it("creates MELRA_HOME private, and says when one it finds is not", async () => {
+    if (process.platform === "win32") return;
+    const root = await mkdtemp(join(tmpdir(), "melra-private-home-"));
+    roots.push(root);
+    const env = { ...process.env, MELRA_WORKSPACE: root, MELRA_POLICY: "" };
+    const home = join(root, "home");
+    await execute(process.execPath, [entry, "init", "--client", "claude"], { cwd: root, env: { ...env, MELRA_HOME: home } });
+    expect((await stat(home)).mode & 0o777).toBe(0o700);
+    // One made earlier and left open is reported, and left as it is.
+    const open = join(root, "open");
+    await mkdir(open);
+    await chmod(open, 0o755);
+    const result = await execute(process.execPath, [entry, "doctor"], { cwd: root, env: { ...env, MELRA_HOME: open } }).catch(
+      (error: { stdout: string }) => error,
+    );
+    const check = (JSON.parse(result.stdout) as { checks: Array<{ name: string; status: string; detail: string }> }).checks.find(
+      (entry) => entry.name === "data-directory",
+    );
+    expect(check).toMatchObject({ status: "warn", detail: expect.stringContaining("chmod 700") });
+    expect((await stat(open)).mode & 0o777).toBe(0o755);
   });
 
   it("writes the operator's MELRA_POLICY into the client config, and refuses one that is missing", async () => {
