@@ -199,10 +199,11 @@ describe("a window whose first response never comes (#226)", () => {
       const late = context.waitForEvent("page", { predicate: (page) => page.url().includes("?late") });
       late.catch(() => undefined);
       // The next click opens a window of its own, and while it waits for that
-      // one, the window given up on is handed over.
+      // one (past its settle), the window given up on is handed over.
       const clicking = run({ action: "click", target: { selector: "#later" }, timeoutMs: 15_000 });
       clicking.catch(() => undefined);
       while (!held.has("later")) await new Promise((done) => setTimeout(done, 25));
+      await new Promise((done) => setTimeout(done, 600));
       release("late");
       await late;
       // It stands in for nothing: the click still waits for its own window.
