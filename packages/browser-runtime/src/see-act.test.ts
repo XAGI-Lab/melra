@@ -841,7 +841,9 @@ describe("browser see/act loop", () => {
     try {
       await runtime.execute(BrowserOperationSchema.parse({ kind: "browser", action: "navigate", url }));
       // While it reloads: a poll that lands on a reload says nothing about
-      // hidden, so a target on every document never reads as hidden.
+      // hidden, so a target on every document never reads as hidden. Which
+      // refusal ends the wait depends on where its last poll lands: on a
+      // reload, the secret check after it could not answer either (#236).
       await expect(
         runtime.execute(
           BrowserOperationSchema.parse({
@@ -852,7 +854,7 @@ describe("browser see/act loop", () => {
             timeoutMs: 1_200,
           }),
         ),
-      ).rejects.toThrow("browser_wait_timeout");
+      ).rejects.toThrow(/^browser_(wait_timeout|secret_check_unavailable)/);
       for (let round = 0; round < 15; round += 1) {
         const waited = await runtime.execute(
           BrowserOperationSchema.parse({
