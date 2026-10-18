@@ -1,8 +1,9 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
+  chmod,
   lstat,
   mkdir,
   readFile,
@@ -278,9 +279,18 @@ export class FileRuntime {
         const buffer = Buffer.from(operation.content, operation.encoding);
         if (buffer.byteLength > this.maxFileBytes) throw new Error("file_size_limit_exceeded");
         await mkdir(dirname(path), { recursive: true });
-        const temporary = `${path}.melra-${randomUUID()}.tmp`;
-        await writeFile(temporary, buffer, { flag: "wx" });
+        // A short name beside it, not one built from it: the target's own name
+        // may already be as long as the file system allows.
+        const temporary = join(dirname(path), `.melra-${randomBytes(6).toString("hex")}.tmp`);
+        // The file it replaces keeps its permissions: a private one stays
+        // private and a script stays executable. Written private, then set
+        // exactly, past the umask; the setuid, setgid and sticky bits are not
+        // carried over. A new file gets the default mode, as before.
+        const replaced = await stat(path).catch(() => undefined);
+        const kept = replaced?.isFile() === true ? replaced.mode & 0o777 : undefined;
+        await writeFile(temporary, buffer, { flag: "wx", ...(kept === undefined ? {} : { mode: 0o600 }) });
         try {
+          if (kept !== undefined) await chmod(temporary, kept);
           await rename(temporary, path);
         } catch (error) {
           // A rename that failed (the target is a directory, or held open on

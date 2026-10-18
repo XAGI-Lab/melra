@@ -211,6 +211,11 @@ All notable changes are documented here. The format follows
 
 ### Security
 
+- `file.write` keeps the permissions of a file it replaces: a private file
+  stayed private only until it was written, when it came back with the default
+  mode, and a script lost its execute bit. A file with a name near the file
+  system's length limit can now be written too.
+
 - `MELRA_HOME` is created private (mode `0700`) by `melra setup`, `init` and
   `doctor`, by the server's task store, and in the container image (`/data`);
   they could be created readable by other local users. The store creates the
