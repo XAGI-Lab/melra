@@ -334,7 +334,6 @@ describe("TerminalRuntime", () => {
     const root = await mkdtemp(join(tmpdir(), "melra-terminal-"));
     roots.push(root);
     const runtime = await TerminalRuntime.create({ root });
-    const pids: number[] = [];
     // The program starts a process in its own group and exits at once. That
     // process ignores SIGTERM, as a server it started might.
     const leftover =
@@ -355,7 +354,6 @@ describe("TerminalRuntime", () => {
       }
       expect(await status()).toMatchObject({ running: false });
       const pid = Number(await readFile(join(root, name), "utf8"));
-      pids.push(pid);
       expect(alive(pid)).toBe(true);
       return { jobId: started.jobId, pid };
     };
@@ -369,15 +367,12 @@ describe("TerminalRuntime", () => {
       expect(alive(timed.pid)).toBe(false);
       expect(alive(closed.pid)).toBe(true);
       await runtime.close();
+      // Killed before close() resolved; macOS reaps the zombie a moment later.
+      await until(() => !alive(closed.pid), 1_000);
       expect(alive(closed.pid)).toBe(false);
     } finally {
-      for (const pid of pids) {
-        try {
-          process.kill(pid, "SIGKILL");
-        } catch {
-          // Gone, as it should be.
-        }
-      }
+      // Whatever an early failure left running: close() stops each job's group.
+      await runtime.close();
     }
   }, 30_000);
 

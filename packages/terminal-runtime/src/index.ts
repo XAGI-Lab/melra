@@ -247,6 +247,14 @@ interface BackgroundJob {
    * signalled: an empty group's id can be reused by an unrelated one.
    */
   watch?: NodeJS.Timeout;
+  /**
+   * When supervision ends regardless: the job's timeout and the SIGKILL after
+   * it have both had their turn, so whatever still answers in the group is a
+   * zombie nothing reaps (node as PID 1 in a container without an init) or a
+   * process no signal of ours can end. Waiting on it would hold the job, and
+   * its slot among MAX_JOBS, for as long as the server runs.
+   */
+  until: number;
 }
 
 /** Whether the job's program has exited and left processes in its group. */
@@ -264,7 +272,7 @@ function releaseWhenEmpty(job: BackgroundJob): void {
     return;
   }
   job.watch = setInterval(() => {
-    if (groupAlive(job.child)) return;
+    if (groupAlive(job.child) && Date.now() < job.until) return;
     clearTimeout(job.timer);
     clearInterval(job.watch);
     delete job.watch;
@@ -282,6 +290,7 @@ export class TerminalRuntime {
   private readonly holdsReserved: (path: string) => Promise<boolean>;
   private readonly confineArguments: boolean;
   private readonly jobs = new Map<string, BackgroundJob>();
+  private closed = false;
 
   private constructor(
     options: TerminalRuntimeOptions,
@@ -520,6 +529,7 @@ export class TerminalRuntime {
       truncated: false,
       startedAt: new Date().toISOString(),
       timer,
+      until: Date.now() + prepared.timeoutMs + KILL_GRACE_MS + GROUP_POLL_MS,
     };
     const append = (current: string, chunk: string): string => {
       const next = current + chunk;
@@ -552,7 +562,10 @@ export class TerminalRuntime {
       job.exitCode = exitCode;
       job.signal = terminationSignal;
       job.endedAt = new Date().toISOString();
-      releaseWhenEmpty(job);
+      // After close() the job is no longer ours to watch: close() has already
+      // stopped what it could and waited for it.
+      if (this.closed) clearTimeout(timer);
+      else releaseWhenEmpty(job);
     });
     // `spawn` only reports a failed start asynchronously, so returning as soon
     // as the call came back reported `started: true` for a command that never
@@ -681,6 +694,7 @@ export class TerminalRuntime {
    * process teardown and got EBUSY.
    */
   async close(): Promise<void> {
+    this.closed = true;
     const exits = [...this.jobs.values()].map(async (job) => {
       clearTimeout(job.timer);
       // Exited, but what it started may still be running in its group.

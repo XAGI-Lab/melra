@@ -222,8 +222,12 @@ All notable changes are documented here. The format follows
   process group under supervision until that group is empty. Once the program
   exited, `stop`, the job's `timeoutMs` and the runtime's `close()` stopped
   signalling them, so they could outlive the job and the server, while `stop`
-  still reported `stopped: true`. POSIX only: Windows has no process groups. A
-  process that leaves the group (`setsid`) is still out of reach.
+  still reported `stopped: true`. Supervision ends with the job's timeout and
+  the SIGKILL after it. POSIX only: Windows has no process groups. A process
+  that leaves the group (`setsid`) is still out of reach. `compose.yaml` and
+  the documented `docker run` now start the container with an init (`init:
+  true`, `--init`), so a process a job leaves behind is reaped when it exits;
+  Node as PID 1 reaped only the processes it started.
 
 - `file.write` keeps the permissions of a file it replaces: a private file
   stayed private only until it was written, when it came back with the default
