@@ -840,6 +840,16 @@ wins, so a policy file that pinned it is not loosened by an unset variable, and 
 typo (`MELRA_MODE=enfroced`) fails loudly rather than leaving a machine in
 developer mode with a config that claims otherwise.
 
+A client starts the server with the `env` in its config, not with the flags
+`melra setup` or `melra init` ran with. So in enforced mode they write
+`MELRA_MODE=enforced` into the entry they generate, and `"mode": "enforced"`
+into the policy file when they create one. That file is the shared
+`~/.melra/policy.json` unless `MELRA_POLICY` names another, so every server
+that reads it runs enforced. A policy file that already exists is left as it
+is. An entry they rewrite gets the mode they run in, so rerun them with the
+same `--mode`. `melra conformance` passes `--mode` and `--unsafe-local` to the
+server it starts the same way, as `MELRA_MODE` and `MELRA_UNHINGED`.
+
 A `melra conformance` run against an enforced endpoint swaps checks rather than
 earning any: one L2 check (`wrong-phrase-is-refused`) gives way to two
 (`approval-credential-withheld`, `in-band-approval-refused`), and one L3 check

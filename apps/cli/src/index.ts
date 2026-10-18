@@ -681,8 +681,10 @@ async function init(args: string[], env: CliEnvironment): Promise<InitResult> {
     }
     // No `workspaceRoot`: this file is shared by every project's server, and
     // each config `setup` writes names its own workspace in MELRA_WORKSPACE.
+    // In the mode asked for, so `approve` and `console` run from a shell agree
+    // with the server on it; a policy that already exists is the operator's.
     const { workspaceRoot: _shared, ...policy } = createDefaultPolicy(env.workspaceRoot);
-    await writeFile(policyPath, `${JSON.stringify(policy, null, 2)}\n`, { flag: "wx" });
+    await writeFile(policyPath, `${JSON.stringify({ ...policy, mode: env.mode }, null, 2)}\n`, { flag: "wx" });
   }
   const client = resolveClient(argument("--client", args) ?? "generic");
   const label = CLIENTS[client]?.label ?? client;
@@ -692,6 +694,9 @@ async function init(args: string[], env: CliEnvironment): Promise<InitResult> {
       MELRA_WORKSPACE: env.workspaceRoot,
       MELRA_HOME: env.dataDirectory,
       MELRA_POLICY: policyPath,
+      // The client starts the server with this env, not with our flags: without
+      // it `--mode enforced` would be reported here and a developer server run.
+      ...(env.mode === "enforced" ? { MELRA_MODE: "enforced" } : {}),
     },
   });
   const configPath = clientConfigPath(client, env.workspaceRoot);
@@ -1111,6 +1116,11 @@ async function main(): Promise<void> {
         ...(url === undefined ? {} : { url }),
         ...(token === undefined ? {} : { token }),
         ...(level === undefined ? {} : { claim: Number(level) }),
+        // This process's flags, which a server it spawns gets only as env.
+        serverEnv: {
+          ...(env.mode === "enforced" ? { MELRA_MODE: "enforced" } : {}),
+          ...(env.unhinged ? { MELRA_UNHINGED: "1" } : {}),
+        },
       });
       printJsonOrHuman(report as unknown as ConformanceReport, renderConformance, args);
       process.exitCode = failed ? 1 : 0;
