@@ -278,19 +278,25 @@ async function listenOnSocket(server: Server, path: string): Promise<void> {
   }
 }
 
+/**
+ * The port `MELRA_HTTP_PORT` names, or undefined when it is unset, blank or not
+ * a port. `0` is kept: it asks for any free port. Unset used to read as
+ * `Number("")`, which is 0, so a plain `serve --http` took a random port
+ * instead of the documented 7457 that `status` and every client probe.
+ */
+export function configuredHttpPort(environment: NodeJS.ProcessEnv): number | undefined {
+  const raw = environment.MELRA_HTTP_PORT?.trim();
+  if (raw === undefined || raw === "") return undefined;
+  const port = Number(raw);
+  return Number.isInteger(port) && port >= 0 && port <= 65_535 ? port : undefined;
+}
+
 export async function serveHttp(
   options: MelraHttpOptions,
 ): Promise<MelraHttpServer> {
   const environment = options.environment ?? process.env;
   const host = options.host ?? "127.0.0.1";
-  const configuredPort = Number(environment.MELRA_HTTP_PORT ?? "");
-  const port =
-    options.port ??
-    (Number.isInteger(configuredPort) &&
-    configuredPort >= 0 &&
-    configuredPort <= 65_535
-      ? configuredPort
-      : DEFAULT_HTTP_PORT);
+  const port = options.port ?? configuredHttpPort(environment) ?? DEFAULT_HTTP_PORT;
   // An approval console has no standing token, only a code that one tab can
   // spend once for a session. Fixed or inherited, a token is one written down
   // somewhere, which a harness that started this process may have read.
