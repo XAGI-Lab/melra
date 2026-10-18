@@ -1149,7 +1149,8 @@ async function main(): Promise<void> {
       // socket only they can open and a port anyone local can is the point.
       if (
         socketPath !== undefined &&
-        (http || port !== undefined || args.includes("--open"))
+        // The flag, not its value: a --port with nothing after it is still one.
+        (http || args.includes("--port") || args.includes("--open"))
       ) {
         throw new Error(
           "--socket replaces --http, --port, and --open; pass one transport",

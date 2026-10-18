@@ -1212,6 +1212,11 @@ describe("melra CLI", () => {
         execute(process.execPath, [entry, "serve", "--http", ...args], options),
       ).rejects.toMatchObject({ stderr: expect.stringContaining("--port requires a port") });
     }
+    // With --socket the transports conflict first, value or not: telling a
+    // socket user to pass 0 only gets them refused for mixing transports.
+    await expect(
+      execute(process.execPath, [entry, "serve", "--socket", join(root, "s.sock"), "--port"], options),
+    ).rejects.toMatchObject({ stderr: expect.stringContaining("--socket replaces") });
   }, 60_000);
 
   it("serves on a socket only with --socket, and doctor reports the socket's mode", async () => {
