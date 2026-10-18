@@ -399,6 +399,35 @@ describe("OAuthProvider", () => {
     expect(new OAuthProvider(join(home, "revoke")).clientFor(token)).toBeUndefined();
   });
 
+  it("lists a revoked client as needing approval again", () => {
+    const directory = join(home, "relist");
+    const { id } = issue(new OAuthProvider(directory), "agent");
+    new OAuthProvider(directory).revoke(id);
+    // Its tokens were gone, and it still read `approved`.
+    expect(new OAuthProvider(directory).clients().find((client) => client.id === id)?.approvedAt).toBeUndefined();
+  });
+
+  it("does not redeem a code issued before another process revoked the client", () => {
+    const directory = join(home, "late-code");
+    const server = new OAuthProvider(directory);
+    const id = server.register({ client_name: "agent", redirect_uris: [REDIRECT] }).client_id as string;
+    const verifier = randomBytes(32).toString("base64url");
+    const challenge = createHash("sha256").update(verifier).digest("base64url");
+    const code = new URL(
+      server.decide(
+        new URLSearchParams({ client_id: id, redirect_uri: REDIRECT, code_challenge: challenge, decision: "approve" }),
+      ),
+    ).searchParams.get("code")!;
+    // `melra clients --revoke` cannot reach the server's codes, which live for minutes.
+    new OAuthProvider(directory).revoke(id);
+    expect(() =>
+      server.token(
+        new URLSearchParams({ grant_type: "authorization_code", code, client_id: id, code_verifier: verifier }),
+      ),
+    ).toThrow("invalid_grant");
+    expect(new OAuthProvider(directory).clients().find((client) => client.id === id)?.approvedAt).toBeUndefined();
+  });
+
   it("never lets a registration flood evict an approved client", () => {
     const provider = new OAuthProvider(join(home, "flood"));
     const { token } = issue(provider, "approved");

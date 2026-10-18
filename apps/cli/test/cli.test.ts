@@ -1222,6 +1222,21 @@ describe("melra CLI", () => {
     expect(JSON.parse(deprecated.stdout).unhinged).toBe(true);
   });
 
+  it("refuses to revoke a client that is not registered, or nothing at all", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-cli-"));
+    roots.push(root);
+    const options = { cwd: root, env: { ...process.env, MELRA_HOME: join(root, ".melra"), MELRA_WORKSPACE: root } };
+    // A mistyped id reported "Revoked 0 tokens" and exited 0; a bare --revoke listed the clients.
+    await expect(execute(process.execPath, [entry, "clients", "--revoke", "nope"], options)).rejects.toMatchObject({
+      code: 1,
+      stderr: expect.stringContaining("no such client: nope"),
+    });
+    await expect(execute(process.execPath, [entry, "clients", "--revoke"], options)).rejects.toMatchObject({
+      code: 1,
+      stderr: expect.stringContaining("--revoke requires a client id"),
+    });
+  });
+
   it("refuses a blank --port instead of taking a random one", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-cli-"));
     roots.push(root);

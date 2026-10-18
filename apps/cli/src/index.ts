@@ -898,11 +898,19 @@ async function policyTest(args: string[], env: CliEnvironment): Promise<void> {
 function clientsCommand(args: string[], env: CliEnvironment): number {
   const oauth = new OAuthProvider(env.dataDirectory);
   const revoke = argument("--revoke", args);
-  if (revoke !== undefined) {
+  if (args.includes("--revoke")) {
+    // A bare --revoke listed the clients and exited 0, and a mistyped id
+    // reported a revocation that touched nothing.
+    if (revoke === undefined || revoke.trim() === "") {
+      throw new Error("--revoke requires a client id, or all");
+    }
+    if (revoke !== "all" && !oauth.clients().some((client) => client.id === revoke)) {
+      throw new Error(`no such client: ${printable(revoke)}; 'melra clients' lists them`);
+    }
     const dropped = oauth.revoke(revoke === "all" ? undefined : revoke);
     process.stdout.write(
       `Revoked ${dropped} token${dropped === 1 ? "" : "s"}. ` +
-        `The client must be approved again before it can act.\n`,
+        `${revoke === "all" ? "Every client" : "The client"} must be approved again before it can act.\n`,
     );
     return 0;
   }
