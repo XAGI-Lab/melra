@@ -175,6 +175,16 @@ describe("human doctor report", () => {
     expect(nextStep(unresolved)).toBe("point MELRA_WORKSPACE at a directory you can read and write");
   });
 
+  it("says to make an open data directory private, not to move it", () => {
+    const open = report({
+      checks: [{ name: "data-directory", status: "warn", detail: "/h/.melra can be read by other users; run chmod 700 on it" }],
+      clients: [],
+    });
+    expect(nextStep(open)).toBe("make MELRA_HOME private with chmod 700 (see the data-directory line above)");
+    const unwritable = report({ checks: [{ name: "data-directory", status: "fail", detail: "/h/.melra" }], clients: [] });
+    expect(nextStep(unwritable)).toBe("point MELRA_HOME at a directory you can write");
+  });
+
   it("says what clears an attached browser's warning, which no install does", () => {
     const browser = (detail: string) => report({ checks: [{ name: "browser", status: "warn", detail }], clients: [] });
     expect(nextStep(browser("attached over CDP to http://127.0.0.1:9/: any tab open there is a tab_switch away"))).toBe(
