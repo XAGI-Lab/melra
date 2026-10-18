@@ -440,7 +440,7 @@ export class BrowserRuntime {
   private closing: Promise<unknown>[] = [];
   /** True only while `tab_new` is opening the tab the caller asked for. */
   private openingTab = false;
-  /** Pages handed over while `openPage` is in flight, queued until `newPage` resolves. */
+  /** In a launched browser, pages handed over while `openPage`'s `newPage` is in flight, held until it settles. */
   private openingPagesQueue: Page[] | undefined = undefined;
   /**
    * The windows this runtime owns, by CDP target id: tabs it opened, and every
@@ -1084,14 +1084,17 @@ export class BrowserRuntime {
     const queued: Page[] = [];
     this.openingTab = true;
     this.openingPagesQueue = queued;
-    // Every page queued is counted, and any but the tab `newPage` returned —
-    // all of them, if it failed — is a window a page opened.
+    // Every page queued is counted, and any but the tab `newPage` returned is
+    // a window a page opened. If it failed, the tab it was opening may be
+    // queued all the same: Playwright closes that one before it rejects, still
+    // blank, so a closed blank page is taken for it and not reported.
     const sortQueued = (tab?: Page) => {
       this.openingTab = false;
       this.openingPagesQueue = undefined;
       return queued.flatMap((page) => {
         this.windowsAdopted += 1;
-        return (page === tab ? undefined : this.adopt(page)) ?? [];
+        const mine = tab === undefined ? page.isClosed() && page.url() === "about:blank" : page === tab;
+        return (mine ? undefined : this.adopt(page)) ?? [];
       });
     };
     let opened: Page;

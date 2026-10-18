@@ -275,6 +275,19 @@ describe("browser popups", () => {
       ]);
       const tabs = await session.execute(op({ action: "tabs" }));
       expect((tabs.tabs as Tab[]).map((tab) => tab.url)).toEqual([`${url}/`]);
+
+      // Nor is the tab it was opening reported, when Playwright hands it over
+      // and then fails, closing it first.
+      context.newPage = async () => {
+        const tab = await realNewPage();
+        await tab.close();
+        throw new Error("Page has been closed.");
+      };
+      await expect(session.execute(op({ action: "tab_new" }))).rejects.toThrow("Page has been closed.");
+      context.newPage = realNewPage;
+      const quiet = await session.execute(op({ action: "tabs" }));
+      expect(quiet.popups).toBeUndefined();
+      expect((quiet.tabs as Tab[]).map((tab) => tab.url)).toEqual([`${url}/`]);
     } finally {
       await session.close();
     }
