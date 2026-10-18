@@ -235,7 +235,10 @@ describe("browser popups", () => {
       };
 
       // No url, so nothing after the tab opens gives the close time to land.
-      const opened = await session.execute(op({ action: "tab_new" }));
+      // And the popup held is counted, so tab_new does not wait for it (#226).
+      const started = Date.now();
+      const opened = await session.execute(op({ action: "tab_new", timeoutMs: 10_000 }));
+      expect(Date.now() - started).toBeLessThan(5_000);
       expect(opened.popups).toEqual([
         expect.objectContaining({ url: `${url}/read`, blocked: true }),
       ]);
