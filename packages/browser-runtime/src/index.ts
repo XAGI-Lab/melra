@@ -1090,7 +1090,8 @@ export class BrowserRuntime {
     // closed it, so a closed page queued last is taken for that tab.
     //
     // ponytail: a window a page opened that is handed over last and closed
-    // itself already, during a `newPage` that fails, is counted, not reported.
+    // itself already, during a `newPage` that fails, is counted, not reported;
+    // telling windows apart by target id would end this (#234).
     const sortQueued = (tab?: Page) => {
       this.openingTab = false;
       this.openingPagesQueue = undefined;

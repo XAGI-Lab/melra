@@ -97,7 +97,9 @@ All notable changes are documented here. The format follows
   the tab it returned is counted as the runtime's own, and every other one is
   reported, and closed in block mode, before `tab_new` lists the tabs. If
   `newPage` fails, the windows a page opened meanwhile are closed the same way
-  and reported by the next action. (#233)
+  and reported by the next action, except one that has already closed itself
+  and is handed over last: that one is taken for the tab `newPage` was
+  opening, counted but not reported (#234). (#233)
 
 - A popup the runtime waits for whose first response never arrives now holds
   up only the action that opened it, which still waits its `timeoutMs` for it,
