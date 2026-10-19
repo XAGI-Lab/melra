@@ -109,6 +109,11 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- A process whose database is closed while a workflow advance is still
+  running, as at shutdown, no longer dies on an uncaught `database is not
+  open` from the lease renewal timer. The timer stops renewing, and the
+  advance fails on its own next write.
+
 - A workflow with an `exit_code` evidence predicate can be planned, and so can
   one with a node id, verifier name or URL that looks like an API key
   (`api-integration-tests`). Planning parsed the redacted copy it stores
