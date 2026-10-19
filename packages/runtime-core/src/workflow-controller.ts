@@ -1878,11 +1878,7 @@ function sequenceFinished(node: WorkflowNode, found: Array<TaskRecord | undefine
   return true;
 }
 
-/**
- * The task a workflow takes for an idempotency key: a verified one, else the
- * highest attempt, else the newest planned.
- */
-export function preferredTask(
+function preferredTask(
   tasks: TaskRecord[],
   idempotencyKey: string,
 ): TaskRecord | undefined {

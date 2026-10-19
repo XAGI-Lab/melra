@@ -17,7 +17,6 @@ import {
   type WorkflowRun,
 } from "@melra/protocol";
 import { approvalTtl, classifyOperation, loadPolicy, type LocalPolicy } from "@melra/policy-core";
-import { preferredTask } from "@melra/runtime-core";
 import { SqliteStore } from "@melra/storage-sqlite";
 import type { CliEnvironment } from "./environment.js";
 import { isHuman, paint, table } from "./output.js";
@@ -142,15 +141,13 @@ function expiredHints({ expired, expiredSteps }: ApprovalCounts): string[] {
     ...(expired > 0
       ? [`${expired} whose approval expired — plan again, or clear with \`melra approve <task-id> --deny\``]
       : []),
-    // Not a deny first: on a run that can go on, the next advance asks again,
-    // and a deny would fail the run or stall its unwind. Whether it can go on
-    // is the run's to say, so the hint points there rather than guess; a
-    // challenge whose key no run names (a lost commit) may be a leftover of
-    // one that is over, which only a deny clears. A failed run is not over:
-    // its unwind asks a compensation again, and a deny stalls it.
+    // No deny: where the run can go on, its next advance asks again, and a
+    // deny would fail it or stall its unwind. Which run a task is from, and
+    // whether that run can go on, the task alone cannot say, so the hint
+    // points at the run and states what each would do rather than advise.
     ...(expiredSteps > 0
       ? [
-          `${expiredSteps} workflow step(s) whose approval expired — \`melra workflow inspect <workflow-id>\` shows the run; its next advance asks again where it can go on, and on a cancelled or verified_complete run \`melra approve <task-id> --deny\` clears it (on a failed run never deny a compensation: its unwind asks again)`,
+          `${expiredSteps} workflow step(s) whose approval expired — see its run with \`melra workflow inspect <workflow-id>\`: where the run can go on, its next advance asks again, and a deny would fail the run or stall its unwind`,
         ]
       : []),
   ];
@@ -166,27 +163,22 @@ interface ApprovalCounts {
 }
 
 /**
- * Whether an expired task is a step its run's next advance asks again. Only a
- * workflow plans under an idempotency key; a run that is over never advances,
- * and of the attempts under one key the runtime, and the recovery every CLI
- * process runs at start, take the one `preferredTask` picks. A key no run
- * names (its plan's commit lost) is counted as a step: denied, it fails a run
- * that can go on, and its hint says how a leftover of a run that is over is
- * cleared.
+ * Whether an expired task is a workflow's. Only a workflow plans under an
+ * idempotency key, so a keyed task is one, unless a run that is over (it never
+ * advances again) names a task under that key: only a deny clears that one,
+ * and harmlessly.
  */
 function stepJudge(store: SqliteStore, runs: () => WorkflowRun[]): (task: TaskRecord) => boolean {
   let over: Set<string> | undefined;
-  let every: TaskRecord[] | undefined;
   return (task) => {
-    const key = task.idempotencyKey;
-    if (key === undefined) return false;
+    if (task.idempotencyKey === undefined) return false;
     over ??= new Set(
       runs()
         .filter((run) => run.status === "cancelled" || run.status === "verified_complete")
         .flatMap((run) => Object.values(run.nodes).flatMap((node) => node.taskIds))
         .flatMap((taskId) => store.getTask(taskId)?.idempotencyKey ?? []),
     );
-    return !over.has(key) && preferredTask((every ??= store.listTasks(100_000)), key)?.id === task.id;
+    return !over.has(task.idempotencyKey);
   };
 }
 
@@ -218,10 +210,7 @@ function approvalCounts(
       counts.waiting += 1;
       continue;
     }
-    // Judged only once something has expired: a store keeps every run. A
-    // leftover step of a run that is over is cleared the plain way, as
-    // advance's own first check would have it; so is a duplicate challenge a
-    // lost commit left beside the attempt the run goes on with.
+    // Judged only once something has expired: a store keeps every run.
     if ((step ??= stepJudge(store, runs))(task)) {
       counts.expiredSteps += 1;
     } else counts.expired += 1;

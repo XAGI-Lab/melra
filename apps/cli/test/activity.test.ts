@@ -276,7 +276,7 @@ describe("melra tasks, status, and watch", () => {
     expect([status.expiredApprovals, status.expiredWorkflowSteps]).toEqual([0, 1]);
   });
 
-  it("counts a duplicate challenge no advance takes the plain way, though it shares the step's key", async () => {
+  it("counts a duplicate challenge beside a run's step as a step, so no hint points a deny at the step", async () => {
     const { root, options } = await workspace();
     const workflow = async (...args: string[]) =>
       JSON.parse(
@@ -290,8 +290,9 @@ describe("melra tasks, status, and watch", () => {
     await workflow("advance", id);
     const { run } = await workflow("advance", id);
     // What an advance whose commit a pause made fail leaves when the next one
-    // plans the step again: an earlier duplicate under the same key, waiting,
-    // which the run never names and its advances never take.
+    // plans the step again: an earlier duplicate under the same key, waiting.
+    // Which of the two the run goes on with the task alone cannot say, and
+    // denied, that one fails the run.
     const store = new SqliteStore(join(root, ".melra", "melra.sqlite"));
     let orphan: string;
     try {
@@ -307,9 +308,8 @@ describe("melra tasks, status, and watch", () => {
       store.close();
     }
     lapse(root, orphan);
-    // Pointed at the run, it was told the next advance asks again; none does.
     const status = await statusOf(options);
-    expect([status.expiredApprovals, status.expiredWorkflowSteps]).toEqual([1, 0]);
+    expect([status.expiredApprovals, status.expiredWorkflowSteps]).toEqual([0, 1]);
   });
 
   it("counts a step's challenge as a step though the run never named it, since recovery takes it up", async () => {
