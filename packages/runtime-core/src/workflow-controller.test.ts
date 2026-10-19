@@ -1201,6 +1201,108 @@ describe("WorkflowController execution", () => {
     expect(result.run.nodes["undo-charge"]?.status).toBe("pending");
   });
 
+  /** The shipment's outcome is unknown and the notice fails, both after the charge. */
+  function unknownBesideFailure() {
+    const calls: string[] = [];
+    const execute = async (operation: Operation) => {
+      if (operation.kind !== "http") throw new Error("unexpected_operation");
+      const url = new URL(operation.url);
+      calls.push(`${url.host}${url.pathname}`);
+      if (url.pathname === "/shipments") throw outcomeUnknown("socket hang up");
+      return { success: url.pathname !== "/notify" };
+    };
+    return { calls, execute };
+  }
+
+  /** The fan-out saga with ship and notify as branches of one parallel node. */
+  function parallelSaga(): WorkflowDefinition {
+    return WorkflowDefinitionSchema.parse({
+      schemaVersion: "1.0.0",
+      id: definitionId,
+      version: 1,
+      name: "Charge, then ship and notify in parallel",
+      nodes: [
+        { id: "charge", type: "operation", request: call("Charge", `${PAYMENTS}/charges`) },
+        {
+          id: "fan",
+          type: "parallel",
+          dependsOn: ["charge"],
+          branches: [[call("Ship", `${LOGISTICS}/shipments`)], [call("Notify", `${PAYMENTS}/notify`)]],
+        },
+        { id: "undo-charge", type: "compensation", forNodeId: "charge", request: call("Refund", `${PAYMENTS}/refunds`) },
+      ],
+    });
+  }
+
+  it("halts rather than unwind past a step whose outcome is unknown when another fails", async () => {
+    const { calls, execute } = unknownBesideFailure();
+    const { controller } = await setup(execute);
+    const planned = controller.plan(fanOutSaga());
+
+    const result = await settle(controller, planned.id);
+
+    // The refund could give away goods that may already be in transit.
+    expect(calls).not.toContain("payments.example.test/refunds");
+    expect(result.run.status).toBe("recovery_required");
+    expect(result.run.nodes.ship?.status).toBe("recovery_required");
+    expect(result.run.nodes.notify?.status).toBe("failed");
+    expect(result.run.nodes["undo-charge"]?.status).toBe("pending");
+  });
+
+  it("halts a parallel node with a failed branch beside an unknown one, live and after a restart", async () => {
+    const { calls, execute } = unknownBesideFailure();
+    const { controller, store, tasks, cipher } = await setup(execute);
+    const planned = controller.plan(parallelSaga());
+
+    const result = await settle(controller, planned.id);
+    expect(result.run.nodes.fan?.status).toBe("recovery_required");
+    expect(result.run.status).toBe("recovery_required");
+
+    // Recovery used to rank the failed branch first, fail the run, and offer
+    // the refund on the next advance.
+    const restarted = new WorkflowController(store, tasks, cipher);
+    await restarted.recoverInterrupted();
+    const after = await settle(restarted, planned.id);
+    expect(after.run.nodes.fan?.status).toBe("recovery_required");
+    expect(after.run.status).toBe("recovery_required");
+    expect(calls).not.toContain("payments.example.test/refunds");
+
+    // Once the provider says the shipment never happened, the run fails and
+    // the charge is refunded.
+    const ship = tasks.status(after.run.nodes.fan!.taskIds.find((id) => tasks.status(id).status === "recovery_required")!);
+    store.saveTask({ ...ship, status: "failed", error: "reconciled_absent" });
+    const settled = new WorkflowController(store, tasks, cipher);
+    await settled.recoverInterrupted();
+    expect(settled.status(planned.id).status).toBe("failed");
+    const unwound = await settle(settled, planned.id);
+    expect(unwound.run.nodes["undo-charge"]?.status).toBe("compensated");
+    expect(calls.filter((call) => call.endsWith("/refunds"))).toHaveLength(1);
+  });
+
+  it("halts a run an earlier version left failed beside a step whose outcome is unknown", async () => {
+    const { calls, execute } = unknownBesideFailure();
+    const { controller } = await setup(execute);
+    const planned = controller.plan(fanOutSaga());
+    const halted = await settle(controller, planned.id);
+    expect(halted.run.status).toBe("recovery_required");
+
+    // What an earlier version recorded: the failure ranked first, the run
+    // `failed`, and the next advance about to refund.
+    type Emit = (type: string, data: Record<string, unknown>) => void;
+    const legacy = controller as unknown as {
+      transition(run: WorkflowRun, change: (draft: WorkflowRun, emit: Emit) => void): WorkflowRun;
+    };
+    legacy.transition(halted.run, (draft, emit) => {
+      emit("workflow.status_changed", { from: draft.status, to: "failed" });
+      draft.status = "failed";
+    });
+
+    const run = (await controller.advance(planned.id)).run;
+    expect(run.status).toBe("recovery_required");
+    expect(run.nodes["undo-charge"]?.status).toBe("pending");
+    expect(calls).not.toContain("payments.example.test/refunds");
+  });
+
   it("plans no compensation for a run cancelled while its advance was running", async () => {
     let shipping!: () => void;
     const started = new Promise<void>((resolve) => {

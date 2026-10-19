@@ -98,6 +98,17 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- A workflow step that fails no longer starts the unwind while another step's
+  outcome is unknown or unsettled (`recovery_required`: an effect that may have
+  happened, or a task still running). The run halts as `recovery_required`,
+  starts no further step, and fails and unwinds only once that step is
+  settled, as a denied step already did. It used to refund a charge whose
+  shipment might be in transit, and skip the compensation of a step that went
+  on to verify. This holds for sibling steps and for branches of one
+  `parallel` node, live and after a restart. A run an earlier version left
+  `failed` beside such a step is halted the same way at its next advance.
+  (#270)
+
 - Denying a durable workflow's step (`melra approve <id> --deny`, the
   console's Deny) or cancelling its task (`melra_task_cancel`) no longer leaves
   the run `running` for good with nothing left to run. The step did not

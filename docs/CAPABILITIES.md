@@ -53,9 +53,10 @@ Node types: `operation`, `approval`, `condition`, `parallel`, `bounded_loop`,
   `reconciliation` predicate asking the provider — or enter `recovery_required`.
 - Compensations unwind newest effect first, one at a time, across as many
   providers as the saga touched. An unwind that cannot finish stops and reports
-  `workflow_compensation_incomplete:<node>`. A step denied before it runs
-  starts the unwind, unless another step's outcome is unknown, and a denied
-  compensation stops it.
+  `workflow_compensation_incomplete:<node>`. A failed step, or one denied
+  before it runs, starts the unwind, unless another step's outcome is unknown:
+  then the run halts as `recovery_required` until that step is settled. A
+  denied compensation stops the unwind.
 - Definitions allow at most 500 nodes, 100 dependencies per node, 20 parallel
   branches, and 100 loop iterations.
 - Competing advances for the same workflow are serialized inside one process,
