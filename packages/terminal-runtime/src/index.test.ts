@@ -4,7 +4,7 @@
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TerminalOperationSchema } from "@melra/protocol";
 import { TerminalRuntime, hardenGitRead, redactTerminalOutput } from "./index.js";
@@ -574,6 +574,25 @@ describe("arguments", () => {
       await expect(run(runtime, spelling), spelling).rejects.toThrow(/terminal_path_reserved/);
     }
     await expect(run(runtime, "ok.txt")).resolves.toMatchObject({ success: true });
+  });
+
+  it("answers the same for a reserved working directory, present or absent", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-terminal-")));
+    roots.push(root);
+    const data = join(root, ".melra");
+    await mkdir(join(data, "present"), { recursive: true });
+    const runtime = await TerminalRuntime.create({
+      root,
+      reserved: async (path) => path === data || path.startsWith(`${data}${sep}`),
+    });
+    for (const cwd of [".melra/present", ".melra/missing"]) {
+      await expect(
+        runtime.execute(
+          TerminalOperationSchema.parse({ kind: "terminal", action: "run", command: process.execPath, args: ["-e", ""], cwd }),
+        ),
+        cwd,
+      ).rejects.toThrow(/terminal_path_reserved/);
+    }
   });
 
   it("in enforced mode, refuses an argument spelled inside that leads out", async () => {

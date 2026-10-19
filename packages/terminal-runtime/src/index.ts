@@ -321,6 +321,9 @@ export class TerminalRuntime {
         : cwd ?? ".";
     const candidate = resolve(this.root, input);
     if (!inside(this.root, candidate)) throw new Error("cwd_outside_workspace");
+    // Before the lookup, so a reserved name gets the same answer whether it
+    // exists or not.
+    if (await this.reserved(candidate)) throw new Error("terminal_path_reserved");
     const actual = await realpath(candidate);
     if (!inside(this.root, actual)) throw new Error("cwd_outside_workspace");
     return actual;

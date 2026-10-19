@@ -137,6 +137,30 @@ describe("Verifier", () => {
     );
   });
 
+  it("answers the same for every reserved name, wherever a link inside it leads", async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), "melra-verifier-")));
+    roots.push(base);
+    const root = join(base, "workspace");
+    const data = join(root, ".melra");
+    await mkdir(data, { recursive: true });
+    await mkdir(join(base, "outside"));
+    await writeFile(join(base, "outside", "f"), "outside");
+    await symlink(join(base, "outside"), join(data, "out"), "junction");
+    const verifier = await Verifier.create(root, {
+      reserved: async (path) => path === data || path.startsWith(`${data}${sep}`),
+    });
+    const { evidence } = await verifier.verify(
+      [".melra/out/f", ".melra/out/missing", ".melra/missing"].flatMap((path) => [
+        { type: "file_exists", path },
+        { type: "file_absent", path },
+      ]),
+      {},
+    );
+    expect(evidence.map(({ summary }) => summary)).toEqual(
+      Array.from({ length: 6 }, () => "verification_path_reserved"),
+    );
+  });
+
   it("gives the same refusal, present or absent, for a name a link leads out to", async () => {
     const base = await realpath(await mkdtemp(join(tmpdir(), "melra-verifier-")));
     roots.push(base);

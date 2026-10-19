@@ -572,6 +572,9 @@ export class Verifier {
   private async potentiallyAbsentFilePath(input: string): Promise<string> {
     const candidate = this.spelled(input);
     if (candidate === undefined) throw new Refusal("verification_path_outside_workspace");
+    // Before following links, so every reserved name gets the same answer,
+    // wherever a link inside it leads; the runtime's check follows them itself.
+    if ((await this.reserved?.(candidate)) === true) throw new Refusal("verification_path_reserved");
     let probe = candidate;
     while (true) {
       try {

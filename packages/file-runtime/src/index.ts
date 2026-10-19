@@ -172,6 +172,9 @@ export class FileRuntime {
     if (!inside(this.root, lexical) || (!allowRoot && relative(this.root, lexical) === "")) {
       throw new Error("path_outside_workspace");
     }
+    // Before following links, so every reserved name gets the same answer,
+    // wherever a link inside it leads; `isReserved` follows them itself.
+    if (await this.isReserved(lexical, !changing)) throw new Error("path_reserved");
 
     let probe = lexical;
     let real = lexical;
@@ -193,9 +196,10 @@ export class FileRuntime {
       }
     }
     if (await this.isReserved(real, !changing)) throw new Error("path_reserved");
-    // A directory holding reserved data takes it along when it is moved,
-    // replaced or removed, so nothing may change it either.
-    if (changing && (await this.holdsReserved(real))) throw new Error("path_reserved");
+    // A directory holding reserved data takes it along when it is moved or
+    // removed, so neither may happen to it. Making it again changes nothing,
+    // and nothing can be renamed onto it while it holds anything.
+    if (changing && !creating && (await this.holdsReserved(real))) throw new Error("path_reserved");
     if (creating && relative(this.root, real).split(sep).some((part) => spelling(part) === ".git")) {
       throw new Error("path_git_metadata");
     }

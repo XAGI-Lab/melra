@@ -634,8 +634,8 @@ All notable changes are documented here. The format follows
 ### Security
 
 - MELRA's data directory is reserved as a whole, by every adapter and by
-  verification, in every mode. A file effect can no longer write into it, or
-  move, replace or remove it or any directory that holds it (`path_reserved`),
+  verification, in every mode. A file effect can no longer write into it,
+  replace it, or move or remove it or any directory that holds it (`path_reserved`),
   and the files there are no longer read through the file adapter or named in
   a terminal command. A path is judged both as written and with links
   resolved. Artifacts (screenshots and downloads) are the exception for

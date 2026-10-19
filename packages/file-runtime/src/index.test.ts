@@ -154,6 +154,57 @@ describe("FileRuntime", () => {
     expect((await run({ action: "read", path: ".melra/notes.txt" })).content).toBe("fine");
   });
 
+  it("answers the same for every reserved name, wherever a link inside it leads", async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), "melra-file-")));
+    roots.push(base);
+    const root = join(base, "workspace");
+    const data = join(root, ".melra");
+    await mkdir(data, { recursive: true });
+    await mkdir(join(base, "outside"));
+    await writeFile(join(base, "outside", "f"), "outside");
+    await symlink(join(base, "outside"), join(data, "out"), "junction");
+    const runtime = await FileRuntime.create({ root, reserved: [data] });
+    const run = (operation: Record<string, unknown>) =>
+      runtime.execute(FileOperationSchema.parse({ kind: "file", ...operation }));
+    for (const path of [".melra/out", ".melra/out/f", ".melra/out/missing", ".melra/missing"]) {
+      await expect(run({ action: "stat", path }), path).rejects.toThrow("path_reserved");
+      await expect(run({ action: "write", path, content: "x" }), path).rejects.toThrow("path_reserved");
+    }
+    expect(await readdir(join(base, "outside"))).toEqual(["f"]);
+  });
+
+  it("lets a directory holding a reserved file be made again, and never replaced", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-file-")));
+    roots.push(root);
+    const policy = join(root, "config", "policy.json");
+    await mkdir(join(root, "config"));
+    await mkdir(join(root, "src", "nested"), { recursive: true });
+    await writeFile(policy, "{}");
+    await writeFile(join(root, "plain.txt"), "plain");
+    const runtime = await FileRuntime.create({ root, reserved: [policy] });
+    const run = (operation: Record<string, unknown>) =>
+      runtime.execute(FileOperationSchema.parse({ kind: "file", ...operation }));
+    // Making it again changes nothing.
+    await expect(run({ action: "mkdir", path: "config", recursive: true })).resolves.toMatchObject({ created: true });
+    // Nothing can be renamed onto a directory that is not empty.
+    for (const operation of [
+      { action: "write", path: "config", content: "x" },
+      { action: "move", path: "plain.txt", destination: "config" },
+      { action: "move", path: "src", destination: "config" },
+    ]) {
+      await expect(run(operation), JSON.stringify(operation)).rejects.toThrow();
+    }
+    // Moving or removing it would take the reserved file along.
+    for (const operation of [
+      { action: "delete", path: "config", recursive: true },
+      { action: "move", path: "config", destination: "elsewhere" },
+    ]) {
+      await expect(run(operation), JSON.stringify(operation)).rejects.toThrow("path_reserved");
+    }
+    expect(await readFile(policy, "utf8")).toBe("{}");
+    expect((await readdir(root)).sort()).toEqual(["config", "plain.txt", "src"]);
+  });
+
   it("never writes into a git directory, however the path reaches it", async () => {
     // A repository's config and hooks name programs git runs during a read
     // that needs no approval; nothing the file capability writes may land there.
