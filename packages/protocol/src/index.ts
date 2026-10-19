@@ -751,6 +751,56 @@ export const CredentialsSchema = z
   });
 
 /**
+ * A policy file as written, every key optional (`loadPolicy` fills in the
+ * defaults).
+ *
+ * Strict at every level because the file is a trust boundary. Read loosely, a
+ * typo'd key (`"allowedComands"`) was dropped for the default the operator
+ * meant to replace, and a wrong type flowed straight into policy:
+ * `"unhinged": "false"` is a truthy string and switched the guardrails off.
+ * `approvalTtlMs` keeps the range check `loadPolicy` already made, and its
+ * code, `policy_approval_ttl_invalid`.
+ */
+export const PolicyFileSchema = z
+  .object({
+    version: z.string().exactOptional(),
+    workspaceRoot: z.string().exactOptional(),
+    allowedCommands: z.array(z.string()).exactOptional(),
+    allowedDomains: z.array(z.string()).exactOptional(),
+    allowLocalhost: z.boolean().exactOptional(),
+    popups: z.enum(["allow", "block"]).exactOptional(),
+    mutations: z.enum(["deny", "confirm"]).exactOptional(),
+    approvalTtlMs: z.number().exactOptional(),
+    maxFileBytes: z.number().exactOptional(),
+    memoryRetention: z
+      .object({ maxAgeDays: z.number().exactOptional(), maxPerScope: z.number().exactOptional() })
+      .strict()
+      .exactOptional(),
+    deniedTraits: z.array(CapabilityTraitSchema).exactOptional(),
+    capabilities: z.array(CapabilityGrantSchema).max(200).exactOptional(),
+    credentials: CredentialsSchema.exactOptional(),
+    circuitBreaker: z
+      .object({ threshold: z.number().exactOptional(), cooldownMs: z.number().exactOptional() })
+      .strict()
+      .exactOptional(),
+    unhinged: z.boolean().exactOptional(),
+    // `deployment_mode_unknown` as the flag and MELRA_MODE give it, but with
+    // the file and path, so a typo here is not blamed on the environment.
+    mode: z
+      .string()
+      .refine((value) => {
+        try {
+          deploymentMode(value);
+          return true;
+        } catch {
+          return false;
+        }
+      }, "deployment_mode_unknown")
+      .exactOptional(),
+  })
+  .strict();
+
+/**
  * What MELRA promises about how many times an effect can run.
  *
  * Stating it is the point. The rule that mutations are never retried already

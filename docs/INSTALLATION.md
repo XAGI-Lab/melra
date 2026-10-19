@@ -305,6 +305,23 @@ melra init --client generic
 
 Neither `init` nor `setup` overwrites an existing policy.
 
+The policy file is read strictly. Every key is optional, but a key MELRA does
+not know, at any depth, or a value of the wrong type stops the server from
+starting rather than falling back to the default, with every problem named by
+its path:
+
+```text
+melra: policy_invalid: /home/you/.melra/policy.json: allowedComands: unknown key
+melra: policy_invalid: /home/you/.melra/policy.json: unhinged: Invalid input: expected boolean, received string
+```
+
+The keys are `version`, `workspaceRoot`, `allowedCommands`, `allowedDomains`,
+`allowLocalhost`, `popups`, `mutations`, `approvalTtlMs`, `maxFileBytes`,
+`memoryRetention`, `deniedTraits`, `capabilities`, `credentials`,
+`circuitBreaker`, `unhinged` and `mode`; there is no comment or `$schema`
+key. `melra doctor` fails its `policy` check with the same message, and
+`melra policy test` prints it.
+
 The generated policy allows any public browser destination
 (`allowedDomains: ["*"]`) and localhost, so browsing works without editing
 anything. That list is a *narrowing* control, not the safety boundary: the

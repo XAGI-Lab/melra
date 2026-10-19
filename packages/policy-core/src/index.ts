@@ -22,10 +22,9 @@ import type {
   TaskRequest,
 } from "@melra/protocol";
 import {
-  CapabilityGrantSchema,
-  CredentialsSchema,
   deploymentMode,
   LOCAL_IDENTITY,
+  PolicyFileSchema,
   principalRef,
   terminalArgumentPaths,
 } from "@melra/protocol";
@@ -580,17 +579,40 @@ export async function loadPolicy(
 ): Promise<LocalPolicy> {
   const defaults = createDefaultPolicy(workspaceRoot);
   if (path === undefined) return defaults;
-  const parsed = JSON.parse(await readFile(path, "utf8")) as Partial<LocalPolicy>;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(await readFile(path, "utf8"));
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
+    throw new Error(`policy_invalid: ${path}: ${error.message}`);
+  }
   // A window of zero, a negative one or a string would leave every challenge
   // expired, or never expiring; refused loudly rather than read as a default.
+  const ttl = (raw as { approvalTtlMs?: unknown } | null)?.approvalTtlMs;
   if (
-    parsed.approvalTtlMs !== undefined &&
-    !(Number.isInteger(parsed.approvalTtlMs) && parsed.approvalTtlMs >= 1 && parsed.approvalTtlMs <= MAX_APPROVAL_TTL_MS)
+    ttl !== undefined &&
+    !(typeof ttl === "number" && Number.isInteger(ttl) && ttl >= 1 && ttl <= MAX_APPROVAL_TTL_MS)
   ) {
     throw new Error(
       `policy_approval_ttl_invalid: approvalTtlMs must be a whole number of milliseconds from 1 to ${MAX_APPROVAL_TTL_MS} (24 hours)`,
     );
   }
+  // Every problem at once, each by its path, so one edit fixes the file.
+  const result = PolicyFileSchema.safeParse(raw);
+  if (!result.success) {
+    const at = (segments: readonly PropertyKey[]) =>
+      segments
+        .map((segment) => (typeof segment === "number" ? `[${segment}]` : `.${String(segment)}`))
+        .join("")
+        .replace(/^\./, "") || "(root)";
+    const problems = result.error.issues.flatMap((issue) =>
+      issue.code === "unrecognized_keys"
+        ? issue.keys.map((key) => `${at([...issue.path, key])}: unknown key`)
+        : [`${at(issue.path)}: ${issue.message}`],
+    );
+    throw new Error(`policy_invalid: ${path}: ${problems.join("; ")}`);
+  }
+  const parsed = result.data;
   return {
     ...defaults,
     ...parsed,
@@ -607,20 +629,12 @@ export async function loadPolicy(
     memoryRetention: { ...defaults.memoryRetention, ...parsed.memoryRetention },
     circuitBreaker: { ...defaults.circuitBreaker, ...parsed.circuitBreaker },
     deniedTraits: parsed.deniedTraits ?? defaults.deniedTraits,
-    // Parsed, not spread: a grant is the file claiming authority exists, so a
-    // malformed one has to fail loudly rather than land as an object that
-    // matches nothing or — worse — everything.
-    capabilities:
-      parsed.capabilities === undefined
-        ? defaults.capabilities
-        : CapabilityGrantSchema.array().max(200).parse(parsed.capabilities),
-    // Same reasoning as `capabilities`: a malformed credential definition must
-    // not land as an object whose `hosts` happen to match nothing — an operator
-    // would read that as "scoped" when it is "silently absent".
-    credentials:
-      parsed.credentials === undefined
-        ? defaults.credentials
-        : CredentialsSchema.parse(parsed.credentials),
+    // Through `PolicyFileSchema`, never spread raw: a grant is the file claiming
+    // authority exists, and a malformed grant or credential definition must
+    // fail loudly rather than land as an object that matches nothing or — worse
+    // — everything.
+    capabilities: parsed.capabilities ?? defaults.capabilities,
+    credentials: parsed.credentials ?? defaults.credentials,
     // Through the same parser the environment variable and the flag go through,
     // so `"mode": "enfroced"` in a policy file fails loudly instead of leaving a
     // machine in developer mode with a file that claims otherwise.

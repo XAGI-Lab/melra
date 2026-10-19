@@ -1,10 +1,11 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { TaskRequestSchema } from "@melra/protocol";
 import {
   classifyCommand,
@@ -61,6 +62,91 @@ describe("approval window", () => {
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
+  });
+});
+
+describe("policy file", () => {
+  let directory: string;
+  beforeAll(async () => {
+    directory = await mkdtemp(join(tmpdir(), "melra-policy-file-"));
+  });
+  afterAll(async () => {
+    await rm(directory, { recursive: true, force: true });
+  });
+  const file = () => join(directory, "policy.json");
+  const load = async (policy: unknown) => {
+    await writeFile(file(), JSON.stringify(policy));
+    return loadPolicy(file(), directory);
+  };
+
+  it("refuses a key it does not know, at any depth, naming the file and the path", async () => {
+    const unknown: Array<[unknown, string]> = [
+      [{ allowedComands: ["git"] }, "allowedComands"],
+      [{ mdoe: "enforced" }, "mdoe"],
+      [{ memoryRetention: { maxAge: 3 } }, "memoryRetention.maxAge"],
+      [{ circuitBreaker: { threshold: 3, cooldown: 1 } }, "circuitBreaker.cooldown"],
+      [{ capabilities: [{ id: "r", capability: "file.read", effects: ["read"], scope: "x" }] }, "capabilities[0].scope"],
+      [
+        {
+          credentials: {
+            gh: { source: { env: "T" }, inject: { header: "A", schema: "B" }, hosts: ["h"], capability: "*" },
+          },
+        },
+        "credentials.gh.inject.schema",
+      ],
+    ];
+    for (const [policy, at] of unknown) {
+      await expect(load(policy), at).rejects.toThrow(`policy_invalid: ${file()}: ${at}: unknown key`);
+    }
+  });
+
+  it("refuses a value of the wrong type, at any depth, naming the file and the path", async () => {
+    const wrong: Array<[unknown, string]> = [
+      [{ allowedCommands: "git" }, "allowedCommands"],
+      [{ allowLocalhost: "false" }, "allowLocalhost"],
+      // A truthy string: read loosely, this one switched the guardrails off.
+      [{ unhinged: "false" }, "unhinged"],
+      [{ maxFileBytes: "10mb" }, "maxFileBytes"],
+      [{ mutations: "Deny" }, "mutations"],
+      [{ deniedTraits: ["packge-install"] }, "deniedTraits[0]"],
+      [{ mode: 1 }, "mode"],
+      [{ memoryRetention: { maxAgeDays: "30" } }, "memoryRetention.maxAgeDays"],
+      [{ circuitBreaker: { threshold: "3" } }, "circuitBreaker.threshold"],
+      [{ capabilities: [{ id: "r", capability: "file.read", effects: "read" }] }, "capabilities[0].effects"],
+      [[], "(root)"],
+    ];
+    for (const [policy, at] of wrong) {
+      await expect(load(policy), at).rejects.toThrow(`policy_invalid: ${file()}: ${at}: `);
+    }
+    // The mode's own code, but blamed on the file rather than MELRA_MODE.
+    await expect(load({ mode: "enfroced" })).rejects.toThrow(
+      `policy_invalid: ${file()}: mode: deployment_mode_unknown`,
+    );
+  });
+
+  it("loads every committed example policy, and the one init writes", async () => {
+    const examples = fileURLToPath(new URL("../../../examples/", import.meta.url));
+    const found = (await readdir(examples, { recursive: true }))
+      .filter((path) => basename(path) === "policy.json")
+      .sort();
+    expect(found.length).toBeGreaterThanOrEqual(3);
+    for (const path of found) await loadPolicy(join(examples, path), directory);
+    // What `melra init` writes: the defaults without a workspace, in a mode.
+    const { workspaceRoot: _shared, ...defaults } = createDefaultPolicy(directory);
+    expect(await load({ ...defaults, mode: "enforced" })).toEqual({
+      ...createDefaultPolicy(directory),
+      mode: "enforced",
+    });
+    // Unchanged semantics: a relative root is the file's, retention merges over
+    // the defaults, and a grant gets its defaults.
+    const loaded = await load({
+      workspaceRoot: "inner",
+      memoryRetention: { maxPerScope: 5 },
+      capabilities: [{ id: "r", capability: "file.read", effects: ["read"] }],
+    });
+    expect(loaded.workspaceRoot).toBe(join(directory, "inner"));
+    expect(loaded.memoryRetention).toEqual({ maxAgeDays: 30, maxPerScope: 5 });
+    expect(loaded.capabilities[0]).toMatchObject({ target: "*", principal: "*" });
   });
 });
 

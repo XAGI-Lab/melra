@@ -460,6 +460,28 @@ All notable changes are documented here. The format follows
 
 ### Security
 
+- **Breaking:** the policy file is read strictly, against `PolicyFileSchema`
+  in `@melra/protocol`. A key MELRA does not know, at any depth
+  (`"allowedComands"`, `memoryRetention.maxAge`, a misspelt field in a grant
+  or credential), or a value of the wrong type (`"allowedCommands": "git"`,
+  `"maxFileBytes": "10mb"`, `"mutations": "Deny"`, an unknown trait in
+  `deniedTraits`) now stops the server from starting, with every problem
+  named by its path: `policy_invalid: /home/you/.melra/policy.json:
+  allowedComands: unknown key`. Before, an unknown key was dropped for the
+  default the operator meant to replace, and a wrong type reached policy as
+  written: `"unhinged": "false"` and `"allowLocalhost": "false"` are truthy
+  strings, so the first switched the guardrails off and the second let
+  localhost through, and `"mutations": "Deny"` still asked for approval
+  instead of refusing. A file that loaded with a stray key now refuses to
+  start, so it is breaking; it is listed here because every file it refuses
+  was being read more permissively than it said. A mode typo in the file
+  reads `policy_invalid: <file>: mode: deployment_mode_unknown`, so it is not
+  blamed on `MELRA_MODE`, and a file that is not JSON names itself the same
+  way. `approvalTtlMs` keeps `policy_approval_ttl_invalid`. Every policy a
+  release's `melra init` or `melra setup` wrote still loads, and there is no
+  comment or `$schema` key. `melra doctor` fails its `policy` check with the
+  message, and `melra policy test` prints it.
+
 - An authorization code issued to an OAuth client before `melra clients
   --revoke` can no longer be redeemed after it. The revoke runs in another
   process and cannot reach the server's pending codes, which live for five
