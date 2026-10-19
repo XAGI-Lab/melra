@@ -58,7 +58,11 @@ interface PendingCode {
   redirectUri: string;
   challenge: string;
   expiresAt: number;
-  /** The approval this code came from; a revoke or a later approval ends it. */
+  /**
+   * The approval this code came from, by its timestamp: a revoke ends it, and
+   * so does a later approval (one in the same millisecond would not, but that
+   * is the operator approving the same client twice).
+   */
   approvedAt: string;
 }
 
