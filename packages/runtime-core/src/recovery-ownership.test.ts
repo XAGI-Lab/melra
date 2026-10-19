@@ -64,6 +64,7 @@ async function side(
   }),
   probe?: EvidenceProbe,
   policy: Partial<LocalPolicy> = {},
+  leaseDurationMs = 60_000,
 ) {
   const store = new SqliteStore(at.path);
   stores.push(store);
@@ -77,7 +78,13 @@ async function side(
     verifier,
     cipher,
   );
-  return { store, verifier, adapter, tasks, workflows: new WorkflowController(store, tasks, cipher) };
+  return {
+    store,
+    verifier,
+    adapter,
+    tasks,
+    workflows: new WorkflowController(store, tasks, cipher, leaseDurationMs),
+  };
 }
 
 /** An adapter that reports when it is entered and finishes when told to. */
@@ -414,6 +421,86 @@ describe("workflow recovery across processes", () => {
     expect(footprint(a.store, run.id)).toEqual(before);
     release.open();
     expect((await advancing).run.status).toBe("verified_complete");
+  });
+
+  it("does not start the next branch task after losing its workflow lease", async () => {
+    vi.useFakeTimers();
+    const at = await home();
+    const nextAdapter = held();
+    const a = await side(at, undefined, undefined, {}, 1_000);
+    const b = await side(at, nextAdapter.execute);
+    const firstDone = gate();
+    const releaseFirst = gate();
+    const leaseLost = gate();
+    const renew = a.store.renewWorkflowLease.bind(a.store);
+    vi.spyOn(a.store, "renewWorkflowLease").mockImplementation((id, owner, expiresAt) => {
+      const renewed = renew(id, owner, expiresAt);
+      if (!renewed) leaseLost.open();
+      return renewed;
+    });
+
+    const run = a.workflows.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Two-step branch",
+        nodes: [
+          {
+            id: "inspect",
+            type: "operation",
+            request: TaskRequestSchema.parse({
+              goal: "Inspect",
+              operation: { kind: "system", action: "info" },
+            }),
+          },
+          {
+            id: "branch",
+            type: "condition",
+            dependsOn: ["inspect"],
+            sourceNodeId: "inspect",
+            predicate: { type: "result_equals", path: "success", value: true },
+            whenTrue: [put("first"), put("second")],
+            whenFalse: [],
+          },
+        ],
+      }),
+    );
+
+    try {
+      await a.workflows.advance(run.id);
+      const waiting = (await a.workflows.advance(run.id)).run;
+      const execute = a.tasks.execute.bind(a.tasks);
+      vi.spyOn(a.tasks, "execute").mockImplementationOnce(async (...args) => {
+        const result = await execute(...args);
+        firstDone.open();
+        await releaseFirst.opened;
+        return result;
+      });
+      const advancing = a.workflows.advance(run.id, approvalsFor(waiting));
+      void advancing.catch(() => undefined);
+      await firstDone.opened;
+      expireLease(a.store, run.id);
+
+      const recovered = (await b.workflows.advance(run.id)).run;
+      const bAdvancing = b.workflows.advance(run.id, approvalsFor(recovered));
+      void bAdvancing.catch(() => undefined);
+      await nextAdapter.entered.opened;
+      await vi.advanceTimersByTimeAsync(1_000);
+      await leaseLost.opened;
+
+      releaseFirst.open();
+      await expect(advancing).rejects.toThrow("workflow_lease_lost");
+      expect(a.adapter).toHaveBeenCalledTimes(2);
+
+      nextAdapter.release.open();
+      expect((await bAdvancing).run.status).toBe("verified_complete");
+      expect(b.adapter).toHaveBeenCalledTimes(1);
+    } finally {
+      releaseFirst.open();
+      nextAdapter.release.open();
+      vi.useRealTimers();
+    }
   });
 
   it("refuses a halted run without disturbing the lease a dead advance left", async () => {

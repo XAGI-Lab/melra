@@ -103,6 +103,7 @@ export class WorkflowController {
   // Runs an advance in this process holds the lease for. Recovery leaves them
   // alone even once the lease has lapsed, say across a laptop's sleep.
   private readonly leased = new Set<string>();
+  private readonly leaseLost = new Set<string>();
 
   constructor(
     private readonly store: SqliteStore,
@@ -282,11 +283,15 @@ export class WorkflowController {
       // database) is tried again next tick: stopping would let the lease lapse
       // mid-advance and a second process run the same step.
       try {
-        this.store.renewWorkflowLease(
+        const renewed = this.store.renewWorkflowLease(
           workflowId,
           this.owner,
           new Date(Date.now() + this.leaseDurationMs).toISOString(),
         );
+        if (!renewed) {
+          this.leaseLost.add(workflowId);
+          clearInterval(renewal);
+        }
       } catch (error) {
         if ((error as { code?: unknown }).code === "ERR_INVALID_STATE") clearInterval(renewal);
       }
@@ -297,6 +302,7 @@ export class WorkflowController {
       return await this.advanceOnce(workflowId, approvals, inputs);
     } finally {
       this.leased.delete(workflowId);
+      this.leaseLost.delete(workflowId);
       clearInterval(renewal);
       this.store.releaseWorkflowLease(workflowId, this.owner);
     }
@@ -517,6 +523,7 @@ export class WorkflowController {
         if (compensation.state.status !== "verified_complete") break;
       }
     }
+    this.assertAdvanceLease(workflowId);
     let run = this.transition(current, (draft, emit) => {
       for (const { nodeId, result } of results) {
         // A node offered again and still waiting (an approval nobody has
@@ -1285,6 +1292,7 @@ export class WorkflowController {
     executePlanned = true,
     identity: TaskIdentity,
   ): Promise<NodeAdvance> {
+    this.assertAdvanceLease(identity.workflowId);
     let task =
       existingTaskId === undefined
         ? this.tasks.plan(request, {
@@ -1344,6 +1352,14 @@ export class WorkflowController {
       state: nodeStateForTask(task, !executePlanned),
       tasks: [task],
     };
+  }
+
+  private assertAdvanceLease(workflowId: string): void {
+    const lease = this.store.getWorkflowLease(workflowId);
+    if (this.leaseLost.has(workflowId) || lease?.owner !== this.owner) {
+      this.leaseLost.add(workflowId);
+      throw new Error("workflow_lease_lost");
+    }
   }
 
   private async runSequential(
