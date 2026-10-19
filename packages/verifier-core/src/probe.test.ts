@@ -162,6 +162,9 @@ describe("verification through a channel that did not act", () => {
     const { verified, evidence } = await verifier.verify([predicate()], created);
     expect(verified).toBe(false);
     expect(evidence[0]).toMatchObject({ passed: false, inconclusive: true });
+    // The status arrived whole, so a miss on it is still the provider's word.
+    const byStatus = await verifier.verify([predicate({ path: "status", value: 404 })], created);
+    expect(byStatus.evidence[0]?.inconclusive).toBeUndefined();
   });
 
   it("does not call a value mismatch inconclusive", async () => {

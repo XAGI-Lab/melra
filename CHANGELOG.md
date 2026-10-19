@@ -102,9 +102,11 @@ All notable changes are documented here. The format follows
   The chunk that crossed the cap was dropped whole, so a body that arrived in
   one read (anything up to tens of KB) came back empty, and `bytes` counted
   the dropped chunk; it now counts the bytes delivered. An
-  `http_resource_matches` read whose body was cut at the cap is inconclusive,
-  not a "did not match", so the mutation it verifies is `recovery_required`
-  rather than `failed`. (#249)
+  `http_resource_matches` read that misses on a path into a 2xx body cut at
+  the cap (`json.*`, `content`) is inconclusive, not a "did not match": as
+  reconciliation it leaves the task `recovery_required` instead of `failed`,
+  and as evidence the item is marked inconclusive. A miss on the status or a
+  header is still the provider's answer. (#249)
 
 - The TypeScript SDK's `MelraClient.connect()` says why a `melra serve` it
   started refused to start: the error quotes the server's stderr (an invalid
