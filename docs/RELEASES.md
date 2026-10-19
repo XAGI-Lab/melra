@@ -54,8 +54,8 @@ The tag workflow:
 Verify downloaded artifacts:
 
 ```bash
-sha256sum --check SHA256SUMS
-gh attestation verify <artifact> --repo XAGI-Lab/melra
+sha256sum --check --ignore-missing SHA256SUMS &&
+  gh attestation verify <artifact> --repo XAGI-Lab/melra
 ```
 
 Artifact attestations prove which GitHub workflow built a digest. They do not
