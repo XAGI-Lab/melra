@@ -107,6 +107,44 @@ describe("TaskController", () => {
     );
   });
 
+  it("hands out one certificate per task across processes", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-controller-certificate-"));
+    roots.push(root);
+    const databasePath = join(root, "melra.sqlite");
+    const key = Buffer.alloc(32, 23);
+    const executor = { execute: async () => ({ success: true, value: "verified" }) };
+    const running = new SqliteStore(databasePath);
+    const elsewhere = new SqliteStore(databasePath);
+    stores.push(running, elsewhere);
+    const executing = await createController(running, root, key, executor);
+    const other = await createController(elsewhere, root, key, executor);
+    const planned = executing.plan(
+      TaskRequestSchema.parse({ goal: "Inspect the runtime", operation: { kind: "system", action: "info" } }),
+    );
+    // Another process reads the task, and a workflow advance certifies it,
+    // after its outcome is recorded and before its certificate is.
+    const save = running.saveCertificate.bind(running);
+    let read: ReturnType<TaskController["receipts"]> | undefined;
+    let certified: ReturnType<TaskController["certify"]>;
+    vi.spyOn(running, "saveCertificate").mockImplementationOnce((certificate, options) => {
+      read = other.receipts({ taskId: planned.id });
+      certified = other.certify(planned.id);
+      return save(certificate, options);
+    });
+
+    const executed = await executing.execute(planned.id);
+
+    // A read writes nothing, so it cannot hand out a certificate the
+    // executor's then replaces.
+    expect(read?.certificate).toBeUndefined();
+    const stored = running.getCertificateForTask(planned.id)!;
+    expect([executed.certificate?.certificateId, certified?.certificateId]).toEqual([
+      stored.certificateId,
+      stored.certificateId,
+    ]);
+    expect(running.getTask(planned.id)?.certificateId).toBe(stored.certificateId);
+  });
+
   it("keeps exact requests out of SQLite and rejects the wrong key", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-controller-sealed-"));
     roots.push(root);
@@ -749,6 +787,87 @@ describe("effect contract and principal", () => {
     expect(execution.receipt?.principal).toBe("agent:local");
   });
 
+  describe("a write that fails after the adapter returned", () => {
+    async function charge(
+      execute: () => Promise<Record<string, unknown>>,
+      options: { idempotencyKey?: string } = {},
+    ) {
+      const { controller, store } = await setup({ execute });
+      const task = controller.plan(
+        TaskRequestSchema.parse({
+          goal: "Charge the customer",
+          operation: {
+            kind: "http",
+            action: "request",
+            method: "POST",
+            url: "http://localhost:9/charges",
+          },
+          requiredEvidence: [
+            { type: "result_equals", path: "success", value: true },
+          ],
+        }),
+        options,
+      );
+      const approval = { approvalId: task.approval!.approvalId, phrase: task.approval!.phrase! };
+      return { controller, store, task, approval };
+    }
+
+    it("parks the mutation instead of calling it failed", async () => {
+      const execute = vi.fn(async () => ({ success: true }));
+      const { controller, store, task, approval } = await charge(execute);
+      vi.spyOn(store, "saveTaskExecutionResult").mockImplementationOnce(() => {
+        throw new Error("database is locked");
+      });
+      const charged = vi.spyOn(CircuitBreaker.prototype, "recordFailure");
+
+      const result = await controller.execute(task.id, approval);
+
+      // The charge went through; only the record of it did not.
+      expect(result.task.status).toBe("recovery_required");
+      expect(result.receipt?.evidence[0]).toMatchObject({ passed: false, inconclusive: true });
+      // The target answered, so it is not charged with the failure.
+      expect(charged).not.toHaveBeenCalled();
+      charged.mockRestore();
+      // Retrying the obvious way reconciles rather than charging again.
+      await controller.execute(task.id);
+      expect(execute).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps a verified outcome when only its certificate could not be written", async () => {
+      const execute = vi.fn(async () => ({ success: true }));
+      const { controller, store, task, approval } = await charge(execute);
+      vi.spyOn(store, "saveCertificate").mockImplementationOnce(() => {
+        throw new Error("disk full");
+      });
+
+      const result = await controller.execute(task.id, approval);
+
+      expect(result.task.status).toBe("verified_success");
+      expect(store.getTask(task.id)?.status).toBe("verified_success");
+      expect(controller.receipts({ taskId: task.id }).receipts).toHaveLength(1);
+      expect(execute).toHaveBeenCalledTimes(1);
+    });
+
+    it("settles a mutation that verified and committed its key before a later write failed", async () => {
+      const execute = vi.fn(async () => ({ success: true }));
+      const { controller, store, task, approval } = await charge(execute, {
+        idempotencyKey: "c".repeat(64),
+      });
+      vi.spyOn(store, "saveReceipt").mockImplementationOnce(() => {
+        throw new Error("database is locked");
+      });
+      expect((await controller.execute(task.id, approval)).task.status).toBe("recovery_required");
+
+      // Its key is committed only once it verified, so with no reconciliation
+      // declared it was parked for good.
+      const settled = await controller.execute(task.id);
+
+      expect(settled.task.status).toBe("verified_success");
+      expect(settled.certificate?.result).toBe("VERIFIED_SUCCESS");
+      expect(execute).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe("reconciliation", () => {
     /**
      * A charge whose request reached the wire and was never answered, plus the
@@ -756,7 +875,11 @@ describe("effect contract and principal", () => {
      * idempotency key rather than a response field on purpose: there is no
      * response to read on this path.
      */
-    async function unansweredCharge(probe?: EvidenceProbe) {
+    async function unansweredCharge(
+      probe?: EvidenceProbe,
+      url = "http://localhost:9/charges/{{idempotencyKey}}",
+      plan: { stored?: boolean } = {},
+    ) {
       const execute = vi.fn(async () => {
         throw outcomeUnknown("socket hang up");
       });
@@ -777,13 +900,14 @@ describe("effect contract and principal", () => {
           reconciliation: [
             {
               type: "http_resource_matches",
-              url: "http://localhost:9/charges/{{idempotencyKey}}",
+              url,
               method: "GET",
               path: "json.status",
               value: "applied",
             },
           ],
         }),
+        plan,
       );
       const parked = await controller.execute(task.id, {
         approvalId: task.approval!.approvalId,
@@ -860,6 +984,89 @@ describe("effect contract and principal", () => {
       });
       expect(settled.receipt).toBeUndefined();
       expect(probe).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps a parked mutation parked, named as unanswerable, when its reconciliation URL cannot be completed", async () => {
+      const probe = vi.fn(async () => ({
+        status: 404,
+        content: JSON.stringify({ status: "none" }),
+      }));
+      // There is no response on this path, so `json.id` never resolves. A
+      // workflow step accepted before planning checked for that still runs.
+      const { parked, controller, execute } = await unansweredCharge(
+        probe,
+        "http://localhost:9/charges/{{json.id}}",
+        { stored: true },
+      );
+
+      const settled = await controller.execute(parked.task.id);
+
+      // Nobody was asked, so nobody said no; and asking again is refused
+      // again, which a caller must be able to tell from a provider outage.
+      expect(settled.task).toMatchObject({
+        status: "recovery_required",
+        error: "reconciliation_unanswerable:verification_token_unresolved:json.id",
+      });
+      expect(probe).not.toHaveBeenCalled();
+      expect(execute).toHaveBeenCalledTimes(1);
+    });
+
+    it("refuses at plan time a reconciliation URL token the facts before the call cannot fill", async () => {
+      await expect(unansweredCharge(undefined, "http://localhost:9/charges/{{json.id}}")).rejects.toThrow(
+        "reconciliation_unanswerable:verification_token_unresolved:json.id",
+      );
+      // The facts it is read against: the task, the URL, the method, the key.
+      const { parked } = await unansweredCharge(
+        undefined,
+        "http://localhost:9/charges/{{idempotencyKey}}?task={{taskId}}&m={{method}}&u={{url}}",
+      );
+      expect(parked.task.status).toBe("recovery_required");
+    });
+
+    it("refuses at plan time a reconciliation verifier this runtime does not have", async () => {
+      const { controller } = await setup();
+      expect(() =>
+        controller.plan(
+          TaskRequestSchema.parse({
+            goal: "Charge the customer",
+            operation: {
+              kind: "http",
+              action: "request",
+              method: "POST",
+              url: "http://localhost:9/charges",
+            },
+            requiredEvidence: [
+              { type: "result_equals", path: "success", value: true },
+            ],
+            reconciliation: [{ type: "custom", verifier: "ledger_row" }],
+          }),
+        ),
+      ).toThrow("evidence_verifier_unavailable:ledger_row");
+    });
+
+    it("refuses at plan time a file path no answer can ever come from", async () => {
+      const { controller } = await setup();
+      const write = (evidence: Record<string, unknown>) =>
+        TaskRequestSchema.parse({
+          goal: "Write the release flag",
+          operation: { kind: "file", action: "write", path: "release.flag", content: "x" },
+          ...evidence,
+        });
+      for (const path of ["../release.flag", ".", "/etc/hosts"]) {
+        expect(() => controller.plan(write({ requiredEvidence: [{ type: "file_exists", path }] })), path).toThrow(
+          "evidence_path_outside_workspace",
+        );
+        // Asked, it is refused every time, so the task would stay parked.
+        expect(() => controller.plan(write({ reconciliation: [{ type: "file_absent", path }] })), path).toThrow(
+          "evidence_path_outside_workspace",
+        );
+      }
+      // By its spelling: a file that is not there yet is a fair question.
+      const later = write({ requiredEvidence: [{ type: "file_exists", path: "dist/../out/release.flag" }] });
+      expect(controller.plan(later).status).toBe("awaiting_approval");
+      // A workflow step accepted before this check is not stopped at.
+      const accepted = write({ requiredEvidence: [{ type: "file_exists", path: "." }] });
+      expect(controller.plan(accepted, { stored: true }).status).toBe("awaiting_approval");
     });
 
     it("parks an unanswered mutation that declared no way to settle it", async () => {

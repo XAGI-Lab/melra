@@ -308,6 +308,30 @@ melra init --client generic
 
 Neither `init` nor `setup` overwrites an existing policy.
 
+The policy file is read strictly. Every key is optional, but a key MELRA does
+not know, at any depth, or a value of the wrong type stops the server from
+starting rather than falling back to the default, with every problem named by
+its path:
+
+```text
+melra: policy_invalid: /home/you/.melra/policy.json: allowedComands: unknown key
+melra: policy_invalid: /home/you/.melra/policy.json: unhinged: Invalid input: expected boolean, received string
+melra: policy_invalid: /home/you/.melra/policy.json: not valid JSON at line 3 column 1
+```
+
+A file that is not JSON is never quoted, so the message is safe to paste into
+a bug report. Where Node reports the position it is named by line and column;
+for some mistakes, such as a trailing comma in a list, a comment or a bare
+word, Node gives none and the message says only `not valid JSON`.
+
+The keys are `version`, `workspaceRoot`, `allowedCommands`, `allowedDomains`,
+`allowLocalhost`, `popups`, `mutations`, `approvalTtlMs`, `maxFileBytes`,
+`memoryRetention`, `deniedTraits`, `capabilities`, `credentials`,
+`circuitBreaker`, `unhinged` and `mode`; there is no comment or `$schema`
+key. `melra doctor` fails its `policy` check with the same message, `melra
+policy test` prints it, and `melra status` and `melra tasks` report it
+(`policyError` in their JSON).
+
 The generated policy allows any public browser destination
 (`allowedDomains: ["*"]`) and localhost, so browsing works without editing
 anything. That list is a *narrowing* control, not the safety boundary: the

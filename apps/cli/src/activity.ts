@@ -223,6 +223,8 @@ export interface TasksOptions {
   status?: TaskStatus;
   json: boolean;
   window: ApprovalWindow;
+  /** Why the policy file did not load, so the approvals were counted by the defaults. */
+  policyError?: string;
 }
 
 export function tasksCommand(env: CliEnvironment, options: TasksOptions): number {
@@ -235,9 +237,19 @@ export function tasksCommand(env: CliEnvironment, options: TasksOptions): number
     }),
   );
   if (!humanOutput(options.json)) {
-    // The shape `/api/tasks` answers with, minus approvals.
-    write(printable(JSON.stringify({ tasks: tasks.map(visible) }, null, 2), true));
+    // The shape `/api/tasks` answers with, minus approvals, plus `policyError`
+    // as `status` gives it.
+    const { policyError } = options;
+    write(
+      printable(
+        JSON.stringify({ tasks: tasks.map(visible), ...(policyError === undefined ? {} : { policyError }) }, null, 2),
+        true,
+      ),
+    );
     return 0;
+  }
+  if (options.policyError !== undefined) {
+    write(paint.warn(printable(`Policy invalid, approvals counted by the defaults: ${options.policyError}`)));
   }
   if (tasks.length === 0) {
     write(

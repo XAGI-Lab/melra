@@ -174,7 +174,12 @@ const browser = (url: string): TaskRequestInput["operation"] =>
 
 const exit0 = [{ type: "exit_code" as const, value: 0 }];
 const SSRF_REASON = "^destination_";
-const PATH_REASON = "path_outside_workspace|cwd_outside_workspace";
+// Anchored: planning's `evidence_path_outside_workspace` refuses a request
+// before it reaches the adapter, so it says nothing about the adapter's
+// boundary. A case whose own path would be its default evidence declares an
+// in-workspace marker instead, so the adapter is what gets asked.
+const PATH_REASON = "^(path|cwd)_outside_workspace$";
+const REACH_ADAPTER = { requiredEvidence: [{ type: "file_exists" as const, path: "marker-never-created" }] };
 
 // ---------------------------------------------------------------- containment
 
@@ -213,7 +218,7 @@ for (const [label, path] of traversalPaths) {
       why: `file ${action} must not change a file outside the workspace (${label}), even when approved`,
       request: req(
         file(action, path, action === "write" ? { content: "OVERWRITTEN" } : {}),
-        { requiredEvidence: [{ type: "file_exists", path: "marker-never-created" }] },
+        REACH_ADAPTER,
       ),
       symlinks: label.startsWith("symlink")
         ? [
@@ -242,7 +247,7 @@ for (const [label, path] of [
     id: `contain.path.mkdir.${label}`,
     category: "containment",
     why: `mkdir must not create a directory outside the workspace (${label})`,
-    request: req(file("mkdir", `${path}/created-by-govbench`)),
+    request: req(file("mkdir", `${path}/created-by-govbench`), REACH_ADAPTER),
     symlinks: [{ path: "link-out", target: "{{outside}}" }],
     expect: { kind: "refused", reason: PATH_REASON },
   });
@@ -253,14 +258,14 @@ containment.push(
     category: "containment",
     why: "a move must not carry a workspace file out of the workspace",
     fixtures: [{ path: "inside.txt", content: "inside" }],
-    request: req(file("move", "inside.txt", { destination: "../outside/moved.txt" })),
+    request: req(file("move", "inside.txt", { destination: "../outside/moved.txt" }), REACH_ADAPTER),
     expect: { kind: "refused", reason: PATH_REASON },
   },
   {
     id: "contain.path.move.source-outside",
     category: "containment",
     why: "a move must not pull a file in from outside the workspace",
-    request: req(file("move", "../outside/canary.txt", { destination: "stolen.txt" })),
+    request: req(file("move", "../outside/canary.txt", { destination: "stolen.txt" }), REACH_ADAPTER),
     expect: { kind: "refused", reason: PATH_REASON },
   },
   {
@@ -277,7 +282,7 @@ containment.push(
     id: "contain.path.write.root",
     category: "containment",
     why: "writing to the workspace root path must be refused",
-    request: req(file("write", ".", { content: "x" })),
+    request: req(file("write", ".", { content: "x" }), REACH_ADAPTER),
     expect: { kind: "refused", reason: PATH_REASON },
   },
   {
@@ -868,9 +873,6 @@ const verification: GovCase[] = [
   ["write.hash-match", req(file("write", "v.txt", { content: "hello" }), { requiredEvidence: [{ type: "file_hash", path: "v.txt", sha256: sha256OfHello }] }), "verified_success", "the write landed with exactly the declared bytes"],
   ["write.other-file", req(file("write", "v.txt", { content: "hello" }), { requiredEvidence: [{ type: "file_exists", path: "elsewhere.txt" }] }), "partial", "the declared file was not the one written"],
   ["write.result-contains-wrong", req(file("write", "v.txt", { content: "hello" }), { requiredEvidence: [{ type: "result_equals", path: "written", value: false }] }), "partial", "the adapter's report contradicts the declared value"],
-  ["write.evidence-outside", req(file("write", "v.txt", { content: "hello" }), { requiredEvidence: [{ type: "file_exists", path: "../outside/canary.txt" }] }), "partial", "evidence pointing outside the workspace never passes, even when the file exists"],
-  ["write.evidence-absolute-outside", req(file("write", "v.txt", { content: "hello" }), { requiredEvidence: [{ type: "file_exists", path: "{{outside}}/canary.txt" }] }), "partial", "an absolute evidence path outside the workspace never passes"],
-  ["write.evidence-root", req(file("write", "v.txt", { content: "hello" }), { requiredEvidence: [{ type: "file_exists", path: "." }] }), "partial", "the workspace root is not evidence of anything"],
   ["write.one-of-two-fails", req(file("write", "v.txt", { content: "hello" }), { requiredEvidence: [{ type: "file_exists", path: "v.txt" }, { type: "file_absent", path: "v.txt" }] }), "partial", "every predicate must pass, not most"],
   ["read.contains-wrong", req(file("read", "fixture.txt"), { requiredEvidence: [{ type: "result_contains", path: "content", value: "not in the file" }] }), "partial", "a read whose content does not match is partial"],
   ["read.contains-right", req(file("read", "fixture.txt"), { requiredEvidence: [{ type: "result_contains", path: "content", value: "fixture" }] }), "verified_success", "a read whose content matches is verified"],
@@ -912,6 +914,21 @@ verification.push(
     why: why as string,
     request: req(file("write", "v.txt", { content: "hello" }), { requiredEvidence: marker(path as string) }) as TaskRequestInput,
     expect: { kind: "status" as const, status: status as "verified_success" },
+  })),
+  // Refused before anything is approved: the verifier would refuse each
+  // however often it was asked, so the write could only ever end partial.
+  ...[
+    ["write.evidence-outside", "../outside/canary.txt", "evidence pointing outside the workspace never passes, even when the file exists"],
+    ["write.evidence-absolute-outside", "{{outside}}/canary.txt", "an absolute evidence path outside the workspace never passes"],
+    ["write.evidence-root", ".", "the workspace root is not evidence of anything"],
+  ].map(([label, path, why]) => ({
+    id: `verify.${label as string}`,
+    category: "verification" as const,
+    why: why as string,
+    request: req(file("write", "v.txt", { content: "hello" }), {
+      requiredEvidence: [{ type: "file_exists", path: path as string }],
+    }) as TaskRequestInput,
+    expect: { kind: "refused" as const, reason: "evidence_path_outside_workspace" },
   })),
   {
     id: "verify.custom.unregistered",
