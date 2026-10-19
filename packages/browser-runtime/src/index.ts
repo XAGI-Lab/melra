@@ -549,6 +549,8 @@ export class BrowserRuntime {
    * happened — see `execute`.
    */
   private dispatched = false;
+  /** Set when the route refused reserved data during the running action. */
+  private refusedReserved = false;
 
   constructor(private readonly options: BrowserRuntimeOptions) {}
 
@@ -579,6 +581,9 @@ export class BrowserRuntime {
       ) {
         throw new Error("browser_upload_outside_workspace");
       }
+      // Before anything looks the name up, so a reserved name gets the same
+      // answer whether it exists or not.
+      if ((await this.options.reserved?.(candidate)) === true) throw new Error("browser_path_reserved");
       const actual = await realpath(candidate);
       const actualRelative = relative(root, actual);
       if (
@@ -690,7 +695,10 @@ export class BrowserRuntime {
       try {
         await this.assertAllowed(requestUrl);
         await route.continue();
-      } catch {
+      } catch (error) {
+        if (this.acting && error instanceof Error && error.message === "browser_path_reserved") {
+          this.refusedReserved = true;
+        }
         await route.abort("blockedbyclient");
       }
     };
@@ -1933,6 +1941,7 @@ export class BrowserRuntime {
     this.signal = signal;
     this.callMs = operation.timeoutMs;
     this.dispatched = false;
+    this.refusedReserved = false;
     this.actingOn = undefined;
     this.actingTarget = undefined;
     this.action = operation.action;
@@ -2385,7 +2394,11 @@ export class BrowserRuntime {
           CLICKABLE,
         );
         this.dispatched = true;
-        const download = await downloadPromise;
+        // The click went out, so this stays an unknown outcome, but one that
+        // names the refusal when the route turned the file away.
+        const download = await downloadPromise.catch((error: unknown) => {
+          throw this.refusedReserved ? new Error("browser_path_reserved") : error;
+        });
         const suggested = download.suggestedFilename().replaceAll(/[^A-Za-z0-9._-]/g, "_");
         const path = join(
           this.options.artifactDirectory,

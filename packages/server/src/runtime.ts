@@ -151,6 +151,15 @@ export async function workspaceHoldsData(workspaceRoot: string, dataDirectory: s
 }
 
 /**
+ * Whether a workspace is the data directory or inside it, which
+ * `createMelraRuntime` refuses in every mode: every path there is MELRA's own.
+ */
+export async function workspaceInsideData(workspaceRoot: string, dataDirectory: string): Promise<boolean> {
+  const files = await FileRuntime.create({ root: unconfinedRoot(dataDirectory), reserved: [dataDirectory] });
+  return files.isReserved(workspaceRoot);
+}
+
+/**
  * The root a server confines to, given the one it was started for and the one
  * a policy file names: the file's only when it lies inside the given root, so
  * an operator can narrow a workspace but no file can move it elsewhere. A
@@ -283,17 +292,27 @@ export async function createMelraRuntime(
   // one of these would drop this process's POSIX locks on it: SQLite's on the
   // database, or the one other processes read this one's liveness from. The
   // data directory as a whole too: it also holds the key, the files a later
-  // start reads its policy and clients from, and the artifacts.
+  // start reads its policy and clients from, and the artifacts, which may be
+  // read but not changed.
   const reserved = [
     dataDirectory,
     ...["", "-wal", "-shm", "-journal", "-owners"].map((suffix) => `${store.path}${suffix}`),
     join(dataDirectory, "payload.key"),
   ];
+  const artifacts = join(dataDirectory, "artifacts");
   const files = await FileRuntime.create({
     root: runtimeRoot,
     maxFileBytes: policy.maxFileBytes,
     reserved,
+    readable: [artifacts],
   });
+  // Every path in such a workspace would be refused, without saying why.
+  if (await files.isReserved(policy.workspaceRoot)) {
+    store.close();
+    throw new Error(
+      "workspace_inside_data_directory: point MELRA_WORKSPACE at the project, outside MELRA_HOME.",
+    );
+  }
   // A workspace holding the data directory reaches it with a recursive read of
   // no path at all, so refusing the directories above it would be theatre
   // there; enforced mode refuses that layout instead.
@@ -311,7 +330,7 @@ export async function createMelraRuntime(
     confineArguments: mode === "enforced",
   });
   const browser = new BrowserRuntime({
-    artifactDirectory: join(dataDirectory, "artifacts"),
+    artifactDirectory: artifacts,
     workspaceRoot: runtimeRoot,
     allowedDomains: policy.allowedDomains,
     allowLocalhost: policy.allowLocalhost,
@@ -342,7 +361,7 @@ export async function createMelraRuntime(
   });
   const memory = new LocalMemory(store, policy.memoryRetention);
   const computer = new ComputerRuntime({
-    artifactDirectory: join(dataDirectory, "artifacts"),
+    artifactDirectory: artifacts,
     ...(options.computerAdapter === undefined
       ? {}
       : { adapter: options.computerAdapter }),
@@ -366,7 +385,8 @@ export async function createMelraRuntime(
     http,
   );
   const verifier = await Verifier.create(runtimeRoot, {
-      reserved: (path) => files.isReserved(path),
+      // Reads only, so artifacts can be checked.
+      reserved: (path) => files.isReserved(path, true),
       ...(options.evidenceVerifiers === undefined ? {} : { verifiers: options.evidenceVerifiers }),
       // The same adapter the effects go through, so a verification request is
       // checked against the destination boundary, the allowlist, and the

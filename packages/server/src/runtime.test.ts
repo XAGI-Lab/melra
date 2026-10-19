@@ -435,6 +435,20 @@ describe("terminal arguments", () => {
     const { task } = await run(terminal("node", ["-e", "", "."], true));
     expect(task.status).toBe("verified_success");
   });
+
+  it("refuses, in every mode, a workspace that is or sits inside the data directory", async () => {
+    for (const [workspaceRoot, environment] of [
+      [data, {}],
+      [join(data, "workspace"), {}],
+      [join(data, "workspace"), { MELRA_MODE: "enforced" }],
+      [join(data, "workspace"), { MELRA_UNHINGED: "1" }],
+    ] as const) {
+      await expect(
+        createMelraRuntime({ workspaceRoot, dataDirectory: data, environment }),
+        `${workspaceRoot} ${JSON.stringify(environment)}`,
+      ).rejects.toThrow(/workspace_inside_data_directory/);
+    }
+  });
 });
 
 describe("git read hardening", () => {

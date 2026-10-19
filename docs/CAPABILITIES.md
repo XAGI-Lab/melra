@@ -278,6 +278,9 @@ Actions: `capabilities`, `inspect`, `screenshot`, `click`, `move`, `drag`,
 - Capability discovery is read-only and reports the detected adapter and
   limitations.
 - Screenshots return a bounded artifact path, byte size, and SHA-256.
+  Artifacts sit in MELRA's data directory, so where a workspace reaches them
+  the file adapter and file verification may read them, and nothing may
+  change them.
 - Input actions are high-risk mutations requiring evidence and exact scoped
   approval.
 - Coordinates name normalized or pixel space; key input uses a fixed allowlist.

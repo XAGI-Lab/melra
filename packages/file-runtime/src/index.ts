@@ -29,6 +29,12 @@ export interface FileRuntimeOptions {
    * directory still reaches the same refusal.
    */
   reserved?: string[];
+  /**
+   * Directories inside a reserved one whose contents may still be read
+   * (`isReserved` with `reading`), recognised the same way: MELRA's artifacts.
+   * Nothing may change them, or the directory itself.
+   */
+  readable?: string[];
 }
 
 function inside(root: string, candidate: string): boolean {
@@ -97,10 +103,12 @@ export class FileRuntime {
   readonly maxFileBytes: number;
   readonly maxEntries: number;
   private readonly reserved: string[];
+  private readonly readable: string[];
 
   private constructor(options: FileRuntimeOptions, root: string) {
     this.root = root;
     this.reserved = (options.reserved ?? []).map((path) => resolve(path));
+    this.readable = (options.readable ?? []).map((path) => resolve(path));
     this.maxFileBytes = options.maxFileBytes ?? 10 * 1024 * 1024;
     this.maxEntries = options.maxEntries ?? 1_000;
   }
@@ -157,7 +165,7 @@ export class FileRuntime {
         probe = parent;
       }
     }
-    if (await this.isReserved(real)) throw new Error("path_reserved");
+    if (await this.isReserved(real, !changing)) throw new Error("path_reserved");
     // A directory holding reserved data takes it along when it is moved,
     // replaced or removed, so nothing may change it either.
     if (changing && (await this.holdsReserved(real))) throw new Error("path_reserved");
@@ -167,22 +175,36 @@ export class FileRuntime {
     return lexical;
   }
 
-  /** Whether `path` is, or is inside, one of the reserved entries. */
-  async isReserved(path: string): Promise<boolean> {
+  /** Whether `path` is one of `entries`: by a case-insensitive name and the identity of the directory holding it. */
+  private async named(path: string, entries: string[]): Promise<boolean> {
+    const name = spelling(basename(path));
+    for (const entry of entries) {
+      // Only a matching name costs a stat, so ordinary paths cost nothing.
+      if (spelling(basename(entry)) === name && (await sameEntry(dirname(path), dirname(entry)))) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Whether `path` is, or is inside, one of the reserved entries. `reading`
+   * says nothing will change it, so the contents of a readable directory are
+   * judged only below that directory, where a link to reserved data is still
+   * refused.
+   */
+  async isReserved(path: string, reading = false): Promise<boolean> {
     // A descriptor path names whatever this process has open, MELRA's locked
     // files included, and on macOS realpath leaves it under /dev/fd.
     if (process.platform !== "win32" && inside("/dev/fd", resolve(path))) return true;
+    let above: string | undefined;
+    for (let current = resolve(path); reading && above === undefined; current = dirname(current)) {
+      if (await this.named(current, this.readable)) above = current;
+      if (dirname(current) === current) break;
+    }
     // ponytail: one stat per name match, so `payload.key/` repeated 340 times
     // across 100 arguments still costs about 0.9 s. Cache the reserved
     // identities if that ever shows up.
-    for (let current = resolve(path); ; current = dirname(current)) {
-      const name = spelling(basename(current));
-      for (const entry of this.reserved) {
-        // Only a matching name costs a stat, so ordinary paths cost nothing.
-        if (spelling(basename(entry)) === name && (await sameEntry(dirname(current), dirname(entry)))) {
-          return true;
-        }
-      }
+    for (let current = resolve(path); current !== above; current = dirname(current)) {
+      if (await this.named(current, this.reserved)) return true;
       if (dirname(current) === current) break;
     }
     // The same thing under another name: a hard link, or macOS's
@@ -204,7 +226,7 @@ export class FileRuntime {
     // Root first, stopping at the first missing directory: nothing below it
     // exists, and a 4 KB argument would otherwise cost thousands of failed stats.
     const chain: string[] = [];
-    for (let current = resolve(path); ; current = dirname(current)) {
+    for (let current = resolve(path); current !== above; current = dirname(current)) {
       chain.unshift(current);
       if (dirname(current) === current) break;
     }

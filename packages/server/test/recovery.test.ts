@@ -5,12 +5,12 @@
 // are. Building a runtime recovers, and recovery used to take the other one's
 // live task for a crashed one.
 
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { link, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { detectBrowserExecutable } from "@melra/browser-runtime";
-import { BrowserOperationSchema, FileOperationSchema, TaskRequestSchema } from "@melra/protocol";
+import { BrowserOperationSchema, FileOperationSchema, TaskRequestSchema, TerminalOperationSchema } from "@melra/protocol";
 import { createMelraRuntime, type MelraRuntime, type PredicateVerifier } from "../src/index.js";
 
 const roots: string[] = [];
@@ -167,6 +167,58 @@ describe("recovery between runtimes sharing a home", () => {
     // Listing names opens nothing, and the rest of the workspace is ordinary.
     expect(await run({ action: "list", path: "home" })).toMatchObject({ entries: [{ name: ".melra" }] });
     await run({ action: "write", path: "home/notes.txt", content: "x" });
+  });
+
+  it("lets its artifacts be read, and nothing change them", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-runtime-recovery-"));
+    roots.push(root);
+    const data = join(root, ".melra");
+    const runtime = await createMelraRuntime({ workspaceRoot: root, dataDirectory: data, environment: {} });
+    runtimes.push(runtime);
+    const artifacts = join(data, "artifacts");
+    await mkdir(artifacts, { recursive: true });
+    await writeFile(join(artifacts, "shot.png"), "png");
+    // The key under another name among them is still the key.
+    await link(join(data, "payload.key"), join(artifacts, "key.png"));
+    const run = (operation: Record<string, unknown>) =>
+      runtime.router.execute(FileOperationSchema.parse({ kind: "file", ...operation }));
+    expect(await run({ action: "read", path: ".melra/artifacts/shot.png" })).toMatchObject({ content: "png" });
+    expect(await run({ action: "stat", path: ".melra/artifacts/shot.png" })).toMatchObject({ type: "file" });
+    expect(await run({ action: "hash", path: ".melra/artifacts/shot.png" })).toMatchObject({ size: 3 });
+    expect(await run({ action: "list", path: ".melra/artifacts" })).toMatchObject({
+      entries: expect.arrayContaining([{ name: "shot.png", type: "file" }]),
+    });
+    for (const operation of [
+      { action: "read", path: ".melra/artifacts/key.png" },
+      { action: "write", path: ".melra/artifacts/shot.png", content: "x" },
+      { action: "write", path: ".melra/artifacts/new.png", content: "x" },
+      { action: "delete", path: ".melra/artifacts/shot.png" },
+      { action: "delete", path: ".melra/artifacts", recursive: true },
+      { action: "move", path: ".melra/artifacts/shot.png", destination: "shot.png" },
+      { action: "mkdir", path: ".melra/artifacts/sub" },
+    ]) {
+      await expect(run(operation), JSON.stringify(operation)).rejects.toThrow("path_reserved");
+    }
+    expect(await readFile(join(artifacts, "shot.png"), "utf8")).toBe("png");
+    // A command may change what it names, so none may name them.
+    await expect(
+      runtime.router.execute(
+        TerminalOperationSchema.parse({ kind: "terminal", action: "run", command: "ls", args: [".melra/artifacts"] }),
+      ),
+    ).rejects.toThrow("terminal_path_reserved");
+    // The verifier only reads.
+    const write = runtime.controller.plan(
+      TaskRequestSchema.parse({
+        goal: "Write and check",
+        operation: { kind: "file", action: "write", path: "out.txt", content: "x" },
+        requiredEvidence: [{ type: "file_exists", path: ".melra/artifacts/shot.png" }],
+      }),
+    );
+    const checked = await runtime.controller.execute(write.id, {
+      approvalId: write.approval!.approvalId,
+      phrase: write.approval!.phrase!,
+    });
+    expect(checked.task.status).toBe("verified_success");
   });
 
   it("waits for a sweep in flight before closing the database under it", async () => {

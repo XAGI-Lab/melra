@@ -55,9 +55,13 @@ describe("MELRA's own data", () => {
       runtime.execute(BrowserOperationSchema.parse({ kind: "browser", ...operation }));
     try {
       await run({ action: "navigate", url: `http://127.0.0.1:${address.port}/` });
-      await expect(
-        run({ action: "upload", target: { selector: "#f" }, filePaths: ["notes.txt", ".melra/payload.key"] }),
-      ).rejects.toThrow("browser_path_reserved");
+      // Present or absent, a reserved name gets the same answer.
+      for (const reservedPath of [".melra/payload.key", ".melra/policy.json"]) {
+        await expect(
+          run({ action: "upload", target: { selector: "#f" }, filePaths: ["notes.txt", reservedPath] }),
+          reservedPath,
+        ).rejects.toThrow("browser_path_reserved");
+      }
       await expect(run({ action: "upload", target: { selector: "#f" }, filePaths: ["notes.txt"] })).resolves.toMatchObject({
         uploaded: 1,
       });
@@ -71,7 +75,13 @@ describe("MELRA's own data", () => {
     if (executablePath === undefined) return;
     const { root, data, reserved } = await layout();
     const key = pathToFileURL(join(data, "payload.key")).href;
-    await writeFile(join(root, "page.html"), `<a id="get" download href="${key}">key</a>`);
+    // Not text, which the browser would show rather than download.
+    await writeFile(join(root, "plain.bin"), "bytes");
+    const plain = pathToFileURL(join(root, "plain.bin")).href;
+    await writeFile(
+      join(root, "page.html"),
+      `<a id="get" download href="${key}">key</a><a id="plain" download href="${plain}">plain</a>`,
+    );
     const artifacts = join(root, "artifacts");
     const runtime = new BrowserRuntime({
       workspaceRoot: root,
@@ -87,10 +97,19 @@ describe("MELRA's own data", () => {
     try {
       await expect(run({ action: "navigate", url: key })).rejects.toThrow("browser_path_reserved");
       await expect(run({ action: "tab_new", url: key })).rejects.toThrow("browser_path_reserved");
-      // A page may still be a file, and a link on it to the key gets nothing.
+      // A page may still be a file, and its link to an ordinary file downloads.
       await run({ action: "navigate", url: pathToFileURL(join(root, "page.html")).href });
-      await expect(run({ action: "download", target: { selector: "#get" }, timeoutMs: 3_000 })).rejects.toThrow();
-      expect(await readdir(artifacts)).toEqual([]);
+      await expect(run({ action: "download", target: { selector: "#plain" }, timeoutMs: 10_000 })).resolves.toMatchObject({
+        downloaded: true,
+        size: 5,
+      });
+      expect(await readdir(artifacts)).toHaveLength(1);
+      // Its link to the key gets nothing. The click went out, so the outcome is
+      // unknown, and it names the refusal.
+      await expect(run({ action: "download", target: { selector: "#get" }, timeoutMs: 3_000 })).rejects.toThrow(
+        "effect_outcome_unknown:browser_path_reserved",
+      );
+      expect(await readdir(artifacts)).toHaveLength(1);
     } finally {
       await runtime.close();
     }
