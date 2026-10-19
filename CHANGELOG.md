@@ -111,6 +111,10 @@ All notable changes are documented here. The format follows
   the unknown step's compensation, which that unwind skipped, is offered again.
   (#270)
 
+- `docs/COMPATIBILITY.md` names MCP Python SDK `1.30.x`, the version `sdk-py`
+  pins and tests, not `1.28.x`. `pnpm check` now fails when either SDK line
+  stops naming the pinned version. (#286)
+
 - The TypeScript SDK's `execute()` and `advanceWorkflow()` wait up to 36
   minutes for the server, past a task's budget and its built-in evidence
   reads, instead of the MCP client's 60 s default. A task that
