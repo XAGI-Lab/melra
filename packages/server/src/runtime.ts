@@ -1,16 +1,18 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
+import { realpath, stat } from "node:fs/promises";
 import {
   arch,
   cpus,
   freemem,
+  homedir,
   hostname,
   platform,
   release,
   totalmem,
 } from "node:os";
-import { isAbsolute, join, parse, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, parse, relative, resolve } from "node:path";
 import type { DeploymentMode, Operation } from "@melra/protocol";
 import { deploymentMode, HttpOperationSchema } from "@melra/protocol";
 import { BrowserRuntime } from "@melra/browser-runtime";
@@ -148,6 +150,78 @@ export async function workspaceHoldsData(workspaceRoot: string, dataDirectory: s
     reserved: [join(dataDirectory, "payload.key")],
   });
   return files.holdsReserved(files.root);
+}
+
+/**
+ * Whether a workspace hands the agent every project at once: a filesystem
+ * root, the home directory, or a directory holding home (`/Users`, `/home`,
+ * `C:\Users`). Decided by identity, so a symlinked home, a bind mount and
+ * macOS's `/System/Volumes/Data` firmlink spelling (which realpath does not
+ * fold) all count. Undefined for any other directory, a project under home
+ * included, and for one that does not resolve, which `doctor` reports.
+ */
+export async function broadWorkspace(
+  workspace: string,
+  home = homedir(),
+): Promise<"root" | "home" | "holds-home" | undefined> {
+  try {
+    const real = await realpath(workspace);
+    if (parse(real).root === real) return "root";
+    const id = async (path: string) => {
+      const found = await stat(path, { bigint: true });
+      return `${found.dev}:${found.ino}`;
+    };
+    const target = await id(real);
+    const realHome = await realpath(home);
+    const homeId = await id(realHome);
+    for (const start of new Set([realHome, join("/System/Volumes/Data", realHome)])) {
+      // Only a spelling that is home: the ancestors of one that is not are not home's.
+      if ((await id(start).catch(() => undefined)) !== homeId) continue;
+      for (let current = start; ; current = dirname(current)) {
+        if ((await id(current).catch(() => undefined)) === target) {
+          return current === start ? "home" : "holds-home";
+        }
+        if (dirname(current) === current) break;
+      }
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * How to give a process a narrower workspace. MELRA_WORKSPACE always works.
+ * The working directory does unless an operator's policy file pins the
+ * workspace, as the CLI lets a MELRA_POLICY file's `workspaceRoot` do when
+ * MELRA_WORKSPACE is unset; the shared ~/.melra/policy.json only narrows it.
+ */
+export function narrowWorkspaceAdvice(dataDirectory: string, policyPath?: string): string {
+  return policyPath === undefined || resolve(policyPath) === resolve(dataDirectory, "policy.json")
+    ? "set MELRA_WORKSPACE to your project directory, or run this from there"
+    : `set MELRA_WORKSPACE to your project directory, or make that the workspaceRoot in ${policyPath}`;
+}
+
+/**
+ * What to do about a workspace that holds the data directory, by layout. A
+ * broad workspace is the mistake (the default ~/.melra is in home), and moving
+ * MELRA_HOME would only point the server at a new, empty database. A project
+ * someone put MELRA_HOME inside is fixed by moving it out, database and all.
+ * Only the default location is said to stay: one inside a project under a
+ * broad workspace still has to move once the workspace is narrowed.
+ */
+export async function dataLocationAdvice(
+  workspaceRoot: string,
+  dataDirectory: string,
+  policyPath?: string,
+): Promise<string> {
+  if ((await broadWorkspace(workspaceRoot)) === undefined) {
+    return "move the MELRA_HOME directory, with everything in it, out of the workspace, and set MELRA_HOME to where it went";
+  }
+  const narrow = narrowWorkspaceAdvice(dataDirectory, policyPath);
+  return resolve(dataDirectory) === resolve(homedir(), ".melra")
+    ? `${narrow}; keep MELRA_HOME where it is (moving it orphans the database)`
+    : narrow;
 }
 
 /**
@@ -297,9 +371,8 @@ export async function createMelraRuntime(
   const holdsData = await files.holdsReserved(files.root);
   if (mode === "enforced" && holdsData) {
     store.close();
-    throw new Error(
-      "enforced_mode_refuses_data_inside_workspace: move MELRA_HOME outside MELRA_WORKSPACE.",
-    );
+    const advice = await dataLocationAdvice(files.root, dataDirectory, options.policyPath);
+    throw new Error(`enforced_mode_refuses_data_inside_workspace: ${advice}.`);
   }
   const terminal = await TerminalRuntime.create({
     root: runtimeRoot,

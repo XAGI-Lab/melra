@@ -107,6 +107,24 @@ All notable changes are documented here. The format follows
   passes `--socket "$MELRA_SOCKET"` instead. The stderr warning `serve` printed
   in that case is gone with it. (#105)
 
+- **Breaking:** `melra setup` and `melra init` show the workspace they give
+  the agent, as a `Workspace` row and as `workspace` in the JSON, and no
+  longer make it the home directory, a directory holding it (`/Users`,
+  `/home`, `C:\Users`) or a filesystem root (`/`, or a drive root on
+  Windows) unasked. The workspace is the current directory unless
+  `MELRA_WORKSPACE` is set or a `MELRA_POLICY` file's `workspaceRoot` pins
+  it, so the README's `npx @melra/cli@alpha setup` run in a fresh terminal
+  gave the agent the whole home directory, with nothing printed to say so.
+  In a terminal they now say so and ask, defaulting to no; elsewhere (piped,
+  captured, `--json`) they refuse with `workspace_too_broad` and write
+  nothing. Either way they say to set `MELRA_WORKSPACE` to the project
+  directory or run from there; when a `MELRA_POLICY` file set the workspace,
+  to make the project that file's `workspaceRoot` instead of running from
+  it. A script that means it sets `MELRA_WORKSPACE`, which is never
+  questioned. Directories
+  are compared by identity, so a symlinked home and macOS's
+  `/System/Volumes/Data/...` spelling of it count.
+
 - Each GitHub release's notes are its version's `CHANGELOG.md` section, so a
   breaking change is called out in them as `GOVERNANCE.md` asks, instead of a
   list of pull request titles. Wrapped lines are joined, since a release body
@@ -125,6 +143,17 @@ All notable changes are documented here. The format follows
   release only once its tag was cut.
 
 ### Fixed
+
+- `melra doctor`'s `data-location` advice and the enforced-mode refusal
+  `enforced_mode_refuses_data_inside_workspace` give the fix that fits the
+  layout. A workspace that is home or holds it, the usual cause, gets: set
+  `MELRA_WORKSPACE` to the project directory or run the command from there
+  (with a `MELRA_POLICY` file, or make the project its `workspaceRoot`), and
+  keep `MELRA_HOME` where it is. Only a `MELRA_HOME` put inside a project
+  gets: move it out of the workspace, with everything in it. Both always
+  said to move `MELRA_HOME`, which for the usual cause points the server at
+  a new, empty database and orphans the tasks and approvals in the old one.
+  `doctor --json` carries the advice as the check's `next`.
 
 - A parked mutation whose `reconciliation` predicate could not be asked stays
   `recovery_required`: a URL token with nothing to fill it (`{{json.id}}`,
