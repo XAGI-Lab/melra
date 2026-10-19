@@ -1306,6 +1306,30 @@ describe("WorkflowController execution", () => {
     expect(execute).toHaveBeenCalledTimes(1);
   });
 
+  it("finishes it at a later advance when writing that certificate fails again", async () => {
+    const execute = vi.fn(async () => ({ success: true, stored: true }));
+    const { controller, store } = await setup(execute);
+    const full = () => {
+      throw new Error("disk full");
+    };
+    vi.spyOn(store, "saveCertificate").mockImplementationOnce(full).mockImplementationOnce(full);
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Remember",
+        nodes: [{ id: "remember", type: "operation", request: mutationRequest("Remember the project") }],
+      }),
+    );
+    // Thrown, it lost the advance that recorded the step, and the next one
+    // planned the step again. Swallowed, the run had nothing left to run and
+    // no advance looked at its status again.
+    const result = await settle(controller, planned.id);
+    expect(result.run.status).toBe("verified_complete");
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
   it("halts rather than unwind past a step whose outcome is unknown when another is denied", async () => {
     const calls: string[] = [];
     const { controller, tasks } = await setup(async (operation) => {

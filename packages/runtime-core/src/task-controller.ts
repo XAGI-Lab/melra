@@ -577,14 +577,14 @@ export class TaskController {
       task.updatedAt = now();
       this.store.saveTask(task);
       settled = { task, output: result, receipt };
-      const certificate = this.createAndSaveCertificate(task, evidence);
+      const certificate = this.createAndSaveCertificate(task, evidence, true);
       return { ...settled, certificate };
     } catch (error) {
       // The outcome is recorded, beside its receipt and idempotency commit,
       // and only the certificate summarising it failed to write. Rewriting it
       // would contradict them, and an error would read as the effect not
-      // having happened, so the caller gets what was recorded. The next read
-      // of its receipts writes the certificate.
+      // having happened, so the caller gets what was recorded. A workflow
+      // step's certificate is written by the run's next advance (`certify`).
       if (settled !== undefined) return settled;
       const rawMessage = error instanceof Error ? error.message : String(error);
       // Capped after redaction, which can lengthen it, at the 10,000 characters
@@ -648,7 +648,7 @@ export class TaskController {
       this.store.saveReceipt(receipt);
       task.receiptIds.push(receipt.receiptId);
       this.store.saveTask(task);
-      const certificate = this.createAndSaveCertificate(task, evidence);
+      const certificate = this.createAndSaveCertificate(task, evidence, true);
       return { task, receipt, certificate };
     } finally {
       if (timeout !== undefined) clearTimeout(timeout);
@@ -1049,7 +1049,7 @@ export class TaskController {
     if (input.receiptId !== undefined) {
       const receipt = this.store.getReceipt(input.receiptId);
       if (receipt === undefined) throw new Error("receipt_not_found");
-      const certificate = this.certificateFor(receipt.taskId);
+      const certificate = this.store.getCertificateForTask(receipt.taskId);
       return {
         receipts: [receipt],
         ...(certificate === undefined ? {} : { certificate }),
@@ -1057,7 +1057,7 @@ export class TaskController {
     }
     if (input.taskId === undefined) throw new Error("task_or_receipt_required");
     const receipts = this.store.getReceiptsForTask(input.taskId);
-    const certificate = this.certificateFor(input.taskId);
+    const certificate = this.store.getCertificateForTask(input.taskId);
     return {
       receipts,
       ...(certificate === undefined ? {} : { certificate }),
@@ -1065,25 +1065,26 @@ export class TaskController {
   }
 
   /**
-   * A task's certificate, written now if its outcome was recorded and only
-   * the certificate failed to write: a workflow counts a step done only on
-   * its certificate, so the run would never finish. Not for a task in flight
-   * or parked, which something else may be settling while this writes.
+   * A task's certificate, written now for a `verified_success` task whose
+   * certificate failed to write after it was recorded: a workflow counts a
+   * step done only on its certificate. For a writer of the run, never a
+   * read. Only that status, because every other path to it writes the
+   * certificate before the task, and `execute`, which does not, writes it
+   * only if none is stored: whoever writes first, both hand out the same one.
+   * A write that fails again is left for the next writer.
    */
-  private certificateFor(taskId: string): ExecutionCertificate | undefined {
+  certify(taskId: string): ExecutionCertificate | undefined {
     const certificate = this.store.getCertificateForTask(taskId);
     if (certificate !== undefined) return certificate;
     const task = this.store.getTask(taskId);
     const last = task?.receiptIds.at(-1);
     const receipt = last === undefined ? undefined : this.store.getReceipt(last);
-    if (
-      task === undefined ||
-      receipt === undefined ||
-      ["running", "verifying", "recovery_required"].includes(task.status)
-    ) {
+    if (task?.status !== "verified_success" || receipt === undefined) return undefined;
+    try {
+      return this.createAndSaveCertificate(task, receipt.evidence, true);
+    } catch {
       return undefined;
     }
-    return this.createAndSaveCertificate(task, receipt.evidence);
   }
 
   /**
@@ -1212,6 +1213,8 @@ export class TaskController {
   private createAndSaveCertificate(
     task: TaskRecord,
     evidence: EvidenceItem[],
+    // A task's first: one another writer stored meanwhile stays, and is used.
+    first = false,
   ): ExecutionCertificate {
     const approvalChannel =
       task.approvedBy?.channel ??
@@ -1236,11 +1239,11 @@ export class TaskController {
       ...(mode === undefined ? {} : { mode }),
       ...(approvalChannel === undefined ? {} : { approvalChannel }),
     });
-    this.store.saveCertificate(certificate);
-    task.certificateId = certificate.certificateId;
+    const stored = this.store.saveCertificate(certificate, { ifAbsent: first });
+    task.certificateId = stored.certificateId;
     task.updatedAt = now();
     this.store.saveTask(task);
-    return certificate;
+    return stored;
   }
 
   private finishWithoutReceipt(

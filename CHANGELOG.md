@@ -138,12 +138,13 @@ All notable changes are documented here. The format follows
   the target's circuit breaker though the target had answered. A task already
   recorded as `verified_success` keeps that outcome when only its certificate
   fails to write; it was rewritten as `failed` beside its own verified
-  receipt. The certificate is written the next time the task's receipts are
-  read (`melra_receipt`, or a workflow deriving its run's status), so a run
-  with that step still finishes. A mutation that had verified and committed
-  its idempotency key before the write failed settles as `verified_success`
-  when it is next reconciled (`melra_execute`), declared `reconciliation` or
-  not.
+  receipt. A workflow step's certificate is then written by the run's next
+  `advance`, so the run still finishes. It is written only if none is stored,
+  as the executor's own now is, so two processes never hand out different
+  certificates for one task, and reading receipts writes nothing. A mutation
+  that had verified and committed its idempotency key before the write failed
+  settles as `verified_success` when it is next reconciled (`melra_execute`),
+  declared `reconciliation` or not.
 
 - A workflow step whose adapter error runs past 10,000 characters is
   recorded. The task kept the whole message and a workflow node's `error`

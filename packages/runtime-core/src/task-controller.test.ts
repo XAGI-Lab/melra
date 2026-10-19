@@ -107,6 +107,44 @@ describe("TaskController", () => {
     );
   });
 
+  it("hands out one certificate per task across processes", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-controller-certificate-"));
+    roots.push(root);
+    const databasePath = join(root, "melra.sqlite");
+    const key = Buffer.alloc(32, 23);
+    const executor = { execute: async () => ({ success: true, value: "verified" }) };
+    const running = new SqliteStore(databasePath);
+    const elsewhere = new SqliteStore(databasePath);
+    stores.push(running, elsewhere);
+    const executing = await createController(running, root, key, executor);
+    const other = await createController(elsewhere, root, key, executor);
+    const planned = executing.plan(
+      TaskRequestSchema.parse({ goal: "Inspect the runtime", operation: { kind: "system", action: "info" } }),
+    );
+    // Another process reads the task, and a workflow advance certifies it,
+    // after its outcome is recorded and before its certificate is.
+    const save = running.saveCertificate.bind(running);
+    let read: ReturnType<TaskController["receipts"]> | undefined;
+    let certified: ReturnType<TaskController["certify"]>;
+    vi.spyOn(running, "saveCertificate").mockImplementationOnce((certificate, options) => {
+      read = other.receipts({ taskId: planned.id });
+      certified = other.certify(planned.id);
+      return save(certificate, options);
+    });
+
+    const executed = await executing.execute(planned.id);
+
+    // A read writes nothing, so it cannot hand out a certificate the
+    // executor's then replaces.
+    expect(read?.certificate).toBeUndefined();
+    const stored = running.getCertificateForTask(planned.id)!;
+    expect([executed.certificate?.certificateId, certified?.certificateId]).toEqual([
+      stored.certificateId,
+      stored.certificateId,
+    ]);
+    expect(running.getTask(planned.id)?.certificateId).toBe(stored.certificateId);
+  });
+
   it("keeps exact requests out of SQLite and rejects the wrong key", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-controller-sealed-"));
     roots.push(root);

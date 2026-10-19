@@ -371,7 +371,10 @@ export class WorkflowController {
         ? awaiting
         : readyNodeIds(graph, current.nodes);
     if (nodeIds.length === 0) {
-      return { run: current, tasks: [], events: this.events(workflowId, since) };
+      // Nothing to run, but a step's certificate the last advance could not
+      // write may be written now, and a run with nothing left is complete.
+      const run = this.transition(current, (draft, emit) => this.settleStatus(draft, definition, emit));
+      return { run, tasks: [], events: this.events(workflowId, since) };
     }
 
     // A sibling's refusal is reported only after the others' changes are
@@ -1602,10 +1605,10 @@ export class WorkflowController {
           ["verified_complete", "skipped", "compensated"].includes(
             state.status,
           ) &&
+          // Every caller writes the run, so a step's certificate that
+          // failed to write is written here rather than on a read.
           state.taskIds.every(
-            (taskId) =>
-              this.tasks.receipts({ taskId }).certificate?.result ===
-              "VERIFIED_SUCCESS",
+            (taskId) => this.tasks.certify(taskId)?.result === "VERIFIED_SUCCESS",
           )
         );
       })

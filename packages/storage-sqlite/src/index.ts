@@ -1201,15 +1201,23 @@ export class SqliteStore {
     return rows.map((row) => JSON.parse(row.data) as ActionReceipt);
   }
 
-  saveCertificate(certificate: ExecutionCertificate): void {
+  /**
+   * Stores a task's certificate in place of the one it had, and returns what
+   * is stored. With `ifAbsent` one already there stays instead, so two
+   * processes certifying the same outcome hand out the same certificate.
+   */
+  saveCertificate(
+    certificate: ExecutionCertificate,
+    { ifAbsent = false }: { ifAbsent?: boolean } = {},
+  ): ExecutionCertificate {
     this.database
       .prepare(`
         INSERT INTO certificates(id, task_id, data, created_at)
         VALUES (?, ?, ?, ?)
-        ON CONFLICT(task_id) DO UPDATE SET
+        ON CONFLICT(task_id) DO ${ifAbsent ? "NOTHING" : `UPDATE SET
           id = excluded.id,
           data = excluded.data,
-          created_at = excluded.created_at
+          created_at = excluded.created_at`}
       `)
       .run(
         certificate.certificateId,
@@ -1217,6 +1225,7 @@ export class SqliteStore {
         JSON.stringify(certificate),
         certificate.createdAt,
       );
+    return ifAbsent ? this.getCertificateForTask(certificate.taskId)! : certificate;
   }
 
   getCertificateForTask(taskId: string): ExecutionCertificate | undefined {

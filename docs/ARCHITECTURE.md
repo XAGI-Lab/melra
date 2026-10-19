@@ -514,10 +514,12 @@ then be written, parks the same way: the target answered, and nothing recorded
 says what. One that had already verified and committed its idempotency key is
 settled by that commit, which is written only once the effect verified:
 reconciling it asks nobody and it becomes `verified_success`
-(`committed_before_interruption`), declared `reconciliation` or not. A task
-whose outcome was recorded but whose certificate was not gets the certificate
-the next time its receipts are read, so a workflow waiting on that step still
-finishes.
+(`committed_before_interruption`), declared `reconciliation` or not. A workflow
+step whose outcome was recorded but whose certificate was not gets it at the
+run's next advance, so the run still finishes. Only what writes the run (an
+advance, recovery, a resume) writes it, and only if none is stored yet, as
+`execute` writes its own: reading receipts writes nothing, and no two
+processes hand out different certificates for one task.
 
 Settling a parked task is what `reconciliation` predicates are for. They are
 read against the facts that were true *before* the call — the task id, the URL,
