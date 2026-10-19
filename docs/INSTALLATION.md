@@ -181,9 +181,9 @@ build), and `-win-x64.exe`. They are covered by the release's `SHA256SUMS` and
 its signed provenance attestation, so check one before running it:
 
 ```bash
-sha256sum --check --ignore-missing SHA256SUMS
-gh attestation verify melra-<version>-linux-x64 --repo XAGI-Lab/melra
-chmod +x melra-<version>-linux-x64 && ./melra-<version>-linux-x64 doctor
+sha256sum --check --ignore-missing SHA256SUMS &&
+  gh attestation verify melra-<version>-linux-x64 --repo XAGI-Lab/melra &&
+  chmod +x melra-<version>-linux-x64 && ./melra-<version>-linux-x64 doctor
 ```
 
 They are not code-signed. macOS quarantines a downloaded copy until you clear
@@ -877,6 +877,14 @@ melra approve 3f2a… --yes  # no question, for a script that already decided
 melra approve 3f2a… --deny # cancel the task instead
 ```
 
+Denying a step of a durable workflow fails its run, as a failed step does: the
+next `melra workflow advance` offers the compensations declared for the steps
+already done, newest first, each for its own approval. If another step's
+outcome is unknown, the run is `recovery_required` instead and nothing is
+undone until an operator settles it. Deny a compensation to stop there (the
+run then reports `recovery_required` and names it), or end the run without
+unwinding with `melra workflow cancel`.
+
 Off a terminal and without `--yes` it prints the effect as JSON and exits 3
 without deciding. The receipt for the run records who approved it
 (`cli:` plus [`MELRA_APPROVER`](#local-configuration), `operator` by
@@ -1321,6 +1329,10 @@ its own, it points to Docker or WSL2 instead (see
 warns when it finds no restriction at all, or when it cannot read any.
 
 ## Python SDK
+
+To install it, see [the SDK's install section](../sdk-py/README.md#install):
+the wheel attached to each GitHub release, or `pip install ./sdk-py` from a
+checkout. It is not on PyPI, so `pip install melra` does not install it.
 
 For repository development:
 

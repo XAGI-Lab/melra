@@ -57,5 +57,6 @@ in the OpenAI Agents SDK, `transport: { type: "http", url, headers }` in
 `createMCPClient`, or `StreamableHTTPClientTransport` with `requestInit.headers`
 in the MCP SDK. `melra serve --socket <path>` serves the same thing on a
 mode-`0600` Unix socket; MELRA's own SDKs (`@melra/sdk`, the Python `melra`
-package) connect to it directly. See
+package, [installed from a release or a checkout](../../sdk-py/README.md#install),
+not from PyPI) connect to it directly. See
 [docs/INSTALLATION.md](../../docs/INSTALLATION.md#http-server-and-console).
