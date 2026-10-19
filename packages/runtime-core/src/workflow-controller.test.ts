@@ -1030,6 +1030,48 @@ describe("WorkflowController execution", () => {
     expect(run.nodes["undo-ship"]?.status).toBe("skipped");
   });
 
+  it("does not undo, on a later advance, a read its approval only let through", async () => {
+    const calls: string[] = [];
+    const { controller } = await setup(async (operation) => {
+      if (operation.kind !== "http") throw new Error("unexpected_operation");
+      const path = new URL(operation.url).pathname;
+      calls.push(path);
+      return { success: path !== "/notify" };
+    });
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Charge, approve and look up the shipment, notify",
+        nodes: [
+          { id: "charge", type: "operation", request: call("Charge", `${PAYMENTS}/charges`) },
+          { id: "approve-ship", type: "approval", forNodeId: "ship", dependsOn: ["charge"] },
+          {
+            id: "ship",
+            type: "operation",
+            dependsOn: ["approve-ship"],
+            // A read: policy lets the approval pass its task through planned.
+            request: TaskRequestSchema.parse({
+              goal: "Look up the shipment",
+              operation: { kind: "http", action: "request", method: "GET", url: `${LOGISTICS}/shipments` },
+            }),
+          },
+          { id: "notify", type: "operation", dependsOn: ["charge"], request: call("Notify", `${PAYMENTS}/notify`) },
+          // In this order the refund is offered first and parks for approval,
+          // so the shipment's compensation is decided by the next advance.
+          { id: "undo-ship", type: "compensation", forNodeId: "ship", request: call("Cancel shipment", `${LOGISTICS}/cancellations`) },
+          { id: "undo-charge", type: "compensation", forNodeId: "charge", request: call("Refund", `${PAYMENTS}/refunds`) },
+        ],
+      }),
+    );
+
+    const result = await settle(controller, planned.id);
+
+    expect(calls).toEqual(["/charges", "/notify", "/refunds"]);
+    expect(result.run.status).toBe("failed");
+  });
+
   it("stops an unwind when the run is cancelled under it", async () => {
     let cancelRun = () => {};
     const calls: string[] = [];

@@ -269,7 +269,8 @@ effects disagree, cancelled as a duplicate of an attempt that committed or
 still running or verifying, makes the run `recovery_required` until recovery
 settles it. Recovery runs whenever the runtime starts: `melra serve` (each stdio
 session is one), any `melra workflow` command, `approve`, `run`, `console`,
-`inspect` and `export`. `status`, `tasks` and `watch` only read the store.
+`inspect`, `export` and `demo`. `status`, `tasks` and `watch` only read the
+store.
 
 Implemented event types are:
 

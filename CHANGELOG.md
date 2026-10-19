@@ -113,7 +113,8 @@ All notable changes are documented here. The format follows
   the denial, live and after a restart, instead of keeping its other branches'
   approvals on offer. A run an earlier version left `running` this way is
   repaired the next time the runtime starts (`melra serve`, any `melra
-  workflow` command, `approve`, `run`, `console`), and one it left `failed`
+  workflow` command, `approve`, `run`, `console`, `inspect`, `export` or
+  `demo`), and one it left `failed`
   past a denied compensation reports `recovery_required` at its next advance.
   Only an operator's or agent's cancel counts as a denial. A step cancelled as
   a duplicate (its effect committed under an attempt the run does not record,
