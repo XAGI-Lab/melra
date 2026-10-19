@@ -77,7 +77,7 @@ made through other tools remain outside MELRA's control.
 
 ### 26-second demo
 
-https://github.com/user-attachments/assets/69a2a2a2-6301-4a72-82f1-96700516ea59
+https://github.com/user-attachments/assets/e5cf895d-7ea6-4797-a1ef-e69cc5860d3f
 
 <br />
 
