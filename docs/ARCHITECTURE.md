@@ -542,9 +542,16 @@ than stopping. A stalled unwind makes the run `recovery_required` with
 `workflow_compensation_incomplete:<node>` naming the missing inverse, and
 `advance` refuses to start new work on top of it.
 
-A step denied before it runs starts the same unwind as a failed one, unless
-another step's outcome is unknown: then the run is `recovery_required` and
-waits for an operator, rather than undo what that effect may depend on. Each
+A step denied before it runs starts the same unwind as a failed one. Neither
+starts while another step's outcome is unknown or unsettled (an effect that may
+have happened, or a task still running): the run is `recovery_required` and
+waits, starting no further step, rather than undo what that effect may depend
+on. That step is settled by its `reconciliation`: `melra_execute` on its task,
+or recovery when a process starts, asks the provider whether the effect
+happened. Once settled, the run fails at the next recovery and the next
+`advance` unwinds, the settled step's own compensation included if its effect
+happened. A step that declares no `reconciliation` cannot be settled by MELRA;
+`workflow cancel` ends such a run, without unwinding it. Each
 compensation is still its own governed task, so one that is a mutation waits for
 its own approval, and denying it stops the unwind as a failed compensation does.
 To end a run without unwinding it, cancel the run (`workflow cancel`,

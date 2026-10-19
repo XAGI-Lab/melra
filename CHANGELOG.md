@@ -109,6 +109,22 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- A workflow step that fails no longer starts the unwind while another step's
+  outcome is unknown or unsettled (`recovery_required`: an effect that may have
+  happened, or a task still running). The run halts as `recovery_required`,
+  starts no further step, and fails and unwinds only once that step is
+  settled by its `reconciliation`, as a denied step already did; one that
+  declares none leaves `workflow cancel` as the way out. It used to refund a charge whose
+  shipment might be in transit, and skip the compensation of a step that went
+  on to verify. This holds for sibling steps and for branches of one
+  `parallel` node, live and after a restart; a branch refused for a wrong
+  approval no longer reports before the others finish, which left the node
+  recorded as it was and let the unwind start. A run an earlier version left
+  `failed` beside such a step, including a `parallel` node it recorded as
+  failed, is halted the same way at its next advance. The unknown step's
+  compensation, which that unwind skipped, is offered again, also when the step
+  ran under its `approval` node or when that unwind had stalled. (#270)
+
 - A workflow with an `exit_code` evidence predicate can be planned, and so can
   one with a node id, verifier name or URL that looks like an API key
   (`api-integration-tests`). Planning parsed the redacted copy it stores
