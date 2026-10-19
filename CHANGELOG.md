@@ -100,8 +100,8 @@ All notable changes are documented here. The format follows
 
 - The Python SDK's README says how to install it: the wheel attached to each
   GitHub release, checked against `SHA256SUMS` and its attestation, or
-  `pip install ./sdk-py` from a checkout. No doc said so before, and
-  `pip install melra` installs an unrelated PyPI project. (#259)
+  `pip install ./sdk-py` from a checkout. No doc said so before, and the SDK
+  is not on PyPI, so `pip install melra` does not install it. (#259)
 
 - `melra clients` lists a client whose tokens were revoked as `pending`, not
   `approved`: a revoke now clears the client's approval along with its tokens.
