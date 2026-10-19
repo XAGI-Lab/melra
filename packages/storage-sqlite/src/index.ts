@@ -14,7 +14,6 @@ import {
   WorkflowSnapshotSchema,
   type EncryptedPayload,
   type ApprovalDecision,
-  type WorkflowDefinition,
   type WorkflowEvent,
   type WorkflowRun,
   type WorkflowSnapshot,
@@ -114,6 +113,15 @@ function parseStored<T>(
     throw new Error(error);
   }
 }
+
+/**
+ * The redacted copy of a workflow definition, kept for reading. Redaction
+ * rewrites any string shaped like a credential, so a node id or a URL in it
+ * may no longer match the definition schema; only the identity it is stored
+ * under is checked. The sealed payload is the definition that runs.
+ */
+const RedactedWorkflowDefinitionSchema = WorkflowDefinitionSchema.pick({ id: true, version: true }).loose();
+export type RedactedWorkflowDefinition = ReturnType<typeof RedactedWorkflowDefinitionSchema.parse>;
 
 /**
  * Task records, events and receipts are for the user running MELRA alone:
@@ -658,12 +666,12 @@ export class SqliteStore {
    * one), so only the run and its events are written.
    */
   createWorkflow(
-    redactedDefinition: WorkflowDefinition,
+    redactedDefinition: unknown,
     payload: EncryptedPayload | undefined,
     run: WorkflowRun,
     events: WorkflowEvent[],
   ): void {
-    const definition = WorkflowDefinitionSchema.parse(redactedDefinition);
+    const definition = RedactedWorkflowDefinitionSchema.parse(redactedDefinition);
     const sealed = payload === undefined ? undefined : EncryptedPayloadSchema.parse(payload);
     if (sealed === undefined && this.getWorkflowPayload(definition.id, definition.version) === undefined) {
       throw new Error("workflow_payload_not_found");
@@ -735,7 +743,7 @@ export class SqliteStore {
   getWorkflowDefinition(
     id: string,
     version: number,
-  ): WorkflowDefinition | undefined {
+  ): RedactedWorkflowDefinition | undefined {
     const row = this.database
       .prepare(`
         SELECT data FROM workflow_definitions WHERE id = ? AND version = ?
@@ -745,7 +753,7 @@ export class SqliteStore {
       ? undefined
       : parseStored(
           row.data,
-          WorkflowDefinitionSchema,
+          RedactedWorkflowDefinitionSchema,
           "stored_workflow_definition_invalid",
         );
   }

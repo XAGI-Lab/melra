@@ -133,7 +133,7 @@ describe("WorkflowController planning", () => {
       "workflow.status_changed",
     ]);
     expect(
-      store.getWorkflowDefinition(definitionId, 1)?.nodes[0],
+      (store.getWorkflowDefinition(definitionId, 1) as WorkflowDefinition | undefined)?.nodes[0],
     ).not.toEqual(exact.nodes[0]);
     expect(
       cipher.open(
@@ -1205,6 +1205,33 @@ describe("WorkflowController execution", () => {
     );
     const result = await settle(controller, planned.id);
     expect(result.run.status).toBe("verified_complete");
+  });
+
+  it("plans and runs a workflow whose node id looks like an API key", async () => {
+    const { controller, store } = await setup(async () => ({ success: true, exitCode: 0 }));
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Test",
+        nodes: [
+          {
+            id: "api-integration-tests",
+            type: "operation",
+            request: TaskRequestSchema.parse({
+              goal: "Test",
+              operation: { kind: "terminal", action: "run", command: "node", args: ["--version"] },
+              requiredEvidence: [{ type: "exit_code", value: 0 }],
+            }),
+          },
+        ],
+      }),
+    );
+    // The stored copy is redacted; the run reads the sealed definition.
+    expect(JSON.stringify(store.getWorkflowDefinition(definitionId, 1))).not.toContain("api-integration-tests");
+    const result = await settle(controller, planned.id);
+    expect(result.run.nodes["api-integration-tests"]?.status).toBe("verified_complete");
   });
 
   it("halts rather than unwind past a step whose outcome is unknown when another is denied", async () => {

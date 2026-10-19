@@ -103,12 +103,15 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
-- A workflow with an `exit_code` evidence predicate can be planned. Storing
-  its definition redacted every `value` field, including the exit status the
-  schema requires to be a number, so the stored copy failed its own schema and
-  every interface refused the plan, blaming the caller's valid `"value": 0`. An
-  `exit_code` predicate's whole-number value is now kept: no secret can hide in
-  it. Any other `value` is still redacted. (#278)
+- A workflow with an `exit_code` evidence predicate can be planned, and so can
+  one with a node id, verifier name or URL that looks like an API key
+  (`api-integration-tests`). Planning parsed the redacted copy it stores
+  against the definition schema, and redaction had turned the exit status into
+  a string and such names into `[REDACTED_API_KEY]`, so every interface refused
+  the plan and blamed the caller's valid input. The redacted copy is now
+  stored as it is; the sealed definition is the one that runs. An `exit_code`
+  predicate's whole-number value is also kept in that copy, since no secret
+  can hide in it. Any other `value` is still redacted. (#278)
 
 - The screen reading that `inspect` falls back to when no element tree came
   back deletes its screenshot once `tesseract` has read it. Each such
