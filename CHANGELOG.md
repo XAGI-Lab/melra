@@ -125,6 +125,23 @@ All notable changes are documented here. The format follows
   are compared by identity, so a symlinked home and macOS's
   `/System/Volumes/Data/...` spelling of it count.
 
+- Each GitHub release's notes are its version's `CHANGELOG.md` section, so a
+  breaking change is called out in them as `GOVERNANCE.md` asks, instead of a
+  list of pull request titles. Wrapped lines are joined, since a release body
+  shows every newline as a line break. `pnpm docs:check` fails while
+  `package.json`'s version has no section or an empty one, so a version bump
+  without notes fails its pull request rather than the tag release. The
+  container takes the tags npm does: the version, the release channel
+  (`:alpha`, `:beta`, `:rc`, or `:latest` for a stable version) and, before
+  1.0, `:latest` on every release, instead of always `:alpha`. The README and
+  `docs/INSTALLATION.md` now run `:latest`, which follows every release, while
+  `:alpha` stays on the last alpha once betas begin, as npm's `@alpha` does.
+  `scripts/release-channel.mjs` picks the channel for the release and its dry
+  run alike, and a prerelease id other than alpha, beta or rc fails
+  `pnpm check` instead of publishing under `latest`. The release dry run also
+  runs `pnpm security:audit` and extracts the notes, which otherwise stopped a
+  release only once its tag was cut.
+
 ### Fixed
 
 - `melra doctor`'s `data-location` advice and the enforced-mode refusal
@@ -566,6 +583,18 @@ All notable changes are documented here. The format follows
   `docs/COMPATIBILITY.md`, and the README's `melra version` sample), which had
   stayed at 0.3.0-alpha.12 through two releases. `docs/RELEASES.md` lists the
   MCP Registry publish step.
+
+- The container image moves only once a release run has passed everything
+  else, the install smoke on every runner included. The 0.3.0-alpha.13 and
+  alpha.14 runs pushed `ghcr.io/xagi-lab/melra:alpha` while their artifacts
+  jobs failed after the npm publish and before creating the GitHub release,
+  because the container job waited for nothing. npm still moves first, so
+  after such a failure npm's dist-tags lead the image's until the failed jobs
+  are re-run. npm packages publish in dependency order with `@melra/cli` last,
+  so a run that stops partway leaves no published package whose `@melra/*`
+  dependencies are missing; the order came from a glob that could put the CLI
+  first. The order is worked out in full before the first publish, so a
+  dependency cycle stops the run with nothing published.
 
 ### Security
 
