@@ -868,9 +868,6 @@ const verification: GovCase[] = [
   ["write.hash-match", req(file("write", "v.txt", { content: "hello" }), { requiredEvidence: [{ type: "file_hash", path: "v.txt", sha256: sha256OfHello }] }), "verified_success", "the write landed with exactly the declared bytes"],
   ["write.other-file", req(file("write", "v.txt", { content: "hello" }), { requiredEvidence: [{ type: "file_exists", path: "elsewhere.txt" }] }), "partial", "the declared file was not the one written"],
   ["write.result-contains-wrong", req(file("write", "v.txt", { content: "hello" }), { requiredEvidence: [{ type: "result_equals", path: "written", value: false }] }), "partial", "the adapter's report contradicts the declared value"],
-  ["write.evidence-outside", req(file("write", "v.txt", { content: "hello" }), { requiredEvidence: [{ type: "file_exists", path: "../outside/canary.txt" }] }), "partial", "evidence pointing outside the workspace never passes, even when the file exists"],
-  ["write.evidence-absolute-outside", req(file("write", "v.txt", { content: "hello" }), { requiredEvidence: [{ type: "file_exists", path: "{{outside}}/canary.txt" }] }), "partial", "an absolute evidence path outside the workspace never passes"],
-  ["write.evidence-root", req(file("write", "v.txt", { content: "hello" }), { requiredEvidence: [{ type: "file_exists", path: "." }] }), "partial", "the workspace root is not evidence of anything"],
   ["write.one-of-two-fails", req(file("write", "v.txt", { content: "hello" }), { requiredEvidence: [{ type: "file_exists", path: "v.txt" }, { type: "file_absent", path: "v.txt" }] }), "partial", "every predicate must pass, not most"],
   ["read.contains-wrong", req(file("read", "fixture.txt"), { requiredEvidence: [{ type: "result_contains", path: "content", value: "not in the file" }] }), "partial", "a read whose content does not match is partial"],
   ["read.contains-right", req(file("read", "fixture.txt"), { requiredEvidence: [{ type: "result_contains", path: "content", value: "fixture" }] }), "verified_success", "a read whose content matches is verified"],
@@ -912,6 +909,21 @@ verification.push(
     why: why as string,
     request: req(file("write", "v.txt", { content: "hello" }), { requiredEvidence: marker(path as string) }) as TaskRequestInput,
     expect: { kind: "status" as const, status: status as "verified_success" },
+  })),
+  // Refused before anything is approved: the verifier would refuse each
+  // however often it was asked, so the write could only ever end partial.
+  ...[
+    ["write.evidence-outside", "../outside/canary.txt", "evidence pointing outside the workspace never passes, even when the file exists"],
+    ["write.evidence-absolute-outside", "{{outside}}/canary.txt", "an absolute evidence path outside the workspace never passes"],
+    ["write.evidence-root", ".", "the workspace root is not evidence of anything"],
+  ].map(([label, path, why]) => ({
+    id: `verify.${label as string}`,
+    category: "verification" as const,
+    why: why as string,
+    request: req(file("write", "v.txt", { content: "hello" }), {
+      requiredEvidence: [{ type: "file_exists", path: path as string }],
+    }) as TaskRequestInput,
+    expect: { kind: "refused" as const, reason: "evidence_path_outside_workspace" },
   })),
   {
     id: "verify.custom.unregistered",

@@ -960,6 +960,31 @@ describe("effect contract and principal", () => {
       ).toThrow("evidence_verifier_unavailable:ledger_row");
     });
 
+    it("refuses at plan time a file path no answer can ever come from", async () => {
+      const { controller } = await setup();
+      const write = (evidence: Record<string, unknown>) =>
+        TaskRequestSchema.parse({
+          goal: "Write the release flag",
+          operation: { kind: "file", action: "write", path: "release.flag", content: "x" },
+          ...evidence,
+        });
+      for (const path of ["../release.flag", ".", "/etc/hosts"]) {
+        expect(() => controller.plan(write({ requiredEvidence: [{ type: "file_exists", path }] })), path).toThrow(
+          "evidence_path_outside_workspace",
+        );
+        // Asked, it is refused every time, so the task would stay parked.
+        expect(() => controller.plan(write({ reconciliation: [{ type: "file_absent", path }] })), path).toThrow(
+          "evidence_path_outside_workspace",
+        );
+      }
+      // By its spelling: a file that is not there yet is a fair question.
+      const later = write({ requiredEvidence: [{ type: "file_exists", path: "dist/../out/release.flag" }] });
+      expect(controller.plan(later).status).toBe("awaiting_approval");
+      // A workflow step accepted before this check is not stopped at.
+      const accepted = write({ requiredEvidence: [{ type: "file_exists", path: "." }] });
+      expect(controller.plan(accepted, { stored: true }).status).toBe("awaiting_approval");
+    });
+
     it("parks an unanswered mutation that declared no way to settle it", async () => {
       const execute = vi.fn(async () => {
         throw outcomeUnknown("socket hang up");

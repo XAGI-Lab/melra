@@ -264,7 +264,7 @@ export function createMcpServer(
     {
       title: "Plan a MELRA task",
       description:
-        "Plan one bounded operation without running it: MELRA evaluates policy and stores the task in its own records only, so nothing outside MELRA changes until it runs. Send a goal, one operation and requiredEvidence, and leave constraints empty. Returns the task with its effect contract and status planned, awaiting_approval (approval holds the challenge) or policy_blocked (a normal result; policyDecision.reason says why); an invalid request, such as one naming an unregistered verifier, fails the call instead. Keep its id: it is the taskId for melra_execute, melra_task_status, melra_task_cancel and melra_receipt. For dependent steps use melra_workflow_plan.",
+        "Plan one bounded operation without running it: MELRA evaluates policy and stores the task in its own records only, so nothing outside MELRA changes until it runs. Send a goal, one operation and requiredEvidence, and leave constraints empty. Returns the task with its effect contract and status planned, awaiting_approval (approval holds the challenge) or policy_blocked (a normal result; policyDecision.reason says why); an invalid request, such as one naming an unregistered verifier or a file evidence path outside the workspace, fails the call instead. Keep its id: it is the taskId for melra_execute, melra_task_status, melra_task_cancel and melra_receipt. For dependent steps use melra_workflow_plan.",
       inputSchema: MelraPlanInputSchema,
       annotations: {
         readOnlyHint: true,

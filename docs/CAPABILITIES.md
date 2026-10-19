@@ -382,7 +382,10 @@ Action: `info`. Returns local runtime capability information without mutation.
 | `custom` | a verifier the operator registered with the runtime, by name, with flat scalar `params`; strength is always `execution` |
 
 URL globs are anchored and schema-bounded. A completed action with unmet
-required evidence returns `partial`, never `verified_success`.
+required evidence returns `partial`, never `verified_success`. A `file_*` path
+that can only land outside the workspace or on its root is refused at planning
+(`evidence_path_outside_workspace`), since the verifier would refuse it every
+time it was asked.
 
 `custom` is for effects no built-in can confirm, such as a database row or a
 ticket in some SaaS. The verifier is code passed to `createMelraRuntime` as

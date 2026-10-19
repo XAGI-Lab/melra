@@ -534,6 +534,12 @@ safe thing:
 | *(none declared)* | stays `recovery_required`, `reconciliation_not_declared` |
 
 An unreachable provider did not say no, so nothing is concluded from silence.
+A predicate the kernel itself refuses to ask — a path outside the workspace, a
+URL token with nothing to fill it, a verifier this runtime lacks — is
+inconclusive too, and its item also carries `unanswerable: true`, because
+asking again is refused again; a caller deciding whether to wait reads that
+flag, never the summary. Planning refuses a file path that could only be
+refused (`evidence_path_outside_workspace`).
 The same path runs on restart: `recoverInterrupted` reconciles a crashed
 mutation that declared how to settle one, and parks the rest.
 

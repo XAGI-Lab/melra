@@ -196,6 +196,14 @@ export interface EvidenceItem {
    * did not answer is evidence of nothing at all.
    */
   inconclusive?: boolean;
+  /**
+   * Beside `inconclusive`: the kernel itself refused the question — a path
+   * outside the workspace or reserved, a URL token with nothing to fill it, a
+   * verifier or probe this runtime does not have — so asking again of the
+   * same result is refused again. A caller deciding whether to wait reads this
+   * rather than the summary. Only the kernel sets it; a verifier's is dropped.
+   */
+  unanswerable?: boolean;
   source?: string;
   digest?: string;
 }

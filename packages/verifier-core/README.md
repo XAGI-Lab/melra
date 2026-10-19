@@ -53,7 +53,11 @@ What a verifier does **not** decide:
   predicate type, over anything `check` returns, so a new type reads as the
   weakest claim (`execution`) rather than declaring itself `independent`.
 - **Whether an unanswerable question passes.** A type with no verifier, and a
-  `check` that throws, are failed items.
+  `check` that throws, are failed items marked `inconclusive`: no answer, not a
+  no. The kernel's own refusals (a path outside the workspace, a URL token with
+  nothing to fill it, a type with no verifier) are also `unanswerable`, and a
+  verifier cannot set that flag itself. `outsideWorkspace(predicate)` says
+  before anything runs whether a file predicate's path could only be refused.
 - **What a built-in means.** Registering a built-in type is refused
   (`verifier_type_taken`).
 - **Where files are.** The only file access offered is

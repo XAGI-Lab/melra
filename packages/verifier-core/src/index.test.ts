@@ -104,6 +104,63 @@ describe("Verifier", () => {
     ]);
   });
 
+  it("marks only the kernel's own refusals as unanswerable", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-verifier-"));
+    roots.push(root);
+    await writeFile(join(root, "melra.sqlite"), "db");
+    const http = { type: "http_resource_matches", method: "GET", path: "status", value: 200, timeoutMs: 1_000 };
+    const verifier = await Verifier.create(root, {
+      probe: async () => ({ status: 200 }),
+      reserved: async (path) => path.endsWith("melra.sqlite"),
+      verifiers: [
+        {
+          type: "mimic",
+          async check() {
+            throw new Error("verification_path_outside_workspace");
+          },
+        },
+        {
+          type: "claims",
+          async check() {
+            return { passed: false, summary: "no", unanswerable: true };
+          },
+        },
+      ],
+    });
+    const { evidence } = await verifier.verify(
+      [
+        { type: "file_exists", path: "../release.flag" },
+        { type: "file_absent", path: "." },
+        { type: "file_hash", path: "melra.sqlite", sha256: "0".repeat(64) },
+        { ...http, url: "https://files.example.test/{{fileId}}" },
+        { ...http, url: "https://files.example.test/{{dir}}" },
+        { type: "nobody_knows" },
+        { type: "mimic" },
+        { type: "claims" },
+      ],
+      { dir: ".." },
+    );
+    const { evidence: unprobed } = await (await Verifier.create(root)).verify(
+      [{ ...http, url: "https://files.example.test/x" }],
+      {},
+    );
+    // Told apart by the flag, never the summary: a verifier's own failure
+    // can say anything, and is no answer for now rather than for good.
+    expect(
+      [...evidence, ...unprobed].map((item) => [item.summary, item.inconclusive ?? false, item.unanswerable ?? false]),
+    ).toEqual([
+      ["verification_path_outside_workspace", true, true],
+      ["verification_path_outside_workspace", true, true],
+      ["verification_path_reserved", true, true],
+      ["verification_token_unresolved:fileId", true, true],
+      ["verification_token_dot_segment:dir", true, true],
+      ["verification_unsupported:nobody_knows", true, true],
+      ["verification_path_outside_workspace", true, false],
+      ["no", false, false],
+      ["verification_probe_unavailable", true, true],
+    ]);
+  });
+
   it("answers a path under a regular file as absent", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-verifier-"));
     roots.push(root);

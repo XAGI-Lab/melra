@@ -323,6 +323,12 @@ export class TaskController {
           `evidence_verifier_unavailable:${predicate.type === "custom" ? predicate.verifier : predicate.type}`,
         );
       }
+      // A file path the verifier refuses however often it is asked. New work
+      // only, like the reconciliation check: a run accepted before this
+      // check existed is not stopped at the step.
+      if (options.stored !== true && this.verifier.outsideWorkspace(predicate)) {
+        throw new Error("evidence_path_outside_workspace");
+      }
     }
     return evaluatePolicy(
       "00000000-0000-4000-8000-000000000000",

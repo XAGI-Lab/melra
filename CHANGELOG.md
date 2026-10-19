@@ -118,9 +118,17 @@ All notable changes are documented here. The format follows
   predicate whose check throws is now `inconclusive` in the receipt, as an
   unreachable provider already was; a missing file is still a plain no for
   `file_exists` and `file_hash`, and a path under a regular file (`ENOTDIR`)
-  is absent for `file_absent`, where it was an error. Planning refuses a
-  `reconciliation` verifier the runtime does not have
-  (`evidence_verifier_unavailable`), as it did for `requiredEvidence`; a
+  is absent for `file_absent`, where it was an error. An item the kernel
+  itself refused to ask (a path outside the workspace or reserved, a URL token
+  with nothing to fill it, a verifier or probe the runtime does not have) also
+  carries `unanswerable: true`, so a caller can tell a question that is
+  refused every time from one worth asking again without reading its summary;
+  a verifier cannot set it. Planning refuses a `reconciliation` verifier the
+  runtime does not have (`evidence_verifier_unavailable`), as it did for
+  `requiredEvidence`, and a `file_exists`, `file_absent` or `file_hash` path
+  in either that can only land outside the workspace or on its root
+  (`evidence_path_outside_workspace`): such evidence ended `partial` after the
+  effect ran, and such a reconciliation left the task parked for good. A
   workflow run accepted before this change is not stopped at that step.
 
 - A mutation whose adapter returned, but whose result, receipt or task could
