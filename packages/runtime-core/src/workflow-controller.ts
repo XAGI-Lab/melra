@@ -296,12 +296,21 @@ export class WorkflowController {
     }
     const definition = this.loadDefinition(stored);
     const graph = validateWorkflow(definition);
+    const since = stored.stateVersion;
+    // An earlier version failed a run beside a step whose outcome is unknown
+    // and would now undo what that step may depend on. Halt it as a run that
+    // gets there now halts, so recovery settles the step first. Repaired
+    // before any parked step is settled: settled first, the step no longer
+    // reads unknown, and its skipped compensation is never offered again.
+    const repaired = this.repairLegacy(definition, stored);
+    if (repaired !== undefined) {
+      return { run: repaired, tasks: [], events: this.events(workflowId, since) };
+    }
     // A step parked as recovery_required is settled outside the run, by
     // melra_execute reconciling its task against the provider. Its tasks are
     // read again here, as recovery reads them, so the run moves on in this
     // process instead of at the next restart.
     const current = this.resettleParked(stored, definition);
-    const since = stored.stateVersion;
     const rollback =
       current.status === "failed"
         ? definition.nodes
@@ -316,13 +325,6 @@ export class WorkflowController {
             .map((node) => node.id)
             .reverse()
         : [];
-    // An earlier version failed a run beside a step whose outcome is unknown
-    // and would now undo what that step may depend on. Halt it as a run that
-    // gets there now halts, so recovery settles the step first.
-    const repaired = this.repairLegacy(definition, current);
-    if (repaired !== undefined) {
-      return { run: repaired, tasks: [], events: this.events(workflowId, since) };
-    }
     // An unwind that stopped half-done is not a base to build more effects on:
     // a forward effect happened, its declared inverse did not, and no node
     // describes that. Refused here rather than left to `readyNodeIds`, which
@@ -713,9 +715,6 @@ export class WorkflowController {
     const parked = definition.nodes.filter((node) => {
       const state = run.nodes[node.id];
       if (state?.status !== "recovery_required") return false;
-      // Only an earlier version fails a run beside a parked forward step, and
-      // advance repairs that run first, as recovery leaves it alone.
-      if (run.status === "failed" && node.type !== "compensation") return false;
       // Read again only once its recorded tasks would move it: a harness polls
       // a parked run, and reading every task each time is not free. A parallel
       // branch that settled beside one still unknown moves nothing.
