@@ -17,7 +17,7 @@ import {
   TaskRequestSchema,
   TerminalOperationSchema,
 } from "@melra/protocol";
-import { approvalScreen, createMelraRuntime, printable, serveHttp } from "@melra/server";
+import { OAuthProvider, approvalScreen, createMelraRuntime, printable, serveHttp } from "@melra/server";
 import { runConformance } from "../src/conformance.js";
 import { RESTART_SAFE_WORKFLOW } from "../src/demo-workflow.js";
 import { approverLabel, parseCliEnvironment, serverLaunch } from "../src/environment.js";
@@ -1220,6 +1220,39 @@ describe("melra CLI", () => {
     );
     expect(deprecated.stderr).toContain("--unhinged is deprecated");
     expect(JSON.parse(deprecated.stdout).unhinged).toBe(true);
+  });
+
+  it("lists a client it revoked as pending, not approved", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-cli-"));
+    roots.push(root);
+    const home = join(root, ".melra");
+    const options = { cwd: root, env: { ...process.env, MELRA_HOME: home, MELRA_WORKSPACE: root } };
+    // Registered and approved through the console's provider, as a server does.
+    const oauth = new OAuthProvider(home);
+    const id = oauth.register({ client_name: "agent", redirect_uris: ["http://127.0.0.1:9/cb"] }).client_id as string;
+    oauth.decide(
+      new URLSearchParams({ client_id: id, redirect_uri: "http://127.0.0.1:9/cb", code_challenge: "x".repeat(43), decision: "approve" }),
+    );
+    expect((await execute(process.execPath, [entry, "clients"], options)).stdout).toContain(`approved  ${id}`);
+
+    await execute(process.execPath, [entry, "clients", "--revoke", id], options);
+    // Its tokens were gone, and it was still listed as approved.
+    expect((await execute(process.execPath, [entry, "clients"], options)).stdout).toContain(`pending   ${id}`);
+  });
+
+  it("refuses to revoke a client that is not registered, or nothing at all", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-cli-"));
+    roots.push(root);
+    const options = { cwd: root, env: { ...process.env, MELRA_HOME: join(root, ".melra"), MELRA_WORKSPACE: root } };
+    // A mistyped id reported "Revoked 0 tokens" and exited 0; a bare --revoke listed the clients.
+    await expect(execute(process.execPath, [entry, "clients", "--revoke", "nope"], options)).rejects.toMatchObject({
+      code: 1,
+      stderr: expect.stringContaining("no such client: nope"),
+    });
+    await expect(execute(process.execPath, [entry, "clients", "--revoke"], options)).rejects.toMatchObject({
+      code: 1,
+      stderr: expect.stringContaining("--revoke requires a client id"),
+    });
   });
 
   it("refuses a blank --port instead of taking a random one", async () => {

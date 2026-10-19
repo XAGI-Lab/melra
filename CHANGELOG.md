@@ -109,6 +109,12 @@ All notable changes are documented here. The format follows
   and as evidence the item is marked inconclusive. A miss on the status or a
   header is still the provider's answer. (#249)
 
+- `melra clients` lists a client whose tokens were revoked as `pending`, not
+  `approved`: a revoke now clears the client's approval along with its tokens.
+  `melra clients --revoke <id>` exits 1 with `no such client` for an id that is
+  not registered, and a `--revoke` with no value is refused; both used to exit
+  0, the first reporting "Revoked 0 tokens". (#255)
+
 - The TypeScript SDK's `MelraClient.connect()` says why a `melra serve` it
   started refused to start: the error quotes the server's stderr (an invalid
   policy, an unwritable `MELRA_HOME`, a Node without `node:sqlite`) instead
@@ -249,6 +255,12 @@ All notable changes are documented here. The format follows
   MCP Registry publish step.
 
 ### Security
+
+- An authorization code issued to an OAuth client before `melra clients
+  --revoke` can no longer be redeemed after it. The revoke runs in another
+  process and cannot reach the server's pending codes, which live for five
+  minutes, so the client could still get a fresh token in that window. Each
+  code is now bound to the approval it came from, and a revoke ends it. (#255)
 
 - A background terminal job keeps the processes its program leaves in its
   process group under supervision until that group is empty. Once the program
