@@ -310,6 +310,10 @@ describe("melra CLI", () => {
             port: url.port,
             path,
             method: init.body === undefined ? "GET" : "POST",
+            // No pooled keep-alive socket, as in the server's console test:
+            // the console runs in this process, and a slow turn lets it time
+            // one out just as the next request is written to it (#296).
+            agent: false,
             headers: {
               ...(init.token === undefined ? {} : { authorization: `Bearer ${init.token}` }),
               origin: url.origin,
