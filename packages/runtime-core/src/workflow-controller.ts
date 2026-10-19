@@ -1059,7 +1059,7 @@ export class WorkflowController {
   }
 
   cancel(workflowId: string): WorkflowRun {
-    return this.underLease(workflowId, (current, taken) => {
+    return this.underLease(workflowId, (current) => {
       if (current.status === "verified_complete") return current;
       let definition: WorkflowDefinition | undefined;
       try {
@@ -1072,12 +1072,14 @@ export class WorkflowController {
         current.status === "cancelled"
           ? current
           : this.transition(current, (draft, emit) => {
-              // Taken over from an advance that stalled or died, the run names
-              // none of the steps that advance planned or ran, and nothing
-              // recovers a cancelled run: read again from the tasks under its
-              // keys first, as the next advance would, so they are on its
-              // nodes. A task still running there is stopped as the run's own.
-              if (taken === "replaced" && definition !== undefined) {
+              // After an advance that stalled, died or lost its commit, the run
+              // names none of the steps that advance planned or ran, and
+              // nothing recovers a cancelled run: read again from the tasks
+              // under its keys first, as the next advance would, so they are on
+              // its nodes (a run already whole reads the same, and records
+              // nothing more). A task still running there is stopped as the
+              // run's own.
+              if (definition !== undefined) {
                 stopped.push(...this.recoverNodes(current, definition, this.store.listTasks(100_000), draft, emit));
               }
               for (const [nodeId, node] of Object.entries(draft.nodes)) {
@@ -1131,14 +1133,9 @@ export class WorkflowController {
    * workflow_lease_held while an advance in any process holds the lease. A
    * lapsed lease is taken over, so the advance that held it stops with
    * workflow_lease_lost before its next step, and is left expired, as it was:
-   * whoever advances the run next recovers it first. `change` is told it
-   * replaced one: a cancel then recovers the run itself, as nothing
-   * recovers a cancelled run.
+   * whoever advances the run next recovers it first.
    */
-  private underLease(
-    workflowId: string,
-    change: (current: WorkflowRun, taken: "created" | "replaced") => WorkflowRun,
-  ): WorkflowRun {
+  private underLease(workflowId: string, change: (current: WorkflowRun) => WorkflowRun): WorkflowRun {
     this.status(workflowId);
     const at = Date.now();
     const taken = this.store.takeWorkflowLease(
@@ -1150,7 +1147,7 @@ export class WorkflowController {
     if (taken === "refused") throw new Error("workflow_lease_held");
     try {
       // Read under the lease: an advance may have committed since.
-      return change(this.status(workflowId), taken);
+      return change(this.status(workflowId));
     } finally {
       if (taken === "created") this.store.releaseWorkflowLease(workflowId, this.controlOwner);
       else this.store.renewWorkflowLease(workflowId, this.controlOwner, new Date(0).toISOString());

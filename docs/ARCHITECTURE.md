@@ -321,9 +321,9 @@ sleep) is taken over: it stops with `workflow_lease_lost` before its next step.
 A halt or resume leaves its expired lease in place, so whoever advances the run
 next recovers it first; a cancel, which ends the run for good, recovers it
 itself before cancelling it, reading each step's tasks under its keys, so what
-that advance (or one that died holding the lease) ran is recorded on the
-cancelled run, and a task still running there is cancelled as the run's own.
-The public schema also reserves
+that advance (or one that died holding the lease, or lost its commit) ran is
+recorded on the cancelled run, and a task still running there is cancelled as
+the run's own. The public schema also reserves
 `partially_complete`, which no command enters today.
 
 `cancelled` is entered only by `workflow cancel`. A step whose task is denied

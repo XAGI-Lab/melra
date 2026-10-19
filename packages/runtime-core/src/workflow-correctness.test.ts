@@ -1309,7 +1309,7 @@ describe("a halt or cancel while an advance runs a step (#244)", () => {
     expect(done).toEqual(["a", "a"]);
   });
 
-  it.each(["stalled mid-step", "a pause took over once it stalled", "died before its commit"] as const)(
+  it.each(["stalled mid-step", "a pause took over once it stalled", "died before its commit", "lost its commit"] as const)(
     "records on a run it cancels the step of an advance that %s",
     async (how) => {
       const { controller, store, tasks, cipher, done, on } = await setup({ policy: { unhinged: true } });
@@ -1330,6 +1330,13 @@ describe("a halt or cancel while an advance runs a step (#244)", () => {
         vi.spyOn(store, "releaseWorkflowLease").mockImplementationOnce(() => undefined);
         await expect(controller.advance(planned.id)).rejects.toThrow("killed");
         lapse();
+      } else if (how === "lost its commit") {
+        vi.spyOn(store, "transitionWorkflow").mockImplementationOnce(() => {
+          throw new Error("database is locked");
+        });
+        // Released on the way out, so the cancel takes no lease over.
+        await expect(controller.advance(planned.id)).rejects.toThrow("database is locked");
+        expect(store.getWorkflowLease(planned.id)).toBeUndefined();
       } else {
         on.put = () => {
           delete on.put;
@@ -1351,6 +1358,43 @@ describe("a halt or cancel while an advance runs a step (#244)", () => {
       expect(done).toEqual(["a"]);
     },
   );
+
+  it("records nothing of its own recovery when it cancels a run whose record is whole", async () => {
+    const { controller, store, tasks } = await setup();
+    const planned = controller.plan(
+      workflow([
+        { id: "pay", type: "operation", request: put("pay") },
+        { id: "loop", type: "bounded_loop", dependsOn: ["pay"], maxIterations: 2, body: [put("l")] },
+        { id: "par", type: "parallel", dependsOn: ["pay"], branches: [[put("p0")], [put("p1")]] },
+        { id: "refund", type: "compensation", forNodeId: "pay", request: put("refund") },
+      ]),
+    );
+    let run = (await controller.advance(planned.id)).run;
+    run = (await controller.advance(planned.id, approvalsFor(run))).run;
+    run = (await controller.advance(planned.id)).run;
+    // The loop's first iteration and one parallel branch run; the rest wait.
+    const p0 = tasks.status(run.nodes.par!.taskIds[0]!).approval!;
+    run = (
+      await controller.advance(planned.id, [
+        ...approvalsFor({ ...run, nodes: { loop: run.nodes.loop! } }),
+        { approvalId: p0.approvalId, phrase: p0.phrase! },
+      ])
+    ).run;
+    expect(run.nodes.loop).toMatchObject({ status: "awaiting_approval", iterations: 1 });
+    expect(run.nodes.loop!.taskIds).toHaveLength(2);
+    expect(run.nodes.par?.status).toBe("awaiting_approval");
+    expect(tasks.status(run.nodes.par!.taskIds[0]!).status).toBe("verified_success");
+    const cancelled = controller.cancel(planned.id);
+    expect(store.listWorkflowEvents(planned.id, run.stateVersion).map(({ type, data }) => [type, data.nodeId])).toEqual([
+      ["workflow.node_changed", "loop"],
+      ["workflow.node_changed", "par"],
+      ["workflow.node_changed", "refund"],
+      ["workflow.cancelled", undefined],
+    ]);
+    expect(cancelled.nodes.pay).toEqual(run.nodes.pay);
+    expect(cancelled.nodes.loop).toEqual({ ...run.nodes.loop, status: "cancelled" });
+    expect(cancelled.nodes.par).toEqual({ ...run.nodes.par, status: "cancelled" });
+  });
 });
 
 describe("a step whose advance lost its commit (#319)", () => {
