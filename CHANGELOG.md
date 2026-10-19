@@ -107,6 +107,18 @@ All notable changes are documented here. The format follows
   limit, and refuses a value that is not a whole number of milliseconds from 1
   to 2147483647. (#256)
 
+- `send` to an interactive terminal job whose program has closed its stdin is
+  refused as `terminal_job_stdin_closed`. Every send after the failed write
+  was refused as `terminal_job_not_interactive`, and the send whose write
+  failed on the spot was reported as sent. A send to a job whose program has
+  exited is refused as `terminal_job_not_running` even while something it
+  started still holds its output open. (#271)
+
+- The Python SDK's README says how to install it: the wheel attached to each
+  GitHub release, checked against `SHA256SUMS` and its attestation, or
+  `pip install ./sdk-py` from a checkout. No doc said so before, and the SDK
+  is not on PyPI, so `pip install melra` does not install it. (#259)
+
 - Denying a durable workflow's step (`melra approve <id> --deny`, the
   console's Deny) or cancelling its task (`melra_task_cancel`) no longer leaves
   the run `running` for good with nothing left to run. The step did not
