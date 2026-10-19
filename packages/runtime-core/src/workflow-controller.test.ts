@@ -18,7 +18,7 @@ import {
 import { createDefaultPolicy, type LocalPolicy } from "@melra/policy-core";
 import { sha256 } from "@melra/receipt-schema";
 import { SqliteStore } from "@melra/storage-sqlite";
-import { Verifier } from "@melra/verifier-core";
+import { Verifier, type EvidenceProbe } from "@melra/verifier-core";
 import { PayloadCipher } from "./payload-cipher.js";
 import { TaskController } from "./task-controller.js";
 import { applyWorkflowEvent } from "./workflow-events.js";
@@ -42,6 +42,7 @@ async function setup(
     signal?: AbortSignal,
   ) => Promise<Record<string, unknown>> = async () => ({ success: true }),
   policy: Partial<LocalPolicy> = {},
+  probe?: EvidenceProbe,
 ) {
   const root = await mkdtemp(join(tmpdir(), "melra-workflow-controller-"));
   roots.push(root);
@@ -52,7 +53,7 @@ async function setup(
     store,
     { ...createDefaultPolicy(root), ...policy },
     { execute },
-    await Verifier.create(root),
+    await Verifier.create(root, probe === undefined ? {} : { probe }),
     cipher,
   );
   return {
@@ -892,9 +893,9 @@ describe("WorkflowController execution", () => {
     expect(result.run.nodes["undo-charge"]?.status).toBe("pending");
   });
 
-  it("halts, not unwinds, at a step that ran though its advance was not committed", async () => {
+  it("settles, not unwinds, a step that ran though its advance was not committed", async () => {
     const { calls, execute } = saga("none");
-    const { controller, tasks, store, cipher } = await setup(execute);
+    const { controller, tasks } = await setup(execute);
     const definition = sagaDefinition();
     const planned = controller.plan(definition);
     let run = (await controller.advance(planned.id)).run;
@@ -910,17 +911,11 @@ describe("WorkflowController execution", () => {
     await tasks.execute(ran.id, { approvalId: ran.approval!.approvalId, phrase: ran.approval!.phrase! });
 
     // Planned again, ship is cancelled as a duplicate. That is not a denial:
-    // read as one, it refunded the charge while the shipment stood.
-    const halted = await settle(controller, planned.id);
-    expect(halted.run.status).toBe("recovery_required");
-    expect(calls).toEqual(["payments.example.test/charges", "logistics.example.test/shipments"]);
-
-    // Recovery reads every attempt, keeps the one that committed, and the run
-    // carries on from there.
-    const restarted = new WorkflowController(store, tasks, cipher);
-    await restarted.recoverInterrupted();
-    expect(restarted.status(planned.id).nodes.ship).toMatchObject({ status: "verified_complete", taskIds: [ran.id] });
-    const result = await settle(restarted, planned.id);
+    // read as one, it refunded the charge while the shipment stood. The run
+    // halts on it, and the next advance reads its tasks as recovery does,
+    // keeps the attempt that committed, and carries on from there.
+    const result = await settle(controller, planned.id);
+    expect(result.run.nodes.ship).toMatchObject({ status: "verified_complete", taskIds: [ran.id] });
     expect(result.run.status).toBe("verified_complete");
     expect(calls).toEqual([
       "payments.example.test/charges",
@@ -947,11 +942,15 @@ describe("WorkflowController execution", () => {
     shipping.status = "verifying";
     store.saveTask(shipping);
 
-    run = (await controller.advance(planned.id)).run;
-    // Read as failed, it started the unwind and offered the refund.
-    expect(run.status).toBe("recovery_required");
-    expect(run.nodes.ship?.status).toBe("recovery_required");
-    expect(run.nodes["undo-charge"]?.status).toBe("pending");
+    // Read as failed, it started the unwind and offered the refund. The
+    // second advance reads ship's tasks again, and must leave one still in
+    // flight to recovery rather than read it as anything.
+    for (let step = 0; step < 2; step += 1) {
+      run = (await controller.advance(planned.id)).run;
+      expect(run.status).toBe("recovery_required");
+      expect(run.nodes.ship?.status).toBe("recovery_required");
+      expect(run.nodes["undo-charge"]?.status).toBe("pending");
+    }
     expect(calls).toEqual(["payments.example.test/charges"]);
   });
 
@@ -1253,6 +1252,788 @@ describe("WorkflowController execution", () => {
     expect(result.run.status).toBe("recovery_required");
     expect(result.run.nodes.notify?.status).toBe("cancelled");
     expect(result.run.nodes["undo-charge"]?.status).toBe("pending");
+  });
+
+  /** The shipment's outcome is unknown and the notice fails, both after the charge. */
+  function unknownBesideFailure() {
+    const calls: string[] = [];
+    const execute = async (operation: Operation) => {
+      if (operation.kind !== "http") throw new Error("unexpected_operation");
+      const url = new URL(operation.url);
+      calls.push(`${url.host}${url.pathname}`);
+      if (url.pathname === "/shipments") throw outcomeUnknown("socket hang up");
+      return { success: url.pathname !== "/notify" };
+    };
+    return { calls, execute };
+  }
+
+  /** The fan-out saga with ship and notify as branches of one parallel node. */
+  function parallelSaga(): WorkflowDefinition {
+    return WorkflowDefinitionSchema.parse({
+      schemaVersion: "1.0.0",
+      id: definitionId,
+      version: 1,
+      name: "Charge, then ship and notify in parallel",
+      nodes: [
+        { id: "charge", type: "operation", request: call("Charge", `${PAYMENTS}/charges`) },
+        {
+          id: "fan",
+          type: "parallel",
+          dependsOn: ["charge"],
+          branches: [[call("Ship", `${LOGISTICS}/shipments`)], [call("Notify", `${PAYMENTS}/notify`)]],
+        },
+        { id: "undo-charge", type: "compensation", forNodeId: "charge", request: call("Refund", `${PAYMENTS}/refunds`) },
+      ],
+    });
+  }
+
+  /** Whether the run was ever recorded `failed`, the status that unwinds. */
+  const everFailed = (controller: WorkflowController, id: string) =>
+    controller
+      .events(id)
+      .some((event) => event.type === "workflow.status_changed" && (event.data as { to?: string }).to === "failed");
+
+  it("halts rather than unwind past a step whose outcome is unknown when another fails", async () => {
+    const { calls, execute } = unknownBesideFailure();
+    const { controller } = await setup(execute);
+    const planned = controller.plan(fanOutSaga());
+
+    const result = await settle(controller, planned.id);
+    expect(everFailed(controller, planned.id)).toBe(false);
+
+    // The refund could give away goods that may already be in transit.
+    expect(calls).not.toContain("payments.example.test/refunds");
+    expect(result.run.status).toBe("recovery_required");
+    expect(result.run.nodes.ship?.status).toBe("recovery_required");
+    expect(result.run.nodes.notify?.status).toBe("failed");
+    expect(result.run.nodes["undo-charge"]?.status).toBe("pending");
+  });
+
+  it("halts a parallel node with a failed branch beside an unknown one, live and after a restart", async () => {
+    const { calls, execute } = unknownBesideFailure();
+    // Unsafe-local, so both branches run in one wave: under approvals the
+    // node offers one branch's challenge at a time.
+    const { controller, store, tasks, cipher } = await setup(execute, { unhinged: true });
+    const planned = controller.plan(parallelSaga());
+
+    const result = await settle(controller, planned.id);
+    expect(calls).toContain("payments.example.test/notify");
+    expect(result.run.nodes.fan?.status).toBe("recovery_required");
+    expect(result.run.status).toBe("recovery_required");
+    expect(everFailed(controller, planned.id)).toBe(false);
+
+    // Recovery used to rank the failed branch first, fail the run, and offer
+    // the refund on the next advance.
+    const restarted = new WorkflowController(store, tasks, cipher);
+    await restarted.recoverInterrupted();
+    const after = await settle(restarted, planned.id);
+    expect(after.run.nodes.fan?.status).toBe("recovery_required");
+    expect(after.run.status).toBe("recovery_required");
+    expect(calls).not.toContain("payments.example.test/refunds");
+
+    // Once the provider says the shipment never happened, the run fails and
+    // the charge is refunded.
+    const ship = tasks.status(after.run.nodes.fan!.taskIds.find((id) => tasks.status(id).status === "recovery_required")!);
+    store.saveTask({ ...ship, status: "failed", error: "reconciled_absent" });
+    const settled = new WorkflowController(store, tasks, cipher);
+    await settled.recoverInterrupted();
+    expect(settled.status(planned.id).status).toBe("failed");
+    const unwound = await settle(settled, planned.id);
+    expect(unwound.run.nodes["undo-charge"]?.status).toBe("compensated");
+    expect(calls.filter((call) => call.endsWith("/refunds"))).toHaveLength(1);
+  });
+
+  it("records what a parallel node's other branches did before reporting one branch's refusal", async () => {
+    const calls: string[] = [];
+    const { controller, store } = await setup(async (operation) => {
+      if (operation.kind !== "http") throw new Error("unexpected_operation");
+      const url = new URL(operation.url);
+      calls.push(`${url.host}${url.pathname}`);
+      if (url.pathname === "/shipments") {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        throw outcomeUnknown("socket hang up");
+      }
+      return { success: url.pathname !== "/notify" };
+    });
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Charge, then pack and ship in parallel, and notify",
+        nodes: [
+          { id: "charge", type: "operation", request: call("Charge", `${PAYMENTS}/charges`) },
+          {
+            id: "fan",
+            type: "parallel",
+            dependsOn: ["charge"],
+            branches: [[call("Pack", `${LOGISTICS}/packs`)], [call("Ship", `${LOGISTICS}/shipments`)]],
+          },
+          { id: "notify", type: "operation", dependsOn: ["charge"], request: call("Notify", `${PAYMENTS}/notify`) },
+          { id: "undo-charge", type: "compensation", forNodeId: "charge", request: call("Refund", `${PAYMENTS}/refunds`) },
+        ],
+      }),
+    );
+    const answer = (path: string, phrase?: string) => {
+      const task = store
+        .listTasks(100, "awaiting_approval")
+        .find((candidate) => candidate.request.operation.kind === "http" && candidate.request.operation.url.endsWith(path))!;
+      return { approvalId: task.approval!.approvalId, phrase: phrase ?? task.approval!.phrase! };
+    };
+    await controller.advance(planned.id);
+    await controller.advance(planned.id, [answer("/charges")]);
+    await controller.advance(planned.id);
+    // The pack's phrase is wrong; the shipment runs, and its reply is lost.
+    await expect(
+      controller.advance(planned.id, [answer("/packs", "APPROVE 000000000000"), answer("/shipments"), answer("/notify")]),
+    ).rejects.toThrow("approval_phrase_mismatch");
+    expect(calls).toContain("logistics.example.test/shipments");
+
+    // Rejected at the pack's throw, the node was recorded unchanged and the
+    // notice's failure refunded the charge past a shipment that may stand.
+    const run = controller.status(planned.id);
+    expect(run.nodes.fan?.status).toBe("recovery_required");
+    expect(run.status).toBe("recovery_required");
+    await settle(controller, planned.id);
+    expect(calls).not.toContain("payments.example.test/refunds");
+  });
+
+  it("does not record a parallel node complete when a branch refused before it ran", async () => {
+    const calls: string[] = [];
+    const { controller, tasks } = await setup(
+      async (operation) => {
+        if (operation.kind !== "http") throw new Error("unexpected_operation");
+        calls.push(new URL(operation.url).pathname);
+        return { success: true };
+      },
+      { unhinged: true },
+    );
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Pack and ship, then hand over",
+        nodes: [
+          {
+            id: "fan",
+            type: "parallel",
+            branches: [[call("Pack", `${LOGISTICS}/packs`)], [call("Ship", `${LOGISTICS}/shipments`)]],
+          },
+          { id: "handover", type: "operation", dependsOn: ["fan"], request: call("Hand over", `${LOGISTICS}/handovers`) },
+        ],
+      }),
+    );
+    // The shipment's execute refuses once, its task still planned: a policy
+    // tightened since it was planned, say.
+    const execute = tasks.execute.bind(tasks);
+    let refused = false;
+    const refusing = vi.spyOn(tasks, "execute").mockImplementation(async (taskId, ...rest) => {
+      const operation = tasks.status(taskId).request.operation;
+      if (!refused && operation.kind === "http" && operation.url.endsWith("/shipments")) {
+        refused = true;
+        throw new Error("approval_action_digest_mismatch");
+      }
+      return execute(taskId, ...rest);
+    });
+    await expect(controller.advance(planned.id)).rejects.toThrow("approval_action_digest_mismatch");
+    // Counted complete, the node let the handover go ahead of a shipment that
+    // never ran.
+    expect(controller.status(planned.id).nodes.fan?.status).toBe("pending");
+    refusing.mockRestore();
+    await settle(controller, planned.id);
+    expect(calls).toEqual(["/packs", "/shipments", "/handovers"]);
+  });
+
+  it("reads a refused branch by the attempt it acted on, not one the run still names", async () => {
+    const { calls, execute } = unknownBesideFailure();
+    const { controller, store, tasks } = await setup(execute);
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Charge, then pack and ship in parallel",
+        nodes: [
+          { id: "charge", type: "operation", request: call("Charge", `${PAYMENTS}/charges`) },
+          {
+            id: "fan",
+            type: "parallel",
+            dependsOn: ["charge"],
+            branches: [[call("Pack", `${LOGISTICS}/packs`)], [call("Notify", `${PAYMENTS}/notify-ok`)]],
+          },
+          { id: "undo-charge", type: "compensation", forNodeId: "charge", request: call("Refund", `${PAYMENTS}/refunds`) },
+        ],
+      }),
+    );
+    const answer = (path: string, phrase?: string) => {
+      const task = store
+        .listTasks(100, "awaiting_approval")
+        .find((candidate) => candidate.request.operation.kind === "http" && candidate.request.operation.url.endsWith(path))!;
+      return { approvalId: task.approval!.approvalId, phrase: phrase ?? task.approval!.phrase! };
+    };
+    await controller.advance(planned.id);
+    await controller.advance(planned.id, [answer("/charges")]);
+    const waiting = (await controller.advance(planned.id)).run;
+    // Both challenges lapse, and the advance that asks them again loses its
+    // commit: the run still names the cancelled first attempts.
+    for (const taskId of waiting.nodes.fan!.taskIds) {
+      const task = tasks.status(taskId);
+      store.saveTask({ ...task, approval: { ...task.approval!, expiresAt: new Date(Date.now() - 1_000).toISOString() } });
+    }
+    vi.spyOn(store, "transitionWorkflow").mockImplementationOnce(() => {
+      throw new Error("commit_lost");
+    });
+    await expect(controller.advance(planned.id)).rejects.toThrow("commit_lost");
+    // A typo on the pack's new challenge is a typo, not a denial: read by
+    // the cancelled attempt, the node was cancelled and the charge refunded.
+    await expect(
+      controller.advance(planned.id, [answer("/packs", "APPROVE 000000000000"), answer("/notify-ok")]),
+    ).rejects.toThrow("approval_phrase_mismatch");
+    const run = controller.status(planned.id);
+    expect(run.nodes.fan?.status).toBe("awaiting_approval");
+    expect(run.status).not.toBe("failed");
+    expect(calls).not.toContain("payments.example.test/refunds");
+  });
+
+  it("offers again a compensation an earlier version skipped once its target settled across a restart", async () => {
+    const { calls, execute } = unknownBesideFailure();
+    const { controller, store, tasks, cipher } = await setup(execute, { unhinged: true });
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Charge, then ship and notify, both undone",
+        nodes: [
+          { id: "charge", type: "operation", request: call("Charge", `${PAYMENTS}/charges`) },
+          { id: "ship", type: "operation", dependsOn: ["charge"], request: call("Ship", `${LOGISTICS}/shipments`) },
+          { id: "notify", type: "operation", dependsOn: ["charge"], request: call("Notify", `${PAYMENTS}/notify`) },
+          { id: "undo-charge", type: "compensation", forNodeId: "charge", request: call("Refund", `${PAYMENTS}/refunds`) },
+          { id: "undo-ship", type: "compensation", forNodeId: "ship", request: call("Cancel", `${LOGISTICS}/cancellations`) },
+        ],
+      }),
+    );
+    const halted = await settle(controller, planned.id);
+    // An earlier version left it recovery_required with undo-ship skipped.
+    recordAsEarlierVersion(controller, halted.run, (draft, emit) => {
+      const skipped = { status: "skipped" as const, taskIds: [] };
+      emit("workflow.node_changed", { nodeId: "undo-ship", from: "pending", state: skipped });
+      draft.nodes["undo-ship"] = skipped;
+    });
+    // The shipment is reconciled as done, and the upgrade restarts the
+    // process: recovery settles the step before any advance repairs the run.
+    const shipTask = tasks.status(halted.run.nodes.ship!.taskIds[0]!);
+    store.saveTask({ ...shipTask, status: "verified_success" });
+    const restarted = new WorkflowController(store, tasks, cipher);
+    await restarted.recoverInterrupted();
+    await settle(restarted, planned.id);
+    expect(calls.filter((entry) => entry.endsWith("/cancellations") || entry.endsWith("/refunds"))).toEqual([
+      "logistics.example.test/cancellations",
+      "payments.example.test/refunds",
+    ]);
+  });
+
+  it("starts no further step on a run halted beside a failure", async () => {
+    const { calls, execute } = unknownBesideFailure();
+    const { controller } = await setup(execute);
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Charge, then ship, notify and prepare a report",
+        nodes: [
+          { id: "charge", type: "operation", request: call("Charge", `${PAYMENTS}/charges`) },
+          { id: "ship", type: "operation", dependsOn: ["charge"], request: call("Ship", `${LOGISTICS}/shipments`) },
+          { id: "notify", type: "operation", dependsOn: ["charge"], request: call("Notify", `${PAYMENTS}/notify`) },
+          { id: "prepare", type: "operation", dependsOn: ["charge"], request: call("Prepare", `${PAYMENTS}/drafts`) },
+          { id: "report", type: "operation", dependsOn: ["prepare"], request: call("Report", `${PAYMENTS}/reports`) },
+          { id: "undo-charge", type: "compensation", forNodeId: "charge", request: call("Refund", `${PAYMENTS}/refunds`) },
+        ],
+      }),
+    );
+
+    const result = await settle(controller, planned.id);
+
+    // The report became ready once the draft verified, on a run that will
+    // unwind: its effect would only be undone.
+    expect(result.run.status).toBe("recovery_required");
+    expect(result.run.nodes.prepare?.status).toBe("verified_complete");
+    expect(result.run.nodes.report?.status).toBe("pending");
+    expect(calls).not.toContain("payments.example.test/reports");
+  });
+
+  it("starts no further step on a run halted beside a failed branch of a parallel node", async () => {
+    const { calls, execute } = unknownBesideFailure();
+    // Unsafe-local, so both branches run in one wave.
+    const { controller } = await setup(execute, { unhinged: true });
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Charge, then ship and notify in parallel, and prepare a report",
+        nodes: [
+          { id: "charge", type: "operation", request: call("Charge", `${PAYMENTS}/charges`) },
+          {
+            id: "fan",
+            type: "parallel",
+            dependsOn: ["charge"],
+            branches: [[call("Ship", `${LOGISTICS}/shipments`)], [call("Notify", `${PAYMENTS}/notify`)]],
+          },
+          { id: "prepare", type: "operation", dependsOn: ["charge"], request: call("Prepare", `${PAYMENTS}/drafts`) },
+          { id: "report", type: "operation", dependsOn: ["prepare"], request: call("Report", `${PAYMENTS}/reports`) },
+          { id: "undo-charge", type: "compensation", forNodeId: "charge", request: call("Refund", `${PAYMENTS}/refunds`) },
+        ],
+      }),
+    );
+
+    const result = await settle(controller, planned.id);
+
+    // The node reads recovery_required, its unknown branch ranking first; its
+    // failed branch is in its tasks, and the run still unwinds once settled.
+    expect(calls).toContain("payments.example.test/notify");
+    expect(result.run.nodes.fan?.status).toBe("recovery_required");
+    expect(result.run.nodes.report?.status).toBe("pending");
+    expect(calls).not.toContain("payments.example.test/reports");
+  });
+
+  it("halts a run an earlier version left failed beside a step whose outcome is unknown", async () => {
+    const { calls, execute } = unknownBesideFailure();
+    const { controller } = await setup(execute);
+    const planned = controller.plan(fanOutSaga());
+    const halted = await settle(controller, planned.id);
+    expect(halted.run.status).toBe("recovery_required");
+
+    // What an earlier version recorded: the failure ranked first, the run
+    // `failed`, and the next advance about to refund.
+    type Emit = (type: string, data: Record<string, unknown>) => void;
+    const legacy = controller as unknown as {
+      transition(run: WorkflowRun, change: (draft: WorkflowRun, emit: Emit) => void): WorkflowRun;
+    };
+    legacy.transition(halted.run, (draft, emit) => {
+      emit("workflow.status_changed", { from: draft.status, to: "failed" });
+      draft.status = "failed";
+    });
+
+    const run = (await controller.advance(planned.id)).run;
+    expect(run.status).toBe("recovery_required");
+    expect(run.nodes["undo-charge"]?.status).toBe("pending");
+    expect(calls).not.toContain("payments.example.test/refunds");
+  });
+
+  /** A charge whose call was never answered, then a shipment that waits on it. */
+  async function parkedCharge(answer: { status: number; content: string }) {
+    const calls: string[] = [];
+    const { controller, tasks, store } = await setup(
+      async (operation) => {
+        if (operation.kind !== "http") throw new Error("unexpected_operation");
+        const url = new URL(operation.url);
+        calls.push(url.pathname);
+        if (url.pathname === "/charges") throw outcomeUnknown("socket hang up");
+        return { success: true };
+      },
+      {},
+      async () => ({ success: answer.status < 300, ...answer }),
+    );
+    const charge = TaskRequestSchema.parse({
+      goal: "Charge",
+      operation: { kind: "http", action: "request", method: "POST", url: `${PAYMENTS}/charges`, idempotencyKey: "charge-1" },
+      requiredEvidence: [{ type: "result_equals", path: "success", value: true }],
+      reconciliation: [
+        {
+          type: "http_resource_matches",
+          url: `${PAYMENTS}/charges/{{idempotencyKey}}`,
+          method: "GET",
+          path: "json.status",
+          value: "applied",
+        },
+      ],
+    });
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Charge, then ship",
+        nodes: [
+          { id: "charge", type: "operation", request: charge },
+          { id: "ship", type: "operation", dependsOn: ["charge"], request: call("Ship", `${LOGISTICS}/shipments`) },
+          { id: "undo-charge", type: "compensation", forNodeId: "charge", request: call("Refund", `${PAYMENTS}/refunds`) },
+        ],
+      }),
+    );
+    const parked = await settle(controller, planned.id);
+    expect(parked.run.nodes.charge?.status).toBe("recovery_required");
+    // Polled while nothing has moved, it does not read every task again.
+    const everyTask = vi.spyOn(store, "listTasks");
+    await controller.advance(planned.id);
+    expect(everyTask).not.toHaveBeenCalled();
+    everyTask.mockRestore();
+    return { controller, tasks, calls, id: planned.id, taskId: parked.run.nodes.charge!.taskIds[0]! };
+  }
+
+  it("offers again the compensation an earlier version's unwind skipped for the unknown step", async () => {
+    const { calls, execute } = unknownBesideFailure();
+    const { controller, store, tasks, cipher } = await setup(execute, { unhinged: true });
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Charge, then ship and notify, both undone",
+        nodes: [
+          { id: "charge", type: "operation", request: call("Charge", `${PAYMENTS}/charges`) },
+          { id: "ship", type: "operation", dependsOn: ["charge"], request: call("Ship", `${LOGISTICS}/shipments`) },
+          { id: "notify", type: "operation", dependsOn: ["charge"], request: call("Notify", `${PAYMENTS}/notify`) },
+          { id: "undo-charge", type: "compensation", forNodeId: "charge", request: call("Refund", `${PAYMENTS}/refunds`) },
+          { id: "undo-ship", type: "compensation", forNodeId: "ship", request: call("Cancel", `${LOGISTICS}/cancellations`) },
+        ],
+      }),
+    );
+    const halted = await settle(controller, planned.id);
+    expect(halted.run.status).toBe("recovery_required");
+
+    // What an earlier version recorded: the failure ranked first, the run
+    // failed, and its unwind skipped undo-ship, ship not being done.
+    type Emit = (type: string, data: Record<string, unknown>) => void;
+    const legacy = controller as unknown as {
+      transition(run: WorkflowRun, change: (draft: WorkflowRun, emit: Emit) => void): WorkflowRun;
+    };
+    legacy.transition(halted.run, (draft, emit) => {
+      const state = { status: "skipped" as const, taskIds: [] };
+      emit("workflow.node_changed", { nodeId: "undo-ship", from: "pending", state });
+      draft.nodes["undo-ship"] = state;
+      emit("workflow.status_changed", { from: draft.status, to: "failed" });
+      draft.status = "failed";
+    });
+
+    const repaired = (await controller.advance(planned.id)).run;
+    expect(repaired.status).toBe("recovery_required");
+    expect(repaired.nodes["undo-ship"]?.status).toBe("pending");
+
+    // The shipment turns out to have happened: once settled, both are undone,
+    // the shipment first.
+    const shipTask = tasks.status(repaired.nodes.ship!.taskIds[0]!);
+    store.saveTask({ ...shipTask, status: "verified_success" });
+    const restarted = new WorkflowController(store, tasks, cipher);
+    await restarted.recoverInterrupted();
+    await settle(restarted, planned.id);
+    expect(calls.filter((call) => call.endsWith("/cancellations") || call.endsWith("/refunds"))).toEqual([
+      "logistics.example.test/cancellations",
+      "payments.example.test/refunds",
+    ]);
+  });
+
+  it("runs what waits on a parked step once it is reconciled as done, without a restart", async () => {
+    const { controller, tasks, calls, id, taskId } = await parkedCharge({
+      status: 200,
+      content: JSON.stringify({ status: "applied" }),
+    });
+    expect((await tasks.execute(taskId)).task.status).toBe("verified_success");
+
+    // The run used to stay recovery_required, with no events, until a restart.
+    const result = await settle(controller, id);
+    expect(result.run.nodes.charge?.status).toBe("verified_complete");
+    expect(calls).toContain("/shipments");
+    expect(result.run.status).toBe("verified_complete");
+  });
+
+  it("carries an unwind on once its parked compensation is reconciled as done, without a restart", async () => {
+    const calls: string[] = [];
+    const { controller, tasks } = await setup(
+      async (operation) => {
+        if (operation.kind !== "http") throw new Error("unexpected_operation");
+        const url = new URL(operation.url);
+        calls.push(url.pathname);
+        if (url.pathname === "/refunds") throw outcomeUnknown("socket hang up");
+        return { success: url.pathname !== "/shipments" };
+      },
+      { unhinged: true },
+      async () => ({ success: true, status: 200, content: JSON.stringify({ status: "applied" }) }),
+    );
+    const refund = TaskRequestSchema.parse({
+      goal: "Refund",
+      operation: { kind: "http", action: "request", method: "POST", url: `${PAYMENTS}/refunds`, idempotencyKey: "refund-1" },
+      requiredEvidence: [{ type: "result_equals", path: "success", value: true }],
+      reconciliation: [
+        {
+          type: "http_resource_matches",
+          url: `${PAYMENTS}/refunds/{{idempotencyKey}}`,
+          method: "GET",
+          path: "json.status",
+          value: "applied",
+        },
+      ],
+    });
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Charge, then ship",
+        nodes: [
+          { id: "charge", type: "operation", request: call("Charge", `${PAYMENTS}/charges`) },
+          { id: "ship", type: "operation", dependsOn: ["charge"], request: call("Ship", `${LOGISTICS}/shipments`) },
+          { id: "undo-charge", type: "compensation", forNodeId: "charge", request: refund },
+        ],
+      }),
+    );
+    const stalled = await settle(controller, planned.id);
+    expect(stalled.run.nodes["undo-charge"]?.status).toBe("recovery_required");
+    expect(stalled.run.status).toBe("recovery_required");
+    const refundTask = stalled.run.nodes["undo-charge"]!.taskIds[0]!;
+    expect((await tasks.execute(refundTask)).task.status).toBe("verified_success");
+
+    // The unwind used to stay stalled on it until a restart.
+    const result = await settle(controller, planned.id);
+    expect(result.run.nodes["undo-charge"]?.status).toBe("compensated");
+    expect(result.run.status).toBe("failed");
+    expect(calls.filter((path) => path === "/refunds")).toHaveLength(1);
+  });
+
+  it("fails a run whose parked step is reconciled as never done, without a restart", async () => {
+    const { controller, tasks, calls, id, taskId } = await parkedCharge({ status: 404, content: "{}" });
+    expect((await tasks.execute(taskId)).task.status).toBe("failed");
+
+    const result = await settle(controller, id);
+    expect(result.run.nodes.charge?.status).toBe("failed");
+    expect(result.run.status).toBe("failed");
+    // The charge never happened: nothing ships, and there is nothing to refund.
+    expect(calls).not.toContain("/shipments");
+    expect(calls).not.toContain("/refunds");
+  });
+
+  /** Rewrites a run as an earlier version recorded it. */
+  function recordAsEarlierVersion(
+    controller: WorkflowController,
+    run: WorkflowRun,
+    change: (draft: WorkflowRun, emit: (type: string, data: Record<string, unknown>) => void) => void,
+  ) {
+    (
+      controller as unknown as {
+        transition(run: WorkflowRun, change: (draft: WorkflowRun, emit: (type: string, data: Record<string, unknown>) => void) => void): WorkflowRun;
+      }
+    ).transition(run, change);
+  }
+
+  it("halts a run an earlier version left failed with an unknown branch inside a parallel node", async () => {
+    const { calls, execute } = unknownBesideFailure();
+    const { controller } = await setup(execute, { unhinged: true });
+    const planned = controller.plan(parallelSaga());
+    const halted = await settle(controller, planned.id);
+    expect(halted.run.nodes.fan?.status).toBe("recovery_required");
+
+    // What an earlier version recorded: the failed branch ranked first, so the
+    // node and the run read `failed`, and the next advance would refund.
+    recordAsEarlierVersion(controller, halted.run, (draft, emit) => {
+      const state = { ...draft.nodes.fan!, status: "failed" as const };
+      emit("workflow.node_changed", { nodeId: "fan", from: "recovery_required", state });
+      draft.nodes.fan = state;
+      emit("workflow.status_changed", { from: draft.status, to: "failed" });
+      draft.status = "failed";
+    });
+
+    const run = (await settle(controller, planned.id)).run;
+    expect(run.status).toBe("recovery_required");
+    expect(run.nodes.fan?.status).toBe("recovery_required");
+    expect(calls).not.toContain("payments.example.test/refunds");
+  });
+
+  it("offers again a skipped compensation whose step ran under its approval", async () => {
+    const { calls, execute } = unknownBesideFailure();
+    const { controller, store, tasks, cipher } = await setup(execute);
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Charge, approve and ship, notify",
+        nodes: [
+          { id: "charge", type: "operation", request: call("Charge", `${PAYMENTS}/charges`) },
+          { id: "approve-ship", type: "approval", forNodeId: "ship", dependsOn: ["charge"] },
+          { id: "ship", type: "operation", dependsOn: ["approve-ship"], request: call("Ship", `${LOGISTICS}/shipments`) },
+          { id: "notify", type: "operation", dependsOn: ["charge"], request: call("Notify", `${PAYMENTS}/notify`) },
+          { id: "undo-charge", type: "compensation", forNodeId: "charge", request: call("Refund", `${PAYMENTS}/refunds`) },
+          { id: "undo-ship", type: "compensation", forNodeId: "ship", request: call("Cancel", `${LOGISTICS}/cancellations`) },
+        ],
+      }),
+    );
+    // The approval node holds the shipment's unknown outcome; `ship` still
+    // reads `pending`.
+    const halted = await settle(controller, planned.id);
+    expect(halted.run.nodes["approve-ship"]?.status).toBe("recovery_required");
+    expect(halted.run.nodes.ship?.status).toBe("pending");
+
+    recordAsEarlierVersion(controller, halted.run, (draft, emit) => {
+      const state = { status: "skipped" as const, taskIds: [] };
+      emit("workflow.node_changed", { nodeId: "undo-ship", from: "pending", state });
+      draft.nodes["undo-ship"] = state;
+      emit("workflow.status_changed", { from: draft.status, to: "failed" });
+      draft.status = "failed";
+    });
+    const repaired = (await controller.advance(planned.id)).run;
+    expect(repaired.status).toBe("recovery_required");
+    expect(repaired.nodes["undo-ship"]?.status).toBe("pending");
+
+    // The shipment turns out to have happened: both are undone, it first.
+    const shipTask = tasks.status(repaired.nodes["approve-ship"]!.taskIds[0]!);
+    store.saveTask({ ...shipTask, status: "verified_success" });
+    const restarted = new WorkflowController(store, tasks, cipher);
+    await restarted.recoverInterrupted();
+    await settle(restarted, planned.id);
+    expect(calls.filter((call) => call.endsWith("/cancellations") || call.endsWith("/refunds"))).toEqual([
+      "logistics.example.test/cancellations",
+      "payments.example.test/refunds",
+    ]);
+  });
+
+  it("offers again a skipped compensation on a run an earlier version's unwind stalled", async () => {
+    const { execute } = unknownBesideFailure();
+    const { controller } = await setup(execute, { unhinged: true });
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Charge, then ship and notify, both undone",
+        nodes: [
+          { id: "charge", type: "operation", request: call("Charge", `${PAYMENTS}/charges`) },
+          { id: "ship", type: "operation", dependsOn: ["charge"], request: call("Ship", `${LOGISTICS}/shipments`) },
+          { id: "notify", type: "operation", dependsOn: ["charge"], request: call("Notify", `${PAYMENTS}/notify`) },
+          { id: "undo-charge", type: "compensation", forNodeId: "charge", request: call("Refund", `${PAYMENTS}/refunds`) },
+          { id: "undo-ship", type: "compensation", forNodeId: "ship", request: call("Cancel", `${LOGISTICS}/cancellations`) },
+        ],
+      }),
+    );
+    const halted = await settle(controller, planned.id);
+
+    // An earlier version unwound, skipped undo-ship, and stalled at a refund
+    // whose own outcome is unknown.
+    recordAsEarlierVersion(controller, halted.run, (draft, emit) => {
+      const skipped = { status: "skipped" as const, taskIds: [] };
+      emit("workflow.node_changed", { nodeId: "undo-ship", from: "pending", state: skipped });
+      draft.nodes["undo-ship"] = skipped;
+      const stalled = { status: "recovery_required" as const, taskIds: [] };
+      emit("workflow.node_changed", { nodeId: "undo-charge", from: "pending", state: stalled });
+      draft.nodes["undo-charge"] = stalled;
+      draft.error = "workflow_compensation_incomplete:undo-charge";
+      emit("workflow.status_changed", { from: draft.status, to: draft.status, error: draft.error });
+    });
+
+    const repaired = (await controller.advance(planned.id)).run;
+    expect(repaired.nodes["undo-ship"]?.status).toBe("pending");
+    expect(repaired.status).toBe("recovery_required");
+    expect(repaired.error).toBe("workflow_compensation_incomplete:undo-charge");
+  });
+
+  it("repairs a run an earlier version failed before settling a step parked beside it", async () => {
+    const { calls, execute } = unknownBesideFailure();
+    const { controller, store, tasks } = await setup(execute, { unhinged: true });
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Charge, then ship and notify, both undone",
+        nodes: [
+          { id: "charge", type: "operation", request: call("Charge", `${PAYMENTS}/charges`) },
+          { id: "ship", type: "operation", dependsOn: ["charge"], request: call("Ship", `${LOGISTICS}/shipments`) },
+          { id: "notify", type: "operation", dependsOn: ["charge"], request: call("Notify", `${PAYMENTS}/notify`) },
+          { id: "undo-charge", type: "compensation", forNodeId: "charge", request: call("Refund", `${PAYMENTS}/refunds`) },
+          { id: "undo-ship", type: "compensation", forNodeId: "ship", request: call("Cancel", `${LOGISTICS}/cancellations`) },
+        ],
+      }),
+    );
+    const halted = await settle(controller, planned.id);
+    recordAsEarlierVersion(controller, halted.run, (draft, emit) => {
+      const state = { status: "skipped" as const, taskIds: [] };
+      emit("workflow.node_changed", { nodeId: "undo-ship", from: "pending", state });
+      draft.nodes["undo-ship"] = state;
+      emit("workflow.status_changed", { from: draft.status, to: "failed" });
+      draft.status = "failed";
+    });
+    // The shipment is reconciled as done before this version first advances
+    // the run. Settled first, it hid the repair and undo-ship stayed skipped.
+    const shipTask = tasks.status(halted.run.nodes.ship!.taskIds[0]!);
+    store.saveTask({ ...shipTask, status: "verified_success" });
+
+    await settle(controller, planned.id);
+    expect(calls.filter((call) => call.endsWith("/cancellations") || call.endsWith("/refunds"))).toEqual([
+      "logistics.example.test/cancellations",
+      "payments.example.test/refunds",
+    ]);
+  });
+
+  it("repairs a run an earlier version left recovery_required before settling the step parked in it", async () => {
+    for (const stalled of [false, true]) {
+      const { calls, execute } = unknownBesideFailure();
+      const { controller, store, tasks } = await setup(execute, { unhinged: true });
+      const planned = controller.plan(
+        WorkflowDefinitionSchema.parse({
+          schemaVersion: "1.0.0",
+          id: definitionId,
+          version: 1,
+          name: "Charge, then ship and notify, both undone",
+          nodes: [
+            { id: "charge", type: "operation", request: call("Charge", `${PAYMENTS}/charges`) },
+            { id: "ship", type: "operation", dependsOn: ["charge"], request: call("Ship", `${LOGISTICS}/shipments`) },
+            { id: "notify", type: "operation", dependsOn: ["charge"], request: call("Notify", `${PAYMENTS}/notify`) },
+            { id: "undo-charge", type: "compensation", forNodeId: "charge", request: call("Refund", `${PAYMENTS}/refunds`) },
+            { id: "undo-ship", type: "compensation", forNodeId: "ship", request: call("Cancel", `${LOGISTICS}/cancellations`) },
+          ],
+        }),
+      );
+      const halted = await settle(controller, planned.id);
+      // What an earlier version left recovery_required: its unwind skipped
+      // undo-ship, and then recovery moved the failed run on (or the unwind
+      // stalled at a refund whose own outcome was unknown).
+      recordAsEarlierVersion(controller, halted.run, (draft, emit) => {
+        const skipped = { status: "skipped" as const, taskIds: [] };
+        emit("workflow.node_changed", { nodeId: "undo-ship", from: "pending", state: skipped });
+        draft.nodes["undo-ship"] = skipped;
+        if (stalled) {
+          const parked = { status: "recovery_required" as const, taskIds: [] };
+          emit("workflow.node_changed", { nodeId: "undo-charge", from: "pending", state: parked });
+          draft.nodes["undo-charge"] = parked;
+          draft.error = "workflow_compensation_incomplete:undo-charge";
+          emit("workflow.status_changed", { from: draft.status, to: draft.status, error: draft.error });
+        }
+      });
+      // The shipment is reconciled as done before this version advances it.
+      // Settled first, it hid the repair, and undo-ship stayed skipped.
+      const shipTask = tasks.status(halted.run.nodes.ship!.taskIds[0]!);
+      store.saveTask({ ...shipTask, status: "verified_success" });
+      const repaired = (await controller.advance(planned.id)).run;
+      expect(repaired.nodes["undo-ship"]?.status, `stalled: ${stalled}`).toBe("pending");
+      if (!stalled) {
+        await settle(controller, planned.id);
+        expect(calls.filter((entry) => entry.endsWith("/cancellations") || entry.endsWith("/refunds"))).toEqual([
+          "logistics.example.test/cancellations",
+          "payments.example.test/refunds",
+        ]);
+      }
+    }
+  });
+
+  it("does not read every task when polled on a parallel node parked beside a settled branch", async () => {
+    const { controller, store } = await setup(
+      async (operation) => {
+        if (operation.kind === "http" && operation.url.endsWith("/shipments")) throw outcomeUnknown("socket hang up");
+        return { success: true };
+      },
+      { unhinged: true },
+    );
+    const planned = controller.plan(parallelSaga());
+    const parked = await settle(controller, planned.id);
+    expect(parked.run.nodes.fan?.status).toBe("recovery_required");
+
+    const everyTask = vi.spyOn(store, "listTasks");
+    await controller.advance(planned.id);
+    await controller.advance(planned.id);
+    expect(everyTask).not.toHaveBeenCalled();
+    everyTask.mockRestore();
   });
 
   it("plans no compensation for a run cancelled while its advance was running", async () => {

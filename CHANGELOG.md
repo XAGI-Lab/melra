@@ -119,6 +119,59 @@ All notable changes are documented here. The format follows
   after a crash interrupted its verification. Anywhere else, a path that
   reaches a file still reads present, however it is spelled. (#280)
 
+- `melra serve --http` and `--socket` no longer keep every MCP session for the
+  life of the process. The TypeScript SDK's `close()` and `melra conformance
+  --url` now end their session, which they never did, waiting at most two
+  seconds for the server. Past 256 sessions, a new one ends the least
+  recently used session with no request in flight and no event stream open,
+  such as one whose client vanished; a client holding the event stream open,
+  as both SDKs do, is never ended. A
+  request naming a session the server does not have, such as one from before
+  a restart, gets 404 with JSON-RPC error -32001, which tells an MCP client to
+  start a new session. It used to get 400. (#253, #257)
+
+- A file `write` with `encoding: "base64"` refuses content that is not base64
+  (`file_content_invalid_base64`) before anything is written; line breaks,
+  missing padding and the URL-safe alphabet are accepted. Node's lenient
+  decoder wrote two joined chunks as the first, plain text as noise and `!!!!`
+  as an empty file, each verifying as a success. (#279)
+
+- A file `write` to a symlink inside the workspace writes the file it points
+  to, as `read` reads it, and keeps that file's permissions. It replaced the
+  link with a plain file and left the target unchanged. A write to a dangling
+  link is refused (`file_write_dangling_symlink`). (#281)
+
+- A file `list` of the workspace root works however the root is spelled
+  relative to itself (`./`, `sub/..`) or by its resolved absolute path, not
+  only `.`. The others were refused as `path_outside_workspace`. (#282)
+
+- A workflow step parked as `recovery_required` moves at the run's next
+  `advance` once its task is settled, for example by `melra_execute`
+  reconciling it against the provider, and so does a compensation an unwind
+  stopped at. The run used to stay
+  `recovery_required`, with no events, until a process restart ran recovery:
+  a long-running server could not finish the workflow, the steps waiting on a
+  reconciled success never ran, and a reconciled failure never failed the run
+  or started its unwind. (#246)
+
+- A workflow step that fails no longer starts the unwind while another step's
+  outcome is unknown or unsettled (`recovery_required`: an effect that may have
+  happened, or a task still running). The run halts as `recovery_required`,
+  starts no further step, and fails and unwinds only once that step is
+  settled by its `reconciliation`, as a denied step already did; one that
+  declares none leaves `workflow cancel` as the way out. It used to refund a charge whose
+  shipment might be in transit, and skip the compensation of a step that went
+  on to verify. This holds for sibling steps and for branches of one
+  `parallel` node, live and after a restart; a branch refused for a wrong
+  approval no longer reports before the others finish, which left the node
+  recorded as it was and let the unwind start. A run an earlier version left
+  `failed` beside such a step, including a `parallel` node it recorded as
+  failed, is halted the same way at its next advance. The unknown step's
+  compensation, which that unwind skipped, is offered again, also when the step
+  ran under its `approval` node or when that unwind had stalled. (#270)
+
+
+
 - A workflow with an `exit_code` evidence predicate can be planned, and so can
   one with a node id, verifier name or URL that looks like an API key
   (`api-integration-tests`). Planning parsed the redacted copy it stores

@@ -53,9 +53,11 @@ Node types: `operation`, `approval`, `condition`, `parallel`, `bounded_loop`,
   `reconciliation` predicate asking the provider — or enter `recovery_required`.
 - Compensations unwind newest effect first, one at a time, across as many
   providers as the saga touched. An unwind that cannot finish stops and reports
-  `workflow_compensation_incomplete:<node>`. A step denied before it runs
-  starts the unwind, unless another step's outcome is unknown, and a denied
-  compensation stops it.
+  `workflow_compensation_incomplete:<node>`. A failed step, or one denied
+  before it runs, starts the unwind, unless another step's outcome is unknown:
+  then the run halts as `recovery_required` until that step is settled by its
+  `reconciliation`, and `workflow cancel` is the way out for a step that
+  declares none. A denied compensation stops the unwind.
 - Definitions allow at most 500 nodes, 100 dependencies per node, 20 parallel
   branches, and 100 loop iterations.
 - Competing advances for the same workflow are serialized inside one process,
@@ -67,10 +69,17 @@ Node types: `operation`, `approval`, `condition`, `parallel`, `bounded_loop`,
 
 Actions: `list`, `read`, `stat`, `hash`, `write`, `move`, `delete`, `mkdir`.
 
-- Paths are resolved inside one workspace root.
-- Existing symlinks cannot escape that root.
+- Paths are resolved inside one workspace root. `list` takes the root however
+  it is spelled (`.`, `./`, its absolute path with any links in it resolved);
+  no other action takes it.
+- Existing symlinks cannot escape that root. A `write` to a symlink inside it
+  writes the file it points to, as `read` reads it; one whose target does not
+  exist is refused (`file_write_dangling_symlink`).
 - Reads and writes are size-bounded by local policy.
 - Writes use a temporary sibling file followed by an atomic rename.
+- `encoding: "base64"` content must be base64 (line breaks, missing padding and
+  the URL-safe alphabet allowed), or the write is refused before anything lands
+  (`file_content_invalid_base64`).
 - Deletes are destructive and approval-gated.
 
 ### Terminal
