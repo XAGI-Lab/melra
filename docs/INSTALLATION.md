@@ -1318,6 +1318,10 @@ warns when it finds no restriction at all, or when it cannot read any.
 
 ## Python SDK
 
+To install it, see [the SDK's install section](../sdk-py/README.md#install):
+the wheel attached to each GitHub release, or `pip install ./sdk-py` from a
+checkout. `pip install melra` installs an unrelated PyPI project.
+
 For repository development:
 
 ```bash

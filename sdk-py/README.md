@@ -4,6 +4,33 @@ Async Python client for MELRA task, evidence, and durable workflow interfaces.
 Requires Python 3.11 or newer (CI covers 3.11 through 3.14), and the wheel ships
 `py.typed`, so mypy and pyright use its annotations.
 
+## Install
+
+> [!CAUTION]
+> `pip install melra` installs an unrelated PyPI project of the same name. This
+> SDK is not published on PyPI.
+
+Each [GitHub release](https://github.com/XAGI-Lab/melra/releases) attaches the
+wheel, named with the Python spelling of the version (`0.3.0a12` for
+`0.3.0-alpha.12`). It is covered by the release's `SHA256SUMS` and its signed
+provenance attestation, so download both and check the wheel before installing
+it by path:
+
+```bash
+sha256sum --check --ignore-missing SHA256SUMS
+gh attestation verify melra-0.3.0a12-py3-none-any.whl --repo XAGI-Lab/melra
+pip install ./melra-0.3.0a12-py3-none-any.whl
+```
+
+From a checkout of the repository, or for a release without a wheel attached,
+install from source: `pip install ./sdk-py`.
+
+The SDK is a client: `MelraClient()` runs `melra serve`, so install the CLI as
+well (`npm install -g @melra/cli@alpha`, or any route in
+[docs/INSTALLATION.md](../docs/INSTALLATION.md#install)).
+
+## Use
+
 ```python
 from melra import MelraClient
 
