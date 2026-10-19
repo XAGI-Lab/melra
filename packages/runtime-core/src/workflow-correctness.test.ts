@@ -691,6 +691,26 @@ describe("a condition's branch not taken (#268)", () => {
     expect(controller.cancel(planned.id).status).toBe("cancelled");
   });
 
+  it("ends a run whose event history no longer replays, and still cancels what a lost advance left", async () => {
+    const { controller, store, tasks, done } = await setup();
+    const planned = controller.plan(workflow([{ id: "op", type: "operation", request: put("op") }]));
+    const plan = tasks.plan.bind(tasks);
+    let leftover: TaskRecord | undefined;
+    vi.spyOn(tasks, "plan").mockImplementationOnce((request, options) => {
+      const task = plan(request, options);
+      leftover = task;
+      lapseAndPause(controller, store, planned.id);
+      return task;
+    });
+    await expect(controller.advance(planned.id)).rejects.toThrow("workflow_lease_lost");
+    store.database.prepare("UPDATE workflow_events SET data = '{}' WHERE aggregate_id = ?").run(planned.id);
+    // Recovery fails closed on it, and so did every cancel: the run could never end.
+    expect(() => controller.cancel(planned.id)).not.toThrow();
+    expect(controller.status(planned.id).status).toBe("cancelled");
+    expect(tasks.status(leftover!.id).status).toBe("cancelled");
+    expect(done).toEqual([]);
+  });
+
   it("cancels with the run a challenge a lost advance left on a condition a restart left undecided", async () => {
     const { controller, root, store, tasks, cipher, done } = await setup();
     await writeFile(join(root, "flag"), "on");

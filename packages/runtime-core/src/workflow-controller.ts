@@ -1078,9 +1078,15 @@ export class WorkflowController {
               // under its keys first, as the next advance would, so they are on
               // its nodes (a run already whole reads the same, and records
               // nothing more). A task still running there is stopped as the
-              // run's own.
+              // run's own. One that cannot be recovered (its history no longer
+              // replays) is cancelled as it reads, as for a definition that no
+              // longer opens: refused, it could never end.
               if (definition !== undefined) {
-                stopped.push(...this.recoverNodes(current, definition, this.store.listTasks(100_000), draft, emit));
+                try {
+                  stopped.push(...this.recoverNodes(current, definition, this.store.listTasks(100_000), draft, emit));
+                } catch {
+                  // Cancelled as recorded.
+                }
               }
               for (const [nodeId, node] of Object.entries(draft.nodes)) {
                 if (
