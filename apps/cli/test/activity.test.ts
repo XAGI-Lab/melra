@@ -203,7 +203,7 @@ describe("melra tasks, status, and watch", () => {
     expect([status.expiredApprovals, status.expiredWorkflowSteps]).toEqual([0, 1]);
   });
 
-  it("counts an expired step of any workflow run as a step, whatever the run's state", async () => {
+  it("counts an expired step of a run that is not over as a step, a failed one included", async () => {
     const { root, options } = await workspace();
     const write = (path: string) => ({
       goal: `Write ${path}`,
@@ -235,6 +235,39 @@ describe("melra tasks, status, and watch", () => {
     lapse(root, run.nodes.b!.taskIds[0]!);
     const status = await statusOf(options);
     expect([status.expiredApprovals, status.expiredWorkflowSteps]).toEqual([0, 1]);
+  });
+
+  it("counts a step left waiting on a run that is over the plain way, since nothing advances it", async () => {
+    const { root, options } = await workspace();
+    const write = (path: string) => ({
+      goal: `Write ${path}`,
+      operation: { kind: "file", action: "write", path, content: "x" },
+      requiredEvidence: [{ type: "file_exists", path }],
+    });
+    const definition = join(root, "parallel.json");
+    await writeFile(
+      definition,
+      JSON.stringify({
+        schemaVersion: "1.0.0",
+        id: "7a1d2b63-4c0e-4d8f-8b2a-3f9c6e5d4b21",
+        version: 1,
+        name: "parallel-writes",
+        nodes: [{ id: "p", type: "parallel", branches: [[write("a.txt")], [write("b.txt")]] }],
+      }),
+    );
+    const cli = async (...args: string[]) =>
+      (await execute(process.execPath, [entry, ...args], options).catch((error: { stdout: string }) => error)).stdout;
+    const { id } = JSON.parse(await cli("workflow", "plan", "--definition", definition)) as { id: string };
+    const { run } = JSON.parse(await cli("workflow", "advance", id)) as { run: WorkflowRun };
+    const [first, second] = run.nodes.p!.taskIds;
+    // One branch denied, the run cancelled: the other branch's task is left
+    // waiting on a run that never advances again.
+    await cli("approve", first!, "--deny");
+    await cli("workflow", "advance", id);
+    await cli("workflow", "cancel", id);
+    lapse(root, second!);
+    const status = await statusOf(options);
+    expect([status.expiredApprovals, status.expiredWorkflowSteps]).toEqual([1, 0]);
   });
 
   it("does not count as waiting what enforced mode will not take an answer for", async () => {

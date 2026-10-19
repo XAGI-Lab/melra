@@ -189,8 +189,14 @@ function approvalCounts(
       counts.waiting += 1;
       continue;
     }
-    // Read only once something has expired: a store keeps every run.
-    steps ??= new Set(runs().flatMap((run) => Object.values(run.nodes).flatMap((node) => node.taskIds)));
+    // Read only once something has expired: a store keeps every run. A run
+    // that is over never advances again, so its leftover step is cleared the
+    // plain way, as advance's own first check would have it.
+    steps ??= new Set(
+      runs()
+        .filter((run) => run.status !== "cancelled" && run.status !== "verified_complete")
+        .flatMap((run) => Object.values(run.nodes).flatMap((node) => node.taskIds)),
+    );
     if (steps.has(task.id)) counts.expiredSteps += 1;
     else counts.expired += 1;
   }

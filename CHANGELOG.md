@@ -118,10 +118,10 @@ All notable changes are documented here. The format follows
 - `melra tasks` and `melra status` count a task whose approval has expired
   apart from those still waiting, and say to plan it again or clear it with
   `melra approve <task-id> --deny`. They counted it as waiting forever and
-  pointed at `melra approve`, which refused it. An expired workflow step is
-  counted on its own and pointed at `melra workflow inspect`, since the run's
-  next advance asks again where it can go on and a deny would fail the run or
-  stall its unwind. A task
+  pointed at `melra approve`, which refused it. An expired step of a workflow
+  run that is not over is counted on its own and pointed at `melra workflow
+  inspect`, since the run's next advance asks again where it can go on and a
+  deny would fail the run or stall its unwind. A task
   approved in time and not yet run counts as neither, since its agent can
   still run it, and in enforced mode a task answered in band is no longer
   counted as waiting for an answer it cannot take. `status --json` adds
