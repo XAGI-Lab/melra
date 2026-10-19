@@ -275,6 +275,42 @@ describe("melra tasks, status, and watch", () => {
     expect([status.expiredApprovals, status.expiredWorkflowSteps]).toEqual([0, 1]);
   });
 
+  it("counts a duplicate challenge no advance takes the plain way, though it shares the step's key", async () => {
+    const { root, options } = await workspace();
+    const workflow = async (...args: string[]) =>
+      JSON.parse(
+        (
+          await execute(process.execPath, [entry, "workflow", ...args], options).catch(
+            (error: { stdout: string }) => error,
+          )
+        ).stdout,
+      ) as { id: string; run: WorkflowRun };
+    const { id } = await workflow("plan", "--definition", restartSafe);
+    await workflow("advance", id);
+    const { run } = await workflow("advance", id);
+    // What an advance whose commit a pause made fail leaves when the next one
+    // plans the step again: an earlier duplicate under the same key, waiting,
+    // which the run never names and its advances never take.
+    const store = new SqliteStore(join(root, ".melra", "melra.sqlite"));
+    let orphan: string;
+    try {
+      const named = store.getTask(run.nodes.write!.taskIds[0]!)!;
+      orphan = randomUUID();
+      store.saveTask({
+        ...named,
+        id: orphan,
+        createdAt: new Date(Date.parse(named.createdAt) - 1_000).toISOString(),
+        approval: { ...named.approval!, approvalId: randomUUID() },
+      });
+    } finally {
+      store.close();
+    }
+    lapse(root, orphan);
+    // Pointed at the run, it was told the next advance asks again; none does.
+    const status = await statusOf(options);
+    expect([status.expiredApprovals, status.expiredWorkflowSteps]).toEqual([1, 0]);
+  });
+
   it("counts a step left waiting on a run that is over the plain way, since nothing advances it", async () => {
     const { root, options } = await workspace();
     const write = (path: string) => ({

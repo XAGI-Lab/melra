@@ -17,6 +17,7 @@ import {
   type WorkflowRun,
 } from "@melra/protocol";
 import { approvalTtl, classifyOperation, loadPolicy, type LocalPolicy } from "@melra/policy-core";
+import { preferredTask } from "@melra/runtime-core";
 import { SqliteStore } from "@melra/storage-sqlite";
 import type { CliEnvironment } from "./environment.js";
 import { isHuman, paint, table } from "./output.js";
@@ -161,15 +162,20 @@ interface ApprovalCounts {
   expiredSteps: number;
 }
 
-/** The task ids the runs name, and the idempotency keys of those tasks. */
-function stepKeys(store: SqliteStore, runs: WorkflowRun[]): Set<string> {
-  const keys = new Set<string>();
+/**
+ * The tasks the runs' next advance acts on, picked as the runtime picks them:
+ * the task a node names, or for a cancelled one the attempt its key now prefers.
+ */
+function stepTasks(store: SqliteStore, runs: WorkflowRun[]): Set<string> {
+  let every: TaskRecord[] | undefined;
+  const ids = new Set<string>();
   for (const taskId of runs.flatMap((run) => Object.values(run.nodes).flatMap((node) => node.taskIds))) {
-    keys.add(taskId);
-    const key = store.getTask(taskId)?.idempotencyKey;
-    if (key !== undefined) keys.add(key);
+    const named = store.getTask(taskId);
+    const key = named?.status === "cancelled" ? named.idempotencyKey : undefined;
+    const preferred = key === undefined ? undefined : preferredTask((every ??= store.listTasks(100_000)), key);
+    ids.add(preferred?.id ?? taskId);
   }
-  return keys;
+  return ids;
 }
 
 /**
@@ -203,14 +209,14 @@ function approvalCounts(
     // Read only once something has expired: a store keeps every run. A run
     // that is over never advances again, so its leftover step is cleared the
     // plain way, as advance's own first check would have it.
-    // A step is matched by key as well as by id, as the runtime matches it:
-    // an advance that asked a challenge again and then lost its commit leaves
-    // the run naming the cancelled attempt, not the one now waiting.
-    steps ??= stepKeys(
+    // An advance that asked a challenge again and then lost its commit leaves
+    // the run naming the cancelled attempt, not the one now waiting; a lost
+    // first plan leaves a duplicate no advance takes, cleared the plain way.
+    steps ??= stepTasks(
       store,
       runs().filter((run) => run.status !== "cancelled" && run.status !== "verified_complete"),
     );
-    if (steps.has(task.id) || (task.idempotencyKey !== undefined && steps.has(task.idempotencyKey))) {
+    if (steps.has(task.id)) {
       counts.expiredSteps += 1;
     } else counts.expired += 1;
   }
