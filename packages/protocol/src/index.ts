@@ -1176,7 +1176,7 @@ export const WorkflowPlanInputSchema = z
 
 export const WorkflowAdvanceInputSchema = z
   .object({
-    workflowId: z.string().uuid().describe("The run id melra_workflow_plan returned, not the definition's id. An unknown id fails with workflow_not_found; workflow_lease_held means something else holds the run's lease, so retry later."),
+    workflowId: z.string().uuid().describe("The run id melra_workflow_plan returned, not the definition's id. An unknown id fails with workflow_not_found; workflow_lease_held means something else holds the run's lease, so retry later; workflow_lease_lost means another process took the run over mid-advance, so advance again later."),
     approvals: z.array(ApprovalResponseSchema).max(50).default([]).describe("Answers to challenges this run waits on, each {approvalId, phrase} copied from a waiting task's approval and matched by approvalId; unmatched entries are ignored. Must be empty in enforced mode (approval_in_band_refused)."),
     // Answers for nodes parked on a person. Supplied on the same call that
     // resumes the wave, so one round trip both answers and advances.
