@@ -24,7 +24,18 @@ import {
 interface ClientIdentity {
   clientName?: string;
   clientVersion?: string;
+  /**
+   * How long `execute()` and `advanceWorkflow()` wait for the server, in
+   * milliseconds. The default, 16 minutes, is past the longest budget a task
+   * can have (15 minutes), so the client does not give up on an effect the
+   * server is still running and may still verify. A workflow wave that runs
+   * several long steps one after another can take longer: raise it for those.
+   */
+  runTimeoutMs?: number;
 }
+
+/** Past `budget.maxDurationMs`'s cap of 900 000 ms, with a minute to answer in. */
+const RUN_TIMEOUT_MS = 960_000;
 
 /** Spawn `melra serve` (or `command`) as a child and speak MCP over stdio. */
 export interface MelraStdioOptions extends ClientIdentity {
@@ -99,7 +110,10 @@ function melraSettings(environment: NodeJS.ProcessEnv, cwd: string | undefined):
 }
 
 export class MelraClient {
-  private constructor(private readonly client: Client) {}
+  private constructor(
+    private readonly client: Client,
+    private readonly runTimeoutMs: number,
+  ) {}
 
   static async connect(options: MelraClientOptions = {}): Promise<MelraClient> {
     const transport =
@@ -152,15 +166,25 @@ export class MelraClient {
       }
       throw error;
     }
-    return new MelraClient(client);
+    return new MelraClient(client, options.runTimeoutMs ?? RUN_TIMEOUT_MS);
   }
 
+  /**
+   * `long` for the two calls that run effects: the MCP client otherwise gives
+   * up after 60 s, while the server goes on running the task and may verify
+   * it, and a caller who reads that error as a failure runs it again.
+   */
   private async call(
     name: string,
     args: Record<string, unknown>,
+    long = false,
   ): Promise<Record<string, unknown>> {
     return parseMelraToolResult(
-      await this.client.callTool({ name, arguments: args }),
+      await this.client.callTool(
+        { name, arguments: args },
+        undefined,
+        long ? { timeout: this.runTimeoutMs } : undefined,
+      ),
     );
   }
 
@@ -184,10 +208,14 @@ export class MelraClient {
     taskId: string,
     approval?: ApprovalResponse,
   ): Promise<Record<string, unknown>> {
-    return await this.call("melra_execute", {
-      taskId,
-      ...(approval === undefined ? {} : { approval }),
-    });
+    return await this.call(
+      "melra_execute",
+      {
+        taskId,
+        ...(approval === undefined ? {} : { approval }),
+      },
+      true,
+    );
   }
 
   async status(taskId: string): Promise<Record<string, unknown>> {
@@ -237,7 +265,7 @@ export class MelraClient {
       inputs,
     });
     return WorkflowAdvanceResultSchema.parse(
-      await this.call("melra_workflow_advance", parsed),
+      await this.call("melra_workflow_advance", parsed, true),
     );
   }
 

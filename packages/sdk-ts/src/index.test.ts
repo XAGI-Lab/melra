@@ -203,6 +203,35 @@ describe("TypeScript workflow SDK", () => {
 });
 
 describe("TypeScript SDK stdio connect", () => {
+  it("waits for execute as long as runTimeoutMs, not the MCP client's 60 s default", async () => {
+    // A stand-in server whose execute takes 1.5 s, as a long build would take minutes.
+    const mcp = import.meta.resolve("@modelcontextprotocol/sdk/server/mcp.js");
+    const stdio = import.meta.resolve("@modelcontextprotocol/sdk/server/stdio.js");
+    const slow = [
+      `const { McpServer } = await import(${JSON.stringify(mcp)});`,
+      `const { StdioServerTransport } = await import(${JSON.stringify(stdio)});`,
+      `const server = new McpServer({ name: "slow", version: "1" });`,
+      `server.tool("melra_execute", async () => { await new Promise((done) => setTimeout(done, 1500)); return { content: [{ type: "text", text: "{\\"done\\":true}" }] }; });`,
+      `await server.connect(new StdioServerTransport());`,
+    ].join("\n");
+    const connect = (runTimeoutMs: number) =>
+      MelraClient.connect({ command: process.execPath, args: ["--input-type=module", "-e", slow], runTimeoutMs });
+
+    const impatient = await connect(500);
+    try {
+      // Honoured: a short limit really does cut the call off.
+      await expect(impatient.execute("task")).rejects.toThrow(/timed out/i);
+    } finally {
+      await impatient.close();
+    }
+    const patient = await connect(5_000);
+    try {
+      await expect(patient.execute("task")).resolves.toEqual({ done: true });
+    } finally {
+      await patient.close();
+    }
+  });
+
   it("says why the server it started refused to start", async () => {
     // What `melra serve` prints for a bad policy, then exits 1.
     const refuse =

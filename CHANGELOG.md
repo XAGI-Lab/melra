@@ -98,6 +98,13 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- The TypeScript SDK's `execute()` and `advanceWorkflow()` wait up to 16
+  minutes for the server, past the longest budget a task can have, instead of
+  the MCP client's 60 s default. A task that ran longer than a minute was
+  reported to the caller as `Request timed out` while the server went on and
+  verified it, and a caller that took that as a failure could run it again.
+  `MelraClient.connect({ runTimeoutMs })` sets the limit. (#256)
+
 - `melra clients` lists a client whose tokens were revoked as `pending`, not
   `approved`: a revoke now clears the client's approval along with its tokens.
   `melra clients --revoke <id>` exits 1 with `no such client` for an id that is
