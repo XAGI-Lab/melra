@@ -1015,8 +1015,10 @@ class LinuxXdotoolAdapter implements ComputerAdapter {
           Math.min(20, Math.round((operation.deltaY ?? 0) / 100)),
         );
         const button = clicks < 0 ? "4" : "5";
-        for (let index = 0; index < Math.abs(clicks); index += 1) {
-          await this.xdotool(["click", button], operation, signal);
+        // One helper for every notch: one per notch, a cancel between two of
+        // them read as nothing sent, though the earlier ones had scrolled.
+        if (clicks !== 0) {
+          await this.xdotool(["click", "--repeat", String(Math.abs(clicks)), button], operation, signal);
         }
         return { success: true, action: "scroll", deltaY: operation.deltaY ?? 0 };
       }
