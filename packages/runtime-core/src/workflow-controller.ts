@@ -707,15 +707,24 @@ export class WorkflowController {
               : trueKeys.includes(first);
       const all = keys.map((key) => preferredTask(allTasks, key));
       if (chosen === undefined) {
-        // Nothing decided it, whatever tasks a lost advance left: the next
-        // advance asks the predicate and settles the other branch then. A
-        // conflict stands while a task in it may have had an effect.
+        // Nothing decided it. A conflict stands while a task in it may have
+        // had an effect.
         const cleared =
           recorded.error === BRANCH_CONFLICT &&
           recorded.taskIds.every((taskId) => {
             const task = this.store.getTask(taskId);
             return task !== undefined && hadNoEffect(task);
           });
+        if (recorded.error === BRANCH_CONFLICT && !cleared) return { state: recorded, found: all };
+        // A step a lost advance ran, on either branch, is read as the node's,
+        // so one whose outcome is unknown halts the run here rather than a
+        // failed sibling unwinding past it (#270). Only challenges it left
+        // wait for the next advance, which decides and cancels them.
+        const ran = all.filter(
+          (task): task is TaskRecord =>
+            task !== undefined && !["planned", "awaiting_approval"].includes(task.status) && !hadNoEffect(task),
+        );
+        if (ran.length > 0) return { state: recoveredNodeState(node, ran, recorded), found: all };
         return { state: cleared ? { status: "pending", taskIds: [] } : recorded, found: all };
       }
       const halted = this.abandonBranch(node, keys, chosen, allTasks);

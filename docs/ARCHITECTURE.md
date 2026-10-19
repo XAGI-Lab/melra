@@ -271,7 +271,10 @@ later. One there that may have had an effect halts the run as
 than run the other branch beside it. Reconciled as never applied, it no
 longer counts and the run moves on. Where both branches took effect,
 `workflow cancel` ends the run without compensating, and what each branch did
-is undone by hand.
+is undone by hand. A restart before the condition is decided reads a step
+such an advance ran as the condition's own, so one whose outcome is unknown
+halts the run there, as any other step's does, rather than let a failed
+sibling unwind past it.
 
 ## Workflow state and events
 

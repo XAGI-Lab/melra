@@ -125,10 +125,12 @@ All notable changes are documented here. The format follows
   `workflow_condition_branch_conflict:<node>` instead of running the other
   branch beside it. Reconciled as never applied, that task no longer counts
   and the run moves on; where both branches took effect, `workflow cancel`
-  ends the run and what each did is undone by hand. A branch's step is found
-  by its idempotency key, so an advance no longer asks again for a step whose
-  effect already committed, nor reuses another branch's task by position.
-  (#268)
+  ends the run and what each did is undone by hand. A restart before the
+  condition is decided still reads a step such an advance ran as the
+  condition's, so one whose outcome is unknown halts the run rather than let
+  a failed sibling unwind past it. A branch's step is found by its
+  idempotency key, so an advance no longer asks again for a step whose effect
+  already committed, nor reuses another branch's task by position. (#268)
 
 - A parked mutation whose `reconciliation` predicate could not be asked stays
   `recovery_required`: a URL token with nothing to fill it (`{{json.id}}`,

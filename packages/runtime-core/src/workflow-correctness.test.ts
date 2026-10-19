@@ -525,6 +525,105 @@ describe("a condition's branch not taken (#268)", () => {
   });
 });
 
+describe("a condition step a lost advance left unknown (#270)", () => {
+  // Pay, then a branch beside a step that fails; refunding pays back.
+  const definition = () =>
+    workflow([
+      { id: "pay", type: "operation", request: put("pay") },
+      {
+        id: "choose",
+        type: "condition",
+        dependsOn: ["pay"],
+        sourceNodeId: "pay",
+        predicate: { type: "file_exists", path: "flag" },
+        whenTrue: [put("ship")],
+        whenFalse: [put("other")],
+      },
+      {
+        id: "x",
+        type: "operation",
+        dependsOn: ["pay"],
+        request: TaskRequestSchema.parse({ ...put("x"), requiredEvidence: [{ type: "result_equals", path: "stored", value: false }] }),
+      },
+      { id: "refund", type: "compensation", forNodeId: "pay", request: put("refund") },
+    ]);
+
+  it("halts after a restart rather than unwind past it when a pause lost its commit", async () => {
+    const { controller, root, store, tasks, cipher, done, on } = await setup({ policy: { unhinged: true } });
+    await writeFile(join(root, "flag"), "on");
+    const planned = controller.plan(definition());
+    await controller.advance(planned.id);
+    on.put = (key) => {
+      if (key !== "ship") return;
+      controller.pause(planned.id);
+      throw outcomeUnknown("socket hang up");
+    };
+    await expect(controller.advance(planned.id)).rejects.toThrow("workflow_state_conflict");
+    delete on.put;
+    const [ship] = store.listTasks(10, "recovery_required");
+    controller.resume(planned.id);
+
+    const restarted = new WorkflowController(store, tasks, cipher);
+    await restarted.recoverInterrupted();
+    // Left pending, x's failure read as the run's and refund ran while ship may have shipped.
+    expect(restarted.status(planned.id).nodes.choose).toMatchObject({ status: "recovery_required", taskIds: [ship!.id] });
+    const run = (await restarted.advance(planned.id)).run;
+    expect(run.status).toBe("recovery_required");
+    expect(done).toEqual(["pay", "x"]);
+  });
+
+  it("halts after a crash rather than unwind past it", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-workflow-correctness-"));
+    roots.push(root);
+    await writeFile(join(root, "flag"), "on");
+    const path = join(root, "melra.sqlite");
+    const cipher = new PayloadCipher(Buffer.alloc(32, 23));
+    const done: string[] = [];
+    let entered!: () => void;
+    const shipping = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const side = async (store: SqliteStore, hangOnShip: boolean) =>
+      new TaskController(
+        store,
+        { ...createDefaultPolicy(root), unhinged: true },
+        {
+          execute: async (operation: Operation) => {
+            if (operation.kind === "memory") {
+              if (hangOnShip && operation.key === "ship") {
+                entered();
+                await new Promise(() => undefined);
+              }
+              done.push(operation.key ?? "");
+            }
+            return { success: true, stored: true };
+          },
+        },
+        await Verifier.create(root),
+        cipher,
+      );
+    // A short lease, so the next process need not wait long for the dead one's.
+    const storeA = new SqliteStore(path);
+    const a = new WorkflowController(storeA, await side(storeA, true), cipher, 200);
+    const planned = a.plan(definition());
+    await a.advance(planned.id);
+    void a.advance(planned.id).catch(() => undefined);
+    await shipping;
+    await vi.waitFor(() => expect(storeA.listTasks(10, "partial")).toHaveLength(1));
+    storeA.close();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    const storeB = new SqliteStore(path);
+    stores.push(storeB);
+    const b = new WorkflowController(storeB, await side(storeB, false), cipher);
+    await b.recoverInterrupted();
+    expect(b.status(planned.id).status).toBe("recovery_required");
+    const run = (await b.advance(planned.id)).run;
+    expect(run.status).toBe("recovery_required");
+    expect(done).toEqual(["pay", "x"]);
+  });
+});
+
 describe("a step an operator denies", () => {
   // Pay, then two branches that each wait for approval; refunding pays back.
   const fanOut = () =>
