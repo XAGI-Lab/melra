@@ -119,6 +119,30 @@ All notable changes are documented here. The format follows
   back deleting corrections reaches once compaction has run. Edits and
   deletes of one chain from two processes no longer interleave. (#250)
 
+- A file `write` with `encoding: "base64"` refuses content that is not base64
+  (`file_content_invalid_base64`) before anything is written; line breaks,
+  missing padding and the URL-safe alphabet are accepted. Node's lenient
+  decoder wrote two joined chunks as the first, plain text as noise and `!!!!`
+  as an empty file, each verifying as a success. (#279)
+
+- A file `write` to a symlink inside the workspace writes the file it points
+  to, as `read` reads it, and keeps that file's permissions. It replaced the
+  link with a plain file and left the target unchanged. A write to a dangling
+  link is refused (`file_write_dangling_symlink`). (#281)
+
+- A file `list` of the workspace root works however the root is spelled
+  relative to itself (`./`, `sub/..`) or by its resolved absolute path, not
+  only `.`. The others were refused as `path_outside_workspace`. (#282)
+
+- A workflow step parked as `recovery_required` moves at the run's next
+  `advance` once its task is settled, for example by `melra_execute`
+  reconciling it against the provider, and so does a compensation an unwind
+  stopped at. The run used to stay
+  `recovery_required`, with no events, until a process restart ran recovery:
+  a long-running server could not finish the workflow, the steps waiting on a
+  reconciled success never ran, and a reconciled failure never failed the run
+  or started its unwind. (#246)
+
 - A workflow step that fails no longer starts the unwind while another step's
   outcome is unknown or unsettled (`recovery_required`: an effect that may have
   happened, or a task still running). The run halts as `recovery_required`,
@@ -134,6 +158,8 @@ All notable changes are documented here. The format follows
   failed, is halted the same way at its next advance. The unknown step's
   compensation, which that unwind skipped, is offered again, also when the step
   ran under its `approval` node or when that unwind had stalled. (#270)
+
+
 
 - A workflow with an `exit_code` evidence predicate can be planned, and so can
   one with a node id, verifier name or URL that looks like an API key

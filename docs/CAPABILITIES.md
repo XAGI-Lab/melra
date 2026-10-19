@@ -69,10 +69,17 @@ Node types: `operation`, `approval`, `condition`, `parallel`, `bounded_loop`,
 
 Actions: `list`, `read`, `stat`, `hash`, `write`, `move`, `delete`, `mkdir`.
 
-- Paths are resolved inside one workspace root.
-- Existing symlinks cannot escape that root.
+- Paths are resolved inside one workspace root. `list` takes the root however
+  it is spelled (`.`, `./`, its absolute path with any links in it resolved);
+  no other action takes it.
+- Existing symlinks cannot escape that root. A `write` to a symlink inside it
+  writes the file it points to, as `read` reads it; one whose target does not
+  exist is refused (`file_write_dangling_symlink`).
 - Reads and writes are size-bounded by local policy.
 - Writes use a temporary sibling file followed by an atomic rename.
+- `encoding: "base64"` content must be base64 (line breaks, missing padding and
+  the URL-safe alphabet allowed), or the write is refused before anything lands
+  (`file_content_invalid_base64`).
 - Deletes are destructive and approval-gated.
 
 ### Terminal
