@@ -1,8 +1,9 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
+import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, join, parse, resolve } from "node:path";
 import { isSea } from "node:sea";
 import type { DeploymentMode } from "@melra/protocol";
 import { deploymentMode } from "@melra/protocol";
@@ -68,6 +69,24 @@ export function approverLabel(env: CliEnvironment, surface: "cli" | "console" = 
     throw new Error("MELRA_APPROVER must be 1 to 64 letters, digits, '.', '_', '@' or '-'");
   }
   return `${surface}:${env.approver}`;
+}
+
+/**
+ * Whether a workspace is the home directory or a filesystem root, either of
+ * which hands the agent every project at once. Compared by real path, so a
+ * symlinked home or a link to `/` counts, and on Windows regardless of case.
+ * Undefined for any other directory, and for one that does not resolve, which
+ * `doctor` reports on its own.
+ */
+export async function broadWorkspace(workspace: string, home = homedir()): Promise<"home" | "root" | undefined> {
+  try {
+    const real = await realpath(workspace);
+    if (parse(real).root === real) return "root";
+    const fold = (path: string) => (process.platform === "win32" ? path.toLowerCase() : path);
+    return fold(real) === fold(await realpath(home)) ? "home" : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function cdpEndpoint(value: string | undefined): string | undefined {

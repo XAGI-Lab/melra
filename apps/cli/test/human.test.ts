@@ -11,6 +11,7 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { detectClients, type ClientChoice } from "../src/client-status.js";
 import {
+  confirmBroadWorkspace,
   nextStep,
   renderConformance,
   renderDoctor,
@@ -81,6 +82,28 @@ describe("setup wizard", () => {
   it("aborts with no answer when input ends, at either question", async () => {
     expect((await wizard([])).result).toBeUndefined();
     expect((await wizard(["1"])).result).toBeUndefined();
+  });
+});
+
+describe("broad workspace question", () => {
+  const ask = async (answer: string | undefined) => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    let printed = "";
+    output.on("data", (chunk) => (printed += String(chunk)));
+    input.end(answer === undefined ? "" : `${answer}\n`);
+    return { agreed: await confirmBroadWorkspace({ input, output }, "/h", "home"), printed };
+  };
+
+  it("says why, and goes ahead only on a yes", async () => {
+    const { agreed, printed } = await ask("y");
+    expect(agreed).toBe(true);
+    expect(printed).toContain("/h is your home directory, and the agent could read every file under it");
+    expect(printed).toContain("set MELRA_WORKSPACE to it");
+    expect(printed).toContain("Use /h as the workspace anyway? [y/N]");
+    expect((await ask("YES")).agreed).toBe(true);
+    // No is the default, and so is anything else, or no answer at all.
+    for (const answer of ["", "n", "sure", undefined]) expect((await ask(answer)).agreed).toBe(false);
   });
 });
 
@@ -162,12 +185,15 @@ describe("human doctor report", () => {
     expect(renderDoctor(clean).trimEnd().endsWith("Ready")).toBe(true);
   });
 
-  it("says to move a data directory out of the workspace, not to make it writable", () => {
+  it("says to narrow a workspace that holds the data directory, not to move the data", () => {
     const inside = report({
       checks: [{ name: "data-location", status: "warn", detail: "/w/.melra is inside the workspace" }],
       clients: [],
     });
-    expect(nextStep(inside)).toBe("move MELRA_HOME outside MELRA_WORKSPACE");
+    // Moving MELRA_HOME opens an empty database; the workspace is what is wrong.
+    expect(nextStep(inside)).toBe(
+      "run setup from the project directory, or set MELRA_WORKSPACE to it; keep MELRA_HOME where it is (moving it orphans the database)",
+    );
     const unresolved = report({
       checks: [{ name: "data-location", status: "fail", detail: "could not resolve the workspace: EISDIR" }],
       clients: [],
@@ -267,6 +293,7 @@ describe("conformance and setup output", () => {
     const result = {
       initialized: true as const,
       client: "claude-code",
+      workspace: "/w",
       policyPath: "/p",
       configPath: "/w/.mcp.json",
       written: true as const,
@@ -274,6 +301,10 @@ describe("conformance and setup output", () => {
       note: "",
     };
     expect(renderInit(result)).toContain("approve the 'melra' server");
+    // The directory the agent gets, written or printed.
+    expect(renderInit(result)).toMatch(/^ {2}\S+\s+Workspace\s+\/w$/m);
+    const { written: _written, ...printedOnly } = result;
+    expect(renderInit(printedOnly)).toMatch(/Workspace\s+\/w$/m);
     expect(renderInit({ ...result, client: "codex" })).toContain("Next: Restart Codex");
     expect(renderInit({ ...result, unchanged: true })).toContain("already set up; nothing changed");
   });

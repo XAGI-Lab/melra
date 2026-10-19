@@ -107,7 +107,26 @@ All notable changes are documented here. The format follows
   passes `--socket "$MELRA_SOCKET"` instead. The stderr warning `serve` printed
   in that case is gone with it. (#105)
 
+- **Breaking:** `melra setup` and `melra init` show the workspace they give
+  the agent, as a `Workspace` row and as `workspace` in the JSON, and no
+  longer make it the home directory or a filesystem root (`/`, or a drive
+  root on Windows) unasked. The workspace is the current directory unless
+  `MELRA_WORKSPACE` is set, so the README's `npx @melra/cli@alpha setup` run
+  in a fresh terminal gave the agent the whole home directory, with nothing
+  printed to say so. In a terminal they now say so and ask, defaulting to
+  no; elsewhere (piped, captured, `--json`) they refuse with
+  `workspace_too_broad` and write nothing. A script that means it sets
+  `MELRA_WORKSPACE`, which is never questioned. Home is compared by real
+  path, and on Windows regardless of case.
+
 ### Fixed
+
+- `melra doctor`'s `data-location` advice and the enforced-mode refusal
+  `enforced_mode_refuses_data_inside_workspace` say to run setup from the
+  project directory or set `MELRA_WORKSPACE` to it, and to keep `MELRA_HOME`
+  where it is. They said to move `MELRA_HOME` outside the workspace, which
+  points the server at a new, empty database and orphans the tasks and
+  approvals in the old one.
 
 - `melra policy test` previews a mutation that declares no evidence with the
   evidence the server derives for it, as `melra_plan` does, and prints it as

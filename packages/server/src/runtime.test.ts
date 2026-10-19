@@ -419,7 +419,11 @@ describe("terminal arguments", () => {
         dataDirectory: join(base, ".melra"),
         environment: { MELRA_MODE: "enforced" },
       }),
-    ).rejects.toThrow(/enforced_mode_refuses_data_inside_workspace/);
+    ).rejects.toThrow(
+      // Not "move MELRA_HOME": a server pointed at a new one opens an empty
+      // database, with none of the tasks waiting in the old one.
+      /enforced_mode_refuses_data_inside_workspace: run setup from the project directory, or set MELRA_WORKSPACE to it; keep MELRA_HOME where it is/,
+    );
     // Developer mode starts, and the workspace itself is still usable: refusing
     // the directories above the data would refuse every command there.
     runtime = await createMelraRuntime({ workspaceRoot: base, dataDirectory: join(base, ".melra"), environment: {} });

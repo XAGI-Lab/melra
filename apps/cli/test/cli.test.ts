@@ -6,7 +6,7 @@ import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, parse, resolve } from "node:path";
 import { promisify } from "node:util";
 import { PassThrough, Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -20,7 +20,7 @@ import {
 import { OAuthProvider, approvalScreen, createMelraRuntime, printable, serveHttp } from "@melra/server";
 import { runConformance } from "../src/conformance.js";
 import { RESTART_SAFE_WORKFLOW } from "../src/demo-workflow.js";
-import { approverLabel, parseCliEnvironment, serverLaunch } from "../src/environment.js";
+import { approverLabel, broadWorkspace, parseCliEnvironment, serverLaunch } from "../src/environment.js";
 import { approvalConsole, confirmInTerminal, type ConsoleTerminal } from "../src/approval-console.js";
 import { taskTarget } from "../src/activity.js";
 
@@ -1564,6 +1564,7 @@ describe("melra CLI", () => {
     const report = JSON.parse(result.stdout) as {
       initialized: boolean;
       client: string;
+      workspace: string;
       policyPath: string;
       config: { mcpServers: { melra: { command: string } } };
       ready: boolean;
@@ -1571,11 +1572,78 @@ describe("melra CLI", () => {
     };
     expect(report.initialized).toBe(true);
     expect(report.client).toBe("cursor");
+    expect(report.workspace).toBe(root);
     expect(report.ready).toBe(true);
     expect(report.checks.some((check) => check.name === "sqlite")).toBe(true);
     expect(JSON.parse(await readFile(report.policyPath, "utf8"))).toMatchObject({
       mutations: "confirm",
     });
+  });
+
+  it("knows a workspace that is home or a filesystem root, however it is spelled", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-cli-broad-"));
+    roots.push(root);
+    const home = join(root, "home");
+    await mkdir(join(home, "project"), { recursive: true });
+    await symlink(home, join(root, "link"));
+    expect(await broadWorkspace(home, home)).toBe("home");
+    // Through a link, either side: a symlinked home is still home.
+    expect(await broadWorkspace(join(root, "link"), home)).toBe("home");
+    expect(await broadWorkspace(home, join(root, "link"))).toBe("home");
+    expect(await broadWorkspace(join(home, "project"), home)).toBeUndefined();
+    expect(await broadWorkspace(root, home)).toBeUndefined();
+    // `/`, or the drive root on Windows.
+    expect(await broadWorkspace(parse(root).root, home)).toBe("root");
+    // One that does not resolve is doctor's to report.
+    expect(await broadWorkspace(join(root, "missing"), home)).toBeUndefined();
+  });
+
+  it("will not quietly make the home directory or a filesystem root the workspace", async () => {
+    // Real path, so the working directory the CLI reads back is spelled the same.
+    const home = await realpath(await mkdtemp(join(tmpdir(), "melra-cli-home-")));
+    roots.push(home);
+    const env = {
+      ...process.env,
+      HOME: home,
+      USERPROFILE: home,
+      MELRA_HOME: join(home, ".melra"),
+      MELRA_WORKSPACE: "",
+      MELRA_POLICY: "",
+    };
+    // What `npx @melra/cli@alpha setup` in a fresh terminal did: piped, or with
+    // --json, nobody can be asked, so it is refused with what to do instead.
+    for (const [cwd, what] of [
+      [home, "is your home directory"],
+      [parse(home).root, "is the root of the file system"],
+    ] as const) {
+      for (const command of [["setup"], ["init"], ["setup", "--json"]]) {
+        const refused = await execute(process.execPath, [entry, ...command, "--client", "claude"], { cwd, env }).catch(
+          (error: { code: number; stdout: string; stderr: string }) => error,
+        );
+        expect(refused).toMatchObject({ code: 1, stdout: "" });
+        expect(refused.stderr).toContain(`workspace_too_broad: `);
+        expect(refused.stderr).toContain(what);
+        expect(refused.stderr).toContain("Rerun from your project directory, or set MELRA_WORKSPACE to it");
+      }
+    }
+    // Before anything was written.
+    expect(existsSync(join(home, ".melra"))).toBe(false);
+    // MELRA_WORKSPACE naming it is a choice made, so a scripted install still runs.
+    const chosen = await execute(process.execPath, [entry, "init", "--client", "claude"], {
+      cwd: home,
+      env: { ...env, MELRA_WORKSPACE: home },
+    });
+    expect(JSON.parse(chosen.stdout)).toMatchObject({
+      workspace: home,
+      config: { mcpServers: { melra: { env: { MELRA_WORKSPACE: home } } } },
+    });
+    // A project under home is the ordinary case.
+    const project = join(home, "project");
+    await mkdir(project);
+    const setup = await execute(process.execPath, [entry, "setup", "--client", "claude"], { cwd: project, env }).catch(
+      (error: { stdout: string }) => error,
+    );
+    expect((JSON.parse(setup.stdout) as { workspace: string }).workspace).toBe(project);
   });
 
   it("keeps each project in its own workspace when they share MELRA_HOME", async () => {

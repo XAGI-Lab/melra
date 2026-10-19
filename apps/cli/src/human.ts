@@ -30,6 +30,8 @@ export interface DoctorReport {
 export interface InitResult {
   initialized: true;
   client: string;
+  /** The directory the generated config gives the agent, as MELRA_WORKSPACE. */
+  workspace: string;
   policyPath: string;
   configPath?: string;
   written?: true;
@@ -76,7 +78,7 @@ export function nextStep(report: DoctorReport): string | undefined {
       case "data-location":
         return check.detail.startsWith("could not resolve the workspace")
           ? "point MELRA_WORKSPACE at a directory you can read and write"
-          : "move MELRA_HOME outside MELRA_WORKSPACE";
+          : "run setup from the project directory, or set MELRA_WORKSPACE to it; keep MELRA_HOME where it is (moving it orphans the database)";
       case "policy":
         return "fix the policy file's JSON, or unset MELRA_POLICY to use the defaults";
       case "socket":
@@ -175,7 +177,10 @@ function snippet(config: Record<string, unknown> | string): string {
 
 export function renderInit(result: InitResult): string {
   const label = CLIENTS[result.client]?.label ?? result.client;
-  const rows = [[mark("pass"), "Policy", result.policyPath]];
+  const rows = [
+    [mark("pass"), "Workspace", result.workspace],
+    [mark("pass"), "Policy", result.policyPath],
+  ];
   if (result.written === true && result.configPath !== undefined) {
     rows.push([mark("pass"), label, result.configPath]);
     if (result.unchanged === true) {
@@ -213,6 +218,37 @@ export function renderSetup(result: InitResult, report: DoctorReport): string {
 export interface WizardIo {
   input: NodeJS.ReadableStream;
   output: NodeJS.WritableStream;
+}
+
+/** Why `setup` and `init` will not quietly make home or `/` the workspace. */
+export function broadWorkspaceWarning(workspace: string, broad: "home" | "root"): string {
+  return (
+    `${workspace} is ${broad === "home" ? "your home directory" : "the root of the file system"}, ` +
+    "and the agent could read every file under it. Rerun from your project directory, or set MELRA_WORKSPACE to it"
+  );
+}
+
+/**
+ * Asked before `setup` or `init` writes a config whose workspace is home or a
+ * filesystem root: what `npx @melra/cli@alpha setup` in a fresh terminal did
+ * without a word. No unless the person types y; input that ends is a no.
+ */
+export async function confirmBroadWorkspace(
+  io: WizardIo,
+  workspace: string,
+  broad: "home" | "root",
+): Promise<boolean> {
+  io.output.write(`${mark("warn")} ${printable(broadWorkspaceWarning(workspace, broad))}.\n`);
+  const rl = createInterface({ input: io.input, output: io.output });
+  rl.on("SIGINT", () => rl.close());
+  try {
+    rl.setPrompt(`Use ${printable(workspace)} as the workspace anyway? [y/N] `);
+    rl.prompt();
+    const line = await rl[Symbol.asyncIterator]().next();
+    return line.done !== true && ["y", "yes"].includes(String(line.value).trim().toLowerCase());
+  } finally {
+    rl.close();
+  }
 }
 
 /**

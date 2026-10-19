@@ -298,7 +298,8 @@ export async function createMelraRuntime(
   if (mode === "enforced" && holdsData) {
     store.close();
     throw new Error(
-      "enforced_mode_refuses_data_inside_workspace: move MELRA_HOME outside MELRA_WORKSPACE.",
+      "enforced_mode_refuses_data_inside_workspace: run setup from the project directory, or set " +
+        "MELRA_WORKSPACE to it; keep MELRA_HOME where it is (moving it orphans the database).",
     );
   }
   const terminal = await TerminalRuntime.create({

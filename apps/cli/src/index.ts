@@ -49,6 +49,7 @@ import {
 import {
   type CliEnvironment,
   approverLabel,
+  broadWorkspace,
   parseCliEnvironment,
   serverLaunch,
 } from "./environment.js";
@@ -59,6 +60,8 @@ import { clientStatuses, clientsCheck, detectClients } from "./client-status.js"
 import { RESTART_SAFE_WORKFLOW } from "./demo-workflow.js";
 import { detectIsolation, isolationCheck } from "./isolation.js";
 import {
+  broadWorkspaceWarning,
+  confirmBroadWorkspace,
   renderConformance,
   renderDoctor,
   renderInit,
@@ -711,6 +714,7 @@ async function init(args: string[], env: CliEnvironment): Promise<InitResult> {
     return {
       initialized: true,
       client,
+      workspace: env.workspaceRoot,
       policyPath,
       configPath,
       written: true,
@@ -725,6 +729,7 @@ async function init(args: string[], env: CliEnvironment): Promise<InitResult> {
   return {
     initialized: true,
     client,
+    workspace: env.workspaceRoot,
     policyPath,
     ...(configPath === undefined ? {} : { configPath }),
     config,
@@ -736,9 +741,30 @@ async function init(args: string[], env: CliEnvironment): Promise<InitResult> {
   };
 }
 
+// Home or a filesystem root as the workspace hands the agent every project at
+// once, and a fresh terminal starts in home. MELRA_WORKSPACE naming it is a
+// choice already made; otherwise a person at a terminal is asked, defaulting
+// to no, and anything else is refused before a file is written.
+async function workspaceAgreed(args: string[], env: CliEnvironment): Promise<boolean> {
+  const broad = env.workspaceSet === true ? undefined : await broadWorkspace(env.workspaceRoot);
+  if (broad === undefined) return true;
+  if (!isHuman(args) || !process.stdin.isTTY) {
+    throw new Error(
+      `workspace_too_broad: ${broadWorkspaceWarning(env.workspaceRoot, broad)} ` +
+        `(MELRA_WORKSPACE=${env.workspaceRoot} to use it anyway)`,
+    );
+  }
+  if (await confirmBroadWorkspace({ input: process.stdin, output: process.stdout }, env.workspaceRoot, broad)) {
+    return true;
+  }
+  process.stdout.write("Nothing was written.\n");
+  return false;
+}
+
 // One command for the whole local setup: write the policy, emit a working
 // client config, and verify the machine can actually run it.
 async function setup(args: string[], env: CliEnvironment): Promise<number> {
+  if (!(await workspaceAgreed(args, env))) return 1;
   let chosen = args;
   // Only a person at a terminal on both ends is asked. Anything else — a pipe,
   // a test, `--json` — gets today's non-interactive generic setup unchanged.
@@ -1143,6 +1169,10 @@ async function main(): Promise<void> {
     }
     case "init":
       rejectUnknownFlags(args, ["--client", "--write", "--json"]);
+      if (!(await workspaceAgreed(args, env))) {
+        process.exitCode = 1;
+        return;
+      }
       printJsonOrHuman(await init(args, env), renderInit, args);
       return;
     case "setup":
