@@ -416,6 +416,24 @@ describe("melra tasks, status, and watch", { timeout: 60_000 }, () => {
     expect(preview.requiredEvidence).toEqual([{ type: "file_exists", path: "notes.txt" }]);
   });
 
+  it("says the policy file did not load, rather than counting approvals by the defaults unannounced", async () => {
+    const { root, options } = await workspace();
+    const policy = join(root, "policy.json");
+    // Enforced, in a file the server refuses to start on.
+    await writeFile(policy, JSON.stringify({ mode: "enforced", allowedComands: ["git"] }));
+    const invalid = { ...options, env: { ...options.env, MELRA_POLICY: policy } };
+    const refusal = `policy_invalid: ${policy}: allowedComands: unknown key`;
+    const listed = await execute(process.execPath, [entry, "tasks", "--json"], invalid);
+    expect(JSON.parse(listed.stdout)).toEqual({ tasks: [], policyError: refusal });
+    // What would act on the file still refuses to start on it.
+    for (const args of [["run", "--request", systemInfo], ["approve", randomUUID(), "--yes"]]) {
+      await expect(execute(process.execPath, [entry, ...args], invalid), args[0]).rejects.toMatchObject({
+        code: 1,
+        stderr: expect.stringContaining(`melra: ${refusal}\n`),
+      });
+    }
+  });
+
   it("reports an empty home without creating a database", async () => {
     const { options } = await workspace();
     const listed = await execute(process.execPath, [entry, "tasks"], options);

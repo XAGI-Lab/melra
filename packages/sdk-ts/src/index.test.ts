@@ -246,9 +246,9 @@ describe("TypeScript SDK stdio connect", () => {
   it("says why the server it started refused to start", async () => {
     // What `melra serve` prints for a bad policy, then exits 1.
     const refuse =
-      'process.stderr.write("melra: policy_approval_ttl_invalid: approvalTtlMs must be a whole number\\n"); process.exit(1)';
+      'process.stderr.write("melra: policy_invalid: /p/policy.json: approvalTtlMs: policy_approval_ttl_invalid: must be a whole number\\n"); process.exit(1)';
     await expect(MelraClient.connect({ command: process.execPath, args: ["-e", refuse] })).rejects.toThrow(
-      /the server said: melra: policy_approval_ttl_invalid/,
+      /the server said: melra: policy_invalid: \/p\/policy\.json: approvalTtlMs: policy_approval_ttl_invalid/,
     );
   });
 
