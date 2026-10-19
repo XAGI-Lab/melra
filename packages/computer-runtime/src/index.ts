@@ -4,8 +4,8 @@
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { access, mkdir, readFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { access, mkdir, readFile, rm } from "node:fs/promises";
+import { basename, dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import type { ComputerOperation } from "@melra/protocol";
 
@@ -342,6 +342,11 @@ export interface ComputerAdapter {
 export interface ComputerRuntimeOptions {
   artifactDirectory: string;
   adapter?: ComputerAdapter;
+  /**
+   * The OCR program, for one outside tesseract's usual install paths. Setting
+   * it makes reading the screen available wherever screenshots are.
+   */
+  ocrProgram?: string;
 }
 
 const ALLOWED_KEYS: Record<string, number> = {
@@ -1491,7 +1496,10 @@ export class ComputerRuntime {
     signal?: AbortSignal,
   ): Promise<Record<string, unknown>> {
     if (signal?.aborted === true) throw new Error("task_cancelled");
-    const capabilities = await this.adapter.capabilities();
+    const reported = await this.adapter.capabilities();
+    // The adapters look for tesseract only at its usual paths.
+    const capabilities =
+      this.options.ocrProgram === undefined ? reported : { ...reported, ocr: reported.screenshot };
     if (operation.action === "capabilities") {
       return { ...capabilities };
     }
@@ -1586,7 +1594,7 @@ export class ComputerRuntime {
     capabilities: ComputerCapabilities,
     signal?: AbortSignal,
   ): Promise<DesktopElement[]> {
-    const observed = await this.observe(operation, capabilities, signal);
+    const observed = await this.observe(operation, capabilities, signal, true);
     const elements = elementsFrom(observed["elements"]);
     if (elements === undefined || elements.length === 0) {
       throw new Error("computer_elements_unavailable");
@@ -1609,6 +1617,7 @@ export class ComputerRuntime {
     operation: ComputerOperation,
     capabilities: ComputerCapabilities,
     signal?: AbortSignal,
+    forTarget = false,
   ): Promise<Record<string, unknown>> {
     const observed = await this.adapter.execute(
       { ...operation, action: "inspect" },
@@ -1620,7 +1629,16 @@ export class ComputerRuntime {
     if (!capabilities.ocr || !capabilities.screenshot) return observed;
     const displayWidth = observed["displayWidth"];
     if (typeof displayWidth !== "number") return observed;
-    const read = await this.readScreen(operation, displayWidth, signal);
+    // Installing tesseract only ever makes an `inspect` richer: a reading that
+    // fails (no screen-recording permission, a Wayland session, a cut capture)
+    // leaves it as it is on a host without tesseract. A target has nothing to
+    // fall back on, so its own reason is the one worth reporting.
+    const read = await this.readScreen(operation, displayWidth, signal).catch(
+      (error: unknown) => {
+        if (signal?.aborted === true || forTarget) throw error;
+        return [];
+      },
+    );
     return read.length === 0 ? observed : { ...observed, elements: read };
   }
 
@@ -1630,7 +1648,7 @@ export class ComputerRuntime {
     displayWidth: number,
     signal?: AbortSignal,
   ): Promise<DesktopElement[]> {
-    const program = await tesseract();
+    const program = this.options.ocrProgram ?? (await tesseract());
     if (program === undefined) return [];
     const { target: _named, ...rest } = operation;
     const captured = await this.adapter.execute(
@@ -1640,12 +1658,23 @@ export class ComputerRuntime {
     );
     const path = captured["path"];
     if (typeof path !== "string") return [];
-    const { stdout } = await run(
-      program,
-      [path, "stdout", "tsv"],
-      operation.timeoutMs,
-      signal,
-    );
-    return parseOcrElements(stdout, displayWidth);
+    try {
+      const { stdout } = await run(
+        program,
+        [path, "stdout", "tsv"],
+        operation.timeoutMs,
+        signal,
+      );
+      return parseOcrElements(stdout, displayWidth);
+    } finally {
+      // Taken to be read, not kept: no result names it, and it shows whatever
+      // was on the screen. Only a capture in the artifact directory is ours to
+      // delete.
+      // Best effort: a file still held (by a scanner, or a reader a cancel
+      // has not stopped yet) must not replace the reading or the cancel.
+      if (resolve(dirname(path)) === resolve(this.options.artifactDirectory)) {
+        await rm(path, { force: true }).catch(() => undefined);
+      }
+    }
   }
 }
