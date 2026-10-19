@@ -110,26 +110,32 @@ All notable changes are documented here. The format follows
 ### Fixed
 
 - A parked mutation whose `reconciliation` predicate could not be asked stays
-  `recovery_required` (`reconciliation_inconclusive`): a URL token with
-  nothing to fill it (`{{json.id}}`, when there is no response on that path),
-  a custom verifier the runtime does not have, or one whose backend timed out.
-  It was settled as `failed`, `reconciliation_confirms_effect_not_applied`,
-  without the provider being asked, and the agent ran the effect again. A
-  predicate whose check throws is now `inconclusive` in the receipt, as an
-  unreachable provider already was; a missing file is still a plain no for
-  `file_exists` and `file_hash`, and a path under a regular file (`ENOTDIR`)
-  is absent for `file_absent`, where it was an error. An item the kernel
-  itself refused to ask (a path outside the workspace or reserved, a URL token
-  with nothing to fill it, a verifier or probe the runtime does not have) also
-  carries `unanswerable: true`, so a caller can tell a question that is
-  refused every time from one worth asking again without reading its summary;
-  a verifier cannot set it. Planning refuses a `reconciliation` verifier the
-  runtime does not have (`evidence_verifier_unavailable`), as it did for
-  `requiredEvidence`, and a `file_exists`, `file_absent` or `file_hash` path
-  in either that can only land outside the workspace or on its root
-  (`evidence_path_outside_workspace`): such evidence ended `partial` after the
-  effect ran, and such a reconciliation left the task parked for good. A
-  workflow run accepted before this change is not stopped at that step.
+  `recovery_required`: a URL token with nothing to fill it (`{{json.id}}`,
+  when there is no response on that path), a custom verifier the runtime does
+  not have, or one whose backend timed out. It was settled as `failed`,
+  `reconciliation_confirms_effect_not_applied`, without the provider being
+  asked, and the agent ran the effect again. A predicate whose check throws is
+  now `inconclusive` in the receipt, as an unreachable provider already was; a
+  missing file is still a plain no for `file_exists` and `file_hash`, and a
+  path under a regular file (`ENOTDIR`) or a name too long for the filesystem
+  (`ENAMETOOLONG`) is absent for `file_absent`, where it was an error. An item
+  the kernel itself refused to ask (a path outside the workspace or reserved,
+  a URL token with nothing to fill it, a verifier or probe the runtime does not
+  have) also carries `unanswerable: true`, so a caller can tell a question that
+  is refused every time from one worth asking again without reading its
+  summary; a verifier cannot set it. The task's `error` says which:
+  `reconciliation_unanswerable:<refusal>` means the declaration needs fixing,
+  `reconciliation_inconclusive` that the provider may answer later. Planning
+  refuses a `reconciliation` verifier the runtime does not have
+  (`evidence_verifier_unavailable`), as it did for `requiredEvidence`, a
+  `file_exists`, `file_absent` or `file_hash` path in either that can only
+  land outside the workspace or on its root
+  (`evidence_path_outside_workspace`), and a reconciliation URL token the
+  facts it is read against (`taskId`, `url`, `method`, `idempotencyKey`)
+  cannot fill (`reconciliation_unanswerable:verification_token_unresolved:<token>`):
+  such evidence ended `partial` after the effect ran, and such a
+  reconciliation left the task parked for good. A workflow run accepted before
+  this change is not stopped at that step.
 
 - A mutation whose adapter returned, but whose result, receipt or task could
   not then be written (a locked or full database), parks as

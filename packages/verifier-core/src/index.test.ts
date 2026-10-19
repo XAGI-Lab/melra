@@ -172,6 +172,27 @@ describe("Verifier", () => {
     expect(evidence[0]?.inconclusive).toBeUndefined();
   });
 
+  it("answers a name too long for the filesystem as missing, not as no answer", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-verifier-"));
+    roots.push(root);
+    const verifier = await Verifier.create(root);
+    // ENAMETOOLONG: no file can have this name, so the answer cannot change.
+    const path = "a".repeat(300);
+    const { evidence } = await verifier.verify(
+      [
+        { type: "file_exists", path },
+        { type: "file_absent", path },
+        { type: "file_hash", path, sha256: "0".repeat(64) },
+      ],
+      {},
+    );
+    expect(evidence.map(({ passed, inconclusive }) => [passed, inconclusive ?? false])).toEqual([
+      [false, false],
+      [true, false],
+      [false, false],
+    ]);
+  });
+
   it("reads a case-only rename's old spelling as absent, and nothing else spelled differently", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-verifier-"));
     roots.push(root);

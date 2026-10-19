@@ -204,10 +204,13 @@ const pageContains: Built<"page_contains"> = {
 /**
  * A path that is not there: the workspace's answer, not a failure to ask.
  * Thrown, it would read as no answer at all, and a reconciliation or a
- * condition waiting on that file would never decide.
+ * condition waiting on that file would never decide. A name too long for the
+ * filesystem (ENAMETOOLONG) cannot exist either, however often it is asked.
  */
 const missing = (error: unknown): boolean =>
-  error instanceof Error && "code" in error && (error.code === "ENOENT" || error.code === "ENOTDIR");
+  error instanceof Error &&
+  "code" in error &&
+  (error.code === "ENOENT" || error.code === "ENOTDIR" || error.code === "ENAMETOOLONG");
 
 const fileExists: Built<"file_exists"> = {
   type: "file_exists",
@@ -496,6 +499,26 @@ export class Verifier {
   outsideWorkspace(predicate: EvidencePredicate | { type: string; [field: string]: unknown }): boolean {
     const path = (predicate as { path?: unknown }).path;
     return FILE_TYPES.has(predicate.type) && typeof path === "string" && this.spelled(path) === undefined;
+  }
+
+  /**
+   * The refusal an `http_resource_matches` URL gets when `facts` cannot fill
+   * one of its `{{token}}`s, if any. For planning a reconciliation, which is
+   * only ever read against facts known before the call: asked, it would be
+   * refused every time.
+   */
+  unfilledToken(
+    predicate: EvidencePredicate | { type: string; [field: string]: unknown },
+    facts: Record<string, unknown>,
+  ): string | undefined {
+    const url = (predicate as { url?: unknown }).url;
+    if (predicate.type !== "http_resource_matches" || typeof url !== "string") return undefined;
+    try {
+      interpolate(url, facts);
+      return undefined;
+    } catch (error) {
+      return error instanceof Refusal ? error.message : undefined;
+    }
   }
 
   /** `input` under the root before any link is followed; undefined outside it or at the root. */

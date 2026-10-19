@@ -86,11 +86,11 @@ function now(): string {
  * an adapter result so one predicate type reads the same on both paths.
  */
 function reconciliationFacts(
-  task: TaskRecord,
+  taskId: string,
   operation: Operation,
 ): Record<string, unknown> {
   return {
-    taskId: task.id,
+    taskId,
     ...(operation.kind === "http"
       ? {
           url: operation.url,
@@ -319,6 +319,16 @@ export class TaskController {
         : [...parsed.requiredEvidence, ...parsed.reconciliation],
       options,
     );
+    // Read only against the facts known before the call, so a URL token they
+    // cannot fill (`{{json.id}}`: no response is read on this path) is
+    // refused every time it is asked, and the task would stay parked.
+    if (options.stored !== true) {
+      const facts = reconciliationFacts("00000000-0000-4000-8000-000000000000", parsed.operation);
+      for (const predicate of parsed.reconciliation) {
+        const refused = this.verifier.unfilledToken(predicate, facts);
+        if (refused !== undefined) throw new Error(`reconciliation_unanswerable:${refused}`);
+      }
+    }
     return evaluatePolicy(
       "00000000-0000-4000-8000-000000000000",
       parsed,
@@ -738,8 +748,16 @@ export class TaskController {
     }
     const verification = await this.verifier.verify(
       request.reconciliation,
-      reconciliationFacts(task, request.operation),
+      reconciliationFacts(task.id, request.operation),
     );
+    // Refused by the kernel itself, it is refused again however often it is
+    // asked: the declaration needs fixing, which waiting on the provider will
+    // not do. Named, so a caller can tell the two apart.
+    const unanswerable = verification.evidence.filter((item) => item.unanswerable === true);
+    if (unanswerable.length > 0) {
+      const reason = `reconciliation_unanswerable:${unanswerable.map((item) => item.summary).join("; ")}`;
+      return park((redactStructuredValue(reason).value as string).slice(0, 10_000));
+    }
     // An unreachable provider did not say no. Resolving on this would be the
     // same lie as the `failed` this whole path exists to avoid.
     if (verification.evidence.some((item) => item.inconclusive === true)) {

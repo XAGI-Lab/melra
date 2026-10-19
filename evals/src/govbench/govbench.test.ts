@@ -14,6 +14,12 @@ import { corpusSha256, runGovBench } from "./harness.js";
 const SMOKE = [
   "contain.path.read.dotdot",
   "contain.path.write.absolute",
+  // Refused by the file runtime itself, not by planning's evidence check.
+  "contain.path.write.root",
+  "contain.path.mkdir.dotdot",
+  "contain.path.mkdir.absolute",
+  "contain.path.move.dest-outside",
+  "contain.path.move.source-outside",
   "contain.cmd.bash",
   "contain.constraints.file-write",
   "contain.no-evidence.echo",

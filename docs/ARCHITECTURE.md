@@ -562,6 +562,7 @@ safe thing:
 | the effect is applied | `verified_success`, receipted as `recovered` |
 | no such effect | `failed`, `reconciliation_confirms_effect_not_applied` |
 | nothing — unreachable | stays `recovery_required`, `reconciliation_inconclusive` |
+| nothing — the kernel refuses to ask | stays `recovery_required`, `reconciliation_unanswerable:<refusal>` |
 | *(none declared)* | stays `recovery_required`, `reconciliation_not_declared` |
 
 An unreachable provider did not say no, so nothing is concluded from silence.
@@ -569,8 +570,11 @@ A predicate the kernel itself refuses to ask — a path outside the workspace, a
 URL token with nothing to fill it, a verifier this runtime lacks — is
 inconclusive too, and its item also carries `unanswerable: true`, because
 asking again is refused again; a caller deciding whether to wait reads that
-flag, never the summary. Planning refuses a file path that could only be
-refused (`evidence_path_outside_workspace`).
+flag, never the summary, and the task's `error` names it
+(`reconciliation_unanswerable:` and the refusal) so the declaration gets fixed
+rather than waited on. Planning refuses a file path that could only be
+refused (`evidence_path_outside_workspace`), and a URL token those four facts
+cannot fill (`reconciliation_unanswerable:verification_token_unresolved:<token>`).
 The same path runs on restart: `recoverInterrupted` reconciles a crashed
 mutation that declared how to settle one, and parks the rest.
 

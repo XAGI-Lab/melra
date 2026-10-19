@@ -878,6 +878,7 @@ describe("effect contract and principal", () => {
     async function unansweredCharge(
       probe?: EvidenceProbe,
       url = "http://localhost:9/charges/{{idempotencyKey}}",
+      plan: { stored?: boolean } = {},
     ) {
       const execute = vi.fn(async () => {
         throw outcomeUnknown("socket hang up");
@@ -906,6 +907,7 @@ describe("effect contract and principal", () => {
             },
           ],
         }),
+        plan,
       );
       const parked = await controller.execute(task.id, {
         approvalId: task.approval!.approvalId,
@@ -984,26 +986,41 @@ describe("effect contract and principal", () => {
       expect(probe).toHaveBeenCalledTimes(1);
     });
 
-    it("keeps a parked mutation parked when its reconciliation URL cannot be completed", async () => {
+    it("keeps a parked mutation parked, named as unanswerable, when its reconciliation URL cannot be completed", async () => {
       const probe = vi.fn(async () => ({
         status: 404,
         content: JSON.stringify({ status: "none" }),
       }));
-      // There is no response on this path, so `json.id` never resolves.
+      // There is no response on this path, so `json.id` never resolves. A
+      // workflow step accepted before planning checked for that still runs.
       const { parked, controller, execute } = await unansweredCharge(
         probe,
         "http://localhost:9/charges/{{json.id}}",
+        { stored: true },
       );
 
       const settled = await controller.execute(parked.task.id);
 
-      // Nobody was asked, so nobody said no.
+      // Nobody was asked, so nobody said no; and asking again is refused
+      // again, which a caller must be able to tell from a provider outage.
       expect(settled.task).toMatchObject({
         status: "recovery_required",
-        error: "reconciliation_inconclusive",
+        error: "reconciliation_unanswerable:verification_token_unresolved:json.id",
       });
       expect(probe).not.toHaveBeenCalled();
       expect(execute).toHaveBeenCalledTimes(1);
+    });
+
+    it("refuses at plan time a reconciliation URL token the facts before the call cannot fill", async () => {
+      await expect(unansweredCharge(undefined, "http://localhost:9/charges/{{json.id}}")).rejects.toThrow(
+        "reconciliation_unanswerable:verification_token_unresolved:json.id",
+      );
+      // The facts it is read against: the task, the URL, the method, the key.
+      const { parked } = await unansweredCharge(
+        undefined,
+        "http://localhost:9/charges/{{idempotencyKey}}?task={{taskId}}&m={{method}}&u={{url}}",
+      );
+      expect(parked.task.status).toBe("recovery_required");
     });
 
     it("refuses at plan time a reconciliation verifier this runtime does not have", async () => {

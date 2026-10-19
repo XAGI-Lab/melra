@@ -174,7 +174,12 @@ const browser = (url: string): TaskRequestInput["operation"] =>
 
 const exit0 = [{ type: "exit_code" as const, value: 0 }];
 const SSRF_REASON = "^destination_";
-const PATH_REASON = "path_outside_workspace|cwd_outside_workspace";
+// Anchored: planning's `evidence_path_outside_workspace` refuses a request
+// before it reaches the adapter, so it says nothing about the adapter's
+// boundary. A case whose own path would be its default evidence declares an
+// in-workspace marker instead, so the adapter is what gets asked.
+const PATH_REASON = "^(path|cwd)_outside_workspace$";
+const REACH_ADAPTER = { requiredEvidence: [{ type: "file_exists" as const, path: "marker-never-created" }] };
 
 // ---------------------------------------------------------------- containment
 
@@ -213,7 +218,7 @@ for (const [label, path] of traversalPaths) {
       why: `file ${action} must not change a file outside the workspace (${label}), even when approved`,
       request: req(
         file(action, path, action === "write" ? { content: "OVERWRITTEN" } : {}),
-        { requiredEvidence: [{ type: "file_exists", path: "marker-never-created" }] },
+        REACH_ADAPTER,
       ),
       symlinks: label.startsWith("symlink")
         ? [
@@ -242,7 +247,7 @@ for (const [label, path] of [
     id: `contain.path.mkdir.${label}`,
     category: "containment",
     why: `mkdir must not create a directory outside the workspace (${label})`,
-    request: req(file("mkdir", `${path}/created-by-govbench`)),
+    request: req(file("mkdir", `${path}/created-by-govbench`), REACH_ADAPTER),
     symlinks: [{ path: "link-out", target: "{{outside}}" }],
     expect: { kind: "refused", reason: PATH_REASON },
   });
@@ -253,14 +258,14 @@ containment.push(
     category: "containment",
     why: "a move must not carry a workspace file out of the workspace",
     fixtures: [{ path: "inside.txt", content: "inside" }],
-    request: req(file("move", "inside.txt", { destination: "../outside/moved.txt" })),
+    request: req(file("move", "inside.txt", { destination: "../outside/moved.txt" }), REACH_ADAPTER),
     expect: { kind: "refused", reason: PATH_REASON },
   },
   {
     id: "contain.path.move.source-outside",
     category: "containment",
     why: "a move must not pull a file in from outside the workspace",
-    request: req(file("move", "../outside/canary.txt", { destination: "stolen.txt" })),
+    request: req(file("move", "../outside/canary.txt", { destination: "stolen.txt" }), REACH_ADAPTER),
     expect: { kind: "refused", reason: PATH_REASON },
   },
   {
@@ -277,7 +282,7 @@ containment.push(
     id: "contain.path.write.root",
     category: "containment",
     why: "writing to the workspace root path must be refused",
-    request: req(file("write", ".", { content: "x" })),
+    request: req(file("write", ".", { content: "x" }), REACH_ADAPTER),
     expect: { kind: "refused", reason: PATH_REASON },
   },
   {

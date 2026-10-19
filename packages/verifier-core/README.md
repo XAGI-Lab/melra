@@ -57,7 +57,9 @@ What a verifier does **not** decide:
   no. The kernel's own refusals (a path outside the workspace, a URL token with
   nothing to fill it, a type with no verifier) are also `unanswerable`, and a
   verifier cannot set that flag itself. `outsideWorkspace(predicate)` says
-  before anything runs whether a file predicate's path could only be refused.
+  before anything runs whether a file predicate's path could only be refused,
+  and `unfilledToken(predicate, facts)` whether an `http_resource_matches`
+  URL has a `{{token}}` those facts cannot fill.
 - **What a built-in means.** Registering a built-in type is refused
   (`verifier_type_taken`).
 - **Where files are.** The only file access offered is

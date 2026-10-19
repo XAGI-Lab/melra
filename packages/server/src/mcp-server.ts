@@ -286,7 +286,7 @@ export function createMcpServer(
     {
       title: "Execute a planned MELRA task",
       description:
-        "Run one task melra_plan returned, by taskId: MELRA re-evaluates policy, so a plan made under a looser policy is still refused, then runs the operation, checks its requiredEvidence and records a receipt. If the plan returned an approval challenge with a phrase, pass approval with its approvalId and exact phrase; the phrase is scoped to that one task and expires. Only reads are retried, and a recovery_required task is reconciled, never re-run. Returns { task, output?, receipt?, certificate? } with the outcome in task.status. For workflow steps use melra_workflow_advance instead." +
+        "Run one task melra_plan returned, by taskId: MELRA re-evaluates policy, so a plan made under a looser policy is still refused, then runs the operation, checks its requiredEvidence and records a receipt. If the plan returned an approval challenge with a phrase, pass approval with its approvalId and exact phrase; the phrase is scoped to that one task and expires. Only reads are retried, and a recovery_required task is reconciled, never re-run: it stays recovery_required while its provider cannot be reached (task.error reconciliation_inconclusive, ask again later) or while MELRA refuses to ask its reconciliation (reconciliation_unanswerable:<reason>, which asking again will not change). Returns { task, output?, receipt?, certificate? } with the outcome in task.status. For workflow steps use melra_workflow_advance instead." +
         (runtime.policy.mode === "enforced" ? ` ${ENFORCED_APPROVAL}` : ""),
       inputSchema: MelraExecuteInputSchema,
       annotations: {
