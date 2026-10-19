@@ -64,7 +64,6 @@ async function side(
   }),
   probe?: EvidenceProbe,
   policy: Partial<LocalPolicy> = {},
-  leaseDurationMs = 60_000,
 ) {
   const store = new SqliteStore(at.path);
   stores.push(store);
@@ -78,13 +77,7 @@ async function side(
     verifier,
     cipher,
   );
-  return {
-    store,
-    verifier,
-    adapter,
-    tasks,
-    workflows: new WorkflowController(store, tasks, cipher, leaseDurationMs),
-  };
+  return { store, verifier, adapter, tasks, workflows: new WorkflowController(store, tasks, cipher) };
 }
 
 /** An adapter that reports when it is entered and finishes when told to. */
@@ -357,6 +350,34 @@ function expireLease(store: SqliteStore, id: string): void {
     .run(new Date(Date.now() - 1_000).toISOString(), id);
 }
 
+/** inspect, then a branch of two steps: one that needs approval, one that does not. */
+const twoStepBranch = () =>
+  WorkflowDefinitionSchema.parse({
+    schemaVersion: "1.0.0",
+    id: definitionId,
+    version: 1,
+    name: "Two-step branch",
+    nodes: [
+      {
+        id: "inspect",
+        type: "operation",
+        request: TaskRequestSchema.parse({ goal: "Inspect", operation: { kind: "system", action: "info" } }),
+      },
+      {
+        id: "branch",
+        type: "condition",
+        dependsOn: ["inspect"],
+        sourceNodeId: "inspect",
+        predicate: { type: "result_equals", path: "success", value: true },
+        whenTrue: [
+          put("first"),
+          TaskRequestSchema.parse({ goal: "Inspect again", operation: { kind: "system", action: "info" } }),
+        ],
+        whenFalse: [],
+      },
+    ],
+  });
+
 describe("workflow recovery across processes", () => {
   it("leaves a run another process is advancing alone", async () => {
     const at = await home();
@@ -423,49 +444,14 @@ describe("workflow recovery across processes", () => {
     expect((await advancing).run.status).toBe("verified_complete");
   });
 
-  it("does not start the next branch task after losing its workflow lease", async () => {
-    vi.useFakeTimers();
+  it("does not start the next branch step after losing its workflow lease", async () => {
     const at = await home();
+    const a = await side(at);
     const nextAdapter = held();
-    const a = await side(at, undefined, undefined, {}, 1_000);
     const b = await side(at, nextAdapter.execute);
     const firstDone = gate();
     const releaseFirst = gate();
-    const leaseLost = gate();
-    const renew = a.store.renewWorkflowLease.bind(a.store);
-    vi.spyOn(a.store, "renewWorkflowLease").mockImplementation((id, owner, expiresAt) => {
-      const renewed = renew(id, owner, expiresAt);
-      if (!renewed) leaseLost.open();
-      return renewed;
-    });
-
-    const run = a.workflows.plan(
-      WorkflowDefinitionSchema.parse({
-        schemaVersion: "1.0.0",
-        id: definitionId,
-        version: 1,
-        name: "Two-step branch",
-        nodes: [
-          {
-            id: "inspect",
-            type: "operation",
-            request: TaskRequestSchema.parse({
-              goal: "Inspect",
-              operation: { kind: "system", action: "info" },
-            }),
-          },
-          {
-            id: "branch",
-            type: "condition",
-            dependsOn: ["inspect"],
-            sourceNodeId: "inspect",
-            predicate: { type: "result_equals", path: "success", value: true },
-            whenTrue: [put("first"), put("second")],
-            whenFalse: [],
-          },
-        ],
-      }),
-    );
+    const run = a.workflows.plan(twoStepBranch());
 
     try {
       await a.workflows.advance(run.id);
@@ -482,12 +468,10 @@ describe("workflow recovery across processes", () => {
       await firstDone.opened;
       expireLease(a.store, run.id);
 
-      const recovered = (await b.workflows.advance(run.id)).run;
-      const bAdvancing = b.workflows.advance(run.id, approvalsFor(recovered));
+      // B recovers the run and runs step 2, which needs no approval, itself.
+      const bAdvancing = b.workflows.advance(run.id);
       void bAdvancing.catch(() => undefined);
       await nextAdapter.entered.opened;
-      await vi.advanceTimersByTimeAsync(1_000);
-      await leaseLost.opened;
 
       releaseFirst.open();
       await expect(advancing).rejects.toThrow("workflow_lease_lost");
@@ -499,7 +483,6 @@ describe("workflow recovery across processes", () => {
     } finally {
       releaseFirst.open();
       nextAdapter.release.open();
-      vi.useRealTimers();
     }
   });
 
