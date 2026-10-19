@@ -141,9 +141,12 @@ function expiredHints({ expired, expiredSteps }: ApprovalCounts): string[] {
     ...(expired > 0
       ? [`${expired} whose approval expired — plan again, or clear with \`melra approve <task-id> --deny\``]
       : []),
-    // A deny would fail the run, where the next advance asks again.
+    // A deny would fail the run, or stall its unwind, where the next advance
+    // asks again.
     ...(expiredSteps > 0
-      ? [`${expiredSteps} workflow step(s) whose approval expired — \`melra workflow advance <workflow-id>\` asks again`]
+      ? [
+          `${expiredSteps} workflow step(s) whose approval expired — \`melra workflow advance <workflow-id>\` asks again (resume a paused run first)`,
+        ]
       : []),
   ];
 }
@@ -158,31 +161,61 @@ interface ApprovalCounts {
 }
 
 /**
- * Tasks waiting for an operator's approval, and those whose challenge expired
- * unanswered, workflow steps apart. An expired one stays awaiting_approval, and
- * counted as waiting it was reported forever and pointed at `melra approve`,
- * which then refused it. An answer given in time is honoured for a TTL after
- * it, as `TaskController` honours it, so that task waits for its agent and
- * counts as neither.
+ * Tasks of steps the run's next advance asks again once their challenge has
+ * expired: forward steps of a run waiting on approval (or halted, once it is
+ * resumed), and the compensations a failed run's unwind still offers. A step
+ * of any other run, one already failed say, is cleared the plain way.
  */
-function approvalCounts(store: SqliteStore, window: ApprovalWindow): ApprovalCounts {
+function stepsAskedAgain(store: SqliteStore, runs: WorkflowRun[]): Set<string> {
+  return new Set(
+    runs.flatMap((run) => {
+      if (["awaiting_approval", "paused", "suspended"].includes(run.status)) {
+        return Object.values(run.nodes).flatMap((node) => node.taskIds);
+      }
+      if (run.status !== "failed") return [];
+      // The stored copy is redacted but keeps each node's type.
+      const nodes = (
+        store.getWorkflowDefinition(run.definitionId, run.definitionVersion) as
+          | { nodes?: Array<{ id: string; type: string }> }
+          | undefined
+      )?.nodes;
+      return (nodes ?? [])
+        .filter((node) => node.type === "compensation")
+        .flatMap((node) => run.nodes[node.id]?.taskIds ?? []);
+    }),
+  );
+}
+
+/**
+ * Tasks waiting for an operator's approval, and those whose challenge expired
+ * unanswered, workflow steps asked again apart. An expired one stays
+ * awaiting_approval, and counted as waiting it was reported forever and
+ * pointed at `melra approve`, which then refused it. An answer given in time
+ * is honoured for a TTL after it, as `TaskController` honours it, so that task
+ * waits for its agent and counts as neither. In enforced mode an in-band
+ * answer is no answer, and the challenge it took cannot be answered again.
+ */
+function approvalCounts(
+  store: SqliteStore,
+  window: ApprovalWindow,
+  runs: () => WorkflowRun[] = () => store.listWorkflowRuns(["awaiting_approval", "paused", "suspended", "failed"]),
+): ApprovalCounts {
   const now = Date.now();
-  const steps = new Set(store.listWorkflowRuns().flatMap((run) => Object.values(run.nodes).flatMap((node) => node.taskIds)));
+  let steps: Set<string> | undefined;
   const counts = { waiting: 0, expired: 0, expiredSteps: 0 };
   for (const task of store.listTasks(100_000, "awaiting_approval")) {
     const expiresAt = task.approval === undefined ? Infinity : Date.parse(task.approval.expiresAt);
     const decision = task.approval === undefined ? undefined : store.getApprovalDecision(task.approval.approvalId);
-    // In enforced mode an in-band row is no decision at all.
-    const decidedAt =
-      decision === undefined || (window.mode === "enforced" && decision.channel !== "out_of_band")
-        ? undefined
-        : Date.parse(decision.decidedAt);
+    const unusable = window.mode === "enforced" && decision !== undefined && decision.channel !== "out_of_band";
+    const decidedAt = decision === undefined || unusable ? undefined : Date.parse(decision.decidedAt);
     if (decidedAt !== undefined && decidedAt <= expiresAt) {
       if (now < decidedAt + approvalTtl(window)) continue;
-    } else if (now < expiresAt) {
+    } else if (!unusable && now < expiresAt) {
       counts.waiting += 1;
       continue;
     }
+    // Read only once something has expired: a store keeps every run.
+    steps ??= stepsAskedAgain(store, runs());
     if (steps.has(task.id)) counts.expiredSteps += 1;
     else counts.expired += 1;
   }
@@ -465,10 +498,11 @@ export async function statusCommand(
         tasks: store.taskStatusCounts(),
         workflows: countBy(runs.map((run) => run.status)),
         lastActivity: latest,
-        approvals: approvalCounts(store, {
-          mode,
-          ...(policyTtlMs === undefined ? {} : { approvalTtlMs: policyTtlMs }),
-        }),
+        approvals: approvalCounts(
+          store,
+          { mode, ...(policyTtlMs === undefined ? {} : { approvalTtlMs: policyTtlMs }) },
+          () => runs,
+        ),
       };
     },
   );

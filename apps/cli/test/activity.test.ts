@@ -203,6 +203,50 @@ describe("melra tasks, status, and watch", () => {
     expect([status.expiredApprovals, status.expiredWorkflowSteps]).toEqual([0, 1]);
   });
 
+  it("counts an expired step of a run that has already failed the plain way", async () => {
+    const { root, options } = await workspace();
+    const write = (path: string) => ({
+      goal: `Write ${path}`,
+      operation: { kind: "file", action: "write", path, content: "x" },
+      requiredEvidence: [{ type: "file_exists", path }],
+    });
+    const definition = join(root, "two-writes.json");
+    await writeFile(
+      definition,
+      JSON.stringify({
+        schemaVersion: "1.0.0",
+        id: "6f0c1a52-3b9e-4c7d-9a1f-2e8b5d4c3a10",
+        version: 1,
+        name: "two-writes",
+        nodes: [
+          { id: "a", type: "operation", request: write("a.txt") },
+          { id: "b", type: "operation", request: write("b.txt") },
+        ],
+      }),
+    );
+    const cli = async (...args: string[]) =>
+      (await execute(process.execPath, [entry, ...args], options).catch((error: { stdout: string }) => error)).stdout;
+    const { id } = JSON.parse(await cli("workflow", "plan", "--definition", definition)) as { id: string };
+    const { run } = JSON.parse(await cli("workflow", "advance", id)) as { run: WorkflowRun };
+    await cli("approve", run.nodes.a!.taskIds[0]!, "--deny");
+    expect((JSON.parse(await cli("workflow", "advance", id)) as { run: WorkflowRun }).run.status).toBe("failed");
+    // The failed run's advance offers b nothing again: only a deny clears it.
+    lapse(root, run.nodes.b!.taskIds[0]!);
+    const status = await statusOf(options);
+    expect([status.expiredApprovals, status.expiredWorkflowSteps]).toEqual([1, 0]);
+  });
+
+  it("does not count as waiting what enforced mode will not take an answer for", async () => {
+    const { options, run } = await workspace();
+    const { task } = await run(fileWrite);
+    // Answered in band while the deployment was in developer mode; enforced
+    // now, that answer counts for nothing and a second one is refused.
+    await execute(process.execPath, [entry, "approve", task.id, "--yes"], options).catch(() => undefined);
+    const enforced = { ...options, env: { ...options.env, MELRA_MODE: "enforced" } };
+    const status = await statusOf(enforced);
+    expect([status.awaitingApproval, status.expiredApprovals]).toEqual([0, 1]);
+  });
+
   it("refuses a --status or --limit with nothing after it", async () => {
     const { options } = await workspace();
     // What an unquoted `--status $S` sends with S unset: it listed everything.
