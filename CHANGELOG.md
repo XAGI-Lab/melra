@@ -98,6 +98,10 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- `docs/COMPATIBILITY.md` names MCP Python SDK `1.30.x`, the version `sdk-py`
+  pins and tests, not `1.28.x`. `pnpm check` now fails when either SDK line
+  stops naming the pinned version. (#286)
+
 - `send` to an interactive terminal job whose program has closed its stdin is
   refused as `terminal_job_stdin_closed`. Every send after the failed write
   was refused as `terminal_job_not_interactive`, and the send whose write
