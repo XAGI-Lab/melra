@@ -1,6 +1,9 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ComputerOperationSchema, type ComputerOperation } from "@melra/protocol";
 import {
@@ -195,6 +198,75 @@ describe("ComputerRuntime", () => {
       }),
     );
     expect(adapter.calls).toEqual(["inspect", "drag"]);
+  });
+});
+
+// A shell script stands in for tesseract, so these need a POSIX shell.
+describe.skipIf(process.platform === "win32")("reading the screen when no tree came back", () => {
+  const TSV = [
+    "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext",
+    "1\t1\t0\t0\t0\t0\t0\t0\t200\t100\t-1\t",
+    "5\t1\t1\t1\t1\t1\t10\t10\t40\t12\t96.5\tSave",
+  ].join("\n");
+
+  /** Reports no tree, and writes each screenshot where a real adapter does. */
+  class BlindAdapter extends TestAdapter {
+    constructor(
+      private readonly directory: string,
+      private readonly capture: "ok" | "fails" = "ok",
+    ) {
+      super({ elements: false, ocr: true });
+    }
+
+    override async execute(operation: ComputerOperation): Promise<Record<string, unknown>> {
+      await super.execute(operation);
+      if (operation.action === "inspect") {
+        return { success: true, action: "inspect", application: "Finder", displayWidth: 100 };
+      }
+      if (this.capture === "fails") throw new Error("computer_helper_failed: screen recording denied");
+      const path = join(this.directory, "computer-capture.png");
+      writeFileSync(path, "png");
+      return { success: true, action: "screenshot", path };
+    }
+  }
+
+  const scenario = (ocr: string, capture: "ok" | "fails" = "ok") => {
+    const directory = mkdtempSync(join(tmpdir(), "melra-ocr-"));
+    const program = join(mkdtempSync(join(tmpdir(), "melra-ocr-bin-")), "tesseract");
+    writeFileSync(program, `#!/bin/sh\n${ocr}\n`, { mode: 0o755 });
+    const runtime = new ComputerRuntime({
+      artifactDirectory: directory,
+      adapter: new BlindAdapter(directory, capture),
+      ocrProgram: program,
+    });
+    const inspect = () =>
+      runtime.execute(ComputerOperationSchema.parse({ kind: "computer", action: "inspect" }));
+    return { directory, inspect, done: () => rmSync(directory, { recursive: true, force: true }) };
+  };
+
+  it("reads the words and keeps no screenshot", async () => {
+    const { directory, inspect, done } = scenario(`printf '${TSV}'`);
+    try {
+      const observed = (await inspect()) as { elements?: DesktopElement[] };
+      expect(observed.elements?.map(({ name }) => name)).toEqual(["Save"]);
+      expect(readdirSync(directory)).toEqual([]);
+    } finally {
+      done();
+    }
+  });
+
+  it("returns the observation, and no screenshot, when the reading fails", async () => {
+    for (const [ocr, capture] of [["exit 1", "ok"], [`printf '${TSV}'`, "fails"]] as const) {
+      const { directory, inspect, done } = scenario(ocr, capture);
+      try {
+        const observed = await inspect();
+        expect(observed, `${ocr} / ${capture}`).toMatchObject({ application: "Finder", displayWidth: 100 });
+        expect(observed).not.toHaveProperty("elements");
+        expect(readdirSync(directory)).toEqual([]);
+      } finally {
+        done();
+      }
+    }
   });
 });
 

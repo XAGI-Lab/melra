@@ -4,8 +4,8 @@
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { access, mkdir, readFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { access, mkdir, readFile, rm } from "node:fs/promises";
+import { basename, dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import type { ComputerOperation } from "@melra/protocol";
 
@@ -342,6 +342,8 @@ export interface ComputerAdapter {
 export interface ComputerRuntimeOptions {
   artifactDirectory: string;
   adapter?: ComputerAdapter;
+  /** The OCR program; `tesseract` from its usual install paths when unset. */
+  ocrProgram?: string;
 }
 
 const ALLOWED_KEYS: Record<string, number> = {
@@ -1620,7 +1622,15 @@ export class ComputerRuntime {
     if (!capabilities.ocr || !capabilities.screenshot) return observed;
     const displayWidth = observed["displayWidth"];
     if (typeof displayWidth !== "number") return observed;
-    const read = await this.readScreen(operation, displayWidth, signal);
+    // Installing tesseract only ever makes an observation richer: a reading
+    // that fails (no screen-recording permission, a Wayland session, a cut
+    // capture) leaves it as it is on a host without tesseract.
+    const read = await this.readScreen(operation, displayWidth, signal).catch(
+      (error: unknown) => {
+        if (signal?.aborted === true) throw error;
+        return [];
+      },
+    );
     return read.length === 0 ? observed : { ...observed, elements: read };
   }
 
@@ -1630,7 +1640,7 @@ export class ComputerRuntime {
     displayWidth: number,
     signal?: AbortSignal,
   ): Promise<DesktopElement[]> {
-    const program = await tesseract();
+    const program = this.options.ocrProgram ?? (await tesseract());
     if (program === undefined) return [];
     const { target: _named, ...rest } = operation;
     const captured = await this.adapter.execute(
@@ -1640,12 +1650,21 @@ export class ComputerRuntime {
     );
     const path = captured["path"];
     if (typeof path !== "string") return [];
-    const { stdout } = await run(
-      program,
-      [path, "stdout", "tsv"],
-      operation.timeoutMs,
-      signal,
-    );
-    return parseOcrElements(stdout, displayWidth);
+    try {
+      const { stdout } = await run(
+        program,
+        [path, "stdout", "tsv"],
+        operation.timeoutMs,
+        signal,
+      );
+      return parseOcrElements(stdout, displayWidth);
+    } finally {
+      // Taken to be read, not kept: no result names it, and it shows whatever
+      // was on the screen. Only a capture in the artifact directory is ours to
+      // delete.
+      if (resolve(dirname(path)) === resolve(this.options.artifactDirectory)) {
+        await rm(path, { force: true });
+      }
+    }
   }
 }

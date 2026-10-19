@@ -98,6 +98,13 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- The screen reading that `inspect` falls back to when no element tree came
+  back deletes its screenshot once `tesseract` has read it. Each such
+  `inspect`, and each `click`, `move` or `drag` given a `target`, used to leave
+  a full-screen capture in `<MELRA_HOME>/artifacts` that no result named. A
+  reading that fails no longer fails the `inspect`: it returns what the adapter
+  observed, without `elements`, as on a host without `tesseract`. (#251)
+
 - `melra clients` lists a client whose tokens were revoked as `pending`, not
   `approved`: a revoke now clears the client's approval along with its tokens.
   `melra clients --revoke <id>` exits 1 with `no such client` for an id that is
