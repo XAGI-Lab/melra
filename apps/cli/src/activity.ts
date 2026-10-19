@@ -145,11 +145,12 @@ function expiredHints({ expired, expiredSteps }: ApprovalCounts): string[] {
     // Not a deny first: on a run that can go on, the next advance asks again,
     // and a deny would fail the run or stall its unwind. Whether it can go on
     // is the run's to say, so the hint points there rather than guess; a
-    // challenge no run names (a lost commit) may be a leftover of one that is
-    // over, which only a deny clears.
+    // challenge whose key no run names (a lost commit) may be a leftover of
+    // one that is over, which only a deny clears. A failed run is not over:
+    // its unwind asks a compensation again, and a deny stalls it.
     ...(expiredSteps > 0
       ? [
-          `${expiredSteps} workflow step(s) whose approval expired — \`melra workflow inspect <workflow-id>\` shows the run; its next advance asks again where it can go on, and on a run that is over \`melra approve <task-id> --deny\` clears it`,
+          `${expiredSteps} workflow step(s) whose approval expired — \`melra workflow inspect <workflow-id>\` shows the run; its next advance asks again where it can go on, and on a cancelled or verified_complete run \`melra approve <task-id> --deny\` clears it (on a failed run never deny a compensation: its unwind asks again)`,
         ]
       : []),
   ];
