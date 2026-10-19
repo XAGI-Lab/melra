@@ -98,6 +98,15 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- A terminal `run` stopped by its own `timeoutMs` is an unknown outcome
+  (`recovery_required` for a mutation), as it already was when the task's
+  budget or a cancel stopped it. It was recorded `failed`, though the program
+  may have done its work first, and a retry then ran it again. A computer
+  input action (click, move, drag, type, key, scroll) whose helper is stopped
+  by its timeout, or by a cancel while it runs, is an unknown outcome too.
+  Reads, screenshots and target resolution are unchanged. A timed-out `run`
+  no longer returns a result with `timedOut: true`. (#248)
+
 - `send` to an interactive terminal job whose program has closed its stdin is
   refused as `terminal_job_stdin_closed`. Every send after the failed write
   was refused as `terminal_job_not_interactive`, and the send whose write

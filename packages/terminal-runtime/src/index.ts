@@ -479,17 +479,22 @@ export class TerminalRuntime {
         signal?.removeEventListener("abort", onAbort);
         if (settled) return;
         settled = true;
+        // Stopped by its own timeout, as by a cancel, it may well have done
+        // its work first: not "it did not happen". Reads are exempt upstream.
+        if (timedOut) {
+          reject(outcomeUnknown(`terminal_timeout:${prepared.timeoutMs}ms`));
+          return;
+        }
         resolvePromise({
           command: prepared.command,
           args: prepared.args,
           cwd: relative(this.root, prepared.cwd) || ".",
           exitCode: code,
           signal: terminationSignal,
-          timedOut,
           stdout: redactTerminalOutput(stdout),
           stderr: redactTerminalOutput(stderr),
           truncated,
-          success: code === 0 && !timedOut,
+          success: code === 0,
         });
       });
     });

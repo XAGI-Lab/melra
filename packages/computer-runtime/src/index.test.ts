@@ -198,6 +198,49 @@ describe("ComputerRuntime", () => {
   });
 });
 
+describe("an input helper stopped mid-run", () => {
+  /** Fails each action as a helper that timed out, or that a cancel stopped. */
+  class StoppedAdapter extends TestAdapter {
+    constructor(private readonly how: "timeout" | "cancel") {
+      super();
+    }
+
+    override async execute(operation: ComputerOperation, _directory?: string, signal?: AbortSignal): Promise<Record<string, unknown>> {
+      await super.execute(operation);
+      if (this.how === "timeout") throw new Error("computer_helper_timeout:osascript:10000ms");
+      await new Promise((resolve) => signal?.addEventListener("abort", resolve, { once: true }));
+      throw new Error("task_cancelled");
+    }
+  }
+  const act = (action: string, extra: Record<string, unknown> = {}) =>
+    ComputerOperationSchema.parse({ kind: "computer", action, ...extra });
+
+  it("reports a click, keystroke or scroll it may have landed as an unknown outcome", async () => {
+    const runtime = new ComputerRuntime({ artifactDirectory: "/tmp", adapter: new StoppedAdapter("timeout") });
+    for (const operation of [
+      act("click", { x: 0.5, y: 0.5 }),
+      act("type", { text: "hello" }),
+      act("scroll", { x: 0.5, y: 0.5, deltaY: 100 }),
+    ]) {
+      await expect(runtime.execute(operation), operation.action).rejects.toThrow(
+        "effect_outcome_unknown:computer_helper_timeout:",
+      );
+    }
+    // A screenshot changes nothing, so its timeout is a plain failure.
+    await expect(runtime.execute(act("screenshot"))).rejects.toThrow(/^computer_helper_timeout:/);
+  });
+
+  it("reports an input action cancelled while its helper ran as an unknown outcome", async () => {
+    const runtime = new ComputerRuntime({ artifactDirectory: "/tmp", adapter: new StoppedAdapter("cancel") });
+    const controller = new AbortController();
+    const clicking = runtime.execute(act("click", { x: 0.5, y: 0.5 }), controller.signal);
+    setTimeout(() => controller.abort(), 10);
+    await expect(clicking).rejects.toThrow("effect_outcome_unknown:task_cancelled");
+    // Cancelled before anything ran, nothing could have landed.
+    await expect(runtime.execute(act("click", { x: 0.5, y: 0.5 }), controller.signal)).rejects.toThrow(/^task_cancelled$/);
+  });
+});
+
 describe("matchElement", () => {
   const elements = [
     BUTTON("Save", 0),

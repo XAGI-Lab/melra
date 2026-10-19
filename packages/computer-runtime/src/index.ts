@@ -7,7 +7,7 @@ import { constants } from "node:fs";
 import { access, mkdir, readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
-import type { ComputerOperation } from "@melra/protocol";
+import { outcomeUnknown, type ComputerOperation } from "@melra/protocol";
 
 const execFileAsync = promisify(execFile);
 
@@ -1569,11 +1569,25 @@ export class ComputerRuntime {
         throw new Error("computer_normalized_coordinates_out_of_range");
       }
     }
-    const result = await this.adapter.execute(
-      resolved,
-      this.options.artifactDirectory,
-      signal,
-    );
+    // Read afresh: target resolution awaited since the check at the top, and
+    // a cancel may have landed meanwhile.
+    const cancelledBefore = (signal as AbortSignal | undefined)?.aborted === true;
+    let result: Record<string, unknown>;
+    try {
+      result = await this.adapter.execute(resolved, this.options.artifactDirectory, signal);
+    } catch (error) {
+      // A helper stopped by its timeout, or by a cancel once it was running,
+      // may already have clicked, typed or scrolled: not "it did not happen".
+      // A screenshot changes nothing, so it stays a plain failure.
+      const message = error instanceof Error ? error.message : String(error);
+      if (
+        operation.action !== "screenshot" &&
+        (message.startsWith("computer_helper_timeout:") || (message === "task_cancelled" && !cancelledBefore))
+      ) {
+        throw outcomeUnknown(message);
+      }
+      throw error;
+    }
     // The resolved element rides back on the result so a caller can verify what
     // was actually hit with `result_equals` on `element.name`, rather than
     // trusting that the name it asked for was the name that got clicked.
