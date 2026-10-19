@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createHash } from "node:crypto";
-import { link, lstat, mkdtemp, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { link, lstat, mkdir, mkdtemp, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -80,6 +80,119 @@ describe("Verifier", () => {
     );
     expect(hashed.verified).toBe(false);
     expect(hashed.evidence[0]?.summary).toBe("verification_path_reserved");
+  });
+
+  it("answers a missing file as no, not as no answer", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-verifier-"));
+    roots.push(root);
+    await mkdir(join(root, "dir"));
+    const verifier = await Verifier.create(root);
+    const { evidence } = await verifier.verify(
+      [
+        { type: "file_exists", path: "missing.txt" },
+        { type: "file_hash", path: "missing.txt", sha256: "0".repeat(64) },
+        { type: "file_hash", path: "dir", sha256: "0".repeat(64) },
+      ],
+      {},
+    );
+    // Read as inconclusive, a reconciliation or a condition waiting on that
+    // file would never decide.
+    expect(evidence.map(({ passed, inconclusive }) => [passed, inconclusive ?? false])).toEqual([
+      [false, false],
+      [false, false],
+      [false, false],
+    ]);
+  });
+
+  it("marks only the kernel's own refusals as unanswerable", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-verifier-"));
+    roots.push(root);
+    await writeFile(join(root, "melra.sqlite"), "db");
+    const http = { type: "http_resource_matches", method: "GET", path: "status", value: 200, timeoutMs: 1_000 };
+    const verifier = await Verifier.create(root, {
+      probe: async () => ({ status: 200 }),
+      reserved: async (path) => path.endsWith("melra.sqlite"),
+      verifiers: [
+        {
+          type: "mimic",
+          async check() {
+            throw new Error("verification_path_outside_workspace");
+          },
+        },
+        {
+          type: "claims",
+          async check() {
+            return { passed: false, summary: "no", unanswerable: true };
+          },
+        },
+      ],
+    });
+    const { evidence } = await verifier.verify(
+      [
+        { type: "file_exists", path: "../release.flag" },
+        { type: "file_absent", path: "." },
+        { type: "file_hash", path: "melra.sqlite", sha256: "0".repeat(64) },
+        { ...http, url: "https://files.example.test/{{fileId}}" },
+        { ...http, url: "https://files.example.test/{{dir}}" },
+        { type: "nobody_knows" },
+        { type: "mimic" },
+        { type: "claims" },
+      ],
+      { dir: ".." },
+    );
+    const { evidence: unprobed } = await (await Verifier.create(root)).verify(
+      [{ ...http, url: "https://files.example.test/x" }],
+      {},
+    );
+    // Told apart by the flag, never the summary: a verifier's own failure
+    // can say anything, and is no answer for now rather than for good.
+    expect(
+      [...evidence, ...unprobed].map((item) => [item.summary, item.inconclusive ?? false, item.unanswerable ?? false]),
+    ).toEqual([
+      ["verification_path_outside_workspace", true, true],
+      ["verification_path_outside_workspace", true, true],
+      ["verification_path_reserved", true, true],
+      ["verification_token_unresolved:fileId", true, true],
+      ["verification_token_dot_segment:dir", true, true],
+      ["verification_unsupported:nobody_knows", true, true],
+      ["verification_path_outside_workspace", true, false],
+      ["no", false, false],
+      ["verification_probe_unavailable", true, true],
+    ]);
+  });
+
+  it("answers a path under a regular file as absent", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-verifier-"));
+    roots.push(root);
+    await writeFile(join(root, "build"), "a file, not a directory");
+    const verifier = await Verifier.create(root);
+    const { evidence } = await verifier.verify([{ type: "file_absent", path: "build/out.txt" }], {});
+    // ENOTDIR: the path cannot exist, which is an answer, not a failure to ask.
+    expect(evidence[0]).toMatchObject({ passed: true, summary: "workspace path is absent" });
+    expect(evidence[0]?.inconclusive).toBeUndefined();
+  });
+
+  it("refuses a path the filesystem will not take whole, rather than read it as there or gone", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-verifier-"));
+    roots.push(root);
+    const verifier = await Verifier.create(root);
+    const path = "a".repeat(300);
+    // Where the OS says ENAMETOOLONG. The same error comes for a path past
+    // PATH_MAX that does exist, so read as missing it verified a file as gone.
+    if ((await lstat(join(root, path)).catch((error: NodeJS.ErrnoException) => error.code)) !== "ENAMETOOLONG") return;
+    const { evidence } = await verifier.verify(
+      [
+        { type: "file_exists", path },
+        { type: "file_absent", path },
+        { type: "file_hash", path, sha256: "0".repeat(64) },
+      ],
+      {},
+    );
+    expect(evidence.map(({ passed, unanswerable, summary }) => [passed, unanswerable ?? false, summary])).toEqual([
+      [false, true, "verification_path_too_long"],
+      [false, true, "verification_path_too_long"],
+      [false, true, "verification_path_too_long"],
+    ]);
   });
 
   it("reads a case-only rename's old spelling as absent, and nothing else spelled differently", async () => {

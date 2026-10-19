@@ -194,6 +194,35 @@ describe("WorkflowController planning", () => {
     expect(advanced.run.nodes.click?.status).not.toBe("pending");
   });
 
+  it("refuses a reconciliation verifier it does not have only for new work", async () => {
+    const { controller, tasks } = await setup();
+    const ledger = WorkflowDefinitionSchema.parse({
+      schemaVersion: "1.0.0",
+      id: definitionId,
+      version: 1,
+      name: "Remember",
+      nodes: [
+        {
+          id: "remember",
+          type: "operation",
+          request: {
+            ...mutationRequest("Remember the project"),
+            reconciliation: [{ type: "custom", verifier: "ledger_row" }],
+          },
+        },
+      ],
+    });
+    expect(() => controller.plan(ledger)).toThrow("evidence_verifier_unavailable:ledger_row");
+    // Accepted by a version that never checked reconciliation, the run must
+    // not stop at the step, whose earlier steps may already have run.
+    const preflight = tasks.preflight.bind(tasks);
+    const spy = vi.spyOn(tasks, "preflight").mockImplementation((request) => preflight(request, { stored: true }));
+    const run = controller.plan(ledger);
+    spy.mockRestore();
+    const advanced = await controller.advance(run.id);
+    expect(advanced.run.nodes.remember?.status).not.toBe("pending");
+  });
+
   it("rejects a denied nested request before writing anything", async () => {
     const { controller, store } = await setup();
     const denied = WorkflowDefinitionSchema.parse({
@@ -234,6 +263,36 @@ describe("WorkflowController planning", () => {
     expect(store.getWorkflowDefinition(definitionId, 1)).toBeUndefined();
     expect(store.getWorkflowPayload(definitionId, 1)).toBeUndefined();
     expect(store.listTasks()).toEqual([]);
+    expect(
+      store.database.prepare("SELECT count(*) AS count FROM workflow_runs").get(),
+    ).toEqual({ count: 0 });
+  });
+
+  it("refuses a condition, until or delegation check no registered verifier can ask, or on a path outside the workspace", async () => {
+    const { controller, store } = await setup();
+    // Planned, such a check was found out only once the steps before it ran.
+    for (const [unaskable, code] of [
+      [{ type: "custom", verifier: "nobody.registered", params: {} }, "evidence_verifier_unavailable:nobody.registered"],
+      [{ type: "file_exists", path: "../release.flag" }, "evidence_path_outside_workspace"],
+    ] as const) {
+      for (const check of [
+        { type: "condition", sourceNodeId: "inspect", predicate: unaskable },
+        { type: "bounded_loop", body: [request("Poll")], maxIterations: 3, until: unaskable },
+        { type: "delegation", assignee: "outside-worker", goal: "issue the refund", requiredEvidence: [unaskable] },
+      ]) {
+        const unplannable = WorkflowDefinitionSchema.parse({
+          schemaVersion: "1.0.0",
+          id: definitionId,
+          version: 1,
+          name: "Unaskable check",
+          nodes: [
+            { id: "inspect", type: "operation", request: request("Inspect first") },
+            { id: "check", dependsOn: ["inspect"], ...check },
+          ],
+        });
+        expect(() => controller.plan(unplannable), `${check.type} ${unaskable.type}`).toThrow(code);
+      }
+    }
     expect(
       store.database.prepare("SELECT count(*) AS count FROM workflow_runs").get(),
     ).toEqual({ count: 0 });
@@ -409,6 +468,32 @@ describe("WorkflowController execution", () => {
     ).toBe(true);
   });
 
+  it("writes nothing when advanced with nothing due", async () => {
+    const { controller } = await setup(async () => ({ success: true, stored: true }));
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Waits for approval",
+        nodes: [{ id: "write", type: "operation", request: mutationRequest("Write") }],
+      }),
+    );
+    const waiting = await controller.advance(planned.id);
+    expect(waiting.run.status).toBe("awaiting_approval");
+    const recorded = controller.events(planned.id).length;
+
+    // Each poll used to record the waiting node again: a new version, a new event.
+    for (let poll = 0; poll < 3; poll += 1) {
+      const idle = await controller.advance(planned.id);
+      expect(idle.events).toEqual([]);
+      expect(idle.run).toEqual(waiting.run);
+      expect(idle.tasks.map((task) => task.id)).toEqual(waiting.run.nodes.write?.taskIds);
+    }
+    expect(controller.status(planned.id).stateVersion).toBe(waiting.run.stateVersion);
+    expect(controller.events(planned.id)).toHaveLength(recorded);
+  });
+
   it("executes only the condition branch selected from persisted evidence", async () => {
     const executed: string[] = [];
     const { controller } = await setup(async (operation) => {
@@ -574,6 +659,323 @@ describe("WorkflowController execution", () => {
 
     expect(calls).toBe(2);
     expect(result.run.nodes.loop?.iterations).toBe(2);
+    expect(result.run.status).toBe("verified_complete");
+  });
+
+  /** A provider check that answers 503 until told otherwise. */
+  function provider() {
+    const state = { answer: { success: true, status: 503, content: "{}" } as Record<string, unknown> };
+    return {
+      state,
+      probe: async () => state.answer,
+      predicate: {
+        type: "http_resource_matches",
+        url: "https://payments.example.test/charges/1",
+        method: "GET",
+        path: "json.status",
+        value: "applied",
+      },
+      applied: { success: true, status: 200, content: JSON.stringify({ status: "applied" }) },
+    };
+  }
+
+  it("decides a condition only once its provider answers, and records what it waits on", async () => {
+    const executed: string[] = [];
+    const check = provider();
+    const { controller } = await setup(
+      async (operation) => {
+        if (operation.kind !== "file") throw new Error("unexpected_operation");
+        executed.push(operation.path);
+        return { success: true };
+      },
+      {},
+      check.probe,
+    );
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Ship or refund",
+        nodes: [
+          { id: "inspect", type: "operation", request: fileRequest("Inspect", "inspect") },
+          {
+            id: "choose",
+            type: "condition",
+            dependsOn: ["inspect"],
+            sourceNodeId: "inspect",
+            predicate: check.predicate,
+            whenTrue: [fileRequest("Ship", "ship")],
+            whenFalse: [fileRequest("Refund", "refund")],
+          },
+        ],
+      }),
+    );
+    await controller.advance(planned.id);
+
+    // Read as a no, the run refunded a charge that went through, for good.
+    await expect(controller.advance(planned.id)).rejects.toThrow("workflow_check_inconclusive:choose");
+    expect(executed).toEqual(["inspect"]);
+    const waiting = controller.status(planned.id);
+    // Recorded nowhere, the run read as busy while it waited on the provider.
+    expect(waiting.nodes.choose).toEqual({
+      status: "pending",
+      taskIds: [],
+      error:
+        "workflow_check_inconclusive:choose: http_resource_matches https://payments.example.test/charges/1",
+    });
+    // Asked again with the same answer, nothing is written.
+    await expect(controller.advance(planned.id)).rejects.toThrow("workflow_check_inconclusive:choose");
+    expect(controller.status(planned.id)).toEqual(waiting);
+
+    check.state.answer = check.applied;
+    const result = await controller.advance(planned.id);
+    expect(executed).toEqual(["inspect", "ship"]);
+    expect(result.run.status).toBe("verified_complete");
+  });
+
+  it("runs no further iteration of a loop whose until its provider did not answer", async () => {
+    let calls = 0;
+    const check = provider();
+    const { controller } = await setup(
+      async () => {
+        calls += 1;
+        return { success: true };
+      },
+      {},
+      check.probe,
+    );
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Poll the charge",
+        nodes: [
+          {
+            id: "loop",
+            type: "bounded_loop",
+            body: [fileRequest("Loop body", "loop")],
+            maxIterations: 5,
+            until: check.predicate,
+          },
+        ],
+      }),
+    );
+
+    await expect(controller.advance(planned.id)).rejects.toThrow("workflow_check_inconclusive:loop");
+    await expect(controller.advance(planned.id)).rejects.toThrow("workflow_check_inconclusive:loop");
+    expect(calls).toBe(1);
+    expect(controller.status(planned.id).nodes.loop?.iterations).toBe(1);
+
+    check.state.answer = check.applied;
+    const result = await controller.advance(planned.id);
+    expect(calls).toBe(1);
+    expect(result.run.nodes.loop?.iterations).toBe(1);
+    expect(result.run.status).toBe("verified_complete");
+  });
+
+  it("fails a condition whose URL names a value its source result does not hold, and unwinds", async () => {
+    const executed: string[] = [];
+    const check = provider();
+    const { controller } = await setup(
+      async (operation) => {
+        if (operation.kind !== "file") throw new Error("unexpected_operation");
+        executed.push(operation.path);
+        return { success: true };
+      },
+      {},
+      check.probe,
+    );
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Ship or hold",
+        nodes: [
+          { id: "charge", type: "operation", request: fileRequest("Charge", "charge") },
+          { id: "refund", type: "compensation", forNodeId: "charge", request: fileRequest("Refund", "refund") },
+          {
+            id: "choose",
+            type: "condition",
+            dependsOn: ["charge"],
+            sourceNodeId: "charge",
+            predicate: { ...check.predicate, url: "https://payments.example.test/charges/{{json.id}}" },
+            whenTrue: [fileRequest("Ship", "ship")],
+            whenFalse: [fileRequest("Hold", "hold")],
+          },
+        ],
+      }),
+    );
+    await controller.advance(planned.id);
+
+    // Read as a no, it took the other branch on a question it never asked.
+    await expect(controller.advance(planned.id)).rejects.toThrow("workflow_check_unresolvable:choose");
+    expect(executed).toEqual(["charge", "refund"]);
+    const run = controller.status(planned.id);
+    expect(run.status).toBe("failed");
+    expect(run.nodes.choose).toEqual({
+      status: "failed",
+      taskIds: [],
+      error: "workflow_check_unresolvable:choose: http_resource_matches: verification_token_unresolved:json.id",
+    });
+  });
+
+  /** Inspect, then ship or refund on what `predicate` says of the inspection. */
+  function shipOrRefund(predicate: unknown) {
+    return WorkflowDefinitionSchema.parse({
+      schemaVersion: "1.0.0",
+      id: definitionId,
+      version: 1,
+      name: "Ship or refund",
+      nodes: [
+        { id: "inspect", type: "operation", request: fileRequest("Inspect", "inspect") },
+        {
+          id: "choose",
+          type: "condition",
+          dependsOn: ["inspect"],
+          sourceNodeId: "inspect",
+          predicate,
+          whenTrue: [fileRequest("Ship", "ship")],
+          whenFalse: [fileRequest("Refund", "refund")],
+        },
+      ],
+    });
+  }
+
+  it("fails a condition the kernel refuses to ask when it runs, rather than wait on it", async () => {
+    // A verifier gone after a restart, and a path accepted before planning
+    // checked paths: each is refused however often it is asked.
+    for (const [predicate, error] of [
+      [
+        { type: "custom", verifier: "ledger_row", params: {} },
+        "workflow_check_unresolvable:choose: custom:ledger_row: verification_unsupported:custom:ledger_row",
+      ],
+      [
+        { type: "file_exists", path: "/etc/hosts" },
+        "workflow_check_unresolvable:choose: file_exists: verification_path_outside_workspace",
+      ],
+    ] as const) {
+      const executed: string[] = [];
+      const { controller, tasks } = await setup(async (operation) => {
+        if (operation.kind !== "file") throw new Error("unexpected_operation");
+        executed.push(operation.path);
+        return { success: true };
+      });
+      const unchecked = vi.spyOn(tasks, "assertVerifiable").mockImplementation(() => {});
+      const planned = controller.plan(shipOrRefund(predicate));
+      unchecked.mockRestore();
+      await controller.advance(planned.id);
+
+      // Waiting, the run held for good on a question nobody would answer.
+      await expect(controller.advance(planned.id), predicate.type).rejects.toThrow(
+        "workflow_check_unresolvable:choose",
+      );
+      expect(executed).toEqual(["inspect"]);
+      const run = controller.status(planned.id);
+      expect(run.nodes.choose).toEqual({ status: "failed", taskIds: [], error });
+      expect(run.status).toBe("failed");
+    }
+  });
+
+  it("reads a check's definite no as a no, whatever its summary says", async () => {
+    const executed: string[] = [];
+    const { controller } = await setup(async (operation) => {
+      if (operation.kind !== "file") throw new Error("unexpected_operation");
+      executed.push(operation.path);
+      return { success: true, verification_token_sent: false };
+    });
+    const planned = controller.plan(
+      shipOrRefund({ type: "result_equals", path: "verification_token_sent", value: true }),
+    );
+    await controller.advance(planned.id);
+
+    // Its summary starts "verification_token_", and was read as a URL token
+    // nothing could fill: the condition failed and its run unwound.
+    const result = await controller.advance(planned.id);
+    expect(executed).toEqual(["inspect", "refund"]);
+    expect(result.run.status).toBe("verified_complete");
+  });
+
+  it("keeps a check URL's query out of the run", async () => {
+    const check = provider();
+    const { controller } = await setup(async () => ({ success: true, id: "ch_1" }), {}, check.probe);
+    const planned = controller.plan(
+      shipOrRefund({ ...check.predicate, url: "https://payments.example.test/charges/{{id}}?access_token=tok_live_9f8e7d6c5b4a" }),
+    );
+    await controller.advance(planned.id);
+
+    await expect(controller.advance(planned.id)).rejects.toThrow("workflow_check_inconclusive:choose");
+    // Copied whole, the token sat in the run's state and events, which the
+    // definition's redacted copy leaves out.
+    expect(controller.status(planned.id).nodes.choose?.error).toBe(
+      "workflow_check_inconclusive:choose: http_resource_matches https://payments.example.test/charges/ch_1",
+    );
+    expect(JSON.stringify(controller.events(planned.id))).not.toContain("tok_live");
+  });
+
+  it("writes nothing while a check stays unanswered, however its provider words it", async () => {
+    let polls = 0;
+    const { controller } = await setup(async () => ({ success: true }), {}, async () => {
+      polls += 1;
+      // Each address that refused, in the order a round-robin resolver gave them.
+      const addresses = polls % 2 === 1 ? ["192.0.2.1", "192.0.2.2"] : ["192.0.2.2", "192.0.2.1"];
+      throw new Error(addresses.map((address) => `connect ECONNREFUSED ${address}:443`).join("; "));
+    });
+    const planned = controller.plan(shipOrRefund(provider().predicate));
+    await controller.advance(planned.id);
+    await expect(controller.advance(planned.id)).rejects.toThrow("workflow_check_inconclusive:choose");
+    const waiting = controller.status(planned.id);
+    const recorded = controller.events(planned.id).length;
+
+    // Each new wording was a new state: every poll wrote the run and an event.
+    await expect(controller.advance(planned.id)).rejects.toThrow("workflow_check_inconclusive:choose");
+    expect(polls).toBe(2);
+    expect(controller.status(planned.id)).toEqual(waiting);
+    expect(controller.events(planned.id)).toHaveLength(recorded);
+  });
+
+  it("runs another iteration of a loop whose until names a value only a later iteration returns", async () => {
+    let calls = 0;
+    const { controller } = await setup(
+      async () => {
+        calls += 1;
+        // The job has no file until it is done.
+        return calls === 1 ? { success: true } : { success: true, fileId: "f1" };
+      },
+      {},
+      async () => ({ success: true, status: 200, content: JSON.stringify({ status: "ready" }) }),
+    );
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Poll the job",
+        nodes: [
+          {
+            id: "loop",
+            type: "bounded_loop",
+            body: [fileRequest("Loop body", "loop")],
+            maxIterations: 5,
+            until: {
+              type: "http_resource_matches",
+              url: "https://files.example.test/files/{{fileId}}",
+              method: "GET",
+              path: "json.status",
+              value: "ready",
+            },
+          },
+        ],
+      }),
+    );
+
+    // Read as unanswerable, the loop and its run failed on the first
+    // iteration's result, when the next one held the value.
+    const result = await controller.advance(planned.id);
+    expect(calls).toBe(2);
+    expect(result.run.nodes.loop).toMatchObject({ status: "verified_complete", iterations: 2 });
     expect(result.run.status).toBe("verified_complete");
   });
 
@@ -1231,6 +1633,74 @@ describe("WorkflowController execution", () => {
     expect(JSON.stringify(store.getWorkflowDefinition(definitionId, 1))).not.toContain("api-integration-tests");
     const result = await settle(controller, planned.id);
     expect(result.run.nodes["api-integration-tests"]?.status).toBe("verified_complete");
+  });
+
+  it("records a step whose adapter error is longer than a node's error holds", async () => {
+    const execute = vi.fn(async () => {
+      throw new Error("x".repeat(20_000));
+    });
+    const { controller } = await setup(execute);
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Remember",
+        nodes: [{ id: "remember", type: "operation", request: mutationRequest("Remember the project") }],
+      }),
+    );
+    // Copied whole, the error failed the node's own schema after the step ran,
+    // the run was never written, and the next advance ran the step again.
+    const result = await settle(controller, planned.id);
+    expect(result.run.nodes.remember?.status).toBe("failed");
+    expect(result.run.nodes.remember?.error).toHaveLength(10_000);
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("finishes a run whose step's certificate failed to write", async () => {
+    const execute = vi.fn(async () => ({ success: true, stored: true }));
+    const { controller, store } = await setup(execute);
+    vi.spyOn(store, "saveCertificate").mockImplementationOnce(() => {
+      throw new Error("disk full");
+    });
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Remember",
+        nodes: [{ id: "remember", type: "operation", request: mutationRequest("Remember the project") }],
+      }),
+    );
+    // The run is complete only on each step's certificate, and nothing wrote
+    // this one later: the run stayed `running` with nothing left to do.
+    const result = await settle(controller, planned.id);
+    expect(result.run.status).toBe("verified_complete");
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("finishes it at a later advance when writing that certificate fails again", async () => {
+    const execute = vi.fn(async () => ({ success: true, stored: true }));
+    const { controller, store } = await setup(execute);
+    const full = () => {
+      throw new Error("disk full");
+    };
+    vi.spyOn(store, "saveCertificate").mockImplementationOnce(full).mockImplementationOnce(full);
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Remember",
+        nodes: [{ id: "remember", type: "operation", request: mutationRequest("Remember the project") }],
+      }),
+    );
+    // Thrown, it lost the advance that recorded the step, and the next one
+    // planned the step again. Swallowed, the run had nothing left to run and
+    // no advance looked at its status again.
+    const result = await settle(controller, planned.id);
+    expect(result.run.status).toBe("verified_complete");
+    expect(execute).toHaveBeenCalledTimes(1);
   });
 
   it("halts rather than unwind past a step whose outcome is unknown when another is denied", async () => {
@@ -2424,6 +2894,76 @@ describe("WorkflowController human input and delegation", () => {
     expect(reported.run.nodes.handoff?.error).toBe(
       "workflow_delegation_unverified:handoff",
     );
+    expect(reported.run.status).toBe("failed");
+  });
+
+  /** A delegation whose evidence asks the provider about each URL in turn. */
+  function handoff(urls: string[]) {
+    return WorkflowDefinitionSchema.parse({
+      schemaVersion: "1.0.0",
+      id: definitionId,
+      version: 1,
+      name: "Hand it off",
+      nodes: [
+        {
+          id: "handoff",
+          type: "delegation",
+          assignee: "outside-worker",
+          goal: "issue the refund",
+          requiredEvidence: urls.map((url) => ({
+            type: "http_resource_matches",
+            url,
+            method: "GET",
+            path: "json.status",
+            value: "applied",
+          })),
+        },
+      ],
+    });
+  }
+
+  it("keeps a delegation's report while the provider its evidence asks does not answer", async () => {
+    let answer: Record<string, unknown> = { success: true, status: 503, content: "{}" };
+    const { controller } = await setup(undefined, {}, async () => answer);
+    const planned = controller.plan(handoff(["https://payments.example.test/refunds/1"]));
+    await controller.advance(planned.id);
+
+    // Read as a no, the delegation failed and its run unwound.
+    await expect(
+      controller.advance(planned.id, [], [{ nodeId: "handoff", value: "done" }]),
+    ).rejects.toThrow("workflow_check_inconclusive:handoff");
+    expect(controller.status(planned.id).nodes.handoff).toEqual({
+      status: "awaiting_input",
+      taskIds: [],
+      prompt: "outside-worker: issue the refund",
+      input: "done",
+      error:
+        "workflow_check_inconclusive:handoff: http_resource_matches https://payments.example.test/refunds/1",
+    });
+    expect(controller.status(planned.id).status).toBe("awaiting_input");
+
+    // Dropped, the report left the run waiting on a worker who had sent it.
+    answer = { success: true, status: 200, content: JSON.stringify({ status: "applied" }) };
+    const settled = await controller.advance(planned.id);
+    expect(settled.run.nodes.handoff).toMatchObject({ status: "verified_complete", input: "done" });
+    expect(settled.run.status).toBe("verified_complete");
+  });
+
+  it("fails a delegation one of whose checks says no while another goes unanswered", async () => {
+    const { controller } = await setup(undefined, {}, async ({ url }) => ({
+      success: true,
+      status: url.endsWith("/refunds/1") ? 404 : 503,
+      content: "{}",
+    }));
+    const planned = controller.plan(
+      handoff(["https://payments.example.test/refunds/1", "https://tickets.example.test/tickets/9"]),
+    );
+    await controller.advance(planned.id);
+
+    // Every check must pass, so the 404 decides whatever the 503 would have said.
+    const reported = await controller.advance(planned.id, [], [{ nodeId: "handoff", value: "done" }]);
+    expect(reported.run.nodes.handoff?.status).toBe("failed");
+    expect(reported.run.nodes.handoff?.error).toBe("workflow_delegation_unverified:handoff");
     expect(reported.run.status).toBe("failed");
   });
 

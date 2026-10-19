@@ -9,6 +9,15 @@ import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path
 import type { EvidencePredicate } from "@melra/protocol";
 import { evidenceStrength, type EvidenceItem } from "@melra/receipt-schema";
 
+/**
+ * A question the kernel itself refuses to ask: a path outside the workspace or
+ * reserved, a URL token with nothing to fill it, a verifier or probe this
+ * runtime does not have. Asked again of the same result it is refused again,
+ * so `verify` marks the item `unanswerable`. Not exported, so a verifier
+ * cannot make one of its own failures read as the kernel's.
+ */
+class Refusal extends Error {}
+
 function inside(root: string, candidate: string): boolean {
   const rel = relative(root, candidate);
   return rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel));
@@ -77,12 +86,12 @@ function interpolate(template: string, result: Record<string, unknown>): string 
   return template.replace(TOKEN, (_match, path: string) => {
     const value = readResultPath(source, path);
     if (value === undefined || value === null || typeof value === "object") {
-      throw new Error(`verification_token_unresolved:${path}`);
+      throw new Refusal(`verification_token_unresolved:${path}`);
     }
     // `.` and `..` survive percent-encoding as path segments (a URL parser
     // reads `%2E%2E` as `..` too), so `{"id": ".."}` moved the probe up a
     // level onto some other resource and verified that.
-    if (value === "." || value === "..") throw new Error(`verification_token_dot_segment:${path}`);
+    if (value === "." || value === "..") throw new Refusal(`verification_token_dot_segment:${path}`);
     return encodeURIComponent(String(value));
   });
 }
@@ -108,7 +117,7 @@ export interface VerificationContext {
  * One way to confirm an effect. Returns what it found; `type` and `strength`
  * are stamped by the kernel from the predicate type, so a verifier cannot
  * claim a stronger kind of knowing than its type is entitled to. Throwing
- * fails the predicate.
+ * fails the predicate as `inconclusive`: no answer, rather than a no.
  */
 export interface PredicateVerifier<P extends { type: string } = { type: string }> {
   type: P["type"];
@@ -192,12 +201,40 @@ const pageContains: Built<"page_contains"> = {
   },
 };
 
+/**
+ * A path that is not there: the workspace's answer, not a failure to ask.
+ * Thrown, it would read as no answer at all, and a reconciliation or a
+ * condition waiting on that file would never decide.
+ */
+const missing = (error: unknown): boolean =>
+  error instanceof Error && "code" in error && (error.code === "ENOENT" || error.code === "ENOTDIR");
+
+/**
+ * A path the OS will not take whole (ENAMETOOLONG) is no answer either way: a
+ * name past NAME_MAX cannot exist, but a path past PATH_MAX can, built through
+ * relative steps. Read as missing, a file that is there verified as gone. It is
+ * the kernel's own refusal, so a check on it fails rather than waits.
+ */
+function refuseTooLong(error: unknown): void {
+  if (error instanceof Error && "code" in error && error.code === "ENAMETOOLONG") {
+    throw new Refusal("verification_path_too_long");
+  }
+}
+
 const fileExists: Built<"file_exists"> = {
   type: "file_exists",
   async check(predicate, _result, context) {
-    const path = await context.workspacePath(predicate.path);
-    const metadata = await stat(path);
-    const passed = metadata.isFile() || metadata.isDirectory();
+    let path: string;
+    let passed: boolean;
+    try {
+      path = await context.workspacePath(predicate.path);
+      const metadata = await stat(path);
+      passed = metadata.isFile() || metadata.isDirectory();
+    } catch (error) {
+      refuseTooLong(error);
+      if (!missing(error)) throw error;
+      return { passed: false, summary: "workspace path does not exist", source: predicate.path };
+    }
     return {
       passed,
       summary: `workspace path ${passed ? "exists" : "does not exist"}`,
@@ -244,12 +281,16 @@ async function renamedByCase(
 const fileAbsent: Built<"file_absent"> = {
   type: "file_absent",
   async check(predicate, result, context) {
-    const path = await context.workspacePath(predicate.path, { mayBeAbsent: true });
+    const path = await context.workspacePath(predicate.path, { mayBeAbsent: true }).catch((error: unknown) => {
+      refuseTooLong(error);
+      throw error;
+    });
     let passed = false;
     try {
       passed = await renamedByCase(path, await lstat(path, { bigint: true }), result, context);
     } catch (error) {
-      passed = error instanceof Error && "code" in error && error.code === "ENOENT";
+      refuseTooLong(error);
+      passed = missing(error);
       if (!passed) throw error;
     }
     return {
@@ -263,10 +304,19 @@ const fileAbsent: Built<"file_absent"> = {
 const fileHash: Built<"file_hash"> = {
   type: "file_hash",
   async check(predicate, _result, context) {
-    const path = await context.workspacePath(predicate.path);
-    // Streamed, so a large artifact is hashed in constant memory; a FIFO or a
-    // device would never end, so only a regular file is read at all.
-    if (!(await stat(path)).isFile()) throw new Error("verification_hash_requires_regular_file");
+    let path: string;
+    try {
+      path = await context.workspacePath(predicate.path);
+      // Streamed, so a large artifact is hashed in constant memory; a FIFO or
+      // a device would never end, so only a regular file is read at all.
+      if (!(await stat(path)).isFile()) {
+        return { passed: false, summary: "workspace path is not a regular file", source: context.relative(path) };
+      }
+    } catch (error) {
+      refuseTooLong(error);
+      if (!missing(error)) throw error;
+      return { passed: false, summary: "workspace path does not exist", source: predicate.path };
+    }
     const hash = createHash("sha256");
     await pipeline(createReadStream(path), hash);
     const digest = hash.digest("hex");
@@ -287,15 +337,13 @@ const httpResourceMatches: Built<"http_resource_matches"> = {
       // Fails, never passes. A predicate the runtime cannot evaluate is an
       // unanswered question, and treating it as satisfied would make the
       // strongest evidence type the easiest one to claim.
-      throw new Error("verification_probe_unavailable");
+      throw new Refusal("verification_probe_unavailable");
     }
     const url = interpolate(predicate.url, result);
-    // Caught here rather than by the caller so a transport failure is not
-    // filed as the provider saying no. Both are `passed: false`; only this one
-    // is `inconclusive`, and that is what lets an unreachable provider leave a
-    // mutation `recovery_required` instead of `failed`. The interpolate above
-    // stays outside: an unresolved token is a caller error, and the provider
-    // is not implicated in it.
+    // Caught here so the item names the URL it could not read. A transport
+    // failure is not the provider saying no: it is `inconclusive`, and that is
+    // what lets an unreachable provider leave a mutation `recovery_required`
+    // instead of `failed`.
     let observed: Record<string, unknown>;
     try {
       observed = withParsedBody(
@@ -374,6 +422,8 @@ const BUILT_IN: ReadonlyArray<RegisteredVerifier> = [
   httpResourceMatches,
 ];
 const BUILT_IN_TYPES: ReadonlySet<string> = new Set(BUILT_IN.map((verifier) => verifier.type));
+/** The predicates whose `path` is a workspace file. */
+const FILE_TYPES: ReadonlySet<string> = new Set(["file_exists", "file_absent", "file_hash"]);
 
 
 export interface VerifierOptions {
@@ -455,44 +505,72 @@ export class Verifier {
     return new Verifier(await realpath(root), options.probe, options.verifiers ?? [], options.reserved);
   }
 
-  private async filePath(input: string): Promise<string> {
-    const candidate = resolve(this.root, input);
-    if (!inside(this.root, candidate) || relative(this.root, candidate) === "") {
-      throw new Error("verification_path_outside_workspace");
+  /**
+   * Whether a file predicate names a path refused on its spelling alone,
+   * outside the root or the root itself, so asking it can never get an
+   * answer. For planning, before the file need exist: no link is followed,
+   * and one that leads out is still refused when the predicate is asked.
+   */
+  outsideWorkspace(predicate: EvidencePredicate | { type: string; [field: string]: unknown }): boolean {
+    const path = (predicate as { path?: unknown }).path;
+    return FILE_TYPES.has(predicate.type) && typeof path === "string" && this.spelled(path) === undefined;
+  }
+
+  /**
+   * The refusal an `http_resource_matches` URL gets when `facts` cannot fill
+   * one of its `{{token}}`s, if any. For planning a reconciliation, which is
+   * only ever read against facts known before the call: asked, it would be
+   * refused every time.
+   */
+  unfilledToken(
+    predicate: EvidencePredicate | { type: string; [field: string]: unknown },
+    facts: Record<string, unknown>,
+  ): string | undefined {
+    const url = (predicate as { url?: unknown }).url;
+    if (predicate.type !== "http_resource_matches" || typeof url !== "string") return undefined;
+    try {
+      interpolate(url, facts);
+      return undefined;
+    } catch (error) {
+      return error instanceof Refusal ? error.message : undefined;
     }
+  }
+
+  /** `input` under the root before any link is followed; undefined outside it or at the root. */
+  private spelled(input: string): string | undefined {
+    const candidate = resolve(this.root, input);
+    return inside(this.root, candidate) && relative(this.root, candidate) !== "" ? candidate : undefined;
+  }
+
+  private async filePath(input: string): Promise<string> {
+    const candidate = this.spelled(input);
+    if (candidate === undefined) throw new Refusal("verification_path_outside_workspace");
     const actual = await realpath(candidate);
     if (!inside(this.root, actual)) {
-      throw new Error("verification_path_outside_workspace");
+      throw new Refusal("verification_path_outside_workspace");
     }
     if ((await this.reserved?.(actual)) === true) {
-      throw new Error("verification_path_reserved");
+      throw new Refusal("verification_path_reserved");
     }
     return actual;
   }
 
   private async potentiallyAbsentFilePath(input: string): Promise<string> {
-    const candidate = resolve(this.root, input);
-    if (!inside(this.root, candidate) || relative(this.root, candidate) === "") {
-      throw new Error("verification_path_outside_workspace");
-    }
+    const candidate = this.spelled(input);
+    if (candidate === undefined) throw new Refusal("verification_path_outside_workspace");
     let probe = candidate;
     while (true) {
       try {
         const actual = await realpath(probe);
         if (!inside(this.root, actual)) {
-          throw new Error("verification_path_outside_workspace");
+          throw new Refusal("verification_path_outside_workspace");
         }
         return candidate;
       } catch (error) {
-        if (
-          error instanceof Error &&
-          error.message === "verification_path_outside_workspace"
-        ) {
-          throw error;
-        }
+        if (error instanceof Refusal) throw error;
         const parent = dirname(probe);
         if (parent === probe) {
-          throw new Error("verification_path_outside_workspace");
+          throw new Refusal("verification_path_outside_workspace");
         }
         probe = parent;
       }
@@ -515,13 +593,22 @@ export class Verifier {
       const { verifier, type, input } = this.resolve(predicate);
       try {
         // An unregistered type is a question nobody here can answer: it fails.
-        if (verifier === undefined) throw new Error(`verification_unsupported:${type}`);
-        const found = await verifier.check(input as never, result, context);
+        if (verifier === undefined) throw new Refusal(`verification_unsupported:${type}`);
+        // `unanswerable` is the kernel's to say, as `strength` is.
+        const { unanswerable: _claimed, ...found } = await verifier.check(input as never, result, context);
         evidence.push({ ...found, type });
       } catch (error) {
+        // A throw is no answer — an unresolved token, a missing verifier, a
+        // backend that timed out — so it is not a provider's "no" either.
+        // Reconciliation reads that difference to keep the task parked.
         evidence.push({
           type,
           passed: false,
+          inconclusive: true,
+          // Still inconclusive, since nothing was learned about the effect;
+          // flagged so a caller deciding whether to ask again need not parse
+          // the summary.
+          ...(error instanceof Refusal ? { unanswerable: true } : {}),
           summary: error instanceof Error ? error.message : String(error),
         });
       }
