@@ -398,11 +398,7 @@ export class WorkflowController {
           (result.state.status === "failed" ||
             (result.state.status === "cancelled" && !unknownOutcome)) &&
           graph.nodes.get(nodeId)?.type !== "compensation",
-      ) &&
-      // Nor once the run has moved on under this advance (cancelled, paused):
-      // its commit is going to fail, and a compensation planned now would be
-      // a live challenge for a run that no longer offers it.
-      this.status(workflowId).stateVersion === current.stateVersion
+      )
     ) {
       for (const node of [...definition.nodes].reverse()) {
         if (
@@ -411,8 +407,10 @@ export class WorkflowController {
         ) {
           continue;
         }
-        // Checked again before each one: a compensation that ran without a
-        // prompt gives a cancel or pause time to land.
+        // Not once the run has moved on under this advance (cancelled,
+        // paused): its commit is going to fail, and a compensation planned now
+        // would be a live challenge for a run that no longer offers it.
+        // Checked before each one, since one that ran gives a cancel time.
         if (this.status(workflowId).stateVersion !== current.stateVersion) break;
         const stateOf = (id: string) =>
           results.find(({ nodeId }) => nodeId === id)?.result.state ?? current.nodes[id];

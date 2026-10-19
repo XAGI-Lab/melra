@@ -1072,6 +1072,51 @@ describe("WorkflowController execution", () => {
     expect(result.run.status).toBe("failed");
   });
 
+  it("stops a later advance's unwind when the run is cancelled under it", async () => {
+    let cancelRun = () => {};
+    const calls: string[] = [];
+    const { controller, store } = await setup(async (operation) => {
+      if (operation.kind !== "http") throw new Error("unexpected_operation");
+      const path = new URL(operation.url).pathname;
+      calls.push(path);
+      if (path === "/refunds") cancelRun();
+      return { success: path !== "/shipments" };
+    });
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Reserve, charge, ship",
+        nodes: [
+          { id: "reserve", type: "operation", request: call("Reserve", `${LOGISTICS}/reservations`) },
+          { id: "charge", type: "operation", dependsOn: ["reserve"], request: call("Charge", `${PAYMENTS}/charges`) },
+          { id: "ship", type: "operation", dependsOn: ["charge"], request: call("Ship", `${LOGISTICS}/shipments`) },
+          { id: "undo-reserve", type: "compensation", forNodeId: "reserve", request: call("Release", `${LOGISTICS}/releases`) },
+          { id: "undo-charge", type: "compensation", forNodeId: "charge", request: call("Refund", `${PAYMENTS}/refunds`) },
+        ],
+      }),
+    );
+    cancelRun = () => controller.cancel(planned.id);
+    // Each challenge approved as it parks: the refund then runs in the next
+    // advance's unwind, and `workflow cancel` lands while it does.
+    let run = controller.status(planned.id);
+    for (let step = 0; step < 8 && run.status !== "cancelled"; step += 1) {
+      const approvals = Object.values(run.nodes).flatMap((state) =>
+        state.status === "awaiting_approval" && state.approval !== undefined
+          ? [{ approvalId: state.approval.approvalId, phrase: state.approval.phrase! }]
+          : [],
+      );
+      await controller.advance(planned.id, approvals).catch(() => undefined);
+      run = controller.status(planned.id);
+    }
+
+    expect(run.status).toBe("cancelled");
+    expect(calls).toContain("/refunds");
+    // The release would be a live challenge on a run its operator cancelled.
+    expect(store.listTasks(100, "awaiting_approval")).toEqual([]);
+  });
+
   it("stops an unwind when the run is cancelled under it", async () => {
     let cancelRun = () => {};
     const calls: string[] = [];
