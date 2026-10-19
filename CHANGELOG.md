@@ -107,10 +107,10 @@ All notable changes are documented here. The format follows
   verifies on a case-insensitive disk, such as macOS's default. The
   `file_absent` evidence derived for the source found the renamed file under
   the old spelling, so a correct rename ended `partial`. Against a move's own
-  result, the source now reads absent when what its spelling reaches is the
-  move's destination and the directory no longer holds that spelling.
-  Anywhere else, a path that reaches a file still reads present, however it
-  is spelled. (#280)
+  result, the move's source now reads absent when what its spelling reaches is
+  the destination's own entry, with no other name, and the directory no longer
+  holds that spelling; a symlink renamed by case included. Anywhere else, a
+  path that reaches a file still reads present, however it is spelled. (#280)
 
 - An `http` response past `maxResponseBytes` returns the body up to the cap.
   The chunk that crossed the cap was dropped whole, so a body that arrived in

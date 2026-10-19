@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createHash } from "node:crypto";
-import { createReadStream } from "node:fs";
+import { createReadStream, type BigIntStats } from "node:fs";
 import { lstat, readdir, realpath, stat } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
@@ -209,27 +209,34 @@ const fileExists: Built<"file_exists"> = {
 /**
  * Whether `path`, which lstat reached as `found`, is the source of a move that
  * only changed its case: a case-insensitive disk folds the old spelling onto
- * the renamed file, and a correct rename verified as partial. Only for that
- * move's own result, only when what was found is the move's destination, and
- * only when the directory no longer holds the old spelling (a hard link would)
- * is it absent. Anywhere else a path lstat reaches is there, however spelled:
- * a guard asking whether settings.json is absent beside Settings.json must not
- * be told yes.
+ * the renamed file, and a correct rename verified as partial. It is absent
+ * only when `path` is that move's own source, what it reached is the move's
+ * destination entry and that entry's only name (a hard link is a second one),
+ * and the directory no longer lists the old spelling. Anywhere else a path
+ * lstat reaches is there, however spelled: a guard asking whether settings.json
+ * is absent beside Settings.json must not be told yes.
  */
 async function renamedByCase(
   path: string,
-  found: { dev: number; ino: number },
+  found: BigIntStats,
   result: Record<string, unknown>,
   context: VerificationContext,
 ): Promise<boolean> {
-  if (result.moved !== true || typeof result.destination !== "string") return false;
-  const destination = await lstat(await context.workspacePath(result.destination)).catch(() => undefined);
+  if (result.moved !== true || typeof result.path !== "string" || typeof result.destination !== "string") return false;
+  const entry = (input: string) => context.workspacePath(input, { mayBeAbsent: true });
+  if ((await entry(result.path).catch(() => undefined)) !== path) return false;
+  if (!found.isDirectory() && found.nlink !== 1n) return false;
+  // The destination's own entry, not where a link there leads; gone, it is
+  // not what the old spelling reached.
+  const destination = await entry(result.destination)
+    .then((resolved) => lstat(resolved, { bigint: true }))
+    .catch(() => undefined);
   if (destination === undefined || destination.dev !== found.dev || destination.ino !== found.ino) return false;
   // Compared as the OS sees names: UTF-8 (a lone surrogate becomes U+FFFD),
   // and normalization aside, which such disks ignore too.
   const spelled = (name: string) => Buffer.from(name).toString("utf8").normalize("NFC");
   const name = spelled(basename(path));
-  return !(await readdir(dirname(path))).some((entry) => spelled(entry) === name);
+  return !(await readdir(dirname(path))).some((listed) => spelled(listed) === name);
 }
 
 const fileAbsent: Built<"file_absent"> = {
@@ -238,7 +245,7 @@ const fileAbsent: Built<"file_absent"> = {
     const path = await context.workspacePath(predicate.path, { mayBeAbsent: true });
     let passed = false;
     try {
-      passed = await renamedByCase(path, await lstat(path), result, context);
+      passed = await renamedByCase(path, await lstat(path, { bigint: true }), result, context);
     } catch (error) {
       passed = error instanceof Error && "code" in error && error.code === "ENOENT";
       if (!passed) throw error;

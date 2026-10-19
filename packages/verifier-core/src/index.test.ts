@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createHash } from "node:crypto";
-import { link, lstat, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
+import { link, lstat, mkdtemp, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -119,6 +119,55 @@ describe("Verifier", () => {
       destination: "b.txt",
     });
     expect(linked.verified).toBe(false);
+  });
+
+  it("reads a path as absent for a move only when it is that move's own case-renamed source", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-verifier-"));
+    roots.push(root);
+    await writeFile(join(root, "config.json"), "{}");
+    const verifier = await Verifier.create(root);
+    // A move whose destination has since gone: failing to find it made every
+    // file_absent against that result pass, on any disk.
+    const gone = await verifier.verify([{ type: "file_absent", path: "config.json" }], {
+      moved: true,
+      path: "config.json",
+      destination: "gone/config.json",
+    });
+    expect(gone.verified).toBe(false);
+
+    // A link renamed by case is gone under its old spelling, though what it
+    // leads to is not the move's destination entry.
+    await writeFile(join(root, "target.txt"), "x");
+    if (await symlink("target.txt", join(root, "Link")).then(() => true, () => false)) {
+      await rename(join(root, "Link"), join(root, "LINK"));
+      const renamed = await verifier.verify([{ type: "file_absent", path: "Link" }], {
+        moved: true,
+        path: "Link",
+        destination: "LINK",
+      });
+      expect(renamed.verified).toBe(true);
+    }
+
+    await writeFile(join(root, "Draft.md"), "x");
+    await rename(join(root, "Draft.md"), join(root, "README.md"));
+    if (await lstat(join(root, "readme.md")).then(() => true, () => false)) {
+      // Another spelling of the destination is not the move's source.
+      const variant = await verifier.verify([{ type: "file_absent", path: "readme.md" }], {
+        moved: true,
+        path: "Draft.md",
+        destination: "README.md",
+      });
+      expect(variant.verified).toBe(false);
+      // Nor is a hard link the move left in place, spelled in another case.
+      await writeFile(join(root, "B.txt"), "x");
+      await link(join(root, "B.txt"), join(root, "a.txt"));
+      const linked = await verifier.verify([{ type: "file_absent", path: "b.txt" }], {
+        moved: true,
+        path: "b.txt",
+        destination: "A.txt",
+      });
+      expect(linked.verified).toBe(false);
+    }
   });
 
   it("stamps each item with how it was established", async () => {
