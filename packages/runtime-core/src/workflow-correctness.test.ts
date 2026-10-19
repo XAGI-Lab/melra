@@ -552,6 +552,39 @@ describe("a condition's branch not taken (#268)", () => {
     expect(done).toEqual(["create", "after"]);
   });
 
+  it.each([false, true])(
+    "halts on a step a lost advance ran on the other branch that took effect but failed its evidence (restart first: %s)",
+    async (restartFirst) => {
+      const { controller, root, store, tasks, cipher, done, on } = await setup({ policy: { unhinged: true } });
+      await writeFile(join(root, "flag"), "on");
+      // Its effect ran, its evidence did not hold: partial, which nothing reconciles.
+      const patch = TaskRequestSchema.parse({ ...put("patch"), requiredEvidence: [{ type: "result_equals", path: "stored", value: false }] });
+      const planned = controller.plan(choice([patch], [put("create")]));
+      await controller.advance(planned.id);
+      on.put = (key) => {
+        if (key === "patch") controller.pause(planned.id);
+      };
+      await expect(controller.advance(planned.id)).rejects.toThrow("workflow_state_conflict");
+      delete on.put;
+      const [partial] = store.listTasks(10, "partial");
+      controller.resume(planned.id);
+      await unlink(join(root, "flag"));
+
+      let current = controller;
+      if (restartFirst) {
+        current = new WorkflowController(store, tasks, cipher);
+        await current.recoverInterrupted();
+      }
+      // Read by recovery as the condition's own step, failed, the run unwound
+      // after a restart where without one it halted.
+      const run = await settle(current, planned.id);
+      expect(run.status).toBe("recovery_required");
+      expect(run.error).toBe("workflow_condition_branch_conflict:choose");
+      expect(run.nodes.choose?.taskIds).toEqual([partial!.id]);
+      expect(done).toEqual(["patch"]);
+    },
+  );
+
   it("cancels with the run a challenge a lost advance left on a condition a restart left undecided", async () => {
     const { controller, root, store, tasks, cipher, done } = await setup();
     await writeFile(join(root, "flag"), "on");

@@ -126,11 +126,16 @@ All notable changes are documented here. The format follows
   `workflow_condition_branch_conflict:<node>` instead of running the other
   branch beside it. A task there that did not happen (its adapter reported it
   failed, it ran out of budget, it was cancelled or refused by policy, or it
-  was reconciled as never applied) counts for nothing, and the run moves on;
-  where both branches took effect, `workflow cancel` ends the run and what
-  each did is undone by hand. A restart before the condition is decided still
-  reads a step such an advance ran as the condition's, so one whose outcome
-  is unknown halts the run rather than let a failed sibling unwind past it.
+  was reconciled as never applied) counts for nothing, and the run moves on.
+  One that took effect (it verified, or its evidence did not hold) cannot be
+  reconciled, so the run stays halted: inspect what that branch did, undo it
+  by hand, then `workflow cancel`, which compensates nothing, so what earlier
+  steps did is undone by hand too where it should not stand. A restart before
+  the condition is decided still reads a step such an advance ran whose
+  outcome is unknown as the condition's, so it halts the run rather than let
+  a failed sibling unwind past it; anything else such an advance left waits
+  for the next advance, so the run halts or moves on the same with or without
+  a restart.
   A branch's step is found by its idempotency key, so an advance no longer
   asks again for a step whose effect already committed, nor reuses another
   branch's task by position. (#268)

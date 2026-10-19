@@ -716,15 +716,16 @@ export class WorkflowController {
             return task !== undefined && hadNoEffect(task);
           });
         if (recorded.error === BRANCH_CONFLICT && !cleared) return { state: recorded, found: all };
-        // A step a lost advance ran, on either branch, is read as the node's,
-        // so one whose outcome is unknown halts the run here rather than a
-        // failed sibling unwinding past it (#270). Only challenges it left
-        // wait for the next advance, which decides and cancels them.
-        const ran = all.filter(
+        // A step a lost advance ran whose outcome is unknown, on either
+        // branch, is read as the node's, so it halts the run here rather than
+        // a failed sibling unwinding past it (#270). Anything else it left (a
+        // challenge, or a step that took effect but failed its evidence) waits
+        // for the next advance, which decides as it would with no restart.
+        const unknown = all.filter(
           (task): task is TaskRecord =>
-            task !== undefined && !["planned", "awaiting_approval"].includes(task.status) && !hadNoEffect(task),
+            task !== undefined && ["recovery_required", "running", "verifying"].includes(task.status),
         );
-        if (ran.length > 0) return { state: recoveredNodeState(node, ran, recorded), found: all };
+        if (unknown.length > 0) return { state: recoveredNodeState(node, unknown, recorded), found: all };
         return { state: cleared ? { status: "pending", taskIds: [] } : recorded, found: all };
       }
       const halted = this.abandonBranch(node, keys, chosen, allTasks);
