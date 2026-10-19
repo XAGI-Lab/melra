@@ -316,8 +316,10 @@ melra: policy_invalid: /home/you/.melra/policy.json: unhinged: Invalid input: ex
 melra: policy_invalid: /home/you/.melra/policy.json: not valid JSON at line 3 column 1
 ```
 
-A file that is not JSON is named by line and column only, never by the text
-there, so the message is safe to paste into a bug report.
+A file that is not JSON is never quoted, so the message is safe to paste into
+a bug report. Where Node reports the position it is named by line and column;
+for some mistakes, such as a trailing comma in a list, a comment or a bare
+word, Node gives none and the message says only `not valid JSON`.
 
 The keys are `version`, `workspaceRoot`, `allowedCommands`, `allowedDomains`,
 `allowLocalhost`, `popups`, `mutations`, `approvalTtlMs`, `maxFileBytes`,

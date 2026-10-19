@@ -772,8 +772,10 @@ export const PolicyFileSchema = z
   .object({
     version: z.string().exactOptional(),
     workspaceRoot: z.string().exactOptional(),
-    allowedCommands: z.array(z.string()).exactOptional(),
-    allowedDomains: z.array(z.string()).exactOptional(),
+    // An empty entry, as an unset variable leaves, is no name: in the domain
+    // allowlist it matched every host written with a trailing dot.
+    allowedCommands: z.array(z.string().min(1)).exactOptional(),
+    allowedDomains: z.array(z.string().min(1)).exactOptional(),
     allowLocalhost: z.boolean().exactOptional(),
     popups: z.enum(["allow", "block"]).exactOptional(),
     mutations: z.enum(["deny", "confirm"]).exactOptional(),

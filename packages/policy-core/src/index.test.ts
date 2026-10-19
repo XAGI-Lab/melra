@@ -79,6 +79,11 @@ describe("policy file", () => {
     return loadPolicy(file(), directory);
   };
 
+  it("refuses an empty allowlist entry, which an unset variable leaves", async () => {
+    await expect(load({ allowedDomains: [""] })).rejects.toThrow(`policy_invalid: ${file()}: allowedDomains[0]:`);
+    await expect(load({ allowedCommands: ["git", ""] })).rejects.toThrow(`policy_invalid: ${file()}: allowedCommands[1]:`);
+  });
+
   it("refuses a key it does not know, at any depth, naming the file and the path", async () => {
     const unknown: Array<[unknown, string]> = [
       [{ allowedComands: ["git"] }, "allowedComands"],
@@ -1169,6 +1174,17 @@ describe("http destinations", () => {
       requiredEvidence: [{ type: "result_equals", path: "success", value: true }],
     });
   const taskId = "b4b6f2a1-6f2e-4d5a-9c3e-8a1d0f7c2b34";
+
+  it("lets an empty allowlist entry through nothing", () => {
+    // Empty, `.${entry}` was "." and every host spelled with a trailing dot
+    // ended with it: the allowlist let any public host through that way.
+    const policy = { ...createDefaultPolicy(root), allowedDomains: [""] };
+    for (const url of ["https://example.com./x", "https://example.com/x"]) {
+      expect(evaluatePolicy(taskId, request({ method: "GET", url }), policy).decision.reason, url).toBe(
+        "destination_domain_not_allowed",
+      );
+    }
+  });
 
   it("classifies by method, not by kind", () => {
     expect(

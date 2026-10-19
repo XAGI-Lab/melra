@@ -954,8 +954,9 @@ function domainAllowed(operation: Operation, policy: LocalPolicy): boolean {
   return policy.allowedDomains.some(
     (domain) =>
       domain === "*" ||
-      host === domain.toLowerCase() ||
-      host.endsWith(`.${domain.toLowerCase()}`),
+      // Empty, `.${domain}` is "." and every host spelled with a trailing dot
+      // ends with it.
+      (domain !== "" && (host === domain.toLowerCase() || host.endsWith(`.${domain.toLowerCase()}`))),
   );
 }
 
