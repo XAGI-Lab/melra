@@ -382,7 +382,13 @@ export class SqliteStore {
     });
   }
 
-  private transaction<T>(action: () => T): T {
+  /**
+   * Runs `action` as one write transaction: another process sharing the
+   * database waits, so nothing it read changes before it writes, and a throw
+   * undoes every write it made. `action` must not call a method that opens a
+   * transaction of its own.
+   */
+  transaction<T>(action: () => T): T {
     this.database.exec("BEGIN IMMEDIATE");
     try {
       const result = action();

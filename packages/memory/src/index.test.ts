@@ -1,6 +1,9 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { MemoryOperationSchema } from "@melra/protocol";
 import { SqliteStore } from "@melra/storage-sqlite";
@@ -338,6 +341,46 @@ describe("LocalMemory", () => {
       "memory_supersedes_target_invalid",
     );
     expect(store.getMemory(second.id)?.value).toBe("Use version two (fixed)");
+  });
+
+  it("puts as one transaction another process cannot cut into", () => {
+    const root = mkdtempSync(join(tmpdir(), "melra-memory-"));
+    const path = join(root, "melra.sqlite");
+    store = new SqliteStore(path);
+    const other = new SqliteStore(path);
+    try {
+      const memory = new LocalMemory(store);
+      const put = (fields: Record<string, unknown>) =>
+        memory.execute(
+          MemoryOperationSchema.parse({ kind: "memory", action: "put", scope: "workspace", key: "runtime", ...fields }),
+        ) as { id: string };
+      const first = put({ value: "Use version one" });
+      const second = put({ value: "Use version two", supersedesId: first.id });
+      const third = put({ value: "Use version three", supersedesId: second.id });
+      // Another process deletes the middle record while this edit of the third
+      // runs. Let in, its splice pointed the first at the third just as the
+      // edit dropped what the third replaced: the first stayed hidden, with
+      // nothing pointing at it, for compaction to reclaim.
+      other.database.exec("PRAGMA busy_timeout = 50");
+      const write = store.putMemory.bind(store);
+      let cutIn: unknown = "not refused";
+      store.putMemory = (record) => {
+        try {
+          other.deleteMemory(second.id, "workspace");
+        } catch (error) {
+          cutIn = error;
+        }
+        write(record);
+      };
+      put({ id: third.id, value: "Use version three, alone" });
+      expect(String(cutIn)).toMatch(/locked|busy/i);
+      expect(store.getMemory(second.id)?.supersededBy).toBeUndefined();
+    } finally {
+      other.close();
+      store.close();
+      store = undefined;
+      rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
   });
 
   it("brings back what a deleted or edited-away correction replaced", () => {

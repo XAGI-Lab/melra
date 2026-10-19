@@ -109,7 +109,9 @@ All notable changes are documented here. The format follows
   replaced record used to stay hidden with nothing live pointing at it: it
   could not be read, edited or superseded, and compaction deleted it a
   `maxAgeDays` later. A correction that expires, or that `maxPerScope`
-  evicts, revives nothing, and `docs/INSTALLATION.md` says why. (#250)
+  evicts, revives nothing, and `docs/INSTALLATION.md` says why, and how far
+  back deleting corrections reaches once compaction has run. Edits and
+  deletes of one chain from two processes no longer interleave. (#250)
 
 - An `http` response past `maxResponseBytes` returns the body up to the cap.
   The chunk that crossed the cap was dropped whole, so a body that arrived in
