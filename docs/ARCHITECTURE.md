@@ -527,10 +527,11 @@ An unreachable provider did not say no, so nothing is concluded from silence.
 The same path runs on restart: `recoverInterrupted` reconciles a crashed
 mutation that declared how to settle one, and parks the rest.
 
-A workflow step parked this way moves at the run's next `advance`, in the same
-process: the advance reads the step's tasks again, as recovery does. Settled as
-applied, the step is done and what waits on it runs; settled as not applied, it
-failed, and the run fails and unwinds.
+A forward workflow step parked this way moves at the run's next `advance`, in
+the same process: the advance reads the step's tasks again, as recovery does.
+Settled as applied, the step is done and what waits on it runs; settled as not
+applied, it failed, and the run fails and unwinds. A parked compensation is
+covered under [Sagas](#sagas-across-providers).
 
 ## Sagas across providers
 
@@ -545,7 +546,9 @@ at a time, newest effect first, and the unwind stops at the first that does not
 reach `compensated` — refunding while the goods are still in transit is worse
 than stopping. A stalled unwind makes the run `recovery_required` with
 `workflow_compensation_incomplete:<node>` naming the missing inverse, and
-`advance` refuses to start new work on top of it.
+`advance` refuses to start new work on top of it. Once `melra_execute` settles
+that compensation as applied, the next `advance` marks it `compensated` and the
+unwind carries on; settled as not applied, the unwind stays stalled.
 
 A step denied before it runs starts the same unwind as a failed one. Neither
 starts while another step's outcome is unknown or unsettled (an effect that may

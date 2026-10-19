@@ -1683,6 +1683,63 @@ describe("WorkflowController execution", () => {
     expect(repaired.error).toBe("workflow_compensation_incomplete:undo-charge");
   });
 
+  it("repairs a run an earlier version failed before settling a step parked beside it", async () => {
+    const { calls, execute } = unknownBesideFailure();
+    const { controller, store, tasks } = await setup(execute, { unhinged: true });
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Charge, then ship and notify, both undone",
+        nodes: [
+          { id: "charge", type: "operation", request: call("Charge", `${PAYMENTS}/charges`) },
+          { id: "ship", type: "operation", dependsOn: ["charge"], request: call("Ship", `${LOGISTICS}/shipments`) },
+          { id: "notify", type: "operation", dependsOn: ["charge"], request: call("Notify", `${PAYMENTS}/notify`) },
+          { id: "undo-charge", type: "compensation", forNodeId: "charge", request: call("Refund", `${PAYMENTS}/refunds`) },
+          { id: "undo-ship", type: "compensation", forNodeId: "ship", request: call("Cancel", `${LOGISTICS}/cancellations`) },
+        ],
+      }),
+    );
+    const halted = await settle(controller, planned.id);
+    recordAsEarlierVersion(controller, halted.run, (draft, emit) => {
+      const state = { status: "skipped" as const, taskIds: [] };
+      emit("workflow.node_changed", { nodeId: "undo-ship", from: "pending", state });
+      draft.nodes["undo-ship"] = state;
+      emit("workflow.status_changed", { from: draft.status, to: "failed" });
+      draft.status = "failed";
+    });
+    // The shipment is reconciled as done before this version first advances
+    // the run. Settled first, it hid the repair and undo-ship stayed skipped.
+    const shipTask = tasks.status(halted.run.nodes.ship!.taskIds[0]!);
+    store.saveTask({ ...shipTask, status: "verified_success" });
+
+    await settle(controller, planned.id);
+    expect(calls.filter((call) => call.endsWith("/cancellations") || call.endsWith("/refunds"))).toEqual([
+      "logistics.example.test/cancellations",
+      "payments.example.test/refunds",
+    ]);
+  });
+
+  it("does not read every task when polled on a parallel node parked beside a settled branch", async () => {
+    const { controller, store } = await setup(
+      async (operation) => {
+        if (operation.kind === "http" && operation.url.endsWith("/shipments")) throw outcomeUnknown("socket hang up");
+        return { success: true };
+      },
+      { unhinged: true },
+    );
+    const planned = controller.plan(parallelSaga());
+    const parked = await settle(controller, planned.id);
+    expect(parked.run.nodes.fan?.status).toBe("recovery_required");
+
+    const everyTask = vi.spyOn(store, "listTasks");
+    await controller.advance(planned.id);
+    await controller.advance(planned.id);
+    expect(everyTask).not.toHaveBeenCalled();
+    everyTask.mockRestore();
+  });
+
   it("plans no compensation for a run cancelled while its advance was running", async () => {
     let shipping!: () => void;
     const started = new Promise<void>((resolve) => {

@@ -688,15 +688,17 @@ export class WorkflowController {
     const parked = definition.nodes.filter((node) => {
       const state = run.nodes[node.id];
       if (state?.status !== "recovery_required") return false;
-      // Read again only once one of its tasks has moved: a harness polls a
-      // parked run, and reading every task each time is not free.
-      return (
-        state.taskIds.length === 0 ||
-        state.taskIds.some((taskId) => {
-          const task = this.store.getTask(taskId);
-          return task === undefined || !["recovery_required", "running", "verifying"].includes(task.status);
-        })
-      );
+      // Only an earlier version fails a run beside a parked forward step, and
+      // advance repairs that run first, as recovery leaves it alone.
+      if (run.status === "failed" && node.type !== "compensation") return false;
+      // Read again only once its recorded tasks would move it: a harness polls
+      // a parked run, and reading every task each time is not free. A parallel
+      // branch that settled beside one still unknown moves nothing.
+      if (state.taskIds.length === 0) return true;
+      const recorded = state.taskIds.map((taskId) => this.store.getTask(taskId));
+      if (recorded.some((task) => task === undefined)) return true;
+      if (recorded.some((task) => ["running", "verifying"].includes(task!.status))) return false;
+      return recoveredNodeState(node, recorded as TaskRecord[], state).status !== "recovery_required";
     });
     if (parked.length === 0) return run;
     const allTasks = this.store.listTasks(100_000);
