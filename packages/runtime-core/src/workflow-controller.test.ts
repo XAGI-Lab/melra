@@ -1289,6 +1289,61 @@ describe("WorkflowController execution", () => {
     expect(calls.filter((call) => call.endsWith("/refunds"))).toHaveLength(1);
   });
 
+  it("records what a parallel node's other branches did before reporting one branch's refusal", async () => {
+    const calls: string[] = [];
+    const { controller, store } = await setup(async (operation) => {
+      if (operation.kind !== "http") throw new Error("unexpected_operation");
+      const url = new URL(operation.url);
+      calls.push(`${url.host}${url.pathname}`);
+      if (url.pathname === "/shipments") {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        throw outcomeUnknown("socket hang up");
+      }
+      return { success: url.pathname !== "/notify" };
+    });
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Charge, then pack and ship in parallel, and notify",
+        nodes: [
+          { id: "charge", type: "operation", request: call("Charge", `${PAYMENTS}/charges`) },
+          {
+            id: "fan",
+            type: "parallel",
+            dependsOn: ["charge"],
+            branches: [[call("Pack", `${LOGISTICS}/packs`)], [call("Ship", `${LOGISTICS}/shipments`)]],
+          },
+          { id: "notify", type: "operation", dependsOn: ["charge"], request: call("Notify", `${PAYMENTS}/notify`) },
+          { id: "undo-charge", type: "compensation", forNodeId: "charge", request: call("Refund", `${PAYMENTS}/refunds`) },
+        ],
+      }),
+    );
+    const answer = (path: string, phrase?: string) => {
+      const task = store
+        .listTasks(100, "awaiting_approval")
+        .find((candidate) => candidate.request.operation.kind === "http" && candidate.request.operation.url.endsWith(path))!;
+      return { approvalId: task.approval!.approvalId, phrase: phrase ?? task.approval!.phrase! };
+    };
+    await controller.advance(planned.id);
+    await controller.advance(planned.id, [answer("/charges")]);
+    await controller.advance(planned.id);
+    // The pack's phrase is wrong; the shipment runs, and its reply is lost.
+    await expect(
+      controller.advance(planned.id, [answer("/packs", "APPROVE 000000000000"), answer("/shipments"), answer("/notify")]),
+    ).rejects.toThrow("approval_phrase_mismatch");
+    expect(calls).toContain("logistics.example.test/shipments");
+
+    // Rejected at the pack's throw, the node was recorded unchanged and the
+    // notice's failure refunded the charge past a shipment that may stand.
+    const run = controller.status(planned.id);
+    expect(run.nodes.fan?.status).toBe("recovery_required");
+    expect(run.status).toBe("recovery_required");
+    await settle(controller, planned.id);
+    expect(calls).not.toContain("payments.example.test/refunds");
+  });
+
   it("starts no further step on a run halted beside a failure", async () => {
     const { calls, execute } = unknownBesideFailure();
     const { controller } = await setup(execute);

@@ -120,7 +120,9 @@ All notable changes are documented here. The format follows
   declares none leaves `workflow cancel` as the way out. It used to refund a charge whose
   shipment might be in transit, and skip the compensation of a step that went
   on to verify. This holds for sibling steps and for branches of one
-  `parallel` node, live and after a restart. A run an earlier version left
+  `parallel` node, live and after a restart; a branch refused for a wrong
+  approval no longer reports before the others finish, which left the node
+  recorded as it was and let the unwind start. A run an earlier version left
   `failed` beside such a step, including a `parallel` node it recorded as
   failed, is halted the same way at its next advance. The unknown step's
   compensation, which that unwind skipped, is offered again, also when the step
