@@ -153,6 +153,43 @@ describe("verification through a channel that did not act", () => {
     expect((await gone.verify([predicate()], created)).evidence[0]?.inconclusive).toBeUndefined();
   });
 
+  it("reads a body cut at the size cap as no answer, not as no", async () => {
+    // 200, but the JSON stops partway: the state may be past the cut, and a
+    // cut body is not parsed at all.
+    const verifier = await Verifier.create(root, {
+      probe: async () => ({ success: true, status: 200, content: '{"padding":"xxxx', bytes: 16, truncated: true }),
+    });
+    const { verified, evidence } = await verifier.verify([predicate()], created);
+    expect(verified).toBe(false);
+    expect(evidence[0]).toMatchObject({ passed: false, inconclusive: true });
+    // The status arrived whole, so a miss on it is still the provider's word.
+    const byStatus = await verifier.verify([predicate({ path: "status", value: 404 })], created);
+    expect(byStatus.evidence[0]?.inconclusive).toBeUndefined();
+    const itemFor = async (path: string, value: unknown) =>
+      (await verifier.verify([predicate({ path, value })], created)).evidence[0];
+    // The body is longer than what arrived: it may be this size, or this text
+    // (20 bytes in 10 characters), past the cut.
+    expect(await itemFor("bytes", 5_242_880)).toMatchObject({ passed: false, inconclusive: true });
+    expect(await itemFor("content", "é".repeat(10))).toMatchObject({ passed: false, inconclusive: true });
+    // But it is not what arrived, nor anything that fits in it: those are
+    // answers, even where they equal the cut-off part exactly.
+    for (const [path, value] of [
+      ["bytes", 16],
+      ["bytes", 8],
+      ["content", '{"padding":"xxxx'],
+      ["content", "done"],
+    ] as const) {
+      const item = await itemFor(path, value);
+      expect(item, `${path} ${value}`).toMatchObject({ passed: false });
+      expect(item?.inconclusive, `${path} ${value}`).toBeUndefined();
+    }
+    // A cut 404 is still the provider saying it is not there.
+    const gone = await Verifier.create(root, {
+      probe: async () => ({ success: false, status: 404, content: '{"padding":"xxxx', bytes: 16, truncated: true }),
+    });
+    expect((await gone.verify([predicate()], created)).evidence[0]?.inconclusive).toBeUndefined();
+  });
+
   it("does not call a value mismatch inconclusive", async () => {
     const verifier = await Verifier.create(root, {
       probe: probeReturning({ state: "pending" }),

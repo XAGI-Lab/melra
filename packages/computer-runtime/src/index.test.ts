@@ -1,6 +1,9 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ComputerOperationSchema, type ComputerOperation } from "@melra/protocol";
 import {
@@ -238,6 +241,101 @@ describe("an input helper stopped mid-run", () => {
     await expect(clicking).rejects.toThrow("effect_outcome_unknown:task_cancelled");
     // Cancelled before anything ran, nothing could have landed.
     await expect(runtime.execute(act("click", { x: 0.5, y: 0.5 }), controller.signal)).rejects.toThrow(/^task_cancelled$/);
+  });
+});
+
+// A shell script stands in for tesseract, so these need a POSIX shell.
+describe.skipIf(process.platform === "win32")("reading the screen when no tree came back", () => {
+  const TSV = [
+    "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext",
+    "1\t1\t0\t0\t0\t0\t0\t0\t200\t100\t-1\t",
+    "5\t1\t1\t1\t1\t1\t10\t10\t40\t12\t96.5\tSave",
+  ].join("\n");
+
+  /** Reports no tree, and writes each screenshot where a real adapter does. */
+  class BlindAdapter extends TestAdapter {
+    constructor(
+      private readonly directory: string,
+      private readonly capture: "ok" | "fails" = "ok",
+      ocr = true,
+    ) {
+      super({ elements: false, ocr });
+    }
+
+    override async execute(operation: ComputerOperation): Promise<Record<string, unknown>> {
+      await super.execute(operation);
+      if (operation.action === "inspect") {
+        return { success: true, action: "inspect", application: "Finder", displayWidth: 100 };
+      }
+      if (this.capture === "fails") throw new Error("computer_helper_failed: screen recording denied");
+      const path = join(this.directory, "computer-capture.png");
+      writeFileSync(path, "png");
+      return { success: true, action: "screenshot", path };
+    }
+  }
+
+  const scenario = (ocr: string, capture: "ok" | "fails" = "ok") => {
+    const root = mkdtempSync(join(tmpdir(), "melra-ocr-"));
+    const directory = join(root, "artifacts");
+    mkdirSync(directory);
+    const program = join(root, "tesseract");
+    writeFileSync(program, `#!/bin/sh\n${ocr}\n`, { mode: 0o755 });
+    const runtime = new ComputerRuntime({
+      artifactDirectory: directory,
+      adapter: new BlindAdapter(directory, capture),
+      ocrProgram: program,
+    });
+    const inspect = () =>
+      runtime.execute(ComputerOperationSchema.parse({ kind: "computer", action: "inspect" }));
+    const click = () =>
+      runtime.execute(ComputerOperationSchema.parse({ kind: "computer", action: "click", target: { name: "Save" } }));
+    return { directory, inspect, click, done: () => rmSync(root, { recursive: true, force: true }) };
+  };
+
+  it("reads the words and keeps no screenshot", async () => {
+    const { directory, inspect, done } = scenario(`printf '${TSV}'`);
+    try {
+      const observed = (await inspect()) as { elements?: DesktopElement[] };
+      expect(observed.elements?.map(({ name }) => name)).toEqual(["Save"]);
+      expect(readdirSync(directory)).toEqual([]);
+    } finally {
+      done();
+    }
+  });
+
+  it("returns the observation, and no screenshot, when the reading fails", async () => {
+    for (const [ocr, capture] of [["exit 1", "ok"], [`printf '${TSV}'`, "fails"]] as const) {
+      const { directory, inspect, click, done } = scenario(ocr, capture);
+      try {
+        const observed = await inspect();
+        expect(observed, `${ocr} / ${capture}`).toMatchObject({ application: "Finder", displayWidth: 100 });
+        expect(observed).not.toHaveProperty("elements");
+        expect(readdirSync(directory)).toEqual([]);
+        // A target has nothing to fall back on: it reports why the reading
+        // failed, not a bare computer_elements_unavailable.
+        await expect(click(), `${ocr} / ${capture}`).rejects.toThrow(/computer_helper_failed|screen recording denied/);
+      } finally {
+        done();
+      }
+    }
+  });
+
+  it("reads the screen with an OCR program outside tesseract's usual paths", async () => {
+    // The adapter reports no OCR, as the real ones do when tesseract is not
+    // where they look; naming the program is what makes it available.
+    const directory = mkdtempSync(join(tmpdir(), "melra-ocr-"));
+    const program = join(directory, "ocr");
+    writeFileSync(program, `#!/bin/sh\nprintf '${TSV}'\n`, { mode: 0o755 });
+    const adapter = new BlindAdapter(directory, "ok", false);
+    try {
+      const runtime = new ComputerRuntime({ artifactDirectory: directory, adapter, ocrProgram: program });
+      const observed = (await runtime.execute(
+        ComputerOperationSchema.parse({ kind: "computer", action: "inspect" }),
+      )) as { elements?: DesktopElement[] };
+      expect(observed.elements?.map(({ name }) => name)).toEqual(["Save"]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });
 

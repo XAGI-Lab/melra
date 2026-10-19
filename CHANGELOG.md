@@ -8,6 +8,11 @@ All notable changes are documented here. The format follows
 
 ### Added
 
+- `ComputerRuntimeOptions.ocrProgram` names the OCR program for a library
+  embedder whose `tesseract` is outside its usual install paths; naming it
+  makes reading the screen available wherever screenshots are. The server and
+  CLI do not set it. (#251)
+
 - Each GitHub release attaches the single executable (Node inside, no Node
   install needed) for linux-x64, linux-arm64, darwin-arm64 and win-x64, built
   and smoke-tested by the same workflow every pull request runs, and covered by
@@ -106,6 +111,40 @@ All notable changes are documented here. The format follows
   by its timeout, or by a cancel while it runs, is an unknown outcome too.
   Reads, screenshots and target resolution are unchanged. A timed-out `run`
   no longer returns a result with `timedOut: true`. (#248)
+
+- An `http` response past `maxResponseBytes` returns the body up to the cap.
+  The chunk that crossed the cap was dropped whole, so a body that arrived in
+  one read (anything up to tens of KB) came back empty, and `bytes` counted
+  the dropped chunk; it now counts the bytes delivered. An
+  `http_resource_matches` read that misses on a path into a 2xx body cut at
+  the cap (`json.*`, or a `bytes` or `content` larger than what arrived) is
+  inconclusive, not a "did not match": as reconciliation it leaves the task
+  `recovery_required` instead of `failed`, and as evidence the item is marked
+  inconclusive. A cut body never matches an exact `bytes` or `content`,
+  whether in `http_resource_matches` or in `result_equals` on the adapter's
+  own result, since the whole body is longer than what arrived. A miss on the
+  status or a header is still the provider's answer. (#249)
+
+- The screen reading that `inspect` falls back to when no element tree came
+  back deletes its screenshot once `tesseract` has read it. Each such
+  `inspect`, and each `click`, `move` or `drag` given a `target`, used to leave
+  a full-screen capture in `<MELRA_HOME>/artifacts` that no result named. A
+  reading that fails no longer fails the `inspect`: it returns what the adapter
+  observed, without `elements`, as on a host without `tesseract`. A `target`
+  still fails with the reason the reading failed. (#251)
+
+- `docs/COMPATIBILITY.md` names MCP Python SDK `1.30.x`, the version `sdk-py`
+  pins and tests, not `1.28.x`. `pnpm check` now fails when either SDK line
+  stops naming the pinned version. (#286)
+
+- The TypeScript SDK's `execute()` and `advanceWorkflow()` wait up to 36
+  minutes for the server, past a task's budget and its built-in evidence
+  reads, instead of the MCP client's 60 s default. A task that
+  ran longer than a minute was reported to the caller as `Request timed out`
+  while the server went on and verified it, and a caller that took that as a
+  failure could run it again. `MelraClient.connect({ runTimeoutMs })` sets the
+  limit, and refuses a value that is not a whole number of milliseconds from 1
+  to 2147483647. (#256)
 
 - `send` to an interactive terminal job whose program has closed its stdin is
   refused as `terminal_job_stdin_closed`. Every send after the failed write
