@@ -313,14 +313,19 @@ its path:
 ```text
 melra: policy_invalid: /home/you/.melra/policy.json: allowedComands: unknown key
 melra: policy_invalid: /home/you/.melra/policy.json: unhinged: Invalid input: expected boolean, received string
+melra: policy_invalid: /home/you/.melra/policy.json: not valid JSON at line 3 column 1
 ```
+
+A file that is not JSON is named by line and column only, never by the text
+there, so the message is safe to paste into a bug report.
 
 The keys are `version`, `workspaceRoot`, `allowedCommands`, `allowedDomains`,
 `allowLocalhost`, `popups`, `mutations`, `approvalTtlMs`, `maxFileBytes`,
 `memoryRetention`, `deniedTraits`, `capabilities`, `credentials`,
 `circuitBreaker`, `unhinged` and `mode`; there is no comment or `$schema`
-key. `melra doctor` fails its `policy` check with the same message, and
-`melra policy test` prints it.
+key. `melra doctor` fails its `policy` check with the same message, `melra
+policy test` prints it, and `melra status` and `melra tasks` report it
+(`policyError` in their JSON).
 
 The generated policy allows any public browser destination
 (`allowedDomains: ["*"]`) and localhost, so browsing works without editing

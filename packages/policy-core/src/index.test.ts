@@ -124,6 +124,50 @@ describe("policy file", () => {
     );
   });
 
+  it("lists a bad approval window with the file's other problems, naming the file", async () => {
+    // It was checked ahead of the schema: the window alone, and no file named.
+    await expect(load({ approvalTtlMs: 0, bogus: 1 })).rejects.toThrow(
+      new Error(
+        `policy_invalid: ${file()}: approvalTtlMs: policy_approval_ttl_invalid: must be a whole number of milliseconds from 1 to 86400000 (24 hours); bogus: unknown key`,
+      ),
+    );
+  });
+
+  it("brackets a key that is not an identifier, and says what a credential source is", async () => {
+    const credential = { source: { env: "T" }, inject: { header: "A" }, hosts: ["h"], capability: "*" };
+    const source = 'expected {"env": ...} or {"file": ...}';
+    const cases: Array<[unknown, string]> = [
+      [{ credentials: { "a.b": { ...credential, inject: { header: "A", extra: 1 } } } }, 'credentials["a.b"].inject.extra: unknown key'],
+      [{ credentials: { "": credential } }, 'credentials[""]: '],
+      [{ "allowed-commands": [] }, '["allowed-commands"]: unknown key'],
+      [{ credentials: { gh: { ...credential, source: { envv: "T" } } } }, `credentials.gh.source: ${source}`],
+      [{ credentials: { gh: { ...credential, source: "T" } } }, `credentials.gh.source: ${source}`],
+    ];
+    for (const [policy, at] of cases) {
+      await expect(load(policy), at).rejects.toThrow(`policy_invalid: ${file()}: ${at}`);
+    }
+  });
+
+  it("says where a file stops being JSON, never what it says there", async () => {
+    const refusal = async (text: string) => {
+      await writeFile(file(), text);
+      return loadPolicy(file(), directory).then(
+        () => "loaded",
+        (error: Error) => error.message,
+      );
+    };
+    // V8 quotes the text around a bad token, a bare secret included.
+    const token = `ghp_${"a1B2c3D4".repeat(4)}e5F6`;
+    const secret = await refusal(`{"credentials": {"gh": ${token}}}`);
+    expect(secret).toMatch(/: not valid JSON( at line \d+ column \d+)?$/);
+    expect(secret.startsWith(`policy_invalid: ${file()}: `)).toBe(true);
+    expect(secret).not.toContain("ghp_");
+    // Where V8 gives a position, it is the line and column, counted from 1.
+    expect(await refusal('{\n  "allowedCommands": ["git"],\n}')).toBe(
+      `policy_invalid: ${file()}: not valid JSON at line 3 column 1`,
+    );
+  });
+
   it("loads every committed example policy, and the one init writes", async () => {
     const examples = fileURLToPath(new URL("../../../examples/", import.meta.url));
     const found = (await readdir(examples, { recursive: true }))

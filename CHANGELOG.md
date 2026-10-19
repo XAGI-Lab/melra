@@ -462,25 +462,40 @@ All notable changes are documented here. The format follows
 
 - **Breaking:** the policy file is read strictly, against `PolicyFileSchema`
   in `@melra/protocol`. A key MELRA does not know, at any depth
-  (`"allowedComands"`, `memoryRetention.maxAge`, a misspelt field in a grant
-  or credential), or a value of the wrong type (`"allowedCommands": "git"`,
-  `"maxFileBytes": "10mb"`, `"mutations": "Deny"`, an unknown trait in
-  `deniedTraits`) now stops the server from starting, with every problem
-  named by its path: `policy_invalid: /home/you/.melra/policy.json:
-  allowedComands: unknown key`. Before, an unknown key was dropped for the
-  default the operator meant to replace, and a wrong type reached policy as
-  written: `"unhinged": "false"` and `"allowLocalhost": "false"` are truthy
-  strings, so the first switched the guardrails off and the second let
-  localhost through, and `"mutations": "Deny"` still asked for approval
-  instead of refusing. A file that loaded with a stray key now refuses to
-  start, so it is breaking; it is listed here because every file it refuses
-  was being read more permissively than it said. A mode typo in the file
-  reads `policy_invalid: <file>: mode: deployment_mode_unknown`, so it is not
-  blamed on `MELRA_MODE`, and a file that is not JSON names itself the same
-  way. `approvalTtlMs` keeps `policy_approval_ttl_invalid`. Every policy a
-  release's `melra init` or `melra setup` wrote still loads, and there is no
-  comment or `$schema` key. `melra doctor` fails its `policy` check with the
-  message, and `melra policy test` prints it.
+  (`"allowedComands"`, `memoryRetention.maxAge`), or a value of the wrong type
+  (`"allowedCommands": "git"`, `"maxFileBytes": "10mb"`, `"mutations": "Deny"`,
+  an unknown trait in `deniedTraits`) now stops the server from starting, with
+  every problem named by its path: `policy_invalid:
+  /home/you/.melra/policy.json: allowedComands: unknown key`. Before, an
+  unknown key was dropped for the default the operator meant to replace, and a
+  wrong type reached policy as written. Some of those files were read more
+  permissively than they said: `"unhinged": "false"` and `"allowLocalhost":
+  "false"` are truthy strings, so the first switched the guardrails off and the
+  second let localhost through; `"mutations": "Deny"` still asked for approval
+  instead of refusing; `"mdoe": "enforced"` left the machine in developer mode.
+  Others were harmless and are refused all the same, which is why this is
+  breaking: a `"comment"` or `"$schema"` key (MELRA defines neither), and `null` as
+  "use the default". `"mode"`, `"allowedCommands"`, `"allowedDomains"`,
+  `"deniedTraits"`, `"memoryRetention"` and `"circuitBreaker"` set to `null`
+  used to load as the defaults and now refuse (`mode: Invalid input: expected
+  string, received null`); leave the key out instead. A misspelt field in a
+  grant or credential was already refused; only its message changed, from
+  zod's raw JSON to the same one line. A key that is not an identifier is
+  bracketed (`credentials["stripe-test"].inject.extra: unknown key`), and a
+  credential `source` of neither shape says `expected {"env": ...} or {"file":
+  ...}`. A mode typo reads `policy_invalid: <file>: mode:
+  deployment_mode_unknown`, so it is not blamed on `MELRA_MODE`. A bad
+  `approvalTtlMs` is listed with the file's other problems, as `approvalTtlMs:
+  policy_approval_ttl_invalid: must be a whole number of milliseconds from 1 to
+  86400000 (24 hours)` after `policy_invalid: <file>:`, rather than leading the
+  message alone. A file that is not JSON says only where (`policy_invalid:
+  <file>: not valid JSON at line 3 column 1`, or no position on a Node that
+  gives none), never the text there, which V8 quoted and which could be a
+  token. Every policy a release's `melra init` or `melra setup` wrote still
+  loads. `melra doctor` fails its `policy` check with the message, `melra
+  policy test` prints it, and `melra tasks --json` gives it as `policyError`,
+  as `melra status` does, rather than counting approvals by the defaults
+  without a word.
 
 - An authorization code issued to an OAuth client before `melra clients
   --revoke` can no longer be redeemed after it. The revoke runs in another
