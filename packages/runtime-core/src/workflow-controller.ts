@@ -806,20 +806,30 @@ export class WorkflowController {
     for (const key of other) {
       const commit = this.store.getIdempotencyCommit(key);
       if (commit !== undefined) conflicting.add(commit.taskId);
-      for (const listed of allTasks.filter((task) => task.idempotencyKey === key)) {
-        // Read again: the listing can predate an approver starting it.
-        let task = this.tasks.status(listed.id);
-        if (task.status === "planned" || task.status === "awaiting_approval") {
-          this.tasks.cancel(task.id);
-          task = this.tasks.status(task.id);
-        }
-        if (!hadNoEffect(task)) conflicting.add(task.id);
-      }
+    }
+    for (const task of this.cancelChallenges(other, allTasks)) {
+      if (!hadNoEffect(task)) conflicting.add(task.id);
     }
     return conflicting.size === 0
       ? undefined
       : // Sorted, so reading it again in another order records nothing new.
         { status: "recovery_required", taskIds: [...conflicting].sort(), error: BRANCH_CONFLICT };
+  }
+
+  /**
+   * Every task under these keys, read again, with each challenge among them
+   * cancelled and the cancel read back, so nobody approves it later.
+   */
+  private cancelChallenges(keys: string[], allTasks: TaskRecord[]): TaskRecord[] {
+    return allTasks
+      .filter((task) => task.idempotencyKey !== undefined && keys.includes(task.idempotencyKey))
+      .map((listed) => {
+        // Read again: the listing can predate an approver starting it.
+        const task = this.tasks.status(listed.id);
+        if (task.status !== "planned" && task.status !== "awaiting_approval") return task;
+        this.tasks.cancel(task.id);
+        return this.tasks.status(task.id);
+      });
   }
 
   /**
@@ -1026,6 +1036,15 @@ export class WorkflowController {
       current.status === "cancelled"
     ) {
       return current;
+    }
+    // A challenge a lost advance left on a condition is in no node's taskIds:
+    // adopted, the condition would follow its branch without asking (#268).
+    const definition = this.loadDefinition(current);
+    let allTasks: TaskRecord[] | undefined;
+    for (const node of definition.nodes) {
+      if (node.type !== "condition") continue;
+      allTasks ??= this.store.listTasks(100_000);
+      this.cancelChallenges(expectedTaskKeys(current.id, node, definition), allTasks);
     }
     return this.transition(current, (draft, emit) => {
       for (const [nodeId, node] of Object.entries(draft.nodes)) {

@@ -551,6 +551,27 @@ describe("a condition's branch not taken (#268)", () => {
     expect(run.status).toBe("verified_complete");
     expect(done).toEqual(["create", "after"]);
   });
+
+  it("cancels with the run a challenge a lost advance left on a condition a restart left undecided", async () => {
+    const { controller, root, store, tasks, cipher, done } = await setup();
+    await writeFile(join(root, "flag"), "on");
+    const planned = controller.plan(choice([put("ship")], [put("other")]));
+    await controller.advance(planned.id);
+    const challenge = await losingCommit(controller, tasks, planned.id);
+    expect(challenge.status).toBe("awaiting_approval");
+
+    const restarted = new WorkflowController(store, tasks, cipher);
+    await restarted.recoverInterrupted();
+    // Not the condition's: adopted, it would follow ship's branch unasked.
+    expect(restarted.status(planned.id).nodes.choose).toMatchObject({ status: "pending", taskIds: [] });
+    expect(restarted.cancel(planned.id).status).toBe("cancelled");
+    // Left approvable, approving it ran ship on a cancelled run.
+    expect(tasks.status(challenge.id).status).toBe("cancelled");
+    await expect(
+      tasks.execute(challenge.id, { approvalId: challenge.approval!.approvalId, phrase: challenge.approval!.phrase! }),
+    ).rejects.toThrow("task_not_executable:cancelled");
+    expect(done).toEqual([]);
+  });
 });
 
 describe("a condition step a lost advance left unknown (#270)", () => {

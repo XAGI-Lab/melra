@@ -120,8 +120,9 @@ All notable changes are documented here. The format follows
   recorded done with no task took its empty branch), and only then the
   predicate. At recovery and at the advance that decides, the other branch's
   tasks still planned or waiting for approval are cancelled, and each cancel
-  is read back. A task there that may have had an effect, or one started
-  before its cancel landed, halts the run as `recovery_required` with
+  is read back, as `workflow cancel` does for a condition not yet decided.
+  A task there that may have had an effect, or one started before its cancel
+  landed, halts the run as `recovery_required` with
   `workflow_condition_branch_conflict:<node>` instead of running the other
   branch beside it. A task there that did not happen (its adapter reported it
   failed, it ran out of budget, it was cancelled or refused by policy, or it
