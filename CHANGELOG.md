@@ -144,6 +144,22 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- A workflow advance that lost its lease starts no further step. This happens
+  when the advance stalls past the lease, as across a laptop's sleep or a long
+  pause, and another process recovers the run and takes it over. The advance
+  now renews its lease before it plans each step of a sequence, loop
+  iteration, condition or parallel branch, or compensation, and before it
+  commits; when the lease has been taken it fails with `workflow_lease_lost`
+  and commits nothing. Before, it carried on and ran that step's effect a
+  second time beside the process that took over, and found out only at its
+  final commit (`workflow_state_conflict`). A lease that lapsed but that nobody
+  has taken yet is renewed there and kept, so a takeover landing after that
+  check is refused rather than running the step as well. A step already
+  running is not interrupted. A renewal the database was too busy for still
+  does not count as losing the lease between steps (#304); one just before a
+  step fails the advance with that error rather than start the step. Advance
+  the run again to carry on from wherever the other process left it. (#309)
+
 - An absolute path spelled through the workspace root as configured is
   accepted when a symlink or junction lies in the root, as with macOS's
   `/tmp` and `/var/folders`, a symlinked project directory or a Windows 8.3
