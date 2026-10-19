@@ -142,12 +142,14 @@ function expiredHints({ expired, expiredSteps }: ApprovalCounts): string[] {
     ...(expired > 0
       ? [`${expired} whose approval expired — plan again, or clear with \`melra approve <task-id> --deny\``]
       : []),
-    // Not a deny: on a run that can go on, the next advance asks again, and a
-    // deny would fail the run or stall its unwind. Whether it can go on is
-    // the run's to say, so the hint points there rather than guess.
+    // Not a deny first: on a run that can go on, the next advance asks again,
+    // and a deny would fail the run or stall its unwind. Whether it can go on
+    // is the run's to say, so the hint points there rather than guess; a
+    // challenge no run names (a lost commit) may be a leftover of one that is
+    // over, which only a deny clears.
     ...(expiredSteps > 0
       ? [
-          `${expiredSteps} workflow step(s) whose approval expired — \`melra workflow inspect <workflow-id>\` shows the run; its next advance asks again where it can go on`,
+          `${expiredSteps} workflow step(s) whose approval expired — \`melra workflow inspect <workflow-id>\` shows the run; its next advance asks again where it can go on, and on a run that is over \`melra approve <task-id> --deny\` clears it`,
         ]
       : []),
   ];
@@ -166,7 +168,10 @@ interface ApprovalCounts {
  * Whether an expired task is a step its run's next advance asks again. Only a
  * workflow plans under an idempotency key; a run that is over never advances,
  * and of the attempts under one key the runtime, and the recovery every CLI
- * process runs at start, take the one `preferredTask` picks.
+ * process runs at start, take the one `preferredTask` picks. A key no run
+ * names (its plan's commit lost) is counted as a step: denied, it fails a run
+ * that can go on, and its hint says how a leftover of a run that is over is
+ * cleared.
  */
 function stepJudge(store: SqliteStore, runs: () => WorkflowRun[]): (task: TaskRecord) => boolean {
   let over: Set<string> | undefined;

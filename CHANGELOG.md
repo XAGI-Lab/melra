@@ -121,7 +121,9 @@ All notable changes are documented here. The format follows
   pointed at `melra approve`, which refused it. An expired step of a workflow
   run that is not over is counted on its own and pointed at `melra workflow
   inspect`, since the run's next advance asks again where it can go on and a
-  deny would fail the run or stall its unwind. A task
+  deny would fail the run or stall its unwind; a challenge no run names, left
+  by a lost commit, is counted with them, and its hint says a leftover of a
+  run that is over is cleared with a deny. A task
   approved in time and not yet run counts as neither, since its agent can
   still run it, and in enforced mode a task answered in band is no longer
   counted as waiting for an answer it cannot take. `status --json` adds
