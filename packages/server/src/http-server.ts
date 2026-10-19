@@ -22,6 +22,7 @@ import type { MelraRuntime } from "./runtime.js";
 import { approvalSummary, printable } from "./approval-screen.js";
 import { consolePage, consoleSecurityHeaders } from "./console-page.js";
 import { clientPrincipal, CONSENT_HEADERS, OAuthProvider, requestOf } from "./oauth.js";
+import { hold } from "./session-hold.js";
 
 export const DEFAULT_HTTP_PORT = 7457;
 
@@ -721,10 +722,7 @@ export async function serveHttp(
       }
       sessions.delete(sessionId);
       sessions.set(sessionId, existing);
-      existing.busy += 1;
-      response.once("close", () => {
-        existing.busy -= 1;
-      });
+      hold(existing, request, response);
       await existing.transport.handleRequest(request, response);
       return;
     }
@@ -744,10 +742,8 @@ export async function serveHttp(
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
       onsessioninitialized: (id) => {
-        const session = { transport, client: callerRef(client), busy: 1 };
-        response.once("close", () => {
-          session.busy -= 1;
-        });
+        const session = { transport, client: callerRef(client), busy: 0 };
+        hold(session, request, response);
         sessions.set(id, session);
         // Back down to the cap, not one at a time: after a burst of busy
         // sessions it would otherwise stay at its peak. A busy one is a client
