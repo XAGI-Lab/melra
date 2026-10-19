@@ -194,10 +194,11 @@ every install path, environment variable, and the hardened Docker invocation.
 </details>
 
 > [!CAUTION]
-> The **unscoped** npm package `melra` and the PyPI package `melra` are **unrelated
-> third-party projects**. This project publishes only under the `@melra/` npm scope:
-> `@melra/cli` is the CLI. Install from that scope, from this repository, or from the
-> official [releases](https://github.com/XAGI-Lab/melra/releases).
+> This project publishes only under the `@melra/` npm scope (`@melra/cli` is the CLI)
+> and on its [releases](https://github.com/XAGI-Lab/melra/releases), where the Python
+> SDK's wheel is. An **unscoped** npm package `melra` or a PyPI package `melra` is
+> **not this project's**. Install from that scope, from this repository, or from the
+> releases.
 
 If MELRA helps, [star the repository](https://github.com/XAGI-Lab/melra) so other
 agent builders can find it. Trying it in Cursor or another client? Share the client
