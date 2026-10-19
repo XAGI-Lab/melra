@@ -281,8 +281,11 @@ export async function createMelraRuntime(
   // What this process holds open or locked. A workspace can contain the data
   // directory (`serve` started from home), and an adapter opening and closing
   // one of these would drop this process's POSIX locks on it: SQLite's on the
-  // database, or the one other processes read this one's liveness from.
+  // database, or the one other processes read this one's liveness from. The
+  // data directory as a whole too: it also holds the key, the files a later
+  // start reads its policy and clients from, and the artifacts.
   const reserved = [
+    dataDirectory,
     ...["", "-wal", "-shm", "-journal", "-owners"].map((suffix) => `${store.path}${suffix}`),
     join(dataDirectory, "payload.key"),
   ];
@@ -314,6 +317,7 @@ export async function createMelraRuntime(
     allowLocalhost: policy.allowLocalhost,
     popups: policy.popups,
     unhinged,
+    reserved: (path) => files.isReserved(path),
     ...(options.browserExecutablePath === undefined
       ? {}
       : { executablePath: options.browserExecutablePath }),

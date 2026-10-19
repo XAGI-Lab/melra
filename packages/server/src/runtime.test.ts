@@ -420,6 +420,15 @@ describe("terminal arguments", () => {
         environment: { MELRA_MODE: "enforced" },
       }),
     ).rejects.toThrow(/enforced_mode_refuses_data_inside_workspace/);
+    if (process.platform === "darwin") {
+      // The data volume mounted whole holds it too, through no `..` from it.
+      for (const workspaceRoot of ["/System/Volumes/Data", "/System"]) {
+        await expect(
+          createMelraRuntime({ workspaceRoot, dataDirectory: data, environment: { MELRA_MODE: "enforced" } }),
+          workspaceRoot,
+        ).rejects.toThrow(/enforced_mode_refuses_data_inside_workspace/);
+      }
+    }
     // Developer mode starts, and the workspace itself is still usable: refusing
     // the directories above the data would refuse every command there.
     runtime = await createMelraRuntime({ workspaceRoot: base, dataDirectory: join(base, ".melra"), environment: {} });

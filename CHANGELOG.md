@@ -540,6 +540,18 @@ All notable changes are documented here. The format follows
 
 ### Security
 
+- MELRA's data directory is reserved as a whole, by every adapter and by
+  verification, in every mode. A file effect can no longer write into it, or
+  move, replace or remove it or any directory that holds it (`path_reserved`);
+  files there, artifacts included, are no longer read through the file
+  adapter either. The browser no longer uploads reserved files or loads them
+  through a `file:` URL, which only `--unsafe-local` allows
+  (`browser_path_reserved`). `file_exists`, `file_absent` and registered
+  verifiers get no answer about a reserved path, whether or not it exists
+  (`verification_path_reserved`). On macOS, enforced mode now also recognises
+  a workspace that holds the data directory through the data volume, and
+  refuses to start there.
+
 - **Breaking:** the policy file is read strictly, against `PolicyFileSchema`
   in `@melra/protocol`. A key MELRA does not know, at any depth
   (`"allowedComands"`, `memoryRetention.maxAge`), or a value of the wrong type

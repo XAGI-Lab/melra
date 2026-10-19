@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { createReadStream, type BigIntStats } from "node:fs";
 import { lstat, readdir, realpath, stat } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
-import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { EvidencePredicate } from "@melra/protocol";
 import { evidenceStrength, type EvidenceItem } from "@melra/receipt-schema";
 
@@ -545,7 +545,11 @@ export class Verifier {
   private async filePath(input: string): Promise<string> {
     const candidate = this.spelled(input);
     if (candidate === undefined) throw new Refusal("verification_path_outside_workspace");
-    const actual = await realpath(candidate);
+    const actual = await realpath(candidate).catch(async (error: unknown) => {
+      // Not there is an answer, and none is given about a reserved name.
+      if ((await this.reserved?.(candidate)) === true) throw new Refusal("verification_path_reserved");
+      throw error;
+    });
     if (!inside(this.root, actual)) {
       throw new Refusal("verification_path_outside_workspace");
     }
@@ -564,6 +568,10 @@ export class Verifier {
         const actual = await realpath(probe);
         if (!inside(this.root, actual)) {
           throw new Refusal("verification_path_outside_workspace");
+        }
+        // Whether a reserved name is absent is no more answered than whether it exists.
+        if ((await this.reserved?.(join(actual, relative(probe, candidate)))) === true) {
+          throw new Refusal("verification_path_reserved");
         }
         return candidate;
       } catch (error) {

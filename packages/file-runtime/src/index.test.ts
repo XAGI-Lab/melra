@@ -130,6 +130,9 @@ describe("FileRuntime", () => {
       { action: "write", path: ".melra/melra.sqlite-owners/new", content: "x" },
       { action: "move", path: ".melra/notes.txt", destination: ".melra/melra.sqlite" },
       { action: "delete", path: ".melra/melra.sqlite-owners", recursive: true },
+      // The directory holding them goes with them.
+      { action: "delete", path: ".melra", recursive: true },
+      { action: "move", path: ".melra", destination: "elsewhere" },
     ]) {
       await expect(run(operation)).rejects.toThrow("path_reserved");
     }
@@ -294,6 +297,26 @@ describe("FileRuntime", () => {
     // The identity walk goes root first and stops where the path stops existing.
     expect(await runtime.isReserved(join(base, ...Array.from({ length: 500 }, () => "a")))).toBe(false);
     expect(await runtime.isReserved(join(data, "payload.key", "x"))).toBe(true);
+  });
+
+  it("knows a directory holds a reserved file before that file's directory exists", async () => {
+    // As `melra doctor` asks it, before the first start: a link spells the way there.
+    const base = await realpath(await mkdtemp(join(tmpdir(), "melra-file-")));
+    roots.push(base);
+    await mkdir(join(base, "real", "home"), { recursive: true });
+    await mkdir(join(base, "links"));
+    await symlink(join(base, "real", "home"), join(base, "links", "home"), "junction");
+    const runtime = await FileRuntime.create({
+      root: base,
+      reserved: [join(base, "links", "home", ".melra", "payload.key")],
+    });
+    expect(await runtime.holdsReserved(join(base, "real"))).toBe(true);
+    if (process.platform === "darwin") {
+      // The data volume, mounted whole, holds what its firmlinks hold.
+      for (const holder of ["/System/Volumes/Data", "/System/Volumes", "/System"]) {
+        expect(await runtime.holdsReserved(holder), holder).toBe(true);
+      }
+    }
   });
 
   it.skipIf(process.platform !== "darwin")("sees a reserved file through a macOS firmlink", async () => {

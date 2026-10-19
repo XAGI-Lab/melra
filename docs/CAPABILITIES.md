@@ -233,8 +233,8 @@ Actions: `navigate`, `back`, `forward`, `reload`, `inspect`, `wait`, `click`,
 - Resolves and checks the destination and every intercepted request.
 - Blocks private, link-local, multicast, unspecified, and cloud-metadata
   addresses. Localhost is opt-in.
-- Confines uploaded files to the workspace and downloaded files to the artifact
-  directory.
+- Confines uploaded files to the workspace, never MELRA's own data directory,
+  and downloaded files to the artifact directory.
 
 - `MELRA_BROWSER_PROFILE` names a directory to keep, so a site logged into once
   stays logged in across runs. Unset, every run gets a throwaway profile.

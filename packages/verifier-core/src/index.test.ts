@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createHash } from "node:crypto";
-import { link, lstat, mkdir, mkdtemp, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { link, lstat, mkdir, mkdtemp, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { Verifier } from "./index.js";
+import { Verifier, type PredicateVerifier } from "./index.js";
 
 const roots: string[] = [];
 
@@ -80,6 +80,37 @@ describe("Verifier", () => {
     );
     expect(hashed.verified).toBe(false);
     expect(hashed.evidence[0]?.summary).toBe("verification_path_reserved");
+  });
+
+  it("gives no answer about a reserved name, present or absent", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-verifier-")));
+    roots.push(root);
+    const owners = join(root, "melra.sqlite-owners");
+    await mkdir(owners);
+    await writeFile(join(owners, "live"), "");
+    const asks: PredicateVerifier<{ type: "asks"; path: string }> = {
+      type: "asks",
+      async check(predicate, _result, context) {
+        await context.workspacePath(predicate.path, { mayBeAbsent: true });
+        return { passed: true, summary: "asked" };
+      },
+    };
+    const verifier = await Verifier.create(root, {
+      reserved: async (path) => path === owners || path.startsWith(`${owners}${sep}`),
+      verifiers: [asks],
+    });
+    const { evidence } = await verifier.verify(
+      [
+        { type: "file_absent", path: "melra.sqlite-owners/live" },
+        { type: "file_absent", path: "melra.sqlite-owners/gone" },
+        { type: "file_exists", path: "melra.sqlite-owners/gone" },
+        { type: "custom", verifier: "asks", params: { path: "melra.sqlite-owners/gone" } },
+      ],
+      {},
+    );
+    expect(evidence.map(({ summary, unanswerable }) => [summary, unanswerable ?? false])).toEqual(
+      Array.from({ length: 4 }, () => ["verification_path_reserved", true]),
+    );
   });
 
   it("answers a missing file as no, not as no answer", async () => {

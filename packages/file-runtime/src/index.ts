@@ -64,6 +64,15 @@ async function sameEntry(left: string, right: string): Promise<boolean> {
   }
 }
 
+/** `path` with the deepest part of it that exists resolved through links, and the rest as written. */
+async function realSpelling(path: string): Promise<string> {
+  for (let probe = path; ; probe = dirname(probe)) {
+    const actual = await realpath(probe).catch(() => undefined);
+    if (actual !== undefined) return join(actual, relative(probe, path));
+    if (dirname(probe) === probe) return path;
+  }
+}
+
 /**
  * The bytes a write's content stands for. Node's base64 decoder is lenient: it
  * stops at the first padding, skips what is not base64, and decoded two joined
@@ -120,7 +129,7 @@ export class FileRuntime {
    * ponytail: by name, so an NTFS stream spelling of `.git` is not caught; the
    * reserved-file check has the same Windows follow-up.
    */
-  async resolvePath(input: string, allowRoot = false, creating = false): Promise<string> {
+  async resolvePath(input: string, allowRoot = false, creating = false, changing = creating): Promise<string> {
     const lexical = resolve(this.root, input);
     // "Is it the root" asked the way `inside` asks "is it within": through
     // `relative`, which ignores case on Windows. A string compare let `..\\WS`
@@ -149,6 +158,9 @@ export class FileRuntime {
       }
     }
     if (await this.isReserved(real)) throw new Error("path_reserved");
+    // A directory holding reserved data takes it along when it is moved,
+    // replaced or removed, so nothing may change it either.
+    if (changing && (await this.holdsReserved(real))) throw new Error("path_reserved");
     if (creating && relative(this.root, real).split(sep).some((part) => spelling(part) === ".git")) {
       throw new Error("path_git_metadata");
     }
@@ -210,8 +222,18 @@ export class FileRuntime {
     const target = await stat(path, { bigint: true }).catch(() => undefined);
     if (target?.isDirectory() !== true) return false;
     for (const holder of new Set(this.reserved.map((entry) => dirname(entry)))) {
-      // Lexically and through links, so a holder under a symlinked home is still found.
-      for (const start of new Set([holder, await realpath(holder).catch(() => holder)])) {
+      // Lexically and through links, so a holder under a symlinked home is
+      // still found, even before the holder itself exists.
+      const real = await realSpelling(holder);
+      // macOS also mounts the data volume whole at /System/Volumes/Data, so a
+      // directory there, or above it, holds what a firmlinked directory such as
+      // /Users or /private holds, though no `..` from those leads to it. For
+      // data on another volume this may count those system directories as
+      // holders too, which only refuses more.
+      const firmlinked = process.platform === "darwin" ? [join("/System/Volumes/Data", real)] : [];
+      // ponytail: a second bind mount of an ancestor placed inside the target
+      // is on none of these chains; reading the mount table would find it.
+      for (const start of new Set([holder, real, ...firmlinked])) {
         for (let current = start; ; current = dirname(current)) {
           const found = await stat(current, { bigint: true }).catch(() => undefined);
           if (found !== undefined && identity(found) === identity(target)) return true;
@@ -229,6 +251,7 @@ export class FileRuntime {
       // ".": the others were refused as outside the workspace.
       operation.action === "list",
       operation.action === "write" || operation.action === "mkdir",
+      !["list", "read", "stat", "hash"].includes(operation.action),
     );
     switch (operation.action) {
       case "list": {

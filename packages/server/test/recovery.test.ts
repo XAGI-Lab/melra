@@ -5,11 +5,12 @@
 // are. Building a runtime recovers, and recovery used to take the other one's
 // live task for a crashed one.
 
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { TaskRequestSchema } from "@melra/protocol";
+import { detectBrowserExecutable } from "@melra/browser-runtime";
+import { BrowserOperationSchema, FileOperationSchema, TaskRequestSchema } from "@melra/protocol";
 import { createMelraRuntime, type MelraRuntime, type PredicateVerifier } from "../src/index.js";
 
 const roots: string[] = [];
@@ -124,6 +125,48 @@ describe("recovery between runtimes sharing a home", () => {
       phrase: write.approval!.phrase!,
     });
     expect(checked.receipt?.evidence[0]?.summary).toBe("verification_path_reserved");
+    // Nor does the browser upload them.
+    if ((await detectBrowserExecutable()) === undefined) return;
+    await expect(
+      runtime.router.execute(
+        BrowserOperationSchema.parse({
+          kind: "browser",
+          action: "upload",
+          target: { selector: "input" },
+          filePaths: [".melra/payload.key"],
+          timeoutMs: 1_000,
+        }),
+      ),
+    ).rejects.toThrow("browser_path_reserved");
+  }, 120_000);
+
+  it("keeps file effects off the data directory and every directory holding it", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-runtime-recovery-"));
+    roots.push(root);
+    const data = join(root, "home", ".melra");
+    const runtime = await createMelraRuntime({ workspaceRoot: root, dataDirectory: data, environment: {} });
+    runtimes.push(runtime);
+    await mkdir(join(root, "fresh"));
+    const key = await readFile(join(data, "payload.key"));
+    const run = (operation: Record<string, unknown>) =>
+      runtime.router.execute(FileOperationSchema.parse({ kind: "file", ...operation }));
+    for (const operation of [
+      { action: "delete", path: "home/.melra", recursive: true },
+      { action: "delete", path: "home", recursive: true },
+      { action: "move", path: "home", destination: "elsewhere" },
+      { action: "move", path: "fresh", destination: "home/.melra" },
+      // What a later start reads, and what is kept there besides.
+      { action: "write", path: "home/.melra/policy.json", content: "{}" },
+      { action: "write", path: "home/.melra/oauth.json", content: "{}" },
+      { action: "mkdir", path: "home/.melra/artifacts", recursive: true },
+    ]) {
+      await expect(run(operation), JSON.stringify(operation)).rejects.toThrow("path_reserved");
+    }
+    expect(await readFile(join(data, "payload.key"))).toEqual(key);
+    await expect(readFile(join(data, "policy.json"))).rejects.toThrow();
+    // Listing names opens nothing, and the rest of the workspace is ordinary.
+    expect(await run({ action: "list", path: "home" })).toMatchObject({ entries: [{ name: ".melra" }] });
+    await run({ action: "write", path: "home/notes.txt", content: "x" });
   });
 
   it("waits for a sweep in flight before closing the database under it", async () => {

@@ -5,6 +5,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { access, mkdir, readFile, realpath, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import type {
   Browser,
   BrowserContext,
@@ -66,6 +67,11 @@ export interface BrowserRuntimeOptions extends NetworkPolicy {
    * caller looks at next. `"allow"` keeps it as an addressable tab.
    */
   popups?: "allow" | "block";
+  /**
+   * Whether a path is one the browser may not upload or load, in any mode:
+   * the data MELRA itself holds. The runtime passes the file runtime's check.
+   */
+  reserved?: (path: string) => Promise<boolean>;
 }
 
 /**
@@ -582,12 +588,30 @@ export class BrowserRuntime {
       ) {
         throw new Error("browser_upload_outside_workspace");
       }
+      if ((await this.options.reserved?.(actual)) === true) throw new Error("browser_path_reserved");
       if (!(await stat(actual)).isFile()) {
         throw new Error("browser_upload_requires_regular_file");
       }
       resolved.push(actual);
     }
     return resolved;
+  }
+
+  /**
+   * `assertSafeUrl`, and a file: URL naming reserved data is refused too. Only
+   * unhinged mode lets a file: URL through the first, and the reserved data
+   * stays out of reach there as it does for the file and terminal adapters.
+   */
+  private async assertAllowed(url: string): Promise<void> {
+    await assertSafeUrl(url, this.options);
+    if (this.options.reserved === undefined || !/^file:/i.test(url)) return;
+    let path: string;
+    try {
+      path = fileURLToPath(url);
+    } catch {
+      throw new Error("browser_path_reserved");
+    }
+    if (await this.options.reserved(path)) throw new Error("browser_path_reserved");
   }
 
   private async ensureContext(): Promise<BrowserContext> {
@@ -664,7 +688,7 @@ export class BrowserRuntime {
         return;
       }
       try {
-        await assertSafeUrl(requestUrl, this.options);
+        await this.assertAllowed(requestUrl);
         await route.continue();
       } catch {
         await route.abort("blockedbyclient");
@@ -2083,7 +2107,7 @@ export class BrowserRuntime {
     switch (operation.action) {
       case "navigate": {
         if (operation.url === undefined) throw new Error("browser_navigate_requires_url");
-        await assertSafeUrl(operation.url, this.options);
+        await this.assertAllowed(operation.url);
         await this.drive(page);
         const response = await page.goto(operation.url, {
           waitUntil: "domcontentloaded",
@@ -2398,7 +2422,7 @@ export class BrowserRuntime {
         const opened = await this.openPage(context);
         this.activate(opened);
         if (operation.url !== undefined) {
-          await assertSafeUrl(operation.url, this.options);
+          await this.assertAllowed(operation.url);
           await opened.goto(operation.url, {
             waitUntil: "domcontentloaded",
             timeout: operation.timeoutMs,
