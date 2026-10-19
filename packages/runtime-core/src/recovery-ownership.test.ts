@@ -538,6 +538,45 @@ describe("workflow recovery across processes", () => {
     }
   });
 
+  it("fails with workflow_lease_lost when the run was taken over after its last step", async () => {
+    const at = await home();
+    const a = await side(at);
+    const b = await side(at);
+    const run = a.workflows.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Ownership",
+        nodes: [
+          {
+            id: "inspect",
+            type: "operation",
+            request: TaskRequestSchema.parse({ goal: "Inspect", operation: { kind: "system", action: "info" } }),
+          },
+        ],
+      }),
+    );
+    const recovery = b.workflows as unknown as {
+      repairRuns(abandonedOnly: boolean, tasks: Map<string, unknown>, runs: Map<string, unknown>): WorkflowRun[];
+    };
+    let repaired: WorkflowRun[] = [];
+    // The step finishes, A stalls past its lease, and B's repair pass takes
+    // the run over and commits the step before A gets to commit it.
+    const execute = a.tasks.execute.bind(a.tasks);
+    vi.spyOn(a.tasks, "execute").mockImplementationOnce(async (...args) => {
+      const result = await execute(...args);
+      expireLease(a.store, run.id);
+      repaired = recovery.repairRuns(true, new Map(), new Map());
+      return result;
+    });
+
+    await expect(a.workflows.advance(run.id)).rejects.toThrow("workflow_lease_lost");
+    expect(repaired.map(({ id }) => id)).toEqual([run.id]);
+    expect(a.store.getWorkflowRun(run.id)?.status).toBe("verified_complete");
+    expect(a.adapter).toHaveBeenCalledTimes(1);
+  });
+
   it("refuses a halted run without disturbing the lease a dead advance left", async () => {
     const at = await home();
     const adapter = held();
