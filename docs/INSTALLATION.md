@@ -545,7 +545,7 @@ opens the same runtime — same policy, same database, same receipts — on
 browser console:
 
 ```bash
-melra serve --http            # or --port 8080, or MELRA_HTTP_PORT=8080
+melra serve --http            # or --http --port 8080, or MELRA_HTTP_PORT=8080
 melra serve --http --open     # and open the console once it is listening
 ```
 
@@ -844,6 +844,16 @@ wins, so a policy file that pinned it is not loosened by an unset variable, and 
 typo (`MELRA_MODE=enfroced`) fails loudly rather than leaving a machine in
 developer mode with a config that claims otherwise.
 
+A client starts the server with the `env` in its config, not with the flags
+`melra setup` or `melra init` ran with. So in enforced mode they write
+`MELRA_MODE=enforced` into the entry they generate, and `"mode": "enforced"`
+into the policy file when they create one. That file is the shared
+`~/.melra/policy.json` unless `MELRA_POLICY` names another, so every server
+that reads it runs enforced. A policy file that already exists is left as it
+is. An entry they rewrite gets the mode they run in, so rerun them with the
+same `--mode`. `melra conformance` passes `--mode` and `--unsafe-local` to the
+server it starts the same way, as `MELRA_MODE` and `MELRA_UNHINGED`.
+
 A `melra conformance` run against an enforced endpoint swaps checks rather than
 earning any: one L2 check (`wrong-phrase-is-refused`) gives way to two
 (`approval-credential-withheld`, `in-band-approval-refused`), and one L3 check
@@ -866,6 +876,14 @@ melra approve 3f2a…        # shows the effect, asks y/N
 melra approve 3f2a… --yes  # no question, for a script that already decided
 melra approve 3f2a… --deny # cancel the task instead
 ```
+
+Denying a step of a durable workflow fails its run, as a failed step does: the
+next `melra workflow advance` offers the compensations declared for the steps
+already done, newest first, each for its own approval. If another step's
+outcome is unknown, the run is `recovery_required` instead and nothing is
+undone until an operator settles it. Deny a compensation to stop there (the
+run then reports `recovery_required` and names it), or end the run without
+unwinding with `melra workflow cancel`.
 
 Off a terminal and without `--yes` it prints the effect as JSON and exits 3
 without deciding. The receipt for the run records who approved it
@@ -1280,7 +1298,7 @@ docker run --rm melra:local doctor
 Run the stdio server with explicit writable boundaries:
 
 ```bash
-docker run --rm -i \
+docker run --rm -i --init \
   --read-only \
   --security-opt no-new-privileges:true \
   --cap-drop ALL \
@@ -1291,7 +1309,9 @@ docker run --rm -i \
 ```
 
 For an MCP client, set `command` to `docker` and use the arguments above,
-including `-i`. Do not use `-t`; stdio MCP requires clean JSON-RPC streams.
+including `-i`. `--init` puts a minimal init in front of the server as PID 1,
+so a process a terminal job leaves behind is reaped when it exits; Node
+reaps only the processes it started itself. Do not use `-t`; stdio MCP requires clean JSON-RPC streams.
 
 To see what those flags bought, run `doctor` with the same arguments in place
 of `serve`. Its `isolation` line reads the restrictions from `/proc` inside

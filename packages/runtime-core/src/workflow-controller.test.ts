@@ -9,11 +9,13 @@ import {
   TaskRequestSchema,
   WorkflowDefinitionSchema,
   WorkflowEventSchema,
+  outcomeUnknown,
   type Operation,
   type TaskRequest,
   type WorkflowDefinition,
+  type WorkflowRun,
 } from "@melra/protocol";
-import { createDefaultPolicy } from "@melra/policy-core";
+import { createDefaultPolicy, type LocalPolicy } from "@melra/policy-core";
 import { sha256 } from "@melra/receipt-schema";
 import { SqliteStore } from "@melra/storage-sqlite";
 import { Verifier } from "@melra/verifier-core";
@@ -39,6 +41,7 @@ async function setup(
     operation: Operation,
     signal?: AbortSignal,
   ) => Promise<Record<string, unknown>> = async () => ({ success: true }),
+  policy: Partial<LocalPolicy> = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "melra-workflow-controller-"));
   roots.push(root);
@@ -47,7 +50,7 @@ async function setup(
   const cipher = new PayloadCipher(Buffer.alloc(32, 17));
   const tasks = new TaskController(
     store,
-    createDefaultPolicy(root),
+    { ...createDefaultPolicy(root), ...policy },
     { execute },
     await Verifier.create(root),
     cipher,
@@ -758,19 +761,23 @@ describe("WorkflowController execution", () => {
    * in one order, and the helper never volunteers an approval for a node the
    * run did not stop on.
    */
-  async function settle(controller: WorkflowController, id: string) {
+  /** Approves every challenge until nothing moves, denying those of `deny.nodeIds`. */
+  async function settle(
+    controller: WorkflowController,
+    id: string,
+    deny?: { tasks: TaskController; nodeIds: string[] },
+  ) {
     let result = await controller.advance(id);
     for (let round = 0; round < 12; round += 1) {
-      const approvals = Object.values(result.run.nodes).flatMap((state) =>
-        state.status === "awaiting_approval" && state.approval !== undefined
-          ? [
-              {
-                approvalId: state.approval.approvalId,
-                phrase: state.approval.phrase!,
-              },
-            ]
-          : [],
-      );
+      const approvals = Object.entries(result.run.nodes).flatMap(([nodeId, state]) => {
+        if (state.status !== "awaiting_approval" || state.approval === undefined) return [];
+        if (deny?.nodeIds.includes(nodeId) === true) {
+          // What Deny and melra_task_cancel reach: the step's task, cancelled.
+          deny.tasks.cancel(state.taskIds[0]!);
+          return [];
+        }
+        return [{ approvalId: state.approval.approvalId, phrase: state.approval.phrase! }];
+      });
       const next = await controller.advance(id, approvals);
       if (next.events.length === 0) return next;
       result = next;
@@ -876,6 +883,384 @@ describe("WorkflowController execution", () => {
     expect(result.run.status).toBe("recovery_required");
     expect(result.run.error).toBe("workflow_compensation_incomplete:undo-ship");
     expect(result.run.nodes["undo-charge"]?.status).toBe("pending");
+  });
+  it("unwinds the steps already done when an operator denies a later one", async () => {
+    const { calls, execute } = saga("none");
+    const { controller, tasks } = await setup(execute);
+    const planned = controller.plan(sagaDefinition());
+
+    const result = await settle(controller, planned.id, { tasks, nodeIds: ["ship"] });
+
+    // The shipment never happened, so only the charge is undone. The run used
+    // to read `running` for good, with nothing left that could run.
+    expect(calls).toEqual(["payments.example.test/charges", "payments.example.test/refunds"]);
+    expect(result.run.status).toBe("failed");
+    expect(result.run.nodes.ship?.status).toBe("cancelled");
+    expect(result.run.nodes.notify?.status).toBe("pending");
+    expect(result.run.nodes["undo-ship"]?.status).toBe("skipped");
+    expect(result.run.nodes["undo-charge"]?.status).toBe("compensated");
+  });
+
+  it("stops the unwind at a compensation the operator denies", async () => {
+    const { calls, execute } = saga("payments.example.test/notify");
+    const { controller, tasks } = await setup(execute);
+    const planned = controller.plan(sagaDefinition());
+
+    const result = await settle(controller, planned.id, { tasks, nodeIds: ["undo-ship"] });
+
+    // As for a compensation that fails: the shipment was not cancelled, so the
+    // charge that paid for it is not refunded either.
+    expect(calls).not.toContain("payments.example.test/refunds");
+    expect(result.run.status).toBe("recovery_required");
+    expect(result.run.error).toBe("workflow_compensation_incomplete:undo-ship");
+    expect(result.run.nodes["undo-ship"]?.status).toBe("cancelled");
+    expect(result.run.nodes["undo-charge"]?.status).toBe("pending");
+  });
+
+  it("halts, not unwinds, at a step that ran though its advance was not committed", async () => {
+    const { calls, execute } = saga("none");
+    const { controller, tasks, store, cipher } = await setup(execute);
+    const definition = sagaDefinition();
+    const planned = controller.plan(definition);
+    let run = (await controller.advance(planned.id)).run;
+    const charge = run.nodes.charge!.approval!;
+    run = (await controller.advance(planned.id, [{ approvalId: charge.approvalId, phrase: charge.phrase! }])).run;
+    expect(run.nodes.ship?.status).toBe("pending");
+    // Ship ran and committed, then its advance lost its commit (a pause
+    // landed), so the run still shows it pending with no task.
+    const ship = definition.nodes.find((node) => node.id === "ship");
+    if (ship?.type !== "operation") throw new Error("expected_operation_node");
+    const key = sha256({ workflowId: planned.id, nodeId: "ship", iteration: 0, branch: "operation", request: ship.request });
+    const ran = tasks.plan(ship.request, { idempotencyKey: key, attempt: 1, stored: true });
+    await tasks.execute(ran.id, { approvalId: ran.approval!.approvalId, phrase: ran.approval!.phrase! });
+
+    // Planned again, ship is cancelled as a duplicate. That is not a denial:
+    // read as one, it refunded the charge while the shipment stood.
+    const halted = await settle(controller, planned.id);
+    expect(halted.run.status).toBe("recovery_required");
+    expect(calls).toEqual(["payments.example.test/charges", "logistics.example.test/shipments"]);
+
+    // Recovery reads every attempt, keeps the one that committed, and the run
+    // carries on from there.
+    const restarted = new WorkflowController(store, tasks, cipher);
+    await restarted.recoverInterrupted();
+    expect(restarted.status(planned.id).nodes.ship).toMatchObject({ status: "verified_complete", taskIds: [ran.id] });
+    const result = await settle(restarted, planned.id);
+    expect(result.run.status).toBe("verified_complete");
+    expect(calls).toEqual([
+      "payments.example.test/charges",
+      "logistics.example.test/shipments",
+      "payments.example.test/notify",
+    ]);
+  });
+
+  it("does not read a step still verifying as failed", async () => {
+    const { calls, execute } = saga("none");
+    const { controller, store } = await setup(execute);
+    const planned = controller.plan(sagaDefinition());
+    let run = (await controller.advance(planned.id)).run;
+    for (let step = 0; step < 3 && run.nodes.ship?.status !== "awaiting_approval"; step += 1) {
+      const waiting = Object.values(run.nodes).flatMap((state) =>
+        state.status === "awaiting_approval" && state.approval !== undefined
+          ? [{ approvalId: state.approval.approvalId, phrase: state.approval.phrase! }]
+          : [],
+      );
+      run = (await controller.advance(planned.id, waiting)).run;
+    }
+    // Interrupted after its effect, before its final save: it may stand.
+    const shipping = store.getTask(run.nodes.ship!.taskIds[0]!)!;
+    shipping.status = "verifying";
+    store.saveTask(shipping);
+
+    run = (await controller.advance(planned.id)).run;
+    // Read as failed, it started the unwind and offered the refund.
+    expect(run.status).toBe("recovery_required");
+    expect(run.nodes.ship?.status).toBe("recovery_required");
+    expect(run.nodes["undo-charge"]?.status).toBe("pending");
+    expect(calls).toEqual(["payments.example.test/charges"]);
+  });
+
+  it("does not skip the compensation of a step its approval node already ran", async () => {
+    const { calls, execute } = saga("none");
+    const { controller, tasks } = await setup(execute);
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Charge, approve and ship, notify",
+        nodes: [
+          { id: "charge", type: "operation", request: call("Charge", `${PAYMENTS}/charges`) },
+          { id: "approve-ship", type: "approval", forNodeId: "ship", dependsOn: ["charge"] },
+          { id: "ship", type: "operation", dependsOn: ["approve-ship"], request: call("Ship", `${LOGISTICS}/shipments`) },
+          { id: "notify", type: "operation", dependsOn: ["charge"], request: call("Notify", `${PAYMENTS}/notify`) },
+          { id: "undo-charge", type: "compensation", forNodeId: "charge", request: call("Refund", `${PAYMENTS}/refunds`) },
+          { id: "undo-ship", type: "compensation", forNodeId: "ship", request: call("Cancel shipment", `${LOGISTICS}/cancellations`) },
+        ],
+      }),
+    );
+
+    // The approval node runs the shipment; `ship` would only read it next wave.
+    const result = await settle(controller, planned.id, { tasks, nodeIds: ["notify"] });
+
+    // Read as not done, its cancellation was skipped and the charge refunded
+    // while the goods were on their way.
+    expect(calls).toEqual([
+      "payments.example.test/charges",
+      "logistics.example.test/shipments",
+      "logistics.example.test/cancellations",
+      "payments.example.test/refunds",
+    ]);
+    expect(result.run.nodes["undo-ship"]?.status).toBe("compensated");
+    expect(result.run.status).toBe("failed");
+  });
+
+  it("does not undo a step its approval only let through, unrun", async () => {
+    const calls: string[] = [];
+    const { controller } = await setup(
+      async (operation) => {
+        if (operation.kind !== "http") throw new Error("unexpected_operation");
+        const path = new URL(operation.url).pathname;
+        calls.push(path);
+        return { success: path !== "/notify" };
+      },
+      // The approval passes ship's task through planned; ship would run it next wave.
+      { unhinged: true },
+    );
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Charge, approve and ship, notify",
+        nodes: [
+          { id: "charge", type: "operation", request: call("Charge", `${PAYMENTS}/charges`) },
+          { id: "approve-ship", type: "approval", forNodeId: "ship", dependsOn: ["charge"] },
+          { id: "ship", type: "operation", dependsOn: ["approve-ship"], request: call("Ship", `${LOGISTICS}/shipments`) },
+          { id: "notify", type: "operation", dependsOn: ["charge"], request: call("Notify", `${PAYMENTS}/notify`) },
+          { id: "undo-charge", type: "compensation", forNodeId: "charge", request: call("Refund", `${PAYMENTS}/refunds`) },
+          { id: "undo-ship", type: "compensation", forNodeId: "ship", request: call("Cancel shipment", `${LOGISTICS}/cancellations`) },
+        ],
+      }),
+    );
+    let run = (await controller.advance(planned.id)).run;
+    for (let step = 0; step < 6 && run.status !== "failed"; step += 1) {
+      run = (await controller.advance(planned.id)).run;
+    }
+    // Notify failed in the wave the approval passed ship through: nothing was
+    // shipped, so there is nothing to cancel, only the charge to refund.
+    expect(calls).not.toContain("/shipments");
+    expect(calls).not.toContain("/cancellations");
+    expect(calls).toContain("/refunds");
+    expect(run.nodes["undo-ship"]?.status).toBe("skipped");
+  });
+
+  it("does not undo, on a later advance, a read its approval only let through", async () => {
+    const calls: string[] = [];
+    const { controller } = await setup(async (operation) => {
+      if (operation.kind !== "http") throw new Error("unexpected_operation");
+      const path = new URL(operation.url).pathname;
+      calls.push(path);
+      return { success: path !== "/notify" };
+    });
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Charge, approve and look up the shipment, notify",
+        nodes: [
+          { id: "charge", type: "operation", request: call("Charge", `${PAYMENTS}/charges`) },
+          { id: "approve-ship", type: "approval", forNodeId: "ship", dependsOn: ["charge"] },
+          {
+            id: "ship",
+            type: "operation",
+            dependsOn: ["approve-ship"],
+            // A read: policy lets the approval pass its task through planned.
+            request: TaskRequestSchema.parse({
+              goal: "Look up the shipment",
+              operation: { kind: "http", action: "request", method: "GET", url: `${LOGISTICS}/shipments` },
+            }),
+          },
+          { id: "notify", type: "operation", dependsOn: ["charge"], request: call("Notify", `${PAYMENTS}/notify`) },
+          // In this order the refund is offered first and parks for approval,
+          // so the shipment's compensation is decided by the next advance.
+          { id: "undo-ship", type: "compensation", forNodeId: "ship", request: call("Cancel shipment", `${LOGISTICS}/cancellations`) },
+          { id: "undo-charge", type: "compensation", forNodeId: "charge", request: call("Refund", `${PAYMENTS}/refunds`) },
+        ],
+      }),
+    );
+
+    const result = await settle(controller, planned.id);
+
+    expect(calls).toEqual(["/charges", "/notify", "/refunds"]);
+    expect(result.run.status).toBe("failed");
+  });
+
+  it("stops a later advance's unwind when the run is cancelled under it", async () => {
+    let cancelRun = () => {};
+    const calls: string[] = [];
+    let statusAtRefund: string | undefined;
+    const { controller, store } = await setup(async (operation) => {
+      if (operation.kind !== "http") throw new Error("unexpected_operation");
+      const path = new URL(operation.url).pathname;
+      calls.push(path);
+      if (path === "/refunds") {
+        statusAtRefund = controller.status(planned.id).status;
+        cancelRun();
+      }
+      return { success: path !== "/shipments" };
+    });
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Reserve, charge, ship",
+        nodes: [
+          { id: "reserve", type: "operation", request: call("Reserve", `${LOGISTICS}/reservations`) },
+          { id: "charge", type: "operation", dependsOn: ["reserve"], request: call("Charge", `${PAYMENTS}/charges`) },
+          { id: "ship", type: "operation", dependsOn: ["charge"], request: call("Ship", `${LOGISTICS}/shipments`) },
+          { id: "undo-reserve", type: "compensation", forNodeId: "reserve", request: call("Release", `${LOGISTICS}/releases`) },
+          { id: "undo-charge", type: "compensation", forNodeId: "charge", request: call("Refund", `${PAYMENTS}/refunds`) },
+        ],
+      }),
+    );
+    cancelRun = () => controller.cancel(planned.id);
+    // Each challenge approved as it parks: the refund then runs in the next
+    // advance's unwind, and `workflow cancel` lands while it does.
+    let run = controller.status(planned.id);
+    for (let step = 0; step < 8 && run.status !== "cancelled"; step += 1) {
+      const approvals = Object.values(run.nodes).flatMap((state) =>
+        state.status === "awaiting_approval" && state.approval !== undefined
+          ? [{ approvalId: state.approval.approvalId, phrase: state.approval.phrase! }]
+          : [],
+      );
+      await controller.advance(planned.id, approvals).catch(() => undefined);
+      run = controller.status(planned.id);
+    }
+
+    expect(run.status).toBe("cancelled");
+    // Only an advance that starts on a failed run unwinds, so this is the
+    // unwind() path and not the trigger loop of the advance where ship failed.
+    expect(statusAtRefund).toBe("failed");
+    expect(calls).not.toContain("/releases");
+    // The release would be a live challenge on a run its operator cancelled.
+    expect(store.listTasks(100, "awaiting_approval")).toEqual([]);
+  });
+
+  it("stops an unwind when the run is cancelled under it", async () => {
+    let cancelRun = () => {};
+    const calls: string[] = [];
+    const { controller } = await setup(
+      async (operation) => {
+        if (operation.kind !== "http") throw new Error("unexpected_operation");
+        const path = new URL(operation.url).pathname;
+        calls.push(path);
+        if (path === "/refunds") cancelRun();
+        return { success: path !== "/shipments" };
+      },
+      // Every compensation runs without waiting for an approval.
+      { unhinged: true },
+    );
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Reserve, charge, ship",
+        nodes: [
+          { id: "reserve", type: "operation", request: call("Reserve", `${LOGISTICS}/reservations`) },
+          { id: "charge", type: "operation", dependsOn: ["reserve"], request: call("Charge", `${PAYMENTS}/charges`) },
+          { id: "ship", type: "operation", dependsOn: ["charge"], request: call("Ship", `${LOGISTICS}/shipments`) },
+          { id: "undo-reserve", type: "compensation", forNodeId: "reserve", request: call("Release", `${LOGISTICS}/releases`) },
+          { id: "undo-charge", type: "compensation", forNodeId: "charge", request: call("Refund", `${PAYMENTS}/refunds`) },
+        ],
+      }),
+    );
+    // `workflow cancel` lands while the refund runs, the first step undone.
+    cancelRun = () => controller.cancel(planned.id);
+    for (let step = 0; step < 6 && controller.status(planned.id).status !== "cancelled"; step += 1) {
+      await controller.advance(planned.id).catch(() => undefined);
+    }
+
+    expect(controller.status(planned.id).status).toBe("cancelled");
+    expect(calls).toContain("/refunds");
+    expect(calls).not.toContain("/releases");
+  });
+
+  /** Charge, then ship and notify side by side; only the charge is undone. */
+  function fanOutSaga(): WorkflowDefinition {
+    return WorkflowDefinitionSchema.parse({
+      schemaVersion: "1.0.0",
+      id: definitionId,
+      version: 1,
+      name: "Charge, then ship and notify",
+      nodes: [
+        { id: "charge", type: "operation", request: call("Charge", `${PAYMENTS}/charges`) },
+        { id: "ship", type: "operation", dependsOn: ["charge"], request: call("Ship", `${LOGISTICS}/shipments`) },
+        { id: "notify", type: "operation", dependsOn: ["charge"], request: call("Notify", `${PAYMENTS}/notify`) },
+        { id: "undo-charge", type: "compensation", forNodeId: "charge", request: call("Refund", `${PAYMENTS}/refunds`) },
+      ],
+    });
+  }
+
+  it("halts rather than unwind past a step whose outcome is unknown when another is denied", async () => {
+    const calls: string[] = [];
+    const { controller, tasks } = await setup(async (operation) => {
+      if (operation.kind !== "http") throw new Error("unexpected_operation");
+      const url = new URL(operation.url);
+      calls.push(`${url.host}${url.pathname}`);
+      // The shipment may or may not exist; refunding its charge now could
+      // give the goods away.
+      if (url.pathname === "/shipments") throw outcomeUnknown("socket hang up");
+      return { success: true };
+    });
+    const planned = controller.plan(fanOutSaga());
+
+    const result = await settle(controller, planned.id, { tasks, nodeIds: ["notify"] });
+
+    expect(calls).not.toContain("payments.example.test/refunds");
+    expect(result.run.status).toBe("recovery_required");
+    expect(result.run.nodes.notify?.status).toBe("cancelled");
+    expect(result.run.nodes["undo-charge"]?.status).toBe("pending");
+  });
+
+  it("plans no compensation for a run cancelled while its advance was running", async () => {
+    let shipping!: () => void;
+    const started = new Promise<void>((resolve) => {
+      shipping = resolve;
+    });
+    const { controller, store } = await setup(async (operation, signal) => {
+      if (operation.kind === "http" && operation.url.endsWith("/shipments")) {
+        shipping();
+        await new Promise((_, reject) => signal?.addEventListener("abort", () => reject(signal.reason)));
+      }
+      return { success: true };
+    });
+    const planned = controller.plan(fanOutSaga());
+    const approve = (run: WorkflowRun, only?: string) =>
+      Object.entries(run.nodes).flatMap(([nodeId, state]) =>
+        state.status === "awaiting_approval" && state.approval !== undefined && (only === undefined || only === nodeId)
+          ? [{ approvalId: state.approval.approvalId, phrase: state.approval.phrase! }]
+          : [],
+      );
+    let run = (await controller.advance(planned.id)).run;
+    run = (await controller.advance(planned.id, approve(run))).run;
+    for (let step = 0; step < 3 && run.nodes.ship?.status !== "awaiting_approval"; step += 1) {
+      run = (await controller.advance(planned.id)).run;
+    }
+
+    // `workflow cancel` lands while the shipment runs, and aborts it.
+    const advancing = controller.advance(planned.id, approve(run, "ship"));
+    await started;
+    controller.cancel(planned.id);
+    await advancing.catch(() => undefined);
+
+    // A refund planned now would be a live challenge on a run its operator
+    // ended without compensating.
+    expect(controller.status(planned.id).status).toBe("cancelled");
+    expect(store.listTasks(100, "awaiting_approval")).toEqual([]);
   });
 });
 

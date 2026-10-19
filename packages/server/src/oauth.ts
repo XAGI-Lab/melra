@@ -58,6 +58,12 @@ interface PendingCode {
   redirectUri: string;
   challenge: string;
   expiresAt: number;
+  /**
+   * The approval this code came from, by its timestamp: a revoke ends it, and
+   * so does a later approval (one in the same millisecond would not, but that
+   * is the operator approving the same client twice).
+   */
+  approvedAt: string;
 }
 
 /** A registration flood is unauthenticated by design, so it needs a ceiling. */
@@ -433,13 +439,15 @@ ${error === undefined ? "" : `<p class="error" role="alert">${escapeHtml(error)}
       // Resolved again under the lock: the client object has to be the one in
       // the state that is about to be written.
       const { client, challenge } = this.resolve(requestOf(form));
+      const approvedAt = new Date().toISOString();
       this.codes.set(code, {
         clientId: client.id,
         redirectUri,
         challenge,
         expiresAt: Date.now() + CODE_LIFETIME_MS,
+        approvedAt,
       });
-      client.approvedAt = new Date().toISOString();
+      client.approvedAt = approvedAt;
     });
     target.searchParams.set("code", code);
     return target.toString();
@@ -469,6 +477,11 @@ ${error === undefined ? "" : `<p class="error" role="alert">${escapeHtml(error)}
     }
     const token = randomBytes(32).toString("base64url");
     this.update(() => {
+      // `melra clients --revoke` runs in another process and cannot reach this
+      // map, so it clears the approval instead: a code from before a revoke,
+      // still within its lifetime, would otherwise mint a live token after it.
+      const client = this.state.clients.find((candidate) => candidate.id === pending.clientId);
+      if (client?.approvedAt !== pending.approvedAt) throw new Error("invalid_grant");
       this.state.tokens = [
         ...this.state.tokens,
         {
@@ -504,6 +517,11 @@ ${error === undefined ? "" : `<p class="error" role="alert">${escapeHtml(error)}
       this.state.tokens = this.state.tokens.filter((entry) =>
         clientId === undefined ? false : entry.clientId !== clientId,
       );
+      // It must be approved again, so it is not listed as approved, and no
+      // code from the approval it had is honoured.
+      for (const client of this.state.clients) {
+        if (clientId === undefined || client.id === clientId) delete client.approvedAt;
+      }
       return before - this.state.tokens.length;
     });
   }

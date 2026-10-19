@@ -939,6 +939,30 @@ export class TaskController {
         return task;
       }
     }
+    // A read that verified and committed its key before the interruption is
+    // done. Run again, it would only be cancelled as a duplicate of itself,
+    // and a workflow reads a cancelled step as a denial.
+    if (
+      classified.effect === "read" &&
+      task.idempotencyKey !== undefined &&
+      this.store.getIdempotencyCommit(task.idempotencyKey)?.taskId === task.id
+    ) {
+      this.resolveAsVerified(
+        task,
+        request,
+        classified,
+        [
+          {
+            type: "idempotency",
+            passed: true,
+            strength: evidenceStrength("idempotency"),
+            summary: "verified and committed before the interruption",
+          },
+        ],
+        { recovery: "committed_before_interruption" },
+      );
+      return task;
+    }
     const effect = classified.effect;
     task.status = effect === "read" ? "planned" : "recovery_required";
     task.error =

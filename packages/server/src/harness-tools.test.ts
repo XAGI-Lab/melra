@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { TOOL_NAMES } from "@melra/protocol";
 import { createMcpServer, harnessToolsEnabled, SERVER_INSTRUCTIONS } from "./mcp-server.js";
 import { registerHarnessTools } from "./harness-tools.js";
 import { createMelraRuntime, type MelraRuntime } from "./runtime.js";
@@ -162,6 +163,29 @@ describe("harness tools in enforced mode", () => {
       const held = await call(tools, name, { ...args, url: "https://example.com/" });
       expect(held.status, name).toBe("approval_required");
       expect(runtime.controller.status(String(held.taskId)).request.operation, name).toMatchObject({ url: "https://example.com/" });
+    }
+  });
+
+  it("describes every MELRA tool and each of its top-level parameters", async () => {
+    // A model reading the tool list has only these words to pick a tool and
+    // fill its arguments; an undescribed parameter is a guess.
+    const [left, right] = InMemoryTransport.createLinkedPair();
+    await createMcpServer(runtime).connect(right);
+    const client = new Client({ name: "t", version: "1" });
+    await client.connect(left);
+    try {
+      const { tools } = await client.listTools();
+      const melra = tools.filter((tool) => (TOOL_NAMES as readonly string[]).includes(tool.name));
+      expect(melra.map((tool) => tool.name).sort()).toEqual([...TOOL_NAMES].sort());
+      for (const tool of melra) {
+        expect(tool.description?.split(/\s+/).length ?? 0, tool.name).toBeGreaterThanOrEqual(40);
+        const properties = (tool.inputSchema.properties ?? {}) as Record<string, { description?: string }>;
+        for (const [name, property] of Object.entries(properties)) {
+          expect(property.description ?? "", `${tool.name}.${name}`).not.toBe("");
+        }
+      }
+    } finally {
+      await client.close();
     }
   });
 

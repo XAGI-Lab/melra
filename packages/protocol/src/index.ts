@@ -567,7 +567,7 @@ export const TaskRequestSchema = z
       .min(1)
       .max(10_000)
       .describe("Why this task is being run, in one human-readable sentence."),
-    operation: OperationSchema,
+    operation: OperationSchema.describe("The one effect to run: a kind (file, terminal, browser, memory, computer, http or system), an action (melra_capabilities lists each kind's actions) and that kind's fields. MELRA classifies it as read, mutate or destructive; policy then allows it, asks for approval or denies it."),
     // These three carry the rules callers get wrong, and a description is the
     // only channel that reaches a model reading the tool's JSON Schema.
     constraints: z
@@ -588,13 +588,13 @@ export const TaskRequestSchema = z
       maxSteps: 10,
       maxDurationMs: 120_000,
       maxRetries: 2,
-    }),
+    }).describe("maxDurationMs (100-900000, default 120000) is timed from the first attempt: once it passes, no retry starts and a terminal run or browser, computer or http operation is aborted. maxRetries (0-10, default 2) retries only reads whose adapter throws. maxSteps (1-100, default 10) limits nothing."),
     requiredEvidence: z
       .array(EvidencePredicateSchema)
       .max(20)
       .default([])
       .describe(
-        "Predicates that must hold after execution for the task to be verified_success. Required for any non-read operation: a mutation with none is denied with mutation_requires_evidence. An adapter that succeeded while a predicate failed is partial, never success. A semantic predicate is never answered by MELRA: the task waits in waiting_user and fails closed at expiry. Beside semantic, a destructive effect also needs file_exists, file_absent, file_hash or http_resource_matches, or it is denied with semantic_only_destructive; semantic beside reconciliation is denied with semantic_evidence_not_reconcilable.",
+        "Predicates that must hold after execution for the task to be verified_success. A non-read operation needs them unless MELRA derives a default for it; outside unsafe-local mode one with neither is denied with mutation_requires_evidence. An adapter that succeeded while a predicate failed is partial, never success. A semantic predicate is never answered by MELRA: the task waits in waiting_user and fails closed at expiry. Beside semantic, a destructive effect also needs file_exists, file_absent, file_hash or http_resource_matches, or it is denied with semantic_only_destructive; semantic beside reconciliation is denied with semantic_evidence_not_reconcilable.",
       ),
     reconciliation: z
       .array(EvidencePredicateSchema)
@@ -1126,23 +1126,23 @@ export const WorkflowAdvanceResultSchema = z
 
 export const WorkflowPlanInputSchema = z
   .object({
-    definition: WorkflowDefinitionSchema,
+    definition: WorkflowDefinitionSchema.describe("The workflow: schemaVersion \"1.0.0\", an id (UUID) and positive version you choose, a name, and 1-500 nodes linked by dependsOn, of the types melra_capabilities lists under workflowNodes. Different content under an existing id and version fails with workflow_definition_conflict; bump version."),
   })
   .strict();
 
 export const WorkflowAdvanceInputSchema = z
   .object({
-    workflowId: z.string().uuid(),
-    approvals: z.array(ApprovalResponseSchema).max(50).default([]),
+    workflowId: z.string().uuid().describe("The run id melra_workflow_plan returned, not the definition's id. An unknown id fails with workflow_not_found; workflow_lease_held means something else holds the run's lease, so retry later."),
+    approvals: z.array(ApprovalResponseSchema).max(50).default([]).describe("Answers to challenges this run waits on, each {approvalId, phrase} copied from a waiting task's approval and matched by approvalId; unmatched entries are ignored. Must be empty in enforced mode (approval_in_band_refused)."),
     // Answers for nodes parked on a person. Supplied on the same call that
     // resumes the wave, so one round trip both answers and advances.
-    inputs: z.array(WorkflowInputSchema).max(50).default([]),
+    inputs: z.array(WorkflowInputSchema).max(50).default([]).describe("Answers for awaiting_input nodes as {nodeId, value}, matched by nodeId and ignored for nodes this call does not run. A human_input value must fit the node's maxLength and any choices; a delegation value is the delegate's report, and any requiredEvidence on the node still decides."),
   })
   .strict();
 
 export const WorkflowIdInputSchema = z
   .object({
-    workflowId: z.string().uuid(),
+    workflowId: z.string().uuid().describe("The run id melra_workflow_plan returned, not the definition's id. An unknown id fails with workflow_not_found."),
   })
   .strict();
 
@@ -1150,8 +1150,8 @@ export const WorkflowIdInputSchema = z
 // that differ only in a verb.
 export const WorkflowControlInputSchema = z
   .object({
-    workflowId: z.string().uuid(),
-    action: z.enum(["pause", "resume", "suspend"]),
+    workflowId: z.string().uuid().describe("The run id melra_workflow_plan returned, not the definition's id. An unknown id fails with workflow_not_found."),
+    action: z.enum(["pause", "resume", "suspend"]).describe("pause or suspend halts the run (same effect; only the status name differs) and fails with workflow_not_haltable on a verified_complete, cancelled or failed run. resume lifts either halt and runs nothing; on a run not halted it fails with workflow_not_paused."),
   })
   .strict();
 
@@ -1302,20 +1302,20 @@ export const MelraCapabilitiesInputSchema = z.object({}).strict();
 export const MelraPlanInputSchema = TaskRequestSchema;
 export const MelraExecuteInputSchema = z
   .object({
-    taskId: z.string().uuid(),
-    approval: ApprovalResponseSchema.optional(),
+    taskId: z.string().uuid().describe("The id melra_plan returned. Only a planned or awaiting_approval task can run; a policy_blocked one comes back unchanged, a recovery_required one is reconciled rather than re-run, and any other status fails with task_not_executable:<status>. Unknown ids fail with task_not_found."),
+    approval: ApprovalResponseSchema.optional().describe("The awaiting_approval task's challenge as {approvalId, phrase}, phrase copied exactly. Omit it for a planned task, or once an operator has approved with `melra approve`. In enforced mode never send it: for a task that needs approval it is refused (approval_in_band_refused)."),
   })
   .strict();
 export const MelraTaskStatusInputSchema = z
-  .object({ taskId: z.string().uuid() })
+  .object({ taskId: z.string().uuid().describe("The id melra_plan returned, or one of a workflow node's taskIds from melra_workflow_status. An unknown id fails with task_not_found.") })
   .strict();
 export const MelraTaskCancelInputSchema = z
-  .object({ taskId: z.string().uuid() })
+  .object({ taskId: z.string().uuid().describe("The id melra_plan returned for the task to cancel. Cancelling a workflow step's task before it runs fails its run at the next advance, which then offers its compensations, unless another step's outcome is unknown (then recovery_required); cancelling a compensation's task stops the unwind (recovery_required). melra_workflow_cancel ends a run without compensating. An unknown id fails with task_not_found.") })
   .strict();
 export const MelraReceiptBaseSchema = z
   .object({
-    taskId: z.string().uuid().optional(),
-    receiptId: z.string().uuid().optional(),
+    taskId: z.string().uuid().optional().describe("The id melra_plan returned, or a workflow node's taskId: gets all of that task's receipts plus its certificate. An unknown id, or a task with no receipts yet, returns an empty list. Give this or receiptId."),
+    receiptId: z.string().uuid().optional().describe("One receipt's id, from the task's receiptIds or melra_execute's receipt: gets that receipt plus its task's certificate. Takes precedence over taskId; an unknown id fails with receipt_not_found."),
   })
   .strict();
 export const MelraReceiptInputSchema = MelraReceiptBaseSchema

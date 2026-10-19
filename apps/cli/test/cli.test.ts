@@ -3,7 +3,7 @@
 
 import { execFile, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -17,7 +17,7 @@ import {
   TaskRequestSchema,
   TerminalOperationSchema,
 } from "@melra/protocol";
-import { approvalScreen, createMelraRuntime, printable, serveHttp } from "@melra/server";
+import { OAuthProvider, approvalScreen, createMelraRuntime, printable, serveHttp } from "@melra/server";
 import { runConformance } from "../src/conformance.js";
 import { RESTART_SAFE_WORKFLOW } from "../src/demo-workflow.js";
 import { approverLabel, parseCliEnvironment, serverLaunch } from "../src/environment.js";
@@ -965,9 +965,10 @@ describe("melra CLI", () => {
     // directory inside the workspace, so this one sits beside it.
     const strictHome = await mkdtemp(join(tmpdir(), "melra-cli-home-"));
     roots.push(strictHome);
-    const strict = await execute(process.execPath, [entry, "conformance"], {
+    // By the flag, which the spawned server is not given: only its env reaches it.
+    const strict = await execute(process.execPath, [entry, "conformance", "--mode", "enforced"], {
       cwd: root,
-      env: { ...env, MELRA_MODE: "enforced", MELRA_HOME: strictHome },
+      env: { ...env, MELRA_HOME: strictHome },
     });
     const strictReport = JSON.parse(strict.stdout) as {
       level: number;
@@ -991,16 +992,29 @@ describe("melra CLI", () => {
 
     // Unhinged is supposed to cost the governed levels and keep the typed one.
     // If it ever reached L2 the flag would not be doing what it says.
+    // By the flag, as with --mode: the spawned server gets it only as env.
     const unhinged = await execute(
       process.execPath,
-      [entry, "conformance", "--level", "1"],
-      { cwd: root, env: { ...env, MELRA_UNHINGED: "1" } },
+      [entry, "conformance", "--level", "1", "--unsafe-local"],
+      { cwd: root, env },
     );
     expect(JSON.parse(unhinged.stdout).level).toBe(1);
     // Three full suites, each spawning its own server, and the enforced one
     // two `melra approve` processes besides: a Windows runner has taken just
     // over the file's 20 s default for the lot.
   }, 90_000);
+
+  it("says why a server conformance started refused to start", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-cli-"));
+    roots.push(root);
+    // Enforced mode refuses a data directory inside the workspace; the suite
+    // used to report only that the connection closed.
+    const refused = await execute(process.execPath, [entry, "conformance", "--mode", "enforced"], {
+      cwd: root,
+      env: { ...process.env, MELRA_HOME: join(root, ".melra"), MELRA_WORKSPACE: root, MELRA_POLICY: "" },
+    }).catch((error: { stderr: string }) => error);
+    expect(refused.stderr).toContain("enforced_mode_refuses_data_inside_workspace");
+  });
 
   it("keeps Node's SQLite warning out of every invocation", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-cli-"));
@@ -1135,6 +1149,30 @@ describe("melra CLI", () => {
       stderr: expect.not.stringContaining("unknown flag"),
     });
 
+    // An unknown flag after one that takes no value is caught too. --write
+    // and --open were read as taking a value, so the token after them was
+    // skipped unchecked and `--write --dry-run` wrote the client config. The
+    // timeout stops an unfixed `serve` from waiting on stdin for good.
+    for (const args of [
+      ["setup", "--client", "claude-code", "--write", "--dry-run"],
+      ["init", "--client", "claude-code", "--write", "--dry-run"],
+      ["serve", "--open", "--dry-run"],
+    ]) {
+      await expect(
+        execute(process.execPath, [entry, ...args], { ...options, timeout: 10_000 }),
+      ).rejects.toMatchObject({ stderr: expect.stringContaining("unknown flag --dry-run") });
+    }
+    expect(existsSync(join(root, ".mcp.json"))).toBe(false);
+
+    // Without --http, serve speaks MCP over stdio, so a port is refused rather
+    // than left looking like a server that never answers.
+    // A trailing --port too, as `--port $PORT` sends with PORT unset.
+    for (const args of [["serve", "--port", "8080"], ["serve", "--port"], ["serve", "--open"]]) {
+      await expect(
+        execute(process.execPath, [entry, ...args], { ...options, timeout: 10_000 }),
+      ).rejects.toMatchObject({ stderr: expect.stringContaining("--port and --open need --http") });
+    }
+
     // A mistyped command is the same mistake one level up, so it gets the same
     // treatment: name it, and say where the answer is.
     await expect(
@@ -1143,7 +1181,8 @@ describe("melra CLI", () => {
       code: 1,
       stderr: expect.stringContaining("unknown command: docter. Run 'melra --help'"),
     });
-  });
+    // A dozen CLI starts, each a fresh Node process.
+  }, 60_000);
 
   it("cannot run unsafe-local without saying so", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-cli-"));
@@ -1182,6 +1221,61 @@ describe("melra CLI", () => {
     expect(deprecated.stderr).toContain("--unhinged is deprecated");
     expect(JSON.parse(deprecated.stdout).unhinged).toBe(true);
   });
+
+  it("lists a client it revoked as pending, not approved", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-cli-"));
+    roots.push(root);
+    const home = join(root, ".melra");
+    const options = { cwd: root, env: { ...process.env, MELRA_HOME: home, MELRA_WORKSPACE: root } };
+    // Registered and approved through the console's provider, as a server does.
+    const oauth = new OAuthProvider(home);
+    const id = oauth.register({ client_name: "agent", redirect_uris: ["http://127.0.0.1:9/cb"] }).client_id as string;
+    oauth.decide(
+      new URLSearchParams({ client_id: id, redirect_uri: "http://127.0.0.1:9/cb", code_challenge: "x".repeat(43), decision: "approve" }),
+    );
+    expect((await execute(process.execPath, [entry, "clients"], options)).stdout).toContain(`approved  ${id}`);
+
+    await execute(process.execPath, [entry, "clients", "--revoke", id], options);
+    // Its tokens were gone, and it was still listed as approved.
+    expect((await execute(process.execPath, [entry, "clients"], options)).stdout).toContain(`pending   ${id}`);
+  });
+
+  it("refuses to revoke a client that is not registered, or nothing at all", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-cli-"));
+    roots.push(root);
+    const options = { cwd: root, env: { ...process.env, MELRA_HOME: join(root, ".melra"), MELRA_WORKSPACE: root } };
+    // A mistyped id reported "Revoked 0 tokens" and exited 0; a bare --revoke listed the clients.
+    await expect(execute(process.execPath, [entry, "clients", "--revoke", "nope"], options)).rejects.toMatchObject({
+      code: 1,
+      stderr: expect.stringContaining("no such client: nope"),
+    });
+    await expect(execute(process.execPath, [entry, "clients", "--revoke"], options)).rejects.toMatchObject({
+      code: 1,
+      stderr: expect.stringContaining("--revoke requires a client id"),
+    });
+  });
+
+  it("refuses a blank --port instead of taking a random one", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-cli-"));
+    roots.push(root);
+    const options = {
+      cwd: root,
+      env: { ...process.env, MELRA_HOME: join(root, ".melra"), MELRA_WORKSPACE: root },
+      // An unfixed serve listens until killed.
+      timeout: 10_000,
+    };
+    // What `--port "$PORT"` sends with PORT unset, and a --port with nothing after it.
+    for (const args of [["--port", ""], ["--port", " "], ["--port"]]) {
+      await expect(
+        execute(process.execPath, [entry, "serve", "--http", ...args], options),
+      ).rejects.toMatchObject({ stderr: expect.stringContaining("--port requires a port") });
+    }
+    // With --socket the transports conflict first, value or not: telling a
+    // socket user to pass 0 only gets them refused for mixing transports.
+    await expect(
+      execute(process.execPath, [entry, "serve", "--socket", join(root, "s.sock"), "--port"], options),
+    ).rejects.toMatchObject({ stderr: expect.stringContaining("--socket replaces") });
+  }, 60_000);
 
   it("serves on a socket only with --socket, and doctor reports the socket's mode", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-cli-"));
@@ -1400,6 +1494,54 @@ describe("melra CLI", () => {
     expect(policy.allowedDomains).toContain("*");
   });
 
+  it("carries --mode enforced into the policy and the client config it writes", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-cli-mode-"));
+    roots.push(root);
+    // Beside the workspace: enforced mode refuses a data directory inside it.
+    const workspace = join(root, "ws");
+    await mkdir(workspace);
+    const init = async (home: string, extra: string[]) =>
+      JSON.parse(
+        (
+          await execute(process.execPath, [entry, "init", "--client", "claude", ...extra], {
+            cwd: workspace,
+            env: { ...process.env, MELRA_HOME: home, MELRA_WORKSPACE: workspace, MELRA_POLICY: "" },
+          })
+        ).stdout,
+      ) as { policyPath: string; config: { mcpServers: { melra: { env: Record<string, string> } } } };
+    // What the client will run: a process given only the config's env.
+    const modeFrom = async (config: Record<string, string>) =>
+      (
+        JSON.parse(
+          (
+            await execute(process.execPath, [entry, "doctor", "--json"], {
+              cwd: workspace,
+              env: { ...process.env, MELRA_MODE: "", ...config },
+            }).catch((error: { stdout: string }) => error)
+          ).stdout,
+        ) as { mode: string }
+      ).mode;
+
+    const strict = await init(join(root, "strict"), ["--mode", "enforced"]);
+    expect(strict.config.mcpServers.melra.env.MELRA_MODE).toBe("enforced");
+    expect(JSON.parse(await readFile(strict.policyPath, "utf8")).mode).toBe("enforced");
+    expect(await modeFrom(strict.config.mcpServers.melra.env)).toBe("enforced");
+
+    // A policy that already exists is the operator's and is left alone; the
+    // config alone still starts the server enforced.
+    const kept = join(root, "kept");
+    await init(kept, []);
+    const before = await readFile(join(kept, "policy.json"), "utf8");
+    const pinned = await init(kept, ["--mode", "enforced"]);
+    expect(await readFile(join(kept, "policy.json"), "utf8")).toBe(before);
+    expect(JSON.parse(before).mode).toBe("developer");
+    expect(await modeFrom(pinned.config.mcpServers.melra.env)).toBe("enforced");
+
+    // Developer mode adds nothing, so an existing entry stays unchanged.
+    const plain = await init(join(root, "plain"), []);
+    expect(plain.config.mcpServers.melra.env).not.toHaveProperty("MELRA_MODE");
+  });
+
   it("prepares policy, config, and readiness in one setup command", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-cli-setup-"));
     roots.push(root);
@@ -1510,6 +1652,28 @@ describe("melra CLI", () => {
     };
     expect(initialized.config.mcpServers.melra.env.MELRA_WORKSPACE).toBe(second);
     expect(JSON.parse(await readFile(initialized.policyPath, "utf8"))).not.toHaveProperty("workspaceRoot");
+  });
+
+  it("creates MELRA_HOME private, and says when one it finds is not", async () => {
+    if (process.platform === "win32") return;
+    const root = await mkdtemp(join(tmpdir(), "melra-private-home-"));
+    roots.push(root);
+    const env = { ...process.env, MELRA_WORKSPACE: root, MELRA_POLICY: "" };
+    const home = join(root, "home");
+    await execute(process.execPath, [entry, "init", "--client", "claude"], { cwd: root, env: { ...env, MELRA_HOME: home } });
+    expect((await stat(home)).mode & 0o777).toBe(0o700);
+    // One made earlier and left open is reported, and left as it is.
+    const open = join(root, "open");
+    await mkdir(open);
+    await chmod(open, 0o755);
+    const result = await execute(process.execPath, [entry, "doctor"], { cwd: root, env: { ...env, MELRA_HOME: open } }).catch(
+      (error: { stdout: string }) => error,
+    );
+    const check = (JSON.parse(result.stdout) as { checks: Array<{ name: string; status: string; detail: string }> }).checks.find(
+      (entry) => entry.name === "data-directory",
+    );
+    expect(check).toMatchObject({ status: "warn", detail: expect.stringContaining("chmod 700") });
+    expect((await stat(open)).mode & 0o777).toBe(0o755);
   });
 
   it("writes the operator's MELRA_POLICY into the client config, and refuses one that is missing", async () => {

@@ -84,6 +84,13 @@ All notable changes are documented here. The format follows
   (`verifier_type_taken:semantic`) and the runtime does not start. Rename such
   a verifier, and the `custom` predicates that name it. (#54)
 
+- The eleven MCP tools describe themselves fully: each says what it does,
+  when to use it instead of its siblings, what it returns and how its
+  parameters relate, and every top-level parameter now carries a description
+  (most had none). The server's instructions add that no tool lists all tasks
+  or runs, so an agent keeps the ids it is given, and that
+  `melra_workflow_control` halts a run while `melra_workflow_cancel` ends it.
+
 - **Breaking:** in enforced mode, a browser action that drives a page
   (`click`, `type`, `fill_form`, `select`, `press`, `upload`, `download`,
   `close`, `tab_switch`) must name it with `url`, or it is refused at planning
@@ -118,6 +125,72 @@ All notable changes are documented here. The format follows
   in that case is gone with it. (#105)
 
 ### Fixed
+
+- Denying a durable workflow's step (`melra approve <id> --deny`, the
+  console's Deny) or cancelling its task (`melra_task_cancel`) no longer leaves
+  the run `running` for good with nothing left to run. The step did not
+  happen, so the run is `failed`, as when a step fails, and the compensations
+  declared for the steps already done unwind newest first, each still a
+  governed task that waits for its own approval. `melra workflow cancel` still
+  ends a run without unwinding it. Denying or cancelling a compensation now
+  stops the unwind as a failed one does: the run is `recovery_required` with
+  `workflow_compensation_incomplete:<node>`. It used to read `failed`, and the
+  next advance went on to undo the step before it. A run where another step's
+  outcome is unknown (`recovery_required`) halts there instead of unwinding
+  past it. A parallel node with a denied branch now ends when an advance reads
+  the denial, live and after a restart, instead of keeping its other branches'
+  approvals on offer. A run an earlier version left `running` this way is
+  repaired the next time the runtime starts (`melra serve`, any `melra
+  workflow` command, `approve`, `run`, `console`, `inspect`, `export` or
+  `demo`), and one it left `failed`
+  past a denied compensation reports `recovery_required` at its next advance.
+  Only an operator's or agent's cancel counts as a denial. A step cancelled as
+  a duplicate (its effect committed under an attempt the run does not record,
+  after a pause cost an advance its commit), or a step still running or
+  verifying, leaves the run `recovery_required` for recovery to settle when
+  the runtime next starts, and is not read as denied or failed. A step an
+  approval node already ran counts as done when deciding what to undo, and
+  an unwind stops when a cancel or pause lands under it. A condition no
+  longer asks its predicate again once a branch's first step has committed, so
+  the other branch cannot run as well. A read that committed its key before a
+  crash recovers as verified instead of running again only to be cancelled as
+  a duplicate of itself. (#243)
+
+- `melra clients` lists a client whose tokens were revoked as `pending`, not
+  `approved`: a revoke now clears the client's approval along with its tokens.
+  `melra clients --revoke <id>` exits 1 with `no such client` for an id that is
+  not registered, and a `--revoke` with no value is refused; both used to exit
+  0, the first reporting "Revoked 0 tokens". (#255)
+
+- The TypeScript SDK's `MelraClient.connect()` says why a `melra serve` it
+  started refused to start: the error quotes the server's stderr (an invalid
+  policy, an unwritable `MELRA_HOME`, a Node without `node:sqlite`) instead
+  of only `MCP error -32000: Connection closed`. It also reads that stderr
+  for the life of the connection, so a server with a lot to say no longer
+  blocks on a full pipe. (#258)
+
+- `melra serve --http` with neither `--port` nor `MELRA_HTTP_PORT` listens on
+  the documented `127.0.0.1:7457` again. An unset variable read as port `0`,
+  so the server took a random port on every start, clients set up from the
+  docs got connection refused, and `melra status` reported a running server
+  as not running. `MELRA_HTTP_PORT=0` and `--port 0` still ask for any free
+  port. A blank `--port` (`--port "$PORT"` with `PORT` unset), or one with no
+  value, is refused instead of taking a random port the same way. (#252)
+
+- An unknown flag after `--write` or `--open` is refused like any other: the
+  token after them was skipped unchecked, so `melra setup --client claude-code
+  --write --dry-run` wrote the client config. `melra serve --port` and `serve
+  --open` without `--http` are refused rather than serving stdio while the
+  operator waits on a port nobody listens on. (#254)
+
+- In block mode (the default), a popup whose first response never arrives is
+  now closed. Playwright never hands such a window over, so it used to stay
+  open for the life of the context, unreported. Once the action that opened it
+  has given up on it, it has as long again to load, that action's
+  `timeoutMs`; one that loads is reported with its address and closed as
+  before, and one that does not is closed by its target id and reported, with
+  no address and marked `betweenActions`, by the action running then or the
+  next. With `popups: "allow"` it is left open. (#240)
 
 - A window an action gave up on that is handed over later, during another
   action's wait, no longer stands in for a window that action opened, which
@@ -229,6 +302,49 @@ All notable changes are documented here. The format follows
   MCP Registry publish step.
 
 ### Security
+
+- An authorization code issued to an OAuth client before `melra clients
+  --revoke` can no longer be redeemed after it. The revoke runs in another
+  process and cannot reach the server's pending codes, which live for five
+  minutes, so the client could still get a fresh token in that window. Each
+  code is now bound to the approval it came from, and a revoke ends it. (#255)
+
+- A background terminal job keeps the processes its program leaves in its
+  process group under supervision until that group is empty. Once the program
+  exited, `stop`, the job's `timeoutMs` and the runtime's `close()` stopped
+  signalling them, so they could outlive the job and the server, while `stop`
+  still reported `stopped: true`. Supervision ends with the job's timeout and
+  the SIGKILL after it. POSIX only: Windows has no process groups. A process
+  that leaves the group (`setsid`) is still out of reach. `compose.yaml` and
+  the documented `docker run` now start the container with an init (`init:
+  true`, `--init`), so a process a job leaves behind is reaped when it exits;
+  Node as PID 1 reaped only the processes it started.
+
+- `melra setup` and `melra init` run with `--mode enforced` (or
+  `MELRA_MODE=enforced`) write `MELRA_MODE=enforced` into the client entry they
+  generate, and `"mode": "enforced"` into a policy file they create. They
+  reported enforced mode while the entry started a developer-mode server. An
+  existing policy file is left as it is. `melra conformance` likewise passes
+  `--mode enforced` and `--unsafe-local` to the server it starts, which ran
+  without them, and when that server refuses to start it now says why
+  instead of only "Connection closed".
+
+- `file.write` keeps the permissions of a file it replaces: a private file
+  stayed private only until it was written, when it came back with the default
+  mode, and a script lost its execute bit. A file with a name near the file
+  system's length limit can now be written too.
+
+- The Python SDK no longer passes an inherited `MELRA_UNHINGED` or
+  `MELRA_SOCKET` to the server it starts, as the TypeScript SDK already did
+  not: one left exported in a shell made every Python app's server run in
+  unsafe-local mode. Pass either in `environment` to mean it.
+
+- `MELRA_HOME` is created private (mode `0700`) by `melra setup`, `init` and
+  `doctor`, by the server's task store, and in the container image (`/data`);
+  they could be created readable by other local users. The store creates the
+  task database `0600` and keeps it so. `doctor` warns when an existing
+  `MELRA_HOME` is readable by others, says to `chmod 700` it, and leaves it as
+  it is; a named Docker volume made by an older image keeps its old mode.
 
 - A browser input action (`click`, `type`, `fill_form`, `select`, `press`,
   `upload`, `download`) is held to the page its checks read, the `url` it

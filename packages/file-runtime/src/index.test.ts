@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { spawnSync } from "node:child_process";
-import { link, mkdir, mkdtemp, open, readdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, link, mkdir, mkdtemp, open, readdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, parse } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -31,6 +31,29 @@ describe("FileRuntime", () => {
     expect(result.written).toBe(true);
     expect(await readFile(join(root, "artifacts/result.txt"), "utf8")).toBe("verified");
     expect(result.sha256).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it("keeps the permissions of the file it replaces, and writes a name as long as the file system allows", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-file-"));
+    roots.push(root);
+    const runtime = await FileRuntime.create({ root });
+    const write = (path: string, content: string) =>
+      runtime.execute(FileOperationSchema.parse({ kind: "file", action: "write", path, content }));
+    if (process.platform !== "win32") {
+      for (const [name, mode] of [["secret.env", 0o600], ["run.sh", 0o755]] as const) {
+        await writeFile(join(root, name), "before");
+        await chmod(join(root, name), mode);
+        await write(name, "after");
+        expect(await readFile(join(root, name), "utf8")).toBe("after");
+        expect((await stat(join(root, name))).mode & 0o777).toBe(mode);
+      }
+    }
+    // 255 bytes, the usual limit for one name: the temporary copy's name
+    // used to add 47 more.
+    const long = `${"n".repeat(251)}.txt`;
+    await write(long, "fits");
+    expect(await readFile(join(root, long), "utf8")).toBe("fits");
+    expect((await readdir(root)).filter((name) => name.includes(".melra-"))).toEqual([]);
   });
 
   it("never treats a differently cased spelling of the root as somewhere else", async () => {

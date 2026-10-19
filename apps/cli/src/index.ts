@@ -217,7 +217,9 @@ function rejectUnknownFlags(args: string[], known: readonly string[]): void {
   ]);
   // A flag's own value can look like a flag (`--input node=--x`), so skip the
   // slot after any known flag that takes one.
-  const boolean = new Set(["--http", "--json", "--yes", "--deny"]);
+  // Every known flag that takes no value. One missing here had its next
+  // token skipped unchecked, so `--write --dry-run` wrote the config.
+  const boolean = new Set(["--http", "--json", "--yes", "--deny", "--write", "--open"]);
   const valued = new Set(known.filter((flag) => !boolean.has(flag)));
   for (let index = 0; index < args.length; index += 1) {
     const argument_ = args[index];
@@ -547,12 +549,15 @@ async function doctor(env: CliEnvironment): Promise<{
     });
   }
   try {
-    await mkdir(env.dataDirectory, { recursive: true });
+    await mkdir(env.dataDirectory, { recursive: true, mode: 0o700 });
     await access(env.dataDirectory, constants.R_OK | constants.W_OK);
+    // Created private above. One that already existed is left as it is, but
+    // said to be open: the task database inside is private, its directory not.
+    const open = process.platform !== "win32" && ((await stat(env.dataDirectory)).mode & 0o077) !== 0;
     checks.push({
       name: "data-directory",
-      status: "pass",
-      detail: env.dataDirectory,
+      status: open ? "warn" : "pass",
+      detail: open ? `${env.dataDirectory} can be read by other users; run chmod 700 on it` : env.dataDirectory,
     });
   } catch {
     checks.push({
@@ -566,7 +571,7 @@ async function doctor(env: CliEnvironment): Promise<{
   // whose guardrails warning already says so.
   if (
     !env.unhinged &&
-    checks.every((check) => !["workspace", "data-directory"].includes(check.name) || check.status === "pass")
+    checks.every((check) => !["workspace", "data-directory"].includes(check.name) || check.status !== "fail")
   ) {
     try {
       const inside = await workspaceHoldsData(env.workspaceRoot, env.dataDirectory);
@@ -666,7 +671,7 @@ async function doctor(env: CliEnvironment): Promise<{
 }
 
 async function init(args: string[], env: CliEnvironment): Promise<InitResult> {
-  await mkdir(env.dataDirectory, { recursive: true });
+  await mkdir(env.dataDirectory, { recursive: true, mode: 0o700 });
   // The operator's MELRA_POLICY when there is one: writing the default path
   // into the client config instead quietly swapped their policy for ours.
   const policyPath = env.policyPath ?? join(env.dataDirectory, "policy.json");
@@ -678,8 +683,10 @@ async function init(args: string[], env: CliEnvironment): Promise<InitResult> {
     }
     // No `workspaceRoot`: this file is shared by every project's server, and
     // each config `setup` writes names its own workspace in MELRA_WORKSPACE.
+    // In the mode asked for, so `approve` and `console` run from a shell agree
+    // with the server on it; a policy that already exists is the operator's.
     const { workspaceRoot: _shared, ...policy } = createDefaultPolicy(env.workspaceRoot);
-    await writeFile(policyPath, `${JSON.stringify(policy, null, 2)}\n`, { flag: "wx" });
+    await writeFile(policyPath, `${JSON.stringify({ ...policy, mode: env.mode }, null, 2)}\n`, { flag: "wx" });
   }
   const client = resolveClient(argument("--client", args) ?? "generic");
   const label = CLIENTS[client]?.label ?? client;
@@ -689,6 +696,9 @@ async function init(args: string[], env: CliEnvironment): Promise<InitResult> {
       MELRA_WORKSPACE: env.workspaceRoot,
       MELRA_HOME: env.dataDirectory,
       MELRA_POLICY: policyPath,
+      // The client starts the server with this env, not with our flags: without
+      // it `--mode enforced` would be reported here and a developer server run.
+      ...(env.mode === "enforced" ? { MELRA_MODE: "enforced" } : {}),
     },
   });
   const configPath = clientConfigPath(client, env.workspaceRoot);
@@ -888,11 +898,19 @@ async function policyTest(args: string[], env: CliEnvironment): Promise<void> {
 function clientsCommand(args: string[], env: CliEnvironment): number {
   const oauth = new OAuthProvider(env.dataDirectory);
   const revoke = argument("--revoke", args);
-  if (revoke !== undefined) {
+  if (args.includes("--revoke")) {
+    // A bare --revoke listed the clients and exited 0, and a mistyped id
+    // reported a revocation that touched nothing.
+    if (revoke === undefined || revoke.trim() === "") {
+      throw new Error("--revoke requires a client id, or all");
+    }
+    if (revoke !== "all" && !oauth.clients().some((client) => client.id === revoke)) {
+      throw new Error(`no such client: ${printable(revoke)}; 'melra clients' lists them`);
+    }
     const dropped = oauth.revoke(revoke === "all" ? undefined : revoke);
     process.stdout.write(
       `Revoked ${dropped} token${dropped === 1 ? "" : "s"}. ` +
-        `The client must be approved again before it can act.\n`,
+        `${revoke === "all" ? "Every client" : "The client"} must be approved again before it can act.\n`,
     );
     return 0;
   }
@@ -958,7 +976,7 @@ Usage:
   melra doctor [--json]
   melra conformance [--url <mcp-url> --token <token>] [--level <1|2|3>]
   melra init [--client <name>] [--write] [--json]
-  melra serve [--http] [--port <port>] [--open]
+  melra serve [--http [--port <port>] [--open]]
   melra serve --socket <path>
   melra run --request <task.json>
   melra approve <task-id> [--yes] [--deny] [--json]
@@ -1013,12 +1031,13 @@ Flags:
   --http           Serve MCP over loopback HTTP instead of stdio, alongside a
                    read-only REST API, a workflow event stream, and the console.
                    Prints a bearer token; every request must carry it.
-  --port <port>    HTTP port (default: 7457, or MELRA_HTTP_PORT).
+  --port <port>    HTTP port, with --http (default: 7457, or MELRA_HTTP_PORT).
   --socket <path>  Serve what --http serves on a Unix socket created mode 0600,
                    so only this OS user can connect; the token is still
-                   required. Not on Windows. Only this flag moves 'serve'
-                   off stdio.
-  --open           Open the console in your browser once it is listening.
+                   required. Not on Windows. This flag, not MELRA_SOCKET,
+                   moves 'serve' off stdio.
+  --open           With --http, open the console in your browser once it is
+                   listening.
   --url <mcp-url>  Endpoint for 'conformance'. Default: spawn 'melra serve'.
   --level <1|2|3>  Conformance level being claimed (default: 3). The run exits
                    non-zero if the endpoint falls short of it.
@@ -1108,6 +1127,11 @@ async function main(): Promise<void> {
         ...(url === undefined ? {} : { url }),
         ...(token === undefined ? {} : { token }),
         ...(level === undefined ? {} : { claim: Number(level) }),
+        // This process's flags, which a server it spawns gets only as env.
+        serverEnv: {
+          ...(env.mode === "enforced" ? { MELRA_MODE: "enforced" } : {}),
+          ...(env.unhinged ? { MELRA_UNHINGED: "1" } : {}),
+        },
       });
       printJsonOrHuman(report as unknown as ConformanceReport, renderConformance, args);
       process.exitCode = failed ? 1 : 0;
@@ -1136,10 +1160,23 @@ async function main(): Promise<void> {
       // socket only they can open and a port anyone local can is the point.
       if (
         socketPath !== undefined &&
-        (http || port !== undefined || args.includes("--open"))
+        // The flag, not its value: a --port with nothing after it is still one.
+        (http || args.includes("--port") || args.includes("--open"))
       ) {
         throw new Error(
           "--socket replaces --http, --port, and --open; pass one transport",
+        );
+      }
+      // The same mistake the other way round: without --http, serve speaks
+      // stdio, and a port nobody listens on looks like a server that hangs.
+      if (socketPath === undefined && !http && (args.includes("--port") || args.includes("--open"))) {
+        throw new Error("--port and --open need --http; without it, serve speaks MCP over stdio");
+      }
+      // `--port "$PORT"` with PORT unset is Number(""), which is 0: a random
+      // port on every start, the bug a blank MELRA_HTTP_PORT had.
+      if (args.includes("--port") && (port === undefined || port.trim() === "")) {
+        throw new Error(
+          "--port requires a port; leave it out for the default (7457, or MELRA_HTTP_PORT), or pass 0 for any free port",
         );
       }
       const melra = await runtime(env);

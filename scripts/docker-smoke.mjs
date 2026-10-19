@@ -32,6 +32,7 @@ const hardened = [
   ...(platform === undefined ? [] : ["--platform", platform]),
   ...userArgs,
   "-i",
+  "--init",
   "--read-only",
   "--security-opt",
   "no-new-privileges:true",
