@@ -1289,7 +1289,7 @@ export class WorkflowController {
     const requests = branches.flatMap((branch, branchIndex) =>
       branch.map((request, requestIndex) => ({
         request,
-        branch: `${branchIndex}:${requestIndex}`,
+        identity: { workflowId, nodeId, iteration: 0, branch: `${branchIndex}:${requestIndex}` },
       })),
     );
     // Every branch finishes before one's refusal is reported. Rejecting at
@@ -1297,27 +1297,20 @@ export class WorkflowController {
     // as it was, so a failure beside it unwound past whatever that sibling did.
     const settled = await Promise.allSettled(
       requests.map((item, index) =>
-        this.runTask(
-          item.request,
-          state.taskIds[index],
-          approvals,
-          true,
-          {
-            workflowId,
-            nodeId,
-            iteration: 0,
-            branch: item.branch,
-          },
-        ),
+        this.runTask(item.request, state.taskIds[index], approvals, true, item.identity),
       ),
     );
     const refused = settled.find((outcome) => outcome.status === "rejected");
-    // A refused branch stays as its task stands; one with no task yet cannot
-    // be placed among the others, so the refusal goes up alone.
+    // A refused branch stays as the attempt it acted on stands, found by its
+    // key as runTask finds it: one planned in this call is not recorded yet,
+    // and the run may still name a cancelled attempt that was asked again.
+    // One with no task at all cannot be placed among the others, so the
+    // refusal goes up alone.
+    let every: TaskRecord[] | undefined;
     const states = settled.map((outcome, index) => {
       if (outcome.status === "fulfilled") return outcome.value.state;
-      const taskId = state.taskIds[index];
-      const task = taskId === undefined ? undefined : this.store.getTask(taskId);
+      const { request, identity } = requests[index]!;
+      const task = preferredTask((every ??= this.store.listTasks(100_000)), taskIdempotencyKey(identity, request));
       return task === undefined ? undefined : nodeStateForTask(task, false);
     });
     if (states.some((entry) => entry === undefined)) throw refused!.reason;
@@ -1418,12 +1411,16 @@ export class WorkflowController {
     const isUnknown = (nodeId: string) =>
       current.nodes[nodeId]?.status === "recovery_required" || reranked.some(({ node }) => node.id === nodeId);
     // An approval node runs its step's task itself, so the step may still
-    // read `pending` while the approval holds the unknown outcome.
+    // read `pending` while the approval holds the unknown outcome. A target
+    // that has since settled as done counts too: recovery at startup may have
+    // settled it before this ran, and this version skips a compensation only
+    // when its target is not done.
     const unskipped = definition.nodes.filter(
       (node) =>
         node.type === "compensation" &&
         current.nodes[node.id]?.status === "skipped" &&
         (isUnknown(node.forNodeId) ||
+          targetDone(definition, (id) => current.nodes[id], node.forNodeId, this.ran) ||
           definition.nodes.some(
             (other) => other.type === "approval" && other.forNodeId === node.forNodeId && isUnknown(other.id),
           )),
@@ -1447,7 +1444,9 @@ export class WorkflowController {
         emit("workflow.node_changed", { nodeId: node.id, from: "skipped", state });
         draft.nodes[node.id] = state;
       }
-      if (draft.status === "failed") {
+      // A run with nothing unknown stays failed, so its unwind takes up what
+      // was offered again.
+      if (halt) {
         const from = draft.status;
         draft.status = "recovery_required";
         const stalled = stalledCompensation(definition, draft.nodes);
@@ -1666,7 +1665,11 @@ function aggregateNodeState(
     const state = states.find((candidate) => candidate.status === status);
     if (state !== undefined) return { ...state, taskIds };
   }
-  return { status: "verified_complete", taskIds };
+  // Complete only when every branch is: one that has not run yet (a refused
+  // branch whose task is still planned) leaves the node to be offered again.
+  return states.every((state) => state.status === "verified_complete")
+    ? { status: "verified_complete", taskIds }
+    : { status: "pending", taskIds };
 }
 
 /**
