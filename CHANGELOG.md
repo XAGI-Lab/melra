@@ -103,6 +103,19 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- An `http` response past `maxResponseBytes` returns the body up to the cap.
+  The chunk that crossed the cap was dropped whole, so a body that arrived in
+  one read (anything up to tens of KB) came back empty, and `bytes` counted
+  the dropped chunk; it now counts the bytes delivered. An
+  `http_resource_matches` read that misses on a path into a 2xx body cut at
+  the cap (`json.*`, or a `bytes` or `content` larger than what arrived) is
+  inconclusive, not a "did not match": as reconciliation it leaves the task
+  `recovery_required` instead of `failed`, and as evidence the item is marked
+  inconclusive. A cut body never matches an exact `bytes` or `content`,
+  whether in `http_resource_matches` or in `result_equals` on the adapter's
+  own result, since the whole body is longer than what arrived. A miss on the
+  status or a header is still the provider's answer. (#249)
+
 - The screen reading that `inspect` falls back to when no element tree came
   back deletes its screenshot once `tesseract` has read it. Each such
   `inspect`, and each `click`, `move` or `drag` given a `target`, used to leave
