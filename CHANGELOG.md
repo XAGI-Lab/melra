@@ -182,6 +182,24 @@ All notable changes are documented here. The format follows
   while cancelling the tasks after it is reported, and cancelling the
   cancelled run again sweeps again. (#244)
 
+- A workflow step whose advance lost its commit is taken up by its
+  idempotency key on the next advance instead of planned afresh. An
+  `operation` or `approval` node, a `parallel` branch, a `bounded_loop`
+  iteration or a `compensation` that the run named no task for planned a new
+  one without looking for the task the lost advance left under the same key:
+  a leftover challenge stayed approvable beside the new one, a step that took
+  effect but failed its evidence (`partial`) ran a second time, and one that
+  verified was cancelled as its own duplicate and halted the run. Now, as a
+  condition's branch already did, the step takes up the task committed under
+  its key, else the newest that may have had an effect or still waits
+  (planned, awaiting approval, running, verified, partial or unknown), and is
+  planned afresh only when there is none or only tasks that did not happen,
+  as a later attempt than those. A loop that such an advance carried into its
+  next iteration goes on there, rather than ask `until` again of the
+  iteration before and stop short of one that ran. A pause no longer loses an
+  advance's commit (above), but a failed write still can, and runs an earlier
+  version left this way heal on their next advance. (#319)
+
 - A condition step whose advance lost its commit (a pause landed while it ran)
   keeps to one branch. Recovery read both branches' tasks together and could
   reopen the step on the branch it had abandoned, or, when the branch it took

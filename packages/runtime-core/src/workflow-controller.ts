@@ -1071,10 +1071,10 @@ export class WorkflowController {
       // went on, and the run unwound.
       for (const taskId of stopped) this.tasks.cancel(taskId);
       // A challenge a lost advance left is in no node's taskIds: a condition's
-      // is never adopted (it would follow its branch without asking, #268), and
-      // an operation's stays approvable beside the one the next advance plans
-      // afresh (#319). So the run cancels what is planned or waiting under
-      // every node's keys too, and cancelling a cancelled run sweeps again.
+      // is never adopted (it would follow its branch without asking, #268),
+      // and another step's is taken up only when the run advances again
+      // (#319). So the run cancels what is planned or waiting under every
+      // node's keys too, and cancelling a cancelled run sweeps again.
       // A store failure is reported, so the operator cancels again and that
       // sweeps; only a definition that can no longer be opened goes unswept,
       // and still lets the run end.
@@ -1456,14 +1456,26 @@ export class WorkflowController {
     identity: TaskIdentity,
   ): Promise<NodeAdvance> {
     this.assertAdvanceLease(identity.workflowId);
-    let task =
-      existingTaskId === undefined
-        ? this.tasks.plan(request, {
-            idempotencyKey: taskIdempotencyKey(identity, request),
-            attempt: 1,
-            stored: true,
-          })
-        : this.tasks.status(existingTaskId);
+    const key = taskIdempotencyKey(identity, request);
+    let task: TaskRecord;
+    if (existingTaskId !== undefined) {
+      task = this.tasks.status(existingTaskId);
+    } else {
+      // A step the run names no task for may still have one: an advance that
+      // lost its commit planned or ran it (#319). Planned afresh, a leftover
+      // challenge stayed approvable beside the new one, and a step that took
+      // effect but failed its evidence ran again. Planned only when there is
+      // none, or only tasks that did not happen, and above their attempts, so
+      // it is the one recovery prefers.
+      const under = this.tasksUnder(key);
+      task =
+        this.takenUp(key, under) ??
+        this.tasks.plan(request, {
+          idempotencyKey: key,
+          attempt: 1 + Math.max(0, ...under.map((candidate) => candidate.attempt ?? 1)),
+          stored: true,
+        });
+    }
     // A challenge this run asked again after it expired leaves its first
     // attempt cancelled; when the advance that asked again did not commit, the
     // run still names that attempt. Take the newest attempt for the key, as
@@ -1486,7 +1498,7 @@ export class WorkflowController {
     ) {
       this.tasks.cancel(task.id);
       task = this.tasks.plan(request, {
-        idempotencyKey: taskIdempotencyKey(identity, request),
+        idempotencyKey: key,
         attempt: (task.attempt ?? 1) + 1,
         stored: true,
       });
@@ -1536,6 +1548,25 @@ export class WorkflowController {
     }
   }
 
+  /** Every task planned under a step's key: its attempts, and any duplicates. */
+  // ponytail: lists every task per new step; query by key if a long history slows advances.
+  private tasksUnder(key: string): TaskRecord[] {
+    return this.store.listTasks(100_000).filter((task) => task.idempotencyKey === key);
+  }
+
+  /**
+   * The task a step takes up rather than plan one, as recovery reads its key:
+   * the one committed, else the preferred of those that may have had an
+   * effect or still ask (planned, waiting, running, verified, partial or
+   * unknown). Undefined when there are none, or only tasks that did not happen.
+   */
+  private takenUp(key: string, under: TaskRecord[]): TaskRecord | undefined {
+    const committed = this.store.getIdempotencyCommit(key)?.taskId;
+    return committed === undefined
+      ? preferredTask(under.filter((task) => !hadNoEffect(task)), key)
+      : this.tasks.status(committed);
+  }
+
   private async runSequential(
     requests: TaskRequest[],
     state: WorkflowNodeState,
@@ -1544,23 +1575,17 @@ export class WorkflowController {
   ): Promise<NodeAdvance> {
     const taskIds: string[] = [];
     const tasks: TaskRecord[] = [];
-    let every: TaskRecord[] | undefined;
     for (const [index, request] of requests.entries()) {
       const taskIdentity = { ...identity, branch: `${identity.branch}:${index}` };
-      const key = taskIdempotencyKey(taskIdentity, request);
       // The step's task is the one under its key. The run may name another
       // branch's or step's (an earlier version merged both branches), or none
-      // (the advance that planned it lost its commit): one committed, or one
-      // that may have run or is still asking, is taken up, not planned again.
+      // (the advance that planned it lost its commit): runTask then takes up
+      // the one under its key.
       const named = state.taskIds[index];
-      let existing =
-        named !== undefined && this.tasks.status(named).idempotencyKey === key
+      const existing =
+        named !== undefined && this.tasks.status(named).idempotencyKey === taskIdempotencyKey(taskIdentity, request)
           ? named
-          : this.store.getIdempotencyCommit(key)?.taskId;
-      if (existing === undefined) {
-        const found = preferredTask((every ??= this.store.listTasks(100_000)), key);
-        if (found !== undefined && !hadNoEffect(found)) existing = found.id;
-      }
+          : undefined;
       const result = await this.runTask(request, existing, approvals, true, taskIdentity);
       tasks.push(...result.tasks);
       taskIds.push(result.state.taskIds[0]!);
@@ -1629,6 +1654,17 @@ export class WorkflowController {
     const taskIds = [...state.taskIds];
     const tasks: TaskRecord[] = [];
     let iterations = state.iterations ?? 0;
+    // An advance that lost its commit may have gone on to this iteration, so
+    // `until` said no before it: asked again, of a workspace that iteration
+    // changed, it could stop the loop short of an iteration that ran.
+    const wentOn = (iteration: number) => {
+      if (iteration >= node.maxIterations) return false;
+      const key = taskIdempotencyKey(
+        { workflowId, nodeId: node.id, iteration, branch: "loop:0" },
+        node.body[0]!,
+      );
+      return this.takenUp(key, this.tasksUnder(key)) !== undefined;
+    };
     // Resumed after recovery between iterations: the last one finished but its
     // `until` was never checked, and running another would be one too many.
     const finished = taskIds[iterations * node.body.length - 1];
@@ -1637,6 +1673,7 @@ export class WorkflowController {
       taskIds.length === iterations * node.body.length &&
       finished !== undefined &&
       node.until !== undefined &&
+      !wentOn(iterations) &&
       (await answered(
         node.id,
         this.tasks.verifyPersisted(finished, [node.until]),
@@ -1682,6 +1719,7 @@ export class WorkflowController {
       if (
         node.until !== undefined &&
         iterations < node.maxIterations &&
+        !wentOn(iterations) &&
         (await answered(
           node.id,
           this.tasks.verifyPersisted(lastTaskId, [node.until]),

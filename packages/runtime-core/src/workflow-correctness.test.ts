@@ -910,8 +910,8 @@ describe("a step an operator denies", () => {
     expect(done).toEqual(["patch"]);
   });
 
-  it("halts a loop whose iterations ran past its record, and recovery finishes it", async () => {
-    const { controller, store, tasks, cipher, done, root } = await setup();
+  it("takes up a loop's iterations that ran past its record, and asks until only of the last", async () => {
+    const { controller, tasks, done, root } = await setup();
     const tick = put("tick");
     const planned = controller.plan(
       workflow([
@@ -929,23 +929,14 @@ describe("a step an operator denies", () => {
     await writeFile(join(root, "flag"), "");
 
     let run = (await controller.advance(planned.id)).run;
-    for (let step = 0; step < 3 && run.status !== "recovery_required"; step += 1) {
+    for (let step = 0; step < 3 && run.status !== "verified_complete"; step += 1) {
       run = (await controller.advance(planned.id, approvalsFor(run))).run;
     }
     // Reusing iteration 0 and asking `until` of a workspace iteration 1 had
-    // changed cut the loop short, and `after` ran on it.
-    expect(run.status).toBe("recovery_required");
-    expect(run.nodes.after?.status).toBe("pending");
-    expect(done).toEqual(["tick", "tick"]);
-
-    const restarted = new WorkflowController(store, tasks, cipher);
-    await restarted.recoverInterrupted();
-    run = restarted.status(planned.id);
-    // Both iterations kept; the next advance asks `until` of the last one.
-    expect(run.nodes.spin).toMatchObject({ status: "pending", iterations: 2 });
-    for (let step = 0; step < 3 && run.status !== "verified_complete"; step += 1) {
-      run = (await restarted.advance(planned.id, approvalsFor(run))).run;
-    }
+    // changed cut the loop short, and `after` ran on it. Planning iteration 0
+    // afresh halted the run on a duplicate until recovery came. Both are
+    // taken up, and `until` is asked of the last.
+    expect(run.status).toBe("verified_complete");
     expect(run.nodes.spin).toMatchObject({ status: "verified_complete", iterations: 2 });
     expect(done).toEqual(["tick", "tick", "after"]);
   });
@@ -962,14 +953,15 @@ describe("a step an operator denies", () => {
     let run = (await controller.advance(planned.id)).run;
     run = (await controller.advance(planned.id, approvalsFor(run))).run;
     expect(run.nodes.next?.status).toBe("pending");
-    // An advance planned next's challenge and lost its commit to a pause; the
-    // next one planned it again, under the same key and attempt.
+    // An advance planned next's challenge and lost its commit to a pause; an
+    // earlier version's next advance planned it again, under the same key and
+    // attempt, and this one takes up the newer.
     const key = sha256({ workflowId: planned.id, nodeId: "next", iteration: 0, branch: "operation", request: put("next") });
     const stale = tasks.plan(put("next"), { idempotencyKey: key, attempt: 1, stored: true });
     await new Promise((resolve) => setTimeout(resolve, 5));
+    const live = tasks.plan(put("next"), { idempotencyKey: key, attempt: 1, stored: true }).id;
     run = (await controller.advance(planned.id)).run;
-    const live = run.nodes.next!.taskIds[0]!;
-    expect(live).not.toBe(stale.id);
+    expect(run.nodes.next?.taskIds).toEqual([live]);
     // The operator clears the stale one; any later melra process recovers.
     tasks.cancel(stale.id);
     const restarted = new WorkflowController(store, tasks, cipher);
@@ -1315,5 +1307,89 @@ describe("a halt or cancel while an advance runs a step (#244)", () => {
     expect(run.status).toBe("verified_complete");
     expect(run.nodes.loop?.taskIds).toHaveLength(2);
     expect(done).toEqual(["a", "a"]);
+  });
+});
+
+describe("a step whose advance lost its commit (#319)", () => {
+  // The run names none of the tasks an advance planned or ran when its commit
+  // fails (a locked database), or when a pause landed under it before #244;
+  // runs an earlier version left that way still have them.
+  const failNextCommit = (store: SqliteStore) =>
+    vi.spyOn(store, "transitionWorkflow").mockImplementationOnce(() => {
+      throw new Error("database is locked");
+    });
+  const waiting = (store: SqliteStore) => store.listTasks(10, "awaiting_approval").map((task) => task.id).sort();
+
+  it.each([
+    ["an operation", [{ id: "step", type: "operation", request: put("step") }], ["step"]],
+    [
+      "an approval",
+      [
+        { id: "ask", type: "approval", forNodeId: "step" },
+        { id: "step", type: "operation", dependsOn: ["ask"], request: put("step") },
+      ],
+      ["step"],
+    ],
+    ["a parallel branch", [{ id: "step", type: "parallel", branches: [[put("step")], [put("other")]] }], ["other", "step"]],
+    ["a loop", [{ id: "step", type: "bounded_loop", maxIterations: 2, body: [put("step")] }], ["step", "step"]],
+  ] as const)("offers the challenge it left on %s again, not a second one", async (_, nodes, effects) => {
+    const { controller, store, done } = await setup();
+    const planned = controller.plan(workflow([...nodes]));
+    failNextCommit(store);
+    await expect(controller.advance(planned.id)).rejects.toThrow("database is locked");
+    const left = waiting(store);
+    expect(left.length).toBeGreaterThan(0);
+    expect(Object.values(controller.status(planned.id).nodes).every((node) => node.taskIds.length === 0)).toBe(true);
+
+    let run = (await controller.advance(planned.id)).run;
+    // Planned afresh: two challenges for each step, both approvable.
+    expect(waiting(store)).toEqual(left);
+    expect(Object.values(run.nodes).flatMap((node) => node.taskIds).sort()).toEqual(left);
+    for (let step = 0; step < 6 && run.status !== "verified_complete"; step += 1) {
+      run = (await controller.advance(planned.id, approvalsFor(run))).run;
+    }
+    expect(run.status).toBe("verified_complete");
+    expect([...done].sort()).toEqual(effects);
+  });
+
+  // Its evidence fails: the effect happened, and nothing reconciles it.
+  const partial = (key: string) =>
+    TaskRequestSchema.parse({ ...put(key), requiredEvidence: [{ type: "result_equals", path: "stored", value: false }] });
+
+  it.each([
+    ["an operation that verified", [{ id: "a", type: "operation", request: put("a") }, { id: "b", type: "operation", dependsOn: ["a"], request: put("b") }], "a", "verified_complete"],
+    ["an operation", [{ id: "step", type: "operation", request: partial("step") }], "step", "failed"],
+    ["a parallel branch", [{ id: "step", type: "parallel", branches: [[partial("step")], [put("other")]] }], "step", "failed"],
+    ["a loop", [{ id: "step", type: "bounded_loop", maxIterations: 2, body: [partial("step")] }], "step", "failed"],
+    [
+      "a compensation",
+      [
+        { id: "pay", type: "operation", request: put("pay") },
+        { id: "ship", type: "operation", dependsOn: ["pay"], request: partial("ship") },
+        { id: "refund", type: "compensation", forNodeId: "pay", request: partial("refund") },
+      ],
+      "refund",
+      "recovery_required",
+    ],
+  ] as const)("takes up a step it ran on %s rather than run it again", async (_, nodes, target, settled) => {
+    const { controller, store, done, on } = await setup({ policy: { unhinged: true } });
+    const planned = controller.plan(workflow([...nodes]));
+    // The advance that runs the step loses its commit.
+    on.put = (key) => {
+      if (key !== target) return;
+      delete on.put;
+      failNextCommit(store);
+    };
+    let run = controller.status(planned.id);
+    for (let step = 0; step < 6 && !["verified_complete", "failed", "recovery_required"].includes(run.status); step += 1) {
+      run = await controller.advance(planned.id).then(
+        (result) => result.run,
+        () => controller.status(planned.id),
+      );
+    }
+    // Planned afresh, a partial step ran a second time, and a verified one
+    // was cancelled as its own duplicate and halted the run.
+    expect(done.filter((key) => key === target)).toEqual([target]);
+    expect(run.status).toBe(settled);
   });
 });

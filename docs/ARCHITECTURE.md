@@ -370,6 +370,18 @@ interface is served.
   them automatically.
 - A verified task committed before its workflow projection is repaired from
   persisted task evidence and recorded as `workflow.recovered`.
+- An advance whose commit failed leaves the run naming none of the tasks it
+  planned or ran. The next advance takes each step's task up by its
+  idempotency key, as recovery does: the one committed, else the newest
+  attempt that may have had an effect or still waits. So an `operation`,
+  `approval`, `parallel` branch, `bounded_loop` iteration or `compensation`
+  offers the challenge such an advance left again rather than a second one
+  beside it, and a step that verified, took effect but failed its evidence
+  (`partial`), has an unknown outcome or is still running is never run again.
+  A step is planned afresh only when its key has no task, or only tasks that
+  did not happen (failed, out of budget, cancelled or refused by policy). A
+  loop such an advance carried into its next iteration goes on there without
+  asking `until` again of the iteration before.
 - Idempotency keys bind workflow, node, iteration, branch, and canonical
   request. SQLite rejects a second committed attempt.
 - Competing advances for one workflow are serialized inside a server process.
