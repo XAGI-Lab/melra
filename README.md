@@ -61,7 +61,7 @@ made through other tools remain outside MELRA's control.
 
 <br /><br />
 
-[**26-second demo**](docs/assets/melra-product-demo.mp4) &nbsp;·&nbsp; [**Quick start**](#quick-start) &nbsp;·&nbsp; [**How it works**](#how-it-works) &nbsp;·&nbsp; [**See what it is doing**](#see-what-it-is-doing) &nbsp;·&nbsp; [**Docs**](#documentation) &nbsp;·&nbsp; [**Discussions**](https://github.com/XAGI-Lab/melra/discussions) &nbsp;·&nbsp; [**Product Hunt launch**](https://www.producthunt.com/products/melra)
+[**Watch the 26-second demo**](https://youtu.be/FjpDCmp_F0E) &nbsp;·&nbsp; [**Quick start**](#quick-start) &nbsp;·&nbsp; [**How it works**](#how-it-works) &nbsp;·&nbsp; [**See what it is doing**](#see-what-it-is-doing) &nbsp;·&nbsp; [**Docs**](#documentation) &nbsp;·&nbsp; [**Discussions**](https://github.com/XAGI-Lab/melra/discussions) &nbsp;·&nbsp; [**Product Hunt launch**](https://www.producthunt.com/products/melra)
 
 <br />
 
