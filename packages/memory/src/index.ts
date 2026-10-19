@@ -406,6 +406,14 @@ export class LocalMemory {
           else this.store.putMemory(existing);
           throw new Error("memory_supersedes_target_invalid");
         }
+        // An edit that drops or changes what this record supersedes hands the
+        // old one back, as deleting the record would.
+        if (
+          existing?.supersedesId !== undefined &&
+          existing.supersedesId !== memory.supersedesId
+        ) {
+          this.store.unsupersedeMemory(existing.supersedesId, memory.scope, memory.id);
+        }
         // Compact on the write path rather than on a timer: a scope only grows
         // when something is put into it, so this is the one moment reclaiming
         // is worth doing, and a local store is small enough that the cost is a

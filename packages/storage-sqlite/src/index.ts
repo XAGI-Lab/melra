@@ -1348,11 +1348,39 @@ export class SqliteStore {
     return Number(result.changes) > 0;
   }
 
-  deleteMemory(id: string, scope: MemoryScope): boolean {
+  /**
+   * Make `id` live again if `supersededBy` is what retired it, for when the
+   * record that replaced it is deleted or stops claiming to replace it.
+   * Otherwise it stayed hidden with nothing live pointing at it, so it could
+   * be neither read, edited nor superseded, and compaction later deleted it.
+   */
+  unsupersedeMemory(
+    id: string,
+    scope: MemoryScope,
+    supersededBy: string,
+  ): boolean {
     const result = this.database
-      .prepare("DELETE FROM memories WHERE id = ? AND scope = ?")
-      .run(id, scope);
+      .prepare(`
+        UPDATE memories
+        SET superseded_by = NULL, updated_at = ?
+        WHERE id = ? AND scope = ? AND superseded_by = ?
+      `)
+      .run(new Date().toISOString(), id, scope, supersededBy);
     return Number(result.changes) > 0;
+  }
+
+  /** Deleting a correction undoes it: what it replaced is live again. */
+  deleteMemory(id: string, scope: MemoryScope): boolean {
+    return this.transaction(() => {
+      const row = this.database
+        .prepare("SELECT supersedes_id AS supersedesId FROM memories WHERE id = ? AND scope = ?")
+        .get(id, scope) as { supersedesId: string | null } | undefined;
+      const result = this.database
+        .prepare("DELETE FROM memories WHERE id = ? AND scope = ?")
+        .run(id, scope);
+      if (row?.supersedesId != null) this.unsupersedeMemory(row.supersedesId, scope, id);
+      return Number(result.changes) > 0;
+    });
   }
 
   clearMemories(scope: MemoryScope): number {

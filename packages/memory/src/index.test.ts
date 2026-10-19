@@ -340,6 +340,53 @@ describe("LocalMemory", () => {
     expect(store.getMemory(second.id)?.value).toBe("Use version two (fixed)");
   });
 
+  it("brings back what a deleted or edited-away correction replaced", () => {
+    store = new SqliteStore(":memory:");
+    const memory = new LocalMemory(store);
+    const run = (fields: Record<string, unknown>) =>
+      memory.execute(MemoryOperationSchema.parse({ kind: "memory", scope: "workspace", ...fields }));
+    const put = (fields: Record<string, unknown>) =>
+      run({ action: "put", key: "runtime", ...fields }) as { id: string };
+    const listed = () =>
+      (run({ action: "list" }) as { memories: { id: string }[] }).memories.map(({ id }) => id).sort();
+
+    const first = put({ value: "Use version one" });
+    const second = put({ value: "Use version two", supersedesId: first.id });
+    expect(listed()).toEqual([second.id]);
+    // Undoing a mistaken correction used to leave the original hidden for
+    // good: unreadable, immutable, impossible to supersede, then compacted.
+    run({ action: "delete", id: second.id });
+    expect(listed()).toEqual([first.id]);
+    put({ id: first.id, value: "Use version one, still" });
+    const third = put({ value: "Use version three", supersedesId: first.id });
+    expect(listed()).toEqual([third.id]);
+    // An edit that stops superseding it hands it back the same way.
+    put({ id: third.id, value: "Use version three, on its own" });
+    expect(listed()).toEqual([first.id, third.id].sort());
+  });
+
+  it("leaves what an expired correction replaced retired", () => {
+    store = new SqliteStore(":memory:");
+    const memory = new LocalMemory(store);
+    const run = (fields: Record<string, unknown>) =>
+      memory.execute(MemoryOperationSchema.parse({ kind: "memory", scope: "workspace", ...fields }));
+    const first = run({ action: "put", key: "runtime", value: "Use version one" }) as { id: string };
+    run({
+      action: "put",
+      key: "runtime",
+      value: "Use version two until the migration",
+      supersedesId: first.id,
+      expiresAt: "2020-01-01T00:00:00.000Z",
+    });
+    // The lapse of a correction is not evidence the old fact is true again.
+    run({ action: "put", key: "other", value: "Any write compacts the scope" });
+    const { memories } = run({ action: "list", includeSuperseded: true }) as {
+      memories: { id: string; key: string }[];
+    };
+    expect(memories.filter(({ key }) => key === "runtime").map(({ id }) => id)).toEqual([first.id]);
+    expect(store.getMemory(first.id)?.supersededBy).toBeDefined();
+  });
+
   it("supports expiry and scoped supersession", () => {
     store = new SqliteStore(":memory:");
     const memory = new LocalMemory(store);

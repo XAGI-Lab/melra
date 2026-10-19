@@ -484,7 +484,11 @@ scope. `memoryRetention.maxAgeDays` (default `30`) is how long an expired or
 superseded record is kept after it stops being readable — no search or list can
 return one, so removing it changes nothing you can observe, it only stops the
 database growing forever. A superseded record survives while a live record still
-supersedes it, so `supersedesId` never dangles.
+supersedes it, so `supersedesId` never dangles. Deleting the record that
+superseded another, or editing it to supersede something else or nothing, makes
+the one it replaced live again. One that expires does not: its expiry says the
+correction has lapsed, not that the fact it replaced is true again, so both stay
+unreadable and compaction later reclaims them.
 
 `memoryRetention.maxPerScope` is a hard ceiling on *live* memories per scope and
 defaults to `0`, meaning none. It is different in kind: it deletes records you
