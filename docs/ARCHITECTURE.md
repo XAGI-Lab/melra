@@ -266,15 +266,17 @@ one taken, even when the advance that took it lost its commit (a pause landed
 while it ran); then the branch the run recorded; only then the predicate. An
 advance that lost its commit can have left tasks on the branch not taken:
 its challenges are cancelled when the branch is decided, so none is approved
-later. One there that may have had an effect halts the run as
-`recovery_required` with `workflow_condition_branch_conflict:<node>`, rather
-than run the other branch beside it. Reconciled as never applied, it no
-longer counts and the run moves on. Where both branches took effect,
-`workflow cancel` ends the run without compensating, and what each branch did
-is undone by hand. A restart before the condition is decided reads a step
-such an advance ran as the condition's own, so one whose outcome is unknown
-halts the run there, as any other step's does, rather than let a failed
-sibling unwind past it.
+later. One there that may have had an effect (it verified, its evidence did
+not hold, or its outcome is unknown) halts the run as `recovery_required` with
+`workflow_condition_branch_conflict:<node>`, rather than run the other branch
+beside it. One that did not happen counts for nothing: its adapter reported it
+failed, it ran out of budget, or it was cancelled or refused by policy. So a
+halted run moves on once the tasks it names are reconciled as never applied.
+Where both branches took effect, `workflow cancel` ends the run without
+compensating, and what each branch did is undone by hand. A restart before
+the condition is decided reads a step such an advance ran as the condition's
+own, so one whose outcome is unknown halts the run there, as any other step's
+does, rather than let a failed sibling unwind past it.
 
 ## Workflow state and events
 

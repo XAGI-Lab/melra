@@ -523,6 +523,34 @@ describe("a condition's branch not taken (#268)", () => {
     expect(recovered?.status).toBe("recovery_required");
     expect(done).toEqual(["create"]);
   });
+
+  it.each([
+    ["failed", undefined],
+    ["budget_exhausted", 100],
+  ] as const)("carries on past a step a lost advance ran on the other branch that ended %s", async (status, maxDurationMs) => {
+    // Slower than patch's budget, so its timer has fired by the time it throws.
+    const { controller, root, store, done, on } = await setup({ delayMs: 150, policy: { unhinged: true } });
+    await writeFile(join(root, "flag"), "on");
+    const patch = TaskRequestSchema.parse({ ...put("patch"), ...(maxDurationMs === undefined ? {} : { budget: { maxDurationMs } }) });
+    const planned = controller.plan(choice([patch], [put("create")]));
+    await controller.advance(planned.id);
+    // The adapter says patch did not happen; a pause lands meanwhile.
+    on.put = (key) => {
+      if (key !== "patch") return;
+      controller.pause(planned.id);
+      throw new Error("patch_refused");
+    };
+    await expect(controller.advance(planned.id)).rejects.toThrow("workflow_state_conflict");
+    delete on.put;
+    expect(store.listTasks(10, status)).toHaveLength(1);
+    controller.resume(planned.id);
+    await unlink(join(root, "flag"));
+
+    // Read as an effect that may stand, it halted the run for good.
+    const run = await settle(controller, planned.id);
+    expect(run.status).toBe("verified_complete");
+    expect(done).toEqual(["create", "after"]);
+  });
 });
 
 describe("a condition step a lost advance left unknown (#270)", () => {

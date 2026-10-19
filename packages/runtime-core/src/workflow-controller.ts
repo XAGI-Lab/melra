@@ -2006,15 +2006,14 @@ function haltReason(definition: WorkflowDefinition, nodes: WorkflowRun["nodes"])
 }
 
 /**
- * Whether a task is known to have changed nothing: cancelled before it ran,
- * refused by policy, or reconciled as never applied. Anything else may have.
+ * Whether a task is known to have changed nothing, as the task layer records
+ * it: an adapter that may have acted reports an unknown outcome, which parks
+ * the task as recovery_required, so failed (the adapter said it failed, or
+ * reconciliation found it never applied), budget_exhausted, cancelled and
+ * policy_blocked all say it did not happen. Anything else may have.
  */
 function hadNoEffect(task: TaskRecord): boolean {
-  return (
-    task.status === "cancelled" ||
-    task.status === "policy_blocked" ||
-    (task.status === "failed" && task.error === "reconciliation_confirms_effect_not_applied")
-  );
+  return ["failed", "budget_exhausted", "cancelled", "policy_blocked"].includes(task.status);
 }
 
 function taskIdempotencyKey(
