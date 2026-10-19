@@ -377,11 +377,17 @@ export async function createMelraRuntime(
   const files = await FileRuntime.create({
     root: runtimeRoot,
     maxFileBytes: policy.maxFileBytes,
-    reserved,
+    // And the policy file, wherever it lies: every start reads it again.
+    reserved: options.policyPath === undefined ? reserved : [...reserved, resolve(options.policyPath)],
     readable: [artifacts],
   });
+  // The data alone, for the layout checks and the terminal's directory check:
+  // a workspace holding only the policy file is an ordinary one, whose
+  // commands still run. ponytail: so a terminal command given a directory
+  // holding the policy file still reaches it unnamed.
+  const data = await FileRuntime.create({ root: runtimeRoot, reserved });
   // Every path in such a workspace would be refused, without saying why.
-  if (await files.isReserved(policy.workspaceRoot)) {
+  if (await data.isReserved(policy.workspaceRoot)) {
     store.close();
     throw new Error(
       "workspace_inside_data_directory: point MELRA_WORKSPACE at the project, outside MELRA_HOME.",
@@ -390,7 +396,7 @@ export async function createMelraRuntime(
   // A workspace holding the data directory reaches it with a recursive read of
   // no path at all, so refusing the directories above it would be theatre
   // there; enforced mode refuses that layout instead.
-  const holdsData = await files.holdsReserved(files.root);
+  const holdsData = await data.holdsReserved(data.root);
   if (mode === "enforced" && holdsData) {
     store.close();
     const advice = await dataLocationAdvice(files.root, dataDirectory, options.policyPath);
@@ -399,7 +405,7 @@ export async function createMelraRuntime(
   const terminal = await TerminalRuntime.create({
     root: runtimeRoot,
     reserved: (path) => files.isReserved(path),
-    ...(holdsData ? {} : { holdsReserved: (path: string) => files.holdsReserved(path) }),
+    ...(holdsData ? {} : { holdsReserved: (path: string) => data.holdsReserved(path) }),
     confineArguments: mode === "enforced",
   });
   const browser = new BrowserRuntime({

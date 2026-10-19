@@ -5,9 +5,22 @@ import { spawnSync } from "node:child_process";
 import { chmod, link, lstat, mkdir, mkdtemp, open, readdir, readFile, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, parse } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { FileOperationSchema } from "@melra/protocol";
 import { FileRuntime } from "./index.js";
+
+// Counts the runtime's link lookups; each still does the real one.
+const lookups = vi.hoisted(() => ({ realpath: 0 }));
+vi.mock("node:fs/promises", async (actual) => {
+  const fs = await actual<typeof import("node:fs/promises")>();
+  return {
+    ...fs,
+    realpath: (...args: Parameters<typeof fs.realpath>) => {
+      lookups.realpath += 1;
+      return fs.realpath(...args);
+    },
+  };
+});
 
 const roots: string[] = [];
 
@@ -251,6 +264,20 @@ describe("FileRuntime", () => {
           FileOperationSchema.parse({ kind: "file", action: "move", path: byInode, destination: join(root, "moved") }),
         ),
       ).rejects.toThrow("path_reserved");
+      // A directory deeper inside, whose inode is none of those compared.
+      await mkdir(join(owners, "a", "b"), { recursive: true });
+      const deeper = await stat(join(owners, "a", "b"));
+      await expect(
+        runtime.execute(
+          FileOperationSchema.parse({
+            kind: "file",
+            action: "write",
+            path: `/.vol/${deeper.dev}/${deeper.ino}/planted`,
+            content: "x",
+          }),
+        ),
+      ).rejects.toThrow("path_reserved");
+      expect(await readdir(join(owners, "a", "b"))).toEqual([]);
     }
   });
 
@@ -297,6 +324,24 @@ describe("FileRuntime", () => {
     // The identity walk goes root first and stops where the path stops existing.
     expect(await runtime.isReserved(join(base, ...Array.from({ length: 500 }, () => "a")))).toBe(false);
     expect(await runtime.isReserved(join(data, "payload.key", "x"))).toBe(true);
+  });
+
+  it("finds where a deep path stops existing in a few lookups, and still follows a link there", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-file-")));
+    roots.push(root);
+    const data = join(root, ".melra");
+    await mkdir(join(data, "a", "b"), { recursive: true });
+    const deep = join(root, ...Array.from({ length: 300 }, () => "d"));
+    await mkdir(deep, { recursive: true });
+    // Two levels inside the reserved directory: no name or identity on the
+    // spelled path matches, only where the link leads does.
+    await symlink(join(data, "a", "b"), join(deep, "link"), "junction");
+    const runtime = await FileRuntime.create({ root, reserved: [data] });
+    const before = lookups.realpath;
+    expect(await runtime.isReserved(join(deep, "link", "missing", "x"))).toBe(true);
+    expect(await runtime.isReserved(join(deep, "missing", "x"))).toBe(false);
+    // One per part was 600 here, and quadratic in the depth.
+    expect(lookups.realpath - before).toBeLessThan(40);
   });
 
   it("knows a directory holds a reserved file before that file's directory exists", async () => {

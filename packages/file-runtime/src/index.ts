@@ -74,18 +74,24 @@ async function sameEntry(left: string, right: string): Promise<boolean> {
 async function realSpelling(path: string): Promise<string> {
   const whole = await realpath(path).catch(() => undefined);
   if (whole !== undefined) return whole;
-  // Root first, stopping at the first missing part: from the leaf up, a 4 KB
-  // argument that does not exist would cost a failed lookup per part.
+  // A part resolves only if every part above it does, so the deepest one that
+  // does is found by halving: about log2(depth) lookups, not one per part.
+  // ponytail: each realpath still walks its whole prefix, so 100 arguments 300
+  // parts deep cost ~1 s here (12 s at one lookup per part). Memoise resolved
+  // prefixes across a call's arguments if that ever shows up.
   const chain: string[] = [];
   for (let probe = path; ; probe = dirname(probe)) {
     chain.unshift(probe);
     if (dirname(probe) === probe) break;
   }
   let real = path;
-  for (const probe of chain) {
+  let [resolves, fails] = [-1, chain.length - 1];
+  while (fails - resolves > 1) {
+    const middle = (resolves + fails) >> 1;
+    const probe = chain[middle] as string;
     const actual = await realpath(probe).catch(() => undefined);
-    if (actual === undefined) break;
-    real = join(actual, relative(probe, path));
+    if (actual === undefined) fails = middle;
+    else [resolves, real] = [middle, join(actual, relative(probe, path))];
   }
   return real;
 }
@@ -230,6 +236,9 @@ export class FileRuntime {
     // A descriptor path names whatever this process has open, MELRA's locked
     // files included, and on macOS realpath leaves it under /dev/fd.
     if (process.platform !== "win32" && inside("/dev/fd", resolve(path))) return true;
+    // macOS's /.vol/<dev>/<ino> names any file or directory by its inode
+    // alone, so below it no name or identity compared here need match.
+    if (process.platform === "darwin" && inside("/.vol", resolve(path))) return true;
     let above: string | undefined;
     for (let current = resolve(path); reading && above === undefined; current = dirname(current)) {
       if (await this.named(current, this.readable)) above = current;
@@ -242,10 +251,9 @@ export class FileRuntime {
       if (await this.named(current, this.reserved)) return true;
       if (dirname(current) === current) break;
     }
-    // The same thing under another name: a hard link, or macOS's
-    // /.vol/<dev>/<ino>, which names a file or directory by its inode alone.
-    // So the target and each directory above it are compared by identity with
-    // every reserved entry and every file inside a reserved directory.
+    // The same thing under another name, a hard link: so the target and each
+    // directory above it are compared by identity with every reserved entry
+    // and every file inside a reserved directory.
     const identities = new Set<string>();
     for (const entry of this.reserved) {
       const found = await stat(entry, { bigint: true }).catch(() => undefined);
@@ -268,8 +276,7 @@ export class FileRuntime {
     for (const current of chain) {
       const found = await stat(current, { bigint: true }).catch(() => undefined);
       if (found !== undefined && identities.has(identity(found))) return true;
-      // Except /.vol/<dev>, which never stats though /.vol/<dev>/<ino> below it does.
-      if (found === undefined && dirname(current) !== "/.vol") return false;
+      if (found === undefined) return false;
     }
     return false;
   }

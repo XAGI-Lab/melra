@@ -650,7 +650,10 @@ All notable changes are documented here. The format follows
   whether or not it exists (`verification_path_reserved`), and a path a link
   leads out of the workspace gets the same refusal present or absent. On
   macOS, enforced mode now also recognises a workspace that holds the data
-  directory through the data volume, and refuses to start there.
+  directory through the data volume, and refuses to start there, and a path
+  that names a file by its inode number alone is refused. The policy file
+  `MELRA_POLICY` names is reserved the same way wherever it lies, since every
+  start reads it again; a workspace holding it is still an ordinary one.
 
 - A workspace that is the data directory, or sits inside it, including through
   a link, is refused at startup in every mode with

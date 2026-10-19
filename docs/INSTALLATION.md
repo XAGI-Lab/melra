@@ -232,7 +232,7 @@ MELRA uses these environment variables:
 |---|---|---|
 | `MELRA_WORKSPACE` | Hard boundary for file and process operations; a policy file's `workspaceRoot` can only narrow it to a directory inside. `setup` and `init` write it into the client config, and ask before making home, a directory holding it, or a filesystem root the workspace unless it is set | the `workspaceRoot` of a `MELRA_POLICY` file, else the current directory |
 | `MELRA_HOME` | SQLite database and browser artifacts. It must not be the workspace or hold it: a workspace inside it, even through a link, is refused at startup with `workspace_inside_data_directory`. On a case-sensitive filesystem a sibling whose name differs from it only in case is reserved too | `~/.melra` |
-| `MELRA_POLICY` | Optional local policy JSON | safe built-in policy |
+| `MELRA_POLICY` | Optional local policy JSON. Every start reads it again, so wherever it lies it is reserved like `MELRA_HOME`: no file effect, verification, browser upload or terminal argument may name it, and no file effect removes or moves a directory holding it. A workspace holding it is still an ordinary one | safe built-in policy |
 | `MELRA_BROWSER` | Chrome, Chromium, or Edge executable | auto-detected |
 | `MELRA_PAYLOAD_KEY` | Optional canonical base64url 256-bit payload key | private `<MELRA_HOME>/payload.key` |
 | `MELRA_UNHINGED` | Set to `1` to remove every guardrail — see below | unset (all guardrails on) |
