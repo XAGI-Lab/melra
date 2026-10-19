@@ -313,6 +313,95 @@ describe("melra http server", () => {
     }
   });
 
+  describe("MCP sessions", () => {
+    const post = (url: string, body: unknown, sessionId?: string) =>
+      fetch(url, {
+        method: "POST",
+        headers: {
+          authorization: "Bearer test-token",
+          "content-type": "application/json",
+          accept: "application/json, text/event-stream",
+          ...(sessionId === undefined ? {} : { "mcp-session-id": sessionId }),
+        },
+        body: JSON.stringify(body),
+      });
+    const open = async (url: string) => {
+      const response = await post(url, {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-06-18",
+          capabilities: {},
+          clientInfo: { name: "raw", version: "0.0.0" },
+        },
+      });
+      await response.text();
+      return response.headers.get("mcp-session-id")!;
+    };
+    const listTools = async (url: string, sessionId: string) => {
+      const response = await post(url, { jsonrpc: "2.0", id: 2, method: "tools/list" }, sessionId);
+      await response.text();
+      return response.status;
+    };
+
+    it("answers a session it does not have with 404, so the client starts over", async () => {
+      const url = `${base}/mcp`;
+      const unknown = await post(
+        url,
+        { jsonrpc: "2.0", id: 2, method: "tools/list" },
+        "00000000-0000-4000-8000-000000000000",
+      );
+      expect(unknown.status).toBe(404);
+      expect(await unknown.json()).toMatchObject({ error: { code: -32001 } });
+
+      const ended = await open(url);
+      const deleted = await fetch(url, {
+        method: "DELETE",
+        headers: { authorization: "Bearer test-token", "mcp-session-id": ended },
+      });
+      expect(deleted.status).toBe(200);
+      expect(await listTools(url, ended)).toBe(404);
+
+      // No session named at all is still a malformed request.
+      const bare = await post(url, { jsonrpc: "2.0", id: 2, method: "tools/list" });
+      expect(bare.status).toBe(400);
+    });
+
+    it("ends the least recently used idle session once 256 are open", async () => {
+      // Its own server, so sessions other tests left open do not count.
+      const own = await serveHttp({ runtime, port: 0, token: "test-token", environment: {} });
+      const url = own.mcpUrl;
+      const stream = new AbortController();
+      try {
+        // Oldest, but holding an event stream open: never ended under it.
+        const held = await open(url);
+        const listening = await fetch(url, {
+          headers: {
+            authorization: "Bearer test-token",
+            accept: "text/event-stream",
+            "mcp-session-id": held,
+          },
+          signal: stream.signal,
+        });
+        expect(listening.status).toBe(200);
+        const used = await open(url);
+        const unused = await open(url);
+        // Used after `unused` was opened, so `unused` is now the stalest.
+        expect(await listTools(url, used)).toBe(200);
+        for (let opened = 3; opened < 256; opened += 1) await open(url);
+
+        await open(url);
+        expect(await listTools(url, unused)).toBe(404);
+        expect(await listTools(url, used)).toBe(200);
+        expect(await listTools(url, held)).toBe(200);
+      } finally {
+        stream.abort();
+        await own.close();
+      }
+    }, 60_000);
+  });
+
   it("streams workflow events and replays from a cursor", async () => {
     const planned = runtime.workflows.plan({
       schemaVersion: "1.0.0",

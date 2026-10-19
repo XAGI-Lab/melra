@@ -85,6 +85,29 @@ describe("MelraClient over remote transports", () => {
     }
   });
 
+  it("ends its session on the server when closed", async () => {
+    const served = await serve();
+    const melra = await MelraClient.connect({ url: served.mcpUrl, token: "test-token" });
+    const { sessionId } = (
+      melra as unknown as { client: { transport: { sessionId?: string } } }
+    ).client.transport;
+    expect(sessionId).toBeTruthy();
+    await melra.close();
+    // Closing used to abort only the client's requests: the server kept the
+    // session, and this request still got the tool list.
+    const reused = await fetch(served.mcpUrl, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer test-token",
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+        "mcp-session-id": sessionId!,
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    });
+    expect(reused.status).toBe(404);
+  });
+
   it("accepts the bare origin, as the console URL prints it", async () => {
     const served = await serve();
     const melra = await MelraClient.connect({

@@ -3,7 +3,10 @@
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import {
+  StreamableHTTPClientTransport,
+  StreamableHTTPError,
+} from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { httpTransport, socketTransport } from "./remote.js";
 import {
   WorkflowAdvanceInputSchema,
@@ -266,6 +269,13 @@ export class MelraClient {
   }
 
   async close(): Promise<void> {
+    // Over HTTP or a socket the session lives on the server until it is ended;
+    // closing the client only aborts its requests. Best effort: a server that
+    // is already gone has no session left to end.
+    const transport = this.client.transport;
+    if (transport instanceof StreamableHTTPClientTransport) {
+      await transport.terminateSession().catch(() => undefined);
+    }
     await this.client.close();
   }
 }

@@ -25,6 +25,14 @@ import { clientPrincipal, CONSENT_HEADERS, OAuthProvider, requestOf } from "./oa
 
 export const DEFAULT_HTTP_PORT = 7457;
 
+/**
+ * MCP sessions kept before the least recently used idle one is ended. A client
+ * that leaves without ending its session (a crash, a dropped network, an MCP
+ * client that never sends DELETE) otherwise holds an MCP server and its
+ * transport, some 50 KB, for the life of the process.
+ */
+const MAX_MCP_SESSIONS = 256;
+
 export interface MelraHttpOptions {
   runtime: MelraRuntime;
   /** Loopback by default. Anything else exposes a machine-control API. */
@@ -318,9 +326,11 @@ export async function serveHttp(
     options.token ??
     (environment.MELRA_HTTP_TOKEN?.trim() || randomUUID().replaceAll("-", ""));
   if (token.trim() === "") throw new Error("http_token_empty");
+  // Least recently used first. `busy` counts requests in flight, an open event
+  // stream included, so a session is never ended under a call it is serving.
   const sessions = new Map<
     string,
-    { transport: StreamableHTTPServerTransport; client: string }
+    { transport: StreamableHTTPServerTransport; client: string; busy: number }
   >();
   const runtime = options.runtime;
   const enforced = runtime.policy.mode === "enforced";
@@ -689,9 +699,19 @@ export async function serveHttp(
     client?: Principal,
   ): Promise<void> {
     const sessionId = request.headers["mcp-session-id"];
-    const existing =
-      typeof sessionId === "string" ? sessions.get(sessionId) : undefined;
-    if (existing !== undefined) {
+    if (sessionId !== undefined) {
+      const existing =
+        typeof sessionId === "string" ? sessions.get(sessionId) : undefined;
+      if (typeof sessionId !== "string" || existing === undefined) {
+        // Ended, crowded out, or from before a restart. A 404 is what tells
+        // an MCP client to start a new session; a 400 reads as a hard error.
+        json(response, 404, {
+          jsonrpc: "2.0",
+          error: { code: -32001, message: "mcp_session_not_found" },
+          id: null,
+        });
+        return;
+      }
       // The session carries the identity it was opened with, so a second
       // authenticated client cannot pick up someone else's session id and have
       // its effects recorded under the first client's name.
@@ -699,6 +719,12 @@ export async function serveHttp(
         json(response, 403, { error: "mcp_session_belongs_to_another_client" });
         return;
       }
+      sessions.delete(sessionId);
+      sessions.set(sessionId, existing);
+      existing.busy += 1;
+      response.once("close", () => {
+        existing.busy -= 1;
+      });
       await existing.transport.handleRequest(request, response);
       return;
     }
@@ -707,7 +733,7 @@ export async function serveHttp(
       return;
     }
     const body = await readBody(request);
-    if (sessionId !== undefined || !isInitializeRequest(body)) {
+    if (!isInitializeRequest(body)) {
       json(response, 400, { error: "mcp_session_not_found" });
       return;
     }
@@ -718,7 +744,20 @@ export async function serveHttp(
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
       onsessioninitialized: (id) => {
-        sessions.set(id, { transport, client: callerRef(client) });
+        const session = { transport, client: callerRef(client), busy: 1 };
+        response.once("close", () => {
+          session.busy -= 1;
+        });
+        sessions.set(id, session);
+        if (sessions.size <= MAX_MCP_SESSIONS) return;
+        // Every session busy means every client is still there, so none is
+        // ended and the map stays over the cap until one goes idle.
+        for (const [idle, { transport: stale, busy }] of sessions) {
+          if (busy > 0) continue;
+          sessions.delete(idle);
+          void stale.close().catch(() => undefined);
+          return;
+        }
       },
       onsessionclosed: (id) => {
         sessions.delete(id);
