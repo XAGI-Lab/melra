@@ -47,7 +47,7 @@ limits. An implementation claiming compatibility should publish that report.
 The normative automated clients are:
 
 - Model Context Protocol TypeScript SDK `1.32.x`;
-- Model Context Protocol Python SDK `1.28.x`;
+- Model Context Protocol Python SDK `1.30.x`;
 - `@melra/sdk` `0.3.x` alpha;
 - the repository Python `melra` client `0.3.x` alpha.
 

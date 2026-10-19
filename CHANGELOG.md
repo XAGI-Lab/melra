@@ -111,6 +111,26 @@ All notable changes are documented here. The format follows
   own result, since the whole body is longer than what arrived. A miss on the
   status or a header is still the provider's answer. (#249)
 
+- `docs/COMPATIBILITY.md` names MCP Python SDK `1.30.x`, the version `sdk-py`
+  pins and tests, not `1.28.x`. `pnpm check` now fails when either SDK line
+  stops naming the pinned version. (#286)
+
+- The TypeScript SDK's `execute()` and `advanceWorkflow()` wait up to 36
+  minutes for the server, past a task's budget and its built-in evidence
+  reads, instead of the MCP client's 60 s default. A task that
+  ran longer than a minute was reported to the caller as `Request timed out`
+  while the server went on and verified it, and a caller that took that as a
+  failure could run it again. `MelraClient.connect({ runTimeoutMs })` sets the
+  limit, and refuses a value that is not a whole number of milliseconds from 1
+  to 2147483647. (#256)
+
+- `send` to an interactive terminal job whose program has closed its stdin is
+  refused as `terminal_job_stdin_closed`. Every send after the failed write
+  was refused as `terminal_job_not_interactive`, and the send whose write
+  failed on the spot was reported as sent. A send to a job whose program has
+  exited is refused as `terminal_job_not_running` even while something it
+  started still holds its output open. (#271)
+
 - The Python SDK's README says how to install it: the wheel attached to each
   GitHub release, checked against `SHA256SUMS` and its attestation, or
   `pip install ./sdk-py` from a checkout. No doc said so before, and the SDK

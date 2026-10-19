@@ -61,6 +61,20 @@ for (const [path, sentence] of [
   if (!(await readFile(path, "utf8")).includes(sentence)) failures.push(`${path}: does not name ${expected} as the current release`);
 }
 
+// The MCP SDKs COMPATIBILITY.md calls normative are the ones the SDKs pin and
+// test against: the Python line read 1.28.x for a release after the pin moved.
+const typescriptMcp = JSON.parse(await readFile("packages/sdk-ts/package.json", "utf8")).dependencies?.["@modelcontextprotocol/sdk"];
+const pythonMcp = /"mcp==([0-9]+\.[0-9]+)\.[0-9]+"/.exec(python)?.[1];
+const compatibility = await readFile("docs/COMPATIBILITY.md", "utf8");
+for (const [name, version] of [
+  ["TypeScript", /^([0-9]+\.[0-9]+)/.exec(typescriptMcp ?? "")?.[1]],
+  ["Python", pythonMcp],
+]) {
+  if (version === undefined || !compatibility.includes(`Model Context Protocol ${name} SDK \`${version}.x\``)) {
+    failures.push(`docs/COMPATIBILITY.md: does not name the pinned MCP ${name} SDK ${version ?? "(unknown)"}.x`);
+  }
+}
+
 if (failures.length > 0) {
   process.stderr.write(`${failures.join("\n")}\n`);
   process.exitCode = 1;
