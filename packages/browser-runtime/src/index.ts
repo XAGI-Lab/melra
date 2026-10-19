@@ -544,7 +544,18 @@ export class BrowserRuntime {
    */
   private dispatched = false;
 
-  constructor(private readonly options: BrowserRuntimeOptions) {}
+  /**
+   * The workspace root with its links resolved, once, as the file runtime
+   * resolves it: a root link re-pointed later does not move uploads to a
+   * different directory than file operations. An upload awaits it and fails
+   * if it did.
+   */
+  private readonly root: Promise<string>;
+
+  constructor(private readonly options: BrowserRuntimeOptions) {
+    this.root = realpath(options.workspaceRoot);
+    this.root.catch(() => undefined);
+  }
 
   /**
    * Bound a Playwright call that takes no timeout of its own by the running
@@ -561,25 +572,25 @@ export class BrowserRuntime {
   }
 
   private async uploadPaths(paths: string[]): Promise<string[]> {
-    const root = await realpath(this.options.workspaceRoot);
+    const root = await this.root;
+    const configured = resolve(this.options.workspaceRoot);
+    const outside = (from: string, to: string) => {
+      const rel = relative(from, to);
+      return rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel);
+    };
     const resolved: string[] = [];
     for (const input of paths) {
-      const candidate = resolve(root, input);
-      const rel = relative(root, candidate);
-      if (
-        rel === ".." ||
-        rel.startsWith(`..${sep}`) ||
-        isAbsolute(rel)
-      ) {
+      // An absolute path spelled through the root as configured is the same
+      // path under the resolved root; both checks below still apply to it.
+      const candidate =
+        isAbsolute(input) && !outside(configured, resolve(input))
+          ? resolve(root, relative(configured, resolve(input)))
+          : resolve(root, input);
+      if (outside(root, candidate)) {
         throw new Error("browser_upload_outside_workspace");
       }
       const actual = await realpath(candidate);
-      const actualRelative = relative(root, actual);
-      if (
-        actualRelative === ".." ||
-        actualRelative.startsWith(`..${sep}`) ||
-        isAbsolute(actualRelative)
-      ) {
+      if (outside(root, actual)) {
         throw new Error("browser_upload_outside_workspace");
       }
       if (!(await stat(actual)).isFile()) {
