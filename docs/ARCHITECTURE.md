@@ -337,6 +337,10 @@ interface is served.
 Multiple MELRA server processes may share one `MELRA_HOME`. Advancing a workflow
 takes an expiring SQLite lease before any adapter runs, so a second process is
 refused with `workflow_lease_held` rather than starting duplicate side effects.
+The advance renews that lease before each step it starts and before it commits.
+One that stalled long enough for another process to take the run over fails
+with `workflow_lease_lost` instead, starting no further step and committing
+nothing; advancing again carries on from wherever the other process left it.
 
 Recovery touches only work whose process is gone. The process that starts a
 task records itself as the task's owner and holds an exclusive lock on a file

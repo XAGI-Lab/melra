@@ -36,6 +36,30 @@ describe("Verifier", () => {
     expect(result.evidence.every((item) => item.passed)).toBe(true);
   });
 
+  it("verifies absolute paths spelled through the configured workspace link", async () => {
+    const base = await mkdtemp(join(tmpdir(), "melra-verifier-"));
+    roots.push(base);
+    const root = join(base, "workspace");
+    const linked = join(base, "workspace-link");
+    await mkdir(root);
+    await writeFile(join(root, "result.txt"), "verified");
+    await symlink(root, linked, process.platform === "win32" ? "junction" : "dir");
+    const verifier = await Verifier.create(linked);
+    const checked = await verifier.verify(
+      [
+        { type: "file_exists", path: join(linked, "result.txt") },
+        {
+          type: "file_hash",
+          path: join(linked, "result.txt"),
+          sha256: createHash("sha256").update("verified").digest("hex"),
+        },
+        { type: "file_absent", path: join(linked, "missing.txt") },
+      ],
+      {},
+    );
+    expect(checked.verified).toBe(true);
+  });
+
   it("does not treat a mismatched predicate as success", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-verifier-"));
     roots.push(root);

@@ -2,14 +2,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join, parse, resolve } from "node:path";
+import { basename, dirname, join, parse, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { deploymentMode, TaskRequestSchema, type TaskRequest } from "@melra/protocol";
 import { serveHttp } from "./http-server.js";
 import {
   assertEnforceable,
+  broadWorkspace,
   createMelraRuntime,
   unconfinedRoot,
   unhingedFromEnvironment,
@@ -420,7 +422,11 @@ describe("terminal arguments", () => {
         dataDirectory: join(base, ".melra"),
         environment: { MELRA_MODE: "enforced" },
       }),
-    ).rejects.toThrow(/enforced_mode_refuses_data_inside_workspace/);
+    ).rejects.toThrow(
+      // A project workspace someone put MELRA_HOME inside: narrowing the
+      // workspace cannot help, so the data moves, database and all.
+      "enforced_mode_refuses_data_inside_workspace: move the MELRA_HOME directory, with everything in it, out of the workspace",
+    );
     if (process.platform === "darwin") {
       // The data volume mounted whole holds it too, through no `..` from it.
       for (const workspaceRoot of ["/System/Volumes/Data", "/System"]) {
@@ -456,6 +462,96 @@ describe("terminal arguments", () => {
         `${workspaceRoot} ${JSON.stringify(environment)}`,
       ).rejects.toThrow(/workspace_inside_data_directory/);
     }
+  });
+});
+
+describe("a broad workspace", () => {
+  let base: string;
+  const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+
+  beforeEach(async () => {
+    base = await realpath(await mkdtemp(join(tmpdir(), "melra-broad-")));
+  });
+
+  afterEach(async () => {
+    // Restored in place, so os.homedir() reads the real environment again.
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    await rm(base, { recursive: true, force: true });
+  });
+
+  it("is home, a directory holding it, or a filesystem root, however it is spelled", async () => {
+    const home = join(base, "home");
+    await mkdir(join(home, "project"), { recursive: true });
+    await mkdir(join(base, "beside"));
+    await symlink(home, join(base, "link"));
+    expect(await broadWorkspace(home, home)).toBe("home");
+    // Through a link, either side: a symlinked home is still home.
+    expect(await broadWorkspace(join(base, "link"), home)).toBe("home");
+    expect(await broadWorkspace(home, join(base, "link"))).toBe("home");
+    // What holds home holds every user's files, as /Users, /home or C:\Users do.
+    expect(await broadWorkspace(base, home)).toBe("holds-home");
+    // A project under home, or a directory beside it, is the ordinary case.
+    expect(await broadWorkspace(join(home, "project"), home)).toBeUndefined();
+    expect(await broadWorkspace(join(base, "beside"), home)).toBeUndefined();
+    // `/`, or the drive root on Windows.
+    expect(await broadWorkspace(parse(base).root, home)).toBe("root");
+    // One that does not resolve is doctor's to report.
+    expect(await broadWorkspace(join(base, "missing"), home)).toBeUndefined();
+    // macOS reaches every directory on the data volume through the
+    // /System/Volumes/Data firmlink too, which realpath does not fold.
+    const firmlink = join("/System/Volumes/Data", home);
+    if (existsSync(firmlink)) {
+      expect(await broadWorkspace(firmlink, home)).toBe("home");
+      expect(await broadWorkspace(join("/System/Volumes/Data", base), home)).toBe("holds-home");
+      expect(await broadWorkspace("/System/Volumes/Data", home)).toBe("holds-home");
+      expect(await broadWorkspace(join(firmlink, "project"), home)).toBeUndefined();
+    }
+  });
+
+  it("is what an enforced refusal tells you to narrow, keeping MELRA_HOME where it is", async () => {
+    Object.assign(process.env, { HOME: base, USERPROFILE: base });
+    const refusal = (workspaceRoot: string, policyPath?: string) =>
+      expect(
+        createMelraRuntime({
+          workspaceRoot,
+          dataDirectory: join(base, ".melra"),
+          environment: { MELRA_MODE: "enforced" },
+          ...(policyPath === undefined ? {} : { policyPath }),
+        }),
+      ).rejects;
+    // Home holding the default ~/.melra, as from a fresh terminal. Not "run
+    // setup", which does not change the workspace `approve` or `console` use.
+    const narrow =
+      "enforced_mode_refuses_data_inside_workspace: set MELRA_WORKSPACE to your project directory, " +
+      "or run this from there; keep MELRA_HOME where it is (moving it orphans the database).";
+    await refusal(base).toThrow(narrow);
+    // Above home, likewise.
+    await refusal(dirname(base)).toThrow(narrow);
+    // The shared policy only narrows the workspace, so the advice stands.
+    await mkdir(join(base, ".melra"), { recursive: true });
+    await writeFile(join(base, ".melra", "policy.json"), "{}");
+    await refusal(base, join(base, ".melra", "policy.json")).toThrow(narrow);
+    // An operator's policy file can pin the workspace, so running from the
+    // project would not help; its workspaceRoot would.
+    await writeFile(join(base, "team.json"), "{}");
+    await refusal(base, join(base, "team.json")).toThrow(
+      `set MELRA_WORKSPACE to your project directory, or make that the workspaceRoot in ${join(base, "team.json")}; ` +
+        "keep MELRA_HOME where it is",
+    );
+    // MELRA_HOME inside a project under home: narrowing comes first, but it
+    // is not told to stay, since the next refusal would say to move it.
+    await expect(
+      createMelraRuntime({
+        workspaceRoot: base,
+        dataDirectory: join(base, "project", ".melra"),
+        environment: { MELRA_MODE: "enforced" },
+      }),
+    ).rejects.toThrow(
+      /^enforced_mode_refuses_data_inside_workspace: set MELRA_WORKSPACE to your project directory, or run this from there\.$/,
+    );
   });
 });
 

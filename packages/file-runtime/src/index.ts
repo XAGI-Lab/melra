@@ -113,11 +113,13 @@ export class FileRuntime {
   readonly root: string;
   readonly maxFileBytes: number;
   readonly maxEntries: number;
+  private readonly lexicalRoot: string;
   private readonly reserved: string[];
   private readonly readable: string[];
 
   private constructor(options: FileRuntimeOptions, root: string) {
     this.root = root;
+    this.lexicalRoot = resolve(options.root);
     this.reserved = (options.reserved ?? []).map((path) => resolve(path));
     this.readable = (options.readable ?? []).map((path) => resolve(path));
     this.maxFileBytes = options.maxFileBytes ?? 10 * 1024 * 1024;
@@ -135,6 +137,14 @@ export class FileRuntime {
     );
     if (!exists) await mkdir(options.root, { recursive: true });
     return new FileRuntime(options, await realpath(options.root));
+  }
+
+  private inputPath(input: string): string {
+    if (!isAbsolute(input)) return input;
+    const candidate = resolve(input);
+    return inside(this.lexicalRoot, candidate)
+      ? resolve(this.root, relative(this.lexicalRoot, candidate))
+      : input;
   }
 
   /**
@@ -293,7 +303,7 @@ export class FileRuntime {
 
   async execute(operation: FileOperation): Promise<Record<string, unknown>> {
     const path = await this.resolvePath(
-      operation.path,
+      this.inputPath(operation.path),
       // The root however it is spelled ("./", its absolute path), not only
       // ".": the others were refused as outside the workspace.
       operation.action === "list",
@@ -422,7 +432,7 @@ export class FileRuntime {
         if (operation.destination === undefined) {
           throw new Error("file_move_requires_destination");
         }
-        const destination = await this.resolvePath(operation.destination, false, true);
+        const destination = await this.resolvePath(this.inputPath(operation.destination), false, true);
         await mkdir(dirname(destination), { recursive: true });
         await rename(path, destination);
         return {

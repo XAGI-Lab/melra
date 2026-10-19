@@ -350,6 +350,34 @@ function expireLease(store: SqliteStore, id: string): void {
     .run(new Date(Date.now() - 1_000).toISOString(), id);
 }
 
+/** inspect, then a branch of two steps: one that needs approval, one that does not. */
+const twoStepBranch = () =>
+  WorkflowDefinitionSchema.parse({
+    schemaVersion: "1.0.0",
+    id: definitionId,
+    version: 1,
+    name: "Two-step branch",
+    nodes: [
+      {
+        id: "inspect",
+        type: "operation",
+        request: TaskRequestSchema.parse({ goal: "Inspect", operation: { kind: "system", action: "info" } }),
+      },
+      {
+        id: "branch",
+        type: "condition",
+        dependsOn: ["inspect"],
+        sourceNodeId: "inspect",
+        predicate: { type: "result_equals", path: "success", value: true },
+        whenTrue: [
+          put("first"),
+          TaskRequestSchema.parse({ goal: "Inspect again", operation: { kind: "system", action: "info" } }),
+        ],
+        whenFalse: [],
+      },
+    ],
+  });
+
 describe("workflow recovery across processes", () => {
   it("leaves a run another process is advancing alone", async () => {
     const at = await home();
@@ -414,6 +442,139 @@ describe("workflow recovery across processes", () => {
     expect(footprint(a.store, run.id)).toEqual(before);
     release.open();
     expect((await advancing).run.status).toBe("verified_complete");
+  });
+
+  it("does not start the next branch step after losing its workflow lease", async () => {
+    const at = await home();
+    const a = await side(at);
+    const nextAdapter = held();
+    const b = await side(at, nextAdapter.execute);
+    const firstDone = gate();
+    const releaseFirst = gate();
+    const run = a.workflows.plan(twoStepBranch());
+
+    try {
+      await a.workflows.advance(run.id);
+      const waiting = (await a.workflows.advance(run.id)).run;
+      const execute = a.tasks.execute.bind(a.tasks);
+      vi.spyOn(a.tasks, "execute").mockImplementationOnce(async (...args) => {
+        const result = await execute(...args);
+        firstDone.open();
+        await releaseFirst.opened;
+        return result;
+      });
+      const advancing = a.workflows.advance(run.id, approvalsFor(waiting));
+      void advancing.catch(() => undefined);
+      await firstDone.opened;
+      expireLease(a.store, run.id);
+
+      // B recovers the run and runs step 2, which needs no approval, itself.
+      const bAdvancing = b.workflows.advance(run.id);
+      void bAdvancing.catch(() => undefined);
+      await nextAdapter.entered.opened;
+
+      releaseFirst.open();
+      await expect(advancing).rejects.toThrow("workflow_lease_lost");
+      expect(a.adapter).toHaveBeenCalledTimes(2);
+
+      nextAdapter.release.open();
+      expect((await bAdvancing).run.status).toBe("verified_complete");
+      expect(b.adapter).toHaveBeenCalledTimes(1);
+    } finally {
+      releaseFirst.open();
+      nextAdapter.release.open();
+    }
+  });
+
+  it("keeps a lapsed lease nobody took when it starts a step, so a takeover after that is refused", async () => {
+    const at = await home();
+    const second = held();
+    let calls = 0;
+    const a = await side(at, async () => (++calls === 3 ? second.execute() : { success: true, stored: true }));
+    const b = await side(at);
+    const run = a.workflows.plan(twoStepBranch());
+    await a.workflows.advance(run.id);
+    const waiting = (await a.workflows.advance(run.id)).run;
+    // Step 1 finishes and the advance stalls past its lease (a laptop's
+    // sleep), with nobody having taken the lease yet.
+    const execute = a.tasks.execute.bind(a.tasks);
+    vi.spyOn(a.tasks, "execute").mockImplementationOnce(async (...args) => {
+      const result = await execute(...args);
+      expireLease(a.store, run.id);
+      return result;
+    });
+    // B's repair pass, one synchronous block in another process, lands after
+    // A's lease check for step 2 and before step 2's task is written.
+    const recovery = b.workflows as unknown as {
+      repairRuns(abandonedOnly: boolean, tasks: Map<string, unknown>, runs: Map<string, unknown>): WorkflowRun[];
+    };
+    let repaired: WorkflowRun[] | undefined;
+    const plan = a.tasks.plan.bind(a.tasks);
+    vi.spyOn(a.tasks, "plan").mockImplementation((request, options) => {
+      if (request.goal === "Inspect again") repaired ??= recovery.repairRuns(true, new Map(), new Map());
+      return plan(request, options);
+    });
+
+    try {
+      const advancing = a.workflows.advance(run.id, approvalsFor(waiting)).then(
+        ({ run }) => run.status,
+        (error: Error) => error.message,
+      );
+      await second.entered.opened;
+      const resumed = await b.workflows.advance(run.id).then(
+        ({ run }) => run.status,
+        (error: Error) => error.message,
+      );
+      second.release.open();
+
+      // Step 2 ran once, in A. B neither took the run over nor ran it again.
+      expect(b.adapter).not.toHaveBeenCalled();
+      expect(repaired).toEqual([]);
+      expect(resumed).toBe("workflow_lease_held");
+      expect(await advancing).toBe("verified_complete");
+      expect(a.adapter).toHaveBeenCalledTimes(3);
+    } finally {
+      second.release.open();
+    }
+  });
+
+  it("fails with workflow_lease_lost when the run was taken over after its last step", async () => {
+    const at = await home();
+    const a = await side(at);
+    const b = await side(at);
+    const run = a.workflows.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Ownership",
+        nodes: [
+          {
+            id: "inspect",
+            type: "operation",
+            request: TaskRequestSchema.parse({ goal: "Inspect", operation: { kind: "system", action: "info" } }),
+          },
+        ],
+      }),
+    );
+    const recovery = b.workflows as unknown as {
+      repairRuns(abandonedOnly: boolean, tasks: Map<string, unknown>, runs: Map<string, unknown>): WorkflowRun[];
+    };
+    let repaired: WorkflowRun[] = [];
+    // The step finishes, A stalls past its lease, and B's repair pass takes
+    // the run over and commits the step before A gets to commit it.
+    const execute = a.tasks.execute.bind(a.tasks);
+    vi.spyOn(a.tasks, "execute").mockImplementationOnce(async (...args) => {
+      const result = await execute(...args);
+      expireLease(a.store, run.id);
+      repaired = recovery.repairRuns(true, new Map(), new Map());
+      return result;
+    });
+
+    await expect(a.workflows.advance(run.id)).rejects.toThrow("workflow_lease_lost");
+    expect(repaired.map(({ id }) => id)).toEqual([run.id]);
+    expect(a.store.getWorkflowRun(run.id)?.status).toBe("verified_complete");
+    expect(a.adapter).toHaveBeenCalledTimes(1);
   });
 
   it("refuses a halted run without disturbing the lease a dead advance left", async () => {

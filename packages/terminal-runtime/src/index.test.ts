@@ -36,6 +36,57 @@ describe("TerminalRuntime", () => {
     expect(result.stdout).toBe("hello; touch nope");
   });
 
+  it("accepts a cwd spelled through the configured workspace link", async () => {
+    const base = await mkdtemp(join(tmpdir(), "melra-terminal-"));
+    roots.push(base);
+    const root = join(base, "workspace");
+    const sub = join(root, "sub");
+    const linked = join(base, "workspace-link");
+    await mkdir(sub, { recursive: true });
+    await symlink(root, linked, process.platform === "win32" ? "junction" : "dir");
+    const runtime = await TerminalRuntime.create({ root: linked });
+    const result = await runtime.execute(
+      TerminalOperationSchema.parse({
+        kind: "terminal",
+        action: "run",
+        command: process.execPath,
+        args: ["-e", "process.stdout.write(process.cwd())"],
+        cwd: join(linked, "sub"),
+      }),
+    );
+    expect(result.stdout).toBe(await realpath(sub));
+  });
+
+  it("keeps a cwd spelled through the configured root confined", async () => {
+    // Reached through a directory link above it, as macOS's /tmp is (a
+    // junction on Windows), beside a real sibling whose name starts the same.
+    const base = await mkdtemp(join(tmpdir(), "melra-terminal-"));
+    roots.push(base);
+    const real = join(base, "real", "ws");
+    await mkdir(join(base, "real", "ws-evil"), { recursive: true });
+    await mkdir(real);
+    const link = process.platform === "win32" ? "junction" : "dir";
+    await symlink(join(base, "real"), join(base, "alias"), link);
+    await symlink(join(base, "real", "ws-evil"), join(real, "escape"), link);
+    const configured = join(base, "alias", "ws");
+    const runtime = await TerminalRuntime.create({ root: configured });
+    const run = (cwd: string) =>
+      runtime.execute(
+        TerminalOperationSchema.parse({
+          kind: "terminal",
+          action: "run",
+          command: process.execPath,
+          args: ["-e", "process.stdout.write(process.cwd())"],
+          cwd,
+        }),
+      );
+
+    expect((await run(configured)).stdout).toBe(await realpath(real));
+    for (const cwd of [`${configured}-evil`, join(configured, "escape"), join(configured, "..", "ws-evil")]) {
+      await expect(run(cwd)).rejects.toThrow("cwd_outside_workspace");
+    }
+  });
+
   it("calls a run cancelled after it started an unknown outcome, not a failure", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-terminal-"));
     roots.push(root);
