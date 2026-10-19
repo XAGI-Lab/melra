@@ -25,17 +25,25 @@ interface ClientIdentity {
   clientName?: string;
   clientVersion?: string;
   /**
-   * How long `execute()` and `advanceWorkflow()` wait for the server, in
-   * milliseconds. The default, 16 minutes, is past the longest budget a task
-   * can have (15 minutes), so the client does not give up on an effect the
-   * server is still running and may still verify. A workflow wave that runs
-   * several long steps one after another can take longer: raise it for those.
+   * How long `execute()` and `advanceWorkflow()` wait for the server, in whole
+   * milliseconds from 1 to 2 147 483 647. The default, 36 minutes, is past the
+   * longest a task can take: its budget (15 minutes at most), then its
+   * evidence, read after the budget (20 predicates of up to a minute each). So
+   * the client does not give up on an effect the server is still running and
+   * may still verify. A workflow wave that runs several long steps one after
+   * another can take longer: raise it for those.
    */
   runTimeoutMs?: number;
 }
 
-/** Past `budget.maxDurationMs`'s cap of 900 000 ms, with a minute to answer in. */
-const RUN_TIMEOUT_MS = 960_000;
+/**
+ * `budget.maxDurationMs`'s cap, then 20 evidence predicates at the 60 s probe
+ * cap (verification is not timed by the budget), with a minute to answer in.
+ */
+const RUN_TIMEOUT_MS = 900_000 + 20 * 60_000 + 60_000;
+
+/** Node's timer ceiling: past it, as for 0, NaN or a negative, a timer fires at once. */
+const MAX_TIMEOUT_MS = 2_147_483_647;
 
 /** Spawn `melra serve` (or `command`) as a child and speak MCP over stdio. */
 export interface MelraStdioOptions extends ClientIdentity {
@@ -116,6 +124,14 @@ export class MelraClient {
   ) {}
 
   static async connect(options: MelraClientOptions = {}): Promise<MelraClient> {
+    // Anything else becomes a timer that fires in a millisecond, so every
+    // execute() would report a timeout while the server ran the effect.
+    const runTimeoutMs = options.runTimeoutMs ?? RUN_TIMEOUT_MS;
+    if (!Number.isInteger(runTimeoutMs) || runTimeoutMs < 1 || runTimeoutMs > MAX_TIMEOUT_MS) {
+      throw new Error(
+        `melra_run_timeout_invalid: runTimeoutMs must be a whole number of milliseconds from 1 to ${MAX_TIMEOUT_MS}`,
+      );
+    }
     const transport =
       options.url !== undefined
         ? httpTransport(options.url, options.token, options.allowInsecureHttp === true)
@@ -166,7 +182,7 @@ export class MelraClient {
       }
       throw error;
     }
-    return new MelraClient(client, options.runTimeoutMs ?? RUN_TIMEOUT_MS);
+    return new MelraClient(client, runTimeoutMs);
   }
 
   /**

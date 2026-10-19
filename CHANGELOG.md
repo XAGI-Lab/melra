@@ -98,12 +98,14 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
-- The TypeScript SDK's `execute()` and `advanceWorkflow()` wait up to 16
-  minutes for the server, past the longest budget a task can have, instead of
-  the MCP client's 60 s default. A task that ran longer than a minute was
-  reported to the caller as `Request timed out` while the server went on and
-  verified it, and a caller that took that as a failure could run it again.
-  `MelraClient.connect({ runTimeoutMs })` sets the limit. (#256)
+- The TypeScript SDK's `execute()` and `advanceWorkflow()` wait up to 36
+  minutes for the server, past the longest a task can take (its budget, then
+  its evidence reads), instead of the MCP client's 60 s default. A task that
+  ran longer than a minute was reported to the caller as `Request timed out`
+  while the server went on and verified it, and a caller that took that as a
+  failure could run it again. `MelraClient.connect({ runTimeoutMs })` sets the
+  limit, and refuses a value that is not a whole number of milliseconds from 1
+  to 2147483647. (#256)
 
 - Denying a durable workflow's step (`melra approve <id> --deny`, the
   console's Deny) or cancelling its task (`melra_task_cancel`) no longer leaves

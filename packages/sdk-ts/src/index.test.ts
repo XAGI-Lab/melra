@@ -230,6 +230,17 @@ describe("TypeScript SDK stdio connect", () => {
     } finally {
       await patient.close();
     }
+  }, 20_000);
+
+  it("refuses a runTimeoutMs that would fire at once, before starting anything", async () => {
+    // Each of these becomes a 1 ms timer: every execute() would time out while
+    // the server went on and ran the effect.
+    for (const runTimeoutMs of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 2 ** 31]) {
+      await expect(
+        MelraClient.connect({ command: "/nonexistent/melra", runTimeoutMs }),
+        String(runTimeoutMs),
+      ).rejects.toThrow("melra_run_timeout_invalid");
+    }
   });
 
   it("says why the server it started refused to start", async () => {

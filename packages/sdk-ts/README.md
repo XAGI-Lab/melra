@@ -108,10 +108,12 @@ cleartext it is readable by anything on the path. Put TLS in front and use
 network, pass `allowInsecureHttp: true`. A wrong token fails `connect()` with
 `melra_unauthorized`.
 
-`execute()` and `advanceWorkflow()` wait up to 16 minutes for the server, past
-the longest budget a task can have, so the SDK does not give up on an effect the
-server is still running. Set `runTimeoutMs` in `connect()` to change that, for
-example for a workflow wave that runs several long steps in a row.
+`execute()` and `advanceWorkflow()` wait up to 36 minutes for the server, past
+the longest a task can take (its 15-minute budget cap, then up to 20 evidence
+reads of a minute each), so the SDK does not give up on an effect the server is
+still running. Set `runTimeoutMs` in `connect()`, in whole milliseconds up to
+2147483647, to change that, for example for a workflow wave that runs several
+long steps in a row.
 
 ## Workflows
 
