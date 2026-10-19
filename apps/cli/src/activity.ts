@@ -16,7 +16,7 @@ import {
   type TaskStatus,
   type WorkflowRun,
 } from "@melra/protocol";
-import { classifyOperation, loadPolicy } from "@melra/policy-core";
+import { approvalTtl, classifyOperation, loadPolicy, type LocalPolicy } from "@melra/policy-core";
 import { SqliteStore } from "@melra/storage-sqlite";
 import type { CliEnvironment } from "./environment.js";
 import { isHuman, paint, table } from "./output.js";
@@ -136,35 +136,73 @@ function approvalHint(waiting: number): string {
   return `${waiting} waiting for approval — ${APPROVAL_HINT}`;
 }
 
-function expiredHint(expired: number): string {
-  return `${expired} whose approval expired — plan again, or clear with \`melra approve <task-id> --deny\``;
+function expiredHints({ expired, expiredSteps }: ApprovalCounts): string[] {
+  return [
+    ...(expired > 0
+      ? [`${expired} whose approval expired — plan again, or clear with \`melra approve <task-id> --deny\``]
+      : []),
+    // A deny would fail the run, where the next advance asks again.
+    ...(expiredSteps > 0
+      ? [`${expiredSteps} workflow step(s) whose approval expired — \`melra workflow advance <workflow-id>\` asks again`]
+      : []),
+  ];
+}
+
+/** The approval window and mode a server started here would decide by. */
+export type ApprovalWindow = Pick<LocalPolicy, "approvalTtlMs" | "mode">;
+
+interface ApprovalCounts {
+  waiting: number;
+  expired: number;
+  expiredSteps: number;
 }
 
 /**
- * Tasks whose approval can still be given, and those whose challenge expired.
- * An expired one stays awaiting_approval, and counted as waiting it was
- * reported forever and pointed at `melra approve`, which then refused it.
+ * Tasks waiting for an operator's approval, and those whose challenge expired
+ * unanswered, workflow steps apart. An expired one stays awaiting_approval, and
+ * counted as waiting it was reported forever and pointed at `melra approve`,
+ * which then refused it. An answer given in time is honoured for a TTL after
+ * it, as `TaskController` honours it, so that task waits for its agent and
+ * counts as neither.
  */
-function approvalCounts(store: SqliteStore): { waiting: number; expired: number } {
-  const now = new Date().toISOString();
-  const pending = store.listTasks(100_000, "awaiting_approval");
-  const expired = pending.filter((task) => task.approval !== undefined && task.approval.expiresAt <= now).length;
-  return { waiting: pending.length - expired, expired };
+function approvalCounts(store: SqliteStore, window: ApprovalWindow): ApprovalCounts {
+  const now = Date.now();
+  const steps = new Set(store.listWorkflowRuns().flatMap((run) => Object.values(run.nodes).flatMap((node) => node.taskIds)));
+  const counts = { waiting: 0, expired: 0, expiredSteps: 0 };
+  for (const task of store.listTasks(100_000, "awaiting_approval")) {
+    const expiresAt = task.approval === undefined ? Infinity : Date.parse(task.approval.expiresAt);
+    const decision = task.approval === undefined ? undefined : store.getApprovalDecision(task.approval.approvalId);
+    // In enforced mode an in-band row is no decision at all.
+    const decidedAt =
+      decision === undefined || (window.mode === "enforced" && decision.channel !== "out_of_band")
+        ? undefined
+        : Date.parse(decision.decidedAt);
+    if (decidedAt !== undefined && decidedAt <= expiresAt) {
+      if (now < decidedAt + approvalTtl(window)) continue;
+    } else if (now < expiresAt) {
+      counts.waiting += 1;
+      continue;
+    }
+    if (steps.has(task.id)) counts.expiredSteps += 1;
+    else counts.expired += 1;
+  }
+  return counts;
 }
 
 export interface TasksOptions {
   limit: number;
   status?: TaskStatus;
   json: boolean;
+  window: ApprovalWindow;
 }
 
 export function tasksCommand(env: CliEnvironment, options: TasksOptions): number {
-  const { tasks, waiting, expired } = withStore(
+  const { tasks, approvals } = withStore(
     env,
-    { tasks: [] as TaskRecord[], waiting: 0, expired: 0 },
+    { tasks: [] as TaskRecord[], approvals: { waiting: 0, expired: 0, expiredSteps: 0 } },
     (store) => ({
       tasks: store.listTasks(options.limit, options.status),
-      ...approvalCounts(store),
+      approvals: approvalCounts(store, options.window),
     }),
   );
   if (!humanOutput(options.json)) {
@@ -199,9 +237,9 @@ export function tasksCommand(env: CliEnvironment, options: TasksOptions): number
       ),
     ]),
   );
-  if (waiting > 0 || expired > 0) write();
-  if (waiting > 0) write(approvalHint(waiting));
-  if (expired > 0) write(expiredHint(expired));
+  const hints = [...(approvals.waiting > 0 ? [approvalHint(approvals.waiting)] : []), ...expiredHints(approvals)];
+  if (hints.length > 0) write();
+  for (const hint of hints) write(hint);
   return 0;
 }
 
@@ -396,11 +434,13 @@ export async function statusCommand(
   let policyError: string | undefined;
   let policyMode: string | undefined;
   let policyUnhinged = false;
+  let policyTtlMs: number | undefined;
   if (options.policyPath !== undefined) {
     try {
       const loaded = await loadPolicy(options.policyPath, env.workspaceRoot);
       policyMode = loaded.mode;
       policyUnhinged = loaded.unhinged;
+      policyTtlMs = loaded.approvalTtlMs;
     } catch (error) {
       policyError = error instanceof Error ? error.message : String(error);
     }
@@ -413,7 +453,7 @@ export async function statusCommand(
       tasks: {} as Record<string, number>,
       workflows: {} as Record<string, number>,
       lastActivity: undefined as string | undefined,
-      approvals: { waiting: 0, expired: 0 },
+      approvals: { waiting: 0, expired: 0, expiredSteps: 0 },
     },
     (store) => {
       const runs = store.listWorkflowRuns();
@@ -425,7 +465,10 @@ export async function statusCommand(
         tasks: store.taskStatusCounts(),
         workflows: countBy(runs.map((run) => run.status)),
         lastActivity: latest,
-        approvals: approvalCounts(store),
+        approvals: approvalCounts(store, {
+          mode,
+          ...(policyTtlMs === undefined ? {} : { approvalTtlMs: policyTtlMs }),
+        }),
       };
     },
   );
@@ -452,6 +495,7 @@ export async function statusCommand(
     workflows,
     awaitingApproval: approvals.waiting,
     expiredApprovals: approvals.expired,
+    expiredWorkflowSteps: approvals.expiredSteps,
     lastActivity: lastActivity ?? null,
     server: {
       http: { address: `127.0.0.1:${port}`, state: http ? "reachable" : "not running" },
@@ -478,7 +522,7 @@ export async function statusCommand(
   row("Tasks", summary(tasks));
   row("Workflows", summary(workflows));
   if (report.awaitingApproval > 0) row("Waiting", approvalHint(report.awaitingApproval));
-  if (report.expiredApprovals > 0) row("Expired", expiredHint(report.expiredApprovals));
+  for (const hint of expiredHints(approvals)) row("Expired", hint);
   row("Last active", lastActivity === undefined ? "never" : ago(lastActivity));
   row("HTTP", `${report.server.http.address} ${report.server.http.state}`);
   if (report.server.socket !== undefined) {

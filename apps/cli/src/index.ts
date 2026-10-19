@@ -1287,10 +1287,18 @@ async function main(): Promise<void> {
         throw new Error("--limit must be a whole number from 1 to 500");
       }
       const status = argument("--status", args);
+      // Approvals are read by the window and mode a server started here would
+      // use; a policy file that does not load leaves the defaults, as status does.
+      const policyPath = await existingPolicyPath(env);
+      const policy = policyPath === undefined ? undefined : await loadPolicy(policyPath, env.workspaceRoot).catch(() => undefined);
       process.exitCode = tasksCommand(env, {
         limit,
         json: args.includes("--json"),
         ...(status === undefined ? {} : { status: TaskStatusSchema.parse(status) }),
+        window: {
+          mode: env.mode === "enforced" || policy?.mode === "enforced" ? "enforced" : "developer",
+          ...(policy?.approvalTtlMs === undefined ? {} : { approvalTtlMs: policy.approvalTtlMs }),
+        },
       });
       return;
     }

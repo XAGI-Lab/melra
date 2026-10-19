@@ -8,7 +8,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
-import type { TaskRecord } from "@melra/protocol";
+import type { TaskRecord, WorkflowRun } from "@melra/protocol";
+import { SqliteStore } from "@melra/storage-sqlite";
 import { taskTarget } from "../src/activity.js";
 
 const execute = promisify(execFile);
@@ -17,6 +18,7 @@ delete process.env.MELRA_MODE;
 const entry = resolve(import.meta.dirname, "../dist/bin.js");
 const systemInfo = resolve(import.meta.dirname, "../../../examples/01-system-info/task.json");
 const fileWrite = resolve(import.meta.dirname, "../../../examples/02-verified-file-write/task.json");
+const restartSafe = resolve(import.meta.dirname, "../../../examples/workflows/restart-safe.json");
 const roots: string[] = [];
 
 afterEach(async () => {
@@ -140,6 +142,65 @@ describe("melra tasks, status, and watch", () => {
       expiredApprovals: number;
     };
     expect([status.awaitingApproval, status.expiredApprovals]).toEqual([1, 1]);
+  });
+
+  /** Moves a task's challenge into the past, and records `decidedAt` if given. */
+  function lapse(root: string, taskId: string, decidedAt?: number) {
+    const store = new SqliteStore(join(root, ".melra", "melra.sqlite"));
+    try {
+      const task = store.getTask(taskId)!;
+      const expiresAt = Date.now() - 1_000;
+      store.saveTask({ ...task, approval: { ...task.approval!, expiresAt: new Date(expiresAt).toISOString() } });
+      if (decidedAt !== undefined) {
+        store.recordApprovalDecision({
+          approvalId: task.approval!.approvalId,
+          taskId,
+          renderDigest: task.approval!.actionDigest,
+          channel: "in_band",
+          approver: "operator",
+          decidedAt: new Date(expiresAt - decidedAt).toISOString(),
+        });
+      }
+    } finally {
+      store.close();
+    }
+  }
+
+  const statusOf = async (options: Awaited<ReturnType<typeof workspace>>["options"]) =>
+    JSON.parse((await execute(process.execPath, [entry, "status", "--json"], options)).stdout) as {
+      awaitingApproval: number;
+      expiredApprovals: number;
+      expiredWorkflowSteps: number;
+    };
+
+  it("counts an approval given in time, not yet acted on, as neither waiting nor expired", async () => {
+    const { root, options, run } = await workspace();
+    const { task } = await run(fileWrite);
+    // Approved a second before its challenge lapsed: the agent can still run
+    // it, so the hint to plan again or deny would have cancelled it.
+    lapse(root, task.id, 1_000);
+    const status = await statusOf(options);
+    expect([status.awaitingApproval, status.expiredApprovals]).toEqual([0, 0]);
+  });
+
+  it("counts an expired workflow step apart, since its next advance asks again", async () => {
+    const { root, options } = await workspace();
+    // An advance that stops at an approval exits non-zero, its run on stdout.
+    const workflow = async (...args: string[]) =>
+      JSON.parse(
+        (
+          await execute(process.execPath, [entry, "workflow", ...args], options).catch(
+            (error: { stdout: string }) => error,
+          )
+        ).stdout,
+      ) as { id: string; run: WorkflowRun };
+    const { id } = await workflow("plan", "--definition", restartSafe);
+    await workflow("advance", id);
+    const { run } = await workflow("advance", id);
+    lapse(root, run.nodes.write!.taskIds[0]!);
+    // A deny, as the expired hint advises for a single task, would fail the run.
+    const status = await statusOf(options);
+    expect([status.expiredApprovals, status.expiredWorkflowSteps]).toEqual([0, 1]);
   });
 
   it("refuses a --status or --limit with nothing after it", async () => {
