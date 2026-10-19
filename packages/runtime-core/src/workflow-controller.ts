@@ -52,6 +52,20 @@ interface NodeAdvance {
   checkpoint?: boolean;
 }
 
+/**
+ * A node one of whose tasks refused (a wrong approval phrase, say) after the
+ * others had run: what they did is recorded with the node before the refusal
+ * is reported, as a sibling node's would be.
+ */
+class NodeRefused extends Error {
+  constructor(
+    readonly reason: unknown,
+    readonly advance: NodeAdvance,
+  ) {
+    super(reason instanceof Error ? reason.message : String(reason));
+  }
+}
+
 interface TaskIdentity {
   workflowId: string;
   nodeId: string;
@@ -386,8 +400,19 @@ export class WorkflowController {
           // Every sibling finishes before one's error is reported. Rejecting
           // at the first throw released the lease while other adapters still
           // ran, and a retry then read their tasks as failed.
-          refused = settled.find((outcome) => outcome.status === "rejected");
-          return settled.flatMap((outcome) => (outcome.status === "fulfilled" ? [outcome.value] : []));
+          const rejected = settled.find((outcome) => outcome.status === "rejected");
+          if (rejected !== undefined) {
+            refused = {
+              reason: rejected.reason instanceof NodeRefused ? rejected.reason.reason : rejected.reason,
+            };
+          }
+          return settled.flatMap((outcome, index) =>
+            outcome.status === "fulfilled"
+              ? [outcome.value]
+              : outcome.reason instanceof NodeRefused
+                ? [{ nodeId: nodeIds[index]!, result: outcome.reason.advance }]
+                : [],
+          );
         }));
     // A *compensation* that failed must not open a second unwind. The saga is
     // already stranded, and undoing the next step while this inverse is still
@@ -1267,7 +1292,10 @@ export class WorkflowController {
         branch: `${branchIndex}:${requestIndex}`,
       })),
     );
-    const results = await Promise.all(
+    // Every branch finishes before one's refusal is reported. Rejecting at
+    // the first throw left a sibling's adapter running and the node recorded
+    // as it was, so a failure beside it unwound past whatever that sibling did.
+    const settled = await Promise.allSettled(
       requests.map((item, index) =>
         this.runTask(
           item.request,
@@ -1283,10 +1311,22 @@ export class WorkflowController {
         ),
       ),
     );
-    return {
-      state: aggregateNodeState(results.map((result) => result.state)),
-      tasks: results.flatMap((result) => result.tasks),
+    const refused = settled.find((outcome) => outcome.status === "rejected");
+    // A refused branch stays as its task stands; one with no task yet cannot
+    // be placed among the others, so the refusal goes up alone.
+    const states = settled.map((outcome, index) => {
+      if (outcome.status === "fulfilled") return outcome.value.state;
+      const taskId = state.taskIds[index];
+      const task = taskId === undefined ? undefined : this.store.getTask(taskId);
+      return task === undefined ? undefined : nodeStateForTask(task, false);
+    });
+    if (states.some((entry) => entry === undefined)) throw refused!.reason;
+    const advance = {
+      state: aggregateNodeState(states as WorkflowNodeState[]),
+      tasks: settled.flatMap((outcome) => (outcome.status === "fulfilled" ? outcome.value.tasks : [])),
     };
+    if (refused !== undefined) throw new NodeRefused(refused.reason, advance);
+    return advance;
   }
 
   private async runLoop(
@@ -1358,12 +1398,6 @@ export class WorkflowController {
   }
 
   /**
-   * Whether a forward step failed or was denied. Also inside a node that an
-   * unknown branch ranks as recovery_required: a parallel node with one branch
-   * unknown and one failed reads recovery_required, and its failure is in its
-   * tasks.
-   */
-  /**
    * What an earlier version recorded beside a step whose outcome is unknown.
    * It ranked a failure above an unknown outcome, so a parallel, condition or
    * loop node holding both read `failed`, and the run failed and unwound. That
@@ -1428,6 +1462,12 @@ export class WorkflowController {
     });
   }
 
+  /**
+   * Whether a forward step failed or was denied. Also inside a node that an
+   * unknown branch ranks as recovery_required: a parallel node with one branch
+   * unknown and one failed reads recovery_required, and its failure is in its
+   * tasks.
+   */
   private hasFailure(definition: WorkflowDefinition, nodes: WorkflowRun["nodes"]): boolean {
     return definition.nodes.some((node) => {
       if (node.type === "compensation") return false;
