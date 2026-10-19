@@ -99,7 +99,8 @@ All notable changes are documented here. The format follows
 ### Fixed
 
 - A file `write` with `encoding: "base64"` refuses content that is not base64
-  (`file_content_invalid_base64`) before anything is written. Node's lenient
+  (`file_content_invalid_base64`) before anything is written; line breaks,
+  missing padding and the URL-safe alphabet are accepted. Node's lenient
   decoder wrote two joined chunks as the first, plain text as noise and `!!!!`
   as an empty file, each verifying as a success. (#279)
 

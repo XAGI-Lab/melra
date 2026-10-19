@@ -73,7 +73,8 @@ async function sameEntry(left: string, right: string): Promise<boolean> {
  */
 function decodeContent(content: string, encoding: "utf8" | "base64"): Buffer {
   if (encoding !== "base64") return Buffer.from(content, encoding);
-  const compact = content.replace(/\s+/g, "");
+  // The URL-safe alphabet too, which Node always decoded the same way.
+  const compact = content.replace(/\s+/g, "").replaceAll("-", "+").replaceAll("_", "/");
   const decoded = Buffer.from(compact, "base64");
   const padded = compact.padEnd(Math.ceil(compact.length / 4) * 4, "=");
   if (!/^[A-Za-z0-9+/]*={0,2}$/.test(compact) || decoded.toString("base64") !== padded) {
@@ -299,13 +300,16 @@ export class FileRuntime {
         if (buffer.byteLength > this.maxFileBytes) throw new Error("file_size_limit_exceeded");
         // A link inside the workspace is written through, as `read` reads
         // through it: renaming onto the link replaced it with a plain file and
-        // left its target as it was. resolvePath checked the target already.
-        // A dangling one has no target to check.
+        // left its target as it was. A dangling one has no target to check.
         const target = (await lstat(path).catch(() => undefined))?.isSymbolicLink() === true
           ? await realpath(path).catch(() => {
               throw new Error("file_write_dangling_symlink");
             })
           : path;
+        // Checked again as it is now, not as resolvePath found it: the link may
+        // have changed since. The rename below replaces whatever is at the
+        // checked target without following it.
+        if (target !== path) await this.resolvePath(target, false, true);
         await mkdir(dirname(target), { recursive: true });
         // A short name beside it, not one built from it: the target's own name
         // may already be as long as the file system allows.

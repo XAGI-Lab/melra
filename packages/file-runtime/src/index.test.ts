@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { spawnSync } from "node:child_process";
-import { chmod, link, lstat, mkdir, mkdtemp, open, readdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, link, lstat, mkdir, mkdtemp, open, readdir, readFile, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, parse } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -353,9 +353,11 @@ describe("FileRuntime", () => {
       await expect(write(`bad-${index}.bin`, content), content).rejects.toThrow("file_content_invalid_base64");
     }
     expect(await readdir(root)).toEqual([]);
-    // Wrapped as MIME wraps it, and unpadded, it is still base64.
+    // Wrapped as MIME wraps it, unpadded, or URL-safe, it is still base64.
     await write("wrapped.txt", "aGVs\nbG8=");
     await write("unpadded.txt", "aGk");
+    await write("url-safe.bin", Buffer.from([0xfb, 0xff]).toString("base64url"));
+    expect([...(await readFile(join(root, "url-safe.bin")))]).toEqual([0xfb, 0xff]);
     expect(await readFile(join(root, "wrapped.txt"), "utf8")).toBe("hello");
     expect(await readFile(join(root, "unpadded.txt"), "utf8")).toBe("hi");
   });
@@ -369,10 +371,32 @@ describe("FileRuntime", () => {
     await symlink(join("configs", "dev.json"), join(root, "config.json"));
     const runtime = await FileRuntime.create({ root });
     await runtime.execute(FileOperationSchema.parse({ kind: "file", action: "write", path: "config.json", content: "new" }));
-    // The link was replaced by a plain file, and its target kept "orig".
+    // The link survives and its target gets the content, keeping its mode. It
+    // used to be replaced by a plain file, the target keeping "orig".
     expect((await lstat(join(root, "config.json"))).isSymbolicLink()).toBe(true);
     expect(await readFile(join(root, "configs", "dev.json"), "utf8")).toBe("new");
     expect((await stat(join(root, "configs", "dev.json"))).mode & 0o777).toBe(0o600);
+    // Checked as the link is when written, not as it was when first resolved:
+    // swapped for one into .git meanwhile, the write is refused.
+    await mkdir(join(root, ".git"));
+    await writeFile(join(root, ".git", "config"), "orig");
+    await symlink(join(".git", "config"), join(root, "swap"));
+    await writeFile(join(root, "plain.txt"), "plain");
+    const resolvePath = runtime.resolvePath.bind(runtime);
+    let swapped = false;
+    runtime.resolvePath = async (...args: Parameters<typeof resolvePath>) => {
+      const resolved = await resolvePath(...args);
+      if (!swapped) {
+        swapped = true;
+        await rename(join(root, "swap"), join(root, "plain.txt"));
+      }
+      return resolved;
+    };
+    await expect(
+      runtime.execute(FileOperationSchema.parse({ kind: "file", action: "write", path: "plain.txt", content: "x" })),
+    ).rejects.toThrow("path_git_metadata");
+    expect(await readFile(join(root, ".git", "config"), "utf8")).toBe("orig");
+    runtime.resolvePath = resolvePath;
     // A dangling link has no target to check, wherever it points.
     await symlink(join(tmpdir(), "melra-nowhere", "x"), join(root, "dangling.json"));
     await expect(

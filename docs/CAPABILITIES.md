@@ -74,8 +74,9 @@ Actions: `list`, `read`, `stat`, `hash`, `write`, `move`, `delete`, `mkdir`.
   exist is refused (`file_write_dangling_symlink`).
 - Reads and writes are size-bounded by local policy.
 - Writes use a temporary sibling file followed by an atomic rename.
-- `encoding: "base64"` content must be base64, line breaks allowed, or the write
-  is refused before anything lands (`file_content_invalid_base64`).
+- `encoding: "base64"` content must be base64 (line breaks, missing padding and
+  the URL-safe alphabet allowed), or the write is refused before anything lands
+  (`file_content_invalid_base64`).
 - Deletes are destructive and approval-gated.
 
 ### Terminal
