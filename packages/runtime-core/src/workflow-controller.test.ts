@@ -1431,6 +1431,129 @@ describe("WorkflowController execution", () => {
     ]);
   });
 
+  /** Rewrites a run as an earlier version recorded it. */
+  function recordAsEarlierVersion(
+    controller: WorkflowController,
+    run: WorkflowRun,
+    change: (draft: WorkflowRun, emit: (type: string, data: Record<string, unknown>) => void) => void,
+  ) {
+    (
+      controller as unknown as {
+        transition(run: WorkflowRun, change: (draft: WorkflowRun, emit: (type: string, data: Record<string, unknown>) => void) => void): WorkflowRun;
+      }
+    ).transition(run, change);
+  }
+
+  it("halts a run an earlier version left failed with an unknown branch inside a parallel node", async () => {
+    const { calls, execute } = unknownBesideFailure();
+    const { controller } = await setup(execute, { unhinged: true });
+    const planned = controller.plan(parallelSaga());
+    const halted = await settle(controller, planned.id);
+    expect(halted.run.nodes.fan?.status).toBe("recovery_required");
+
+    // What an earlier version recorded: the failed branch ranked first, so the
+    // node and the run read `failed`, and the next advance would refund.
+    recordAsEarlierVersion(controller, halted.run, (draft, emit) => {
+      const state = { ...draft.nodes.fan!, status: "failed" as const };
+      emit("workflow.node_changed", { nodeId: "fan", from: "recovery_required", state });
+      draft.nodes.fan = state;
+      emit("workflow.status_changed", { from: draft.status, to: "failed" });
+      draft.status = "failed";
+    });
+
+    const run = (await settle(controller, planned.id)).run;
+    expect(run.status).toBe("recovery_required");
+    expect(run.nodes.fan?.status).toBe("recovery_required");
+    expect(calls).not.toContain("payments.example.test/refunds");
+  });
+
+  it("offers again a skipped compensation whose step ran under its approval", async () => {
+    const { calls, execute } = unknownBesideFailure();
+    const { controller, store, tasks, cipher } = await setup(execute);
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Charge, approve and ship, notify",
+        nodes: [
+          { id: "charge", type: "operation", request: call("Charge", `${PAYMENTS}/charges`) },
+          { id: "approve-ship", type: "approval", forNodeId: "ship", dependsOn: ["charge"] },
+          { id: "ship", type: "operation", dependsOn: ["approve-ship"], request: call("Ship", `${LOGISTICS}/shipments`) },
+          { id: "notify", type: "operation", dependsOn: ["charge"], request: call("Notify", `${PAYMENTS}/notify`) },
+          { id: "undo-charge", type: "compensation", forNodeId: "charge", request: call("Refund", `${PAYMENTS}/refunds`) },
+          { id: "undo-ship", type: "compensation", forNodeId: "ship", request: call("Cancel", `${LOGISTICS}/cancellations`) },
+        ],
+      }),
+    );
+    // The approval node holds the shipment's unknown outcome; `ship` still
+    // reads `pending`.
+    const halted = await settle(controller, planned.id);
+    expect(halted.run.nodes["approve-ship"]?.status).toBe("recovery_required");
+    expect(halted.run.nodes.ship?.status).toBe("pending");
+
+    recordAsEarlierVersion(controller, halted.run, (draft, emit) => {
+      const state = { status: "skipped" as const, taskIds: [] };
+      emit("workflow.node_changed", { nodeId: "undo-ship", from: "pending", state });
+      draft.nodes["undo-ship"] = state;
+      emit("workflow.status_changed", { from: draft.status, to: "failed" });
+      draft.status = "failed";
+    });
+    const repaired = (await controller.advance(planned.id)).run;
+    expect(repaired.status).toBe("recovery_required");
+    expect(repaired.nodes["undo-ship"]?.status).toBe("pending");
+
+    // The shipment turns out to have happened: both are undone, it first.
+    const shipTask = tasks.status(repaired.nodes["approve-ship"]!.taskIds[0]!);
+    store.saveTask({ ...shipTask, status: "verified_success" });
+    const restarted = new WorkflowController(store, tasks, cipher);
+    await restarted.recoverInterrupted();
+    await settle(restarted, planned.id);
+    expect(calls.filter((call) => call.endsWith("/cancellations") || call.endsWith("/refunds"))).toEqual([
+      "logistics.example.test/cancellations",
+      "payments.example.test/refunds",
+    ]);
+  });
+
+  it("offers again a skipped compensation on a run an earlier version's unwind stalled", async () => {
+    const { execute } = unknownBesideFailure();
+    const { controller } = await setup(execute, { unhinged: true });
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Charge, then ship and notify, both undone",
+        nodes: [
+          { id: "charge", type: "operation", request: call("Charge", `${PAYMENTS}/charges`) },
+          { id: "ship", type: "operation", dependsOn: ["charge"], request: call("Ship", `${LOGISTICS}/shipments`) },
+          { id: "notify", type: "operation", dependsOn: ["charge"], request: call("Notify", `${PAYMENTS}/notify`) },
+          { id: "undo-charge", type: "compensation", forNodeId: "charge", request: call("Refund", `${PAYMENTS}/refunds`) },
+          { id: "undo-ship", type: "compensation", forNodeId: "ship", request: call("Cancel", `${LOGISTICS}/cancellations`) },
+        ],
+      }),
+    );
+    const halted = await settle(controller, planned.id);
+
+    // An earlier version unwound, skipped undo-ship, and stalled at a refund
+    // whose own outcome is unknown.
+    recordAsEarlierVersion(controller, halted.run, (draft, emit) => {
+      const skipped = { status: "skipped" as const, taskIds: [] };
+      emit("workflow.node_changed", { nodeId: "undo-ship", from: "pending", state: skipped });
+      draft.nodes["undo-ship"] = skipped;
+      const stalled = { status: "recovery_required" as const, taskIds: [] };
+      emit("workflow.node_changed", { nodeId: "undo-charge", from: "pending", state: stalled });
+      draft.nodes["undo-charge"] = stalled;
+      draft.error = "workflow_compensation_incomplete:undo-charge";
+      emit("workflow.status_changed", { from: draft.status, to: draft.status, error: draft.error });
+    });
+
+    const repaired = (await controller.advance(planned.id)).run;
+    expect(repaired.nodes["undo-ship"]?.status).toBe("pending");
+    expect(repaired.status).toBe("recovery_required");
+    expect(repaired.error).toBe("workflow_compensation_incomplete:undo-charge");
+  });
+
   it("plans no compensation for a run cancelled while its advance was running", async () => {
     let shipping!: () => void;
     const started = new Promise<void>((resolve) => {
