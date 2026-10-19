@@ -172,12 +172,14 @@ describe("Verifier", () => {
     expect(evidence[0]?.inconclusive).toBeUndefined();
   });
 
-  it("answers a name too long for the filesystem as missing, not as no answer", async () => {
+  it("refuses a path the filesystem will not take whole, rather than read it as there or gone", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-verifier-"));
     roots.push(root);
     const verifier = await Verifier.create(root);
-    // ENAMETOOLONG: no file can have this name, so the answer cannot change.
     const path = "a".repeat(300);
+    // Where the OS says ENAMETOOLONG. The same error comes for a path past
+    // PATH_MAX that does exist, so read as missing it verified a file as gone.
+    if ((await lstat(join(root, path)).catch((error: NodeJS.ErrnoException) => error.code)) !== "ENAMETOOLONG") return;
     const { evidence } = await verifier.verify(
       [
         { type: "file_exists", path },
@@ -186,10 +188,10 @@ describe("Verifier", () => {
       ],
       {},
     );
-    expect(evidence.map(({ passed, inconclusive }) => [passed, inconclusive ?? false])).toEqual([
-      [false, false],
-      [true, false],
-      [false, false],
+    expect(evidence.map(({ passed, unanswerable, summary }) => [passed, unanswerable ?? false, summary])).toEqual([
+      [false, true, "verification_path_too_long"],
+      [false, true, "verification_path_too_long"],
+      [false, true, "verification_path_too_long"],
     ]);
   });
 

@@ -54,8 +54,9 @@ What a verifier does **not** decide:
   weakest claim (`execution`) rather than declaring itself `independent`.
 - **Whether an unanswerable question passes.** A type with no verifier, and a
   `check` that throws, are failed items marked `inconclusive`: no answer, not a
-  no. The kernel's own refusals (a path outside the workspace, a URL token with
-  nothing to fill it, a type with no verifier) are also `unanswerable`, and a
+  no. The kernel's own refusals (a path outside the workspace, a path the
+  filesystem will not take whole, a URL token with nothing to fill it, a type
+  with no verifier) are also `unanswerable`, and a
   verifier cannot set that flag itself. `outsideWorkspace(predicate)` says
   before anything runs whether a file predicate's path could only be refused,
   and `unfilledToken(predicate, facts)` whether an `http_resource_matches`

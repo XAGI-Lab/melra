@@ -204,13 +204,22 @@ const pageContains: Built<"page_contains"> = {
 /**
  * A path that is not there: the workspace's answer, not a failure to ask.
  * Thrown, it would read as no answer at all, and a reconciliation or a
- * condition waiting on that file would never decide. A name too long for the
- * filesystem (ENAMETOOLONG) cannot exist either, however often it is asked.
+ * condition waiting on that file would never decide.
  */
 const missing = (error: unknown): boolean =>
-  error instanceof Error &&
-  "code" in error &&
-  (error.code === "ENOENT" || error.code === "ENOTDIR" || error.code === "ENAMETOOLONG");
+  error instanceof Error && "code" in error && (error.code === "ENOENT" || error.code === "ENOTDIR");
+
+/**
+ * A path the OS will not take whole (ENAMETOOLONG) is no answer either way: a
+ * name past NAME_MAX cannot exist, but a path past PATH_MAX can, built through
+ * relative steps. Read as missing, a file that is there verified as gone. It is
+ * the kernel's own refusal, so a check on it fails rather than waits.
+ */
+function refuseTooLong(error: unknown): void {
+  if (error instanceof Error && "code" in error && error.code === "ENAMETOOLONG") {
+    throw new Refusal("verification_path_too_long");
+  }
+}
 
 const fileExists: Built<"file_exists"> = {
   type: "file_exists",
@@ -222,6 +231,7 @@ const fileExists: Built<"file_exists"> = {
       const metadata = await stat(path);
       passed = metadata.isFile() || metadata.isDirectory();
     } catch (error) {
+      refuseTooLong(error);
       if (!missing(error)) throw error;
       return { passed: false, summary: "workspace path does not exist", source: predicate.path };
     }
@@ -271,11 +281,15 @@ async function renamedByCase(
 const fileAbsent: Built<"file_absent"> = {
   type: "file_absent",
   async check(predicate, result, context) {
-    const path = await context.workspacePath(predicate.path, { mayBeAbsent: true });
+    const path = await context.workspacePath(predicate.path, { mayBeAbsent: true }).catch((error: unknown) => {
+      refuseTooLong(error);
+      throw error;
+    });
     let passed = false;
     try {
       passed = await renamedByCase(path, await lstat(path, { bigint: true }), result, context);
     } catch (error) {
+      refuseTooLong(error);
       passed = missing(error);
       if (!passed) throw error;
     }
@@ -299,6 +313,7 @@ const fileHash: Built<"file_hash"> = {
         return { passed: false, summary: "workspace path is not a regular file", source: context.relative(path) };
       }
     } catch (error) {
+      refuseTooLong(error);
       if (!missing(error)) throw error;
       return { passed: false, summary: "workspace path does not exist", source: predicate.path };
     }

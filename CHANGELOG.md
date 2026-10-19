@@ -117,10 +117,10 @@ All notable changes are documented here. The format follows
   asked, and the agent ran the effect again. A predicate whose check throws is
   now `inconclusive` in the receipt, as an unreachable provider already was; a
   missing file is still a plain no for `file_exists` and `file_hash`, and a
-  path under a regular file (`ENOTDIR`) or a name too long for the filesystem
-  (`ENAMETOOLONG`) is absent for `file_absent`, where it was an error. An item
-  the kernel itself refused to ask (a path outside the workspace or reserved,
-  a URL token with nothing to fill it, a verifier or probe the runtime does not
+  path under a regular file (`ENOTDIR`) is absent for `file_absent`, where it
+  was an error. An item the kernel itself refused to ask (a path outside the
+  workspace or reserved, a path the filesystem will not take whole, a URL
+  token with nothing to fill it, a verifier or probe the runtime does not
   have) also carries `unanswerable: true`, so a caller can tell a question that
   is refused every time from one worth asking again without reading its
   summary; a verifier cannot set it. The task's `error` says which:
