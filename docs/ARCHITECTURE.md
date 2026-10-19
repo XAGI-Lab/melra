@@ -388,7 +388,8 @@ interface is served.
   no task at all; a challenge that expired is still asked again, as a later
   attempt that the next advance prefers. A loop such an advance carried into
   its next iteration goes on there without asking `until` again of the
-  iteration before.
+  iteration before. The tasks under a key are found by an index on
+  `idempotencyKey` (migration 6), not by reading every task.
 - Idempotency keys bind workflow, node, iteration, branch, and canonical
   request. SQLite rejects a second committed attempt.
 - Competing advances for one workflow are serialized inside a server process.

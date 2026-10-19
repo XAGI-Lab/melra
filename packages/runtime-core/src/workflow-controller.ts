@@ -733,7 +733,7 @@ export class WorkflowController {
         if (unknown.length > 0) return { state: recoveredNodeState(node, unknown, recorded), found: all };
         return { state: cleared ? { status: "pending", taskIds: [] } : recorded, found: all };
       }
-      const halted = this.abandonBranch(node, keys, chosen, allTasks);
+      const halted = this.abandonBranch(node, keys, chosen);
       if (halted !== undefined) return { state: halted, found: all };
       for (const key of chosen ? keys.slice(node.whenTrue.length) : trueKeys) ignored.add(key);
     }
@@ -805,7 +805,6 @@ export class WorkflowController {
     node: Extract<WorkflowNode, { type: "condition" }>,
     keys: string[],
     chosen: boolean,
-    allTasks: TaskRecord[],
   ): WorkflowNodeState | undefined {
     const other = chosen ? keys.slice(node.whenTrue.length) : keys.slice(0, node.whenTrue.length);
     const conflicting = new Set<string>();
@@ -813,7 +812,7 @@ export class WorkflowController {
       const commit = this.store.getIdempotencyCommit(key);
       if (commit !== undefined) conflicting.add(commit.taskId);
     }
-    for (const task of this.cancelChallenges(other, allTasks)) {
+    for (const task of this.cancelChallenges(other)) {
       if (!hadNoEffect(task)) conflicting.add(task.id);
     }
     return conflicting.size === 0
@@ -826,10 +825,10 @@ export class WorkflowController {
    * Every task under these keys, read again, with each challenge among them
    * cancelled and the cancel read back, so nobody approves it later.
    */
-  private cancelChallenges(keys: string[], allTasks: TaskRecord[]): TaskRecord[] {
-    const wanted = new Set(keys);
-    return allTasks
-      .filter((task) => task.idempotencyKey !== undefined && wanted.has(task.idempotencyKey))
+  private cancelChallenges(keys: string[]): TaskRecord[] {
+    // Each key once: an approval node's is its operation's.
+    return [...new Set(keys)]
+      .flatMap((key) => this.store.listTasksByKey(key))
       .map((listed) => {
         // Read again: the listing can predate an approver starting it.
         const task = this.tasks.status(listed.id);
@@ -1122,11 +1121,7 @@ export class WorkflowController {
       // and still lets the run end.
       if (definition !== undefined) {
         const opened = definition;
-        this.cancelChallenges(
-          opened.nodes.flatMap((node) => expectedTaskKeys(current.id, node, opened)),
-          // Filtered in SQL, so the history is neither parsed nor cut short.
-          [...this.store.listTasks(100_000, "planned"), ...this.store.listTasks(100_000, "awaiting_approval")],
-        );
+        this.cancelChallenges(opened.nodes.flatMap((node) => expectedTaskKeys(current.id, node, opened)));
       }
       return run;
     });
@@ -1358,7 +1353,7 @@ export class WorkflowController {
           recorded.length === 0 ||
           recorded.some((key) => !own.includes(key))
         ) {
-          const halted = this.abandonBranch(node, keys, chosen, this.store.listTasks(100_000));
+          const halted = this.abandonBranch(node, keys, chosen);
           if (halted !== undefined) return { state: halted, tasks: [] };
         }
         return await this.runSequential(
@@ -1512,7 +1507,7 @@ export class WorkflowController {
     // run still names that attempt. Take the newest attempt for the key, as
     // recovery does, so only a cancel nobody followed reads as a denial.
     if (task.status === "cancelled" && task.idempotencyKey !== undefined) {
-      task = preferredTask(this.store.listTasks(100_000), task.idempotencyKey) ?? task;
+      task = preferredTask(this.store.listTasksByKey(task.idempotencyKey), task.idempotencyKey) ?? task;
     }
     // A challenge that expired before anyone answered it can never be
     // answered, and reusing it left the node unapprovable for good. Ask again:
@@ -1590,10 +1585,9 @@ export class WorkflowController {
    * happen (failed, denied, out of budget, refused) included, so the step
    * reads as it would after a restart. Undefined only when there is none.
    */
-  // ponytail: lists every task per new step; query by key if a long history slows advances.
   private takenUp(key: string): TaskRecord | undefined {
     const committed = this.store.getIdempotencyCommit(key)?.taskId;
-    return committed === undefined ? preferredTask(this.store.listTasks(100_000), key) : this.tasks.status(committed);
+    return committed === undefined ? preferredTask(this.store.listTasksByKey(key), key) : this.tasks.status(committed);
   }
 
   private async runSequential(
@@ -1658,11 +1652,11 @@ export class WorkflowController {
     // and the run may still name a cancelled attempt that was asked again.
     // One with no task at all cannot be placed among the others, so the
     // refusal goes up alone.
-    let every: TaskRecord[] | undefined;
     const states = settled.map((outcome, index) => {
       if (outcome.status === "fulfilled") return outcome.value.state;
       const { request, identity } = requests[index]!;
-      const task = preferredTask((every ??= this.store.listTasks(100_000)), taskIdempotencyKey(identity, request));
+      const key = taskIdempotencyKey(identity, request);
+      const task = preferredTask(this.store.listTasksByKey(key), key);
       return task === undefined ? undefined : nodeStateForTask(task, false);
     });
     if (states.some((entry) => entry === undefined)) throw refused!.reason;

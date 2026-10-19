@@ -205,7 +205,7 @@ Invariants worth knowing before touching this code:
 - Events are append-only and ordered; projections and snapshots are derived. Read state through `status()`/`events()` rather than querying tables directly.
 - Exact workflow definitions and adapter results are sealed with AES-256-GCM (`payload-cipher.ts`) bound to record identity and purpose. Keys come from `MELRA_PAYLOAD_KEY` or a mode-`0600` file (`packages/server/src/payload-key.ts`); permissive key files fail closed.
 
-All of this lives in SQLite migrations 1–5 (`packages/storage-sqlite/src/index.ts`).
+All of this lives in SQLite migrations 1–6 (`packages/storage-sqlite/src/index.ts`).
 Schema changes need a new migration, not an edit to an existing one's statements.
 
 ## Versions must move in lockstep

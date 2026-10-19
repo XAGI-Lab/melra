@@ -220,7 +220,8 @@ All notable changes are documented here. The format follows
   ask `until` again of the iteration before and stop short of one that ran.
   A pause no longer loses an advance's commit (above), but a failed write
   still can, and runs an earlier version left this way heal on their next
-  advance. (#319)
+  advance. Each step finds the tasks under its key in SQL, on an index
+  (migration 6), so a long task history does not slow it. (#319)
 
 - A condition step whose advance lost its commit (a pause landed while it ran)
   keeps to one branch. Recovery read both branches' tasks together and could

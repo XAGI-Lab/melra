@@ -373,6 +373,16 @@ export class SqliteStore {
       );
     `,
     );
+    // Migration 6 indexes tasks by idempotency key, so a workflow step finds
+    // the tasks under its key without reading every task. As for migration 4,
+    // the expression must match listTasksByKey's text exactly.
+    this.applyMigration(
+      6,
+      `
+      CREATE INDEX IF NOT EXISTS tasks_idempotency_key
+        ON tasks(json_extract(data, '$.idempotencyKey'));
+    `,
+    );
   }
 
   private applyMigration(version: number, statements: string): void {
@@ -563,6 +573,14 @@ export class SqliteStore {
             )
             .all(status, limit)
     ) as unknown as JsonRow[];
+    return rows.map((row) => JSON.parse(row.data) as TaskRecord);
+  }
+
+  /** Every task planned under one idempotency key, any status, found by its index. */
+  listTasksByKey(idempotencyKey: string): TaskRecord[] {
+    const rows = this.database
+      .prepare("SELECT data FROM tasks WHERE json_extract(data, '$.idempotencyKey') = ?")
+      .all(idempotencyKey) as unknown as JsonRow[];
     return rows.map((row) => JSON.parse(row.data) as TaskRecord);
   }
 

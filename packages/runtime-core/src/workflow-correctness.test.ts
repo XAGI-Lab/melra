@@ -1569,3 +1569,42 @@ describe("a step whose advance lost its commit (#319)", () => {
     expect(done).toEqual(["step"]);
   });
 });
+
+describe("a step's task looked up by its key", () => {
+  it("does not read every task in the home for each step an advance plans", async () => {
+    const { controller, store, root, done } = await setup({ policy: { unhinged: true } });
+    await writeFile(join(root, "flag"), "on");
+    const planned = controller.plan(
+      workflow([
+        { id: "inspect", type: "operation", request: read() },
+        {
+          id: "loop",
+          type: "bounded_loop",
+          maxIterations: 3,
+          until: { type: "file_exists", path: "never" },
+          body: [put("l")],
+        },
+        { id: "par", type: "parallel", branches: [[put("p0")], [put("p1")]] },
+        {
+          id: "choose",
+          type: "condition",
+          dependsOn: ["inspect"],
+          sourceNodeId: "inspect",
+          predicate: { type: "file_exists", path: "flag" },
+          whenTrue: [put("t")],
+          whenFalse: [put("f")],
+        },
+      ]),
+    );
+    const listed = vi.spyOn(store, "listTasks");
+    let run = (await controller.advance(planned.id)).run;
+    for (let step = 0; step < 4 && run.status !== "verified_complete"; step += 1) {
+      run = (await controller.advance(planned.id)).run;
+    }
+    expect(run.status).toBe("verified_complete");
+    expect(done.sort()).toEqual(["l", "l", "l", "p0", "p1", "t"]);
+    // Each new step, and each loop iteration, parsed the whole task table:
+    // seconds per advance in a home with a long history.
+    expect(listed).not.toHaveBeenCalled();
+  });
+});
