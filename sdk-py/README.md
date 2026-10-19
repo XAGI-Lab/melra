@@ -4,6 +4,38 @@ Async Python client for MELRA task, evidence, and durable workflow interfaces.
 Requires Python 3.11 or newer (CI covers 3.11 through 3.14), and the wheel ships
 `py.typed`, so mypy and pyright use its annotations.
 
+## Install
+
+> [!CAUTION]
+> This SDK is not published on PyPI, so `pip install melra` does not install
+> it. A `melra` package that appears there is not this project's.
+
+Each [GitHub release](https://github.com/XAGI-Lab/melra/releases) attaches the
+wheel, named with the Python spelling of the version (`0.3.0a12` for
+`0.3.0-alpha.12`). It is covered by the release's `SHA256SUMS` and its signed
+provenance attestation. Download the wheel and `SHA256SUMS` into one
+directory, then check the wheel before installing it by path; each step runs
+only if the one before it passed:
+
+```bash
+sha256sum --check --ignore-missing SHA256SUMS &&
+  gh attestation verify melra-0.3.0a12-py3-none-any.whl --repo XAGI-Lab/melra &&
+  pip install ./melra-0.3.0a12-py3-none-any.whl
+```
+
+From a checkout of the repository, or for a release without a wheel attached,
+install from source: `pip install ./sdk-py`.
+
+`MelraClient()` starts `melra serve` from your `PATH`, which
+`npm install -g @melra/cli@alpha` puts there. For an install that leaves no
+`melra` on the `PATH` ([npx, the release tarball, a checkout, the single
+executable](../docs/INSTALLATION.md#install)), name the launcher yourself, for
+example `MelraClient(command="npx", args=["-y", "@melra/cli@alpha", "serve"])`.
+`connect_http` and `connect_socket` start nothing, so they need no CLI on this
+machine.
+
+## Use
+
 ```python
 from melra import MelraClient
 
