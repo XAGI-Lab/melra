@@ -20,7 +20,7 @@ import {
 import { OAuthProvider, approvalScreen, createMelraRuntime, printable, serveHttp } from "@melra/server";
 import { runConformance } from "../src/conformance.js";
 import { RESTART_SAFE_WORKFLOW } from "../src/demo-workflow.js";
-import { approverLabel, broadWorkspace, parseCliEnvironment, serverLaunch } from "../src/environment.js";
+import { approverLabel, parseCliEnvironment, serverLaunch } from "../src/environment.js";
 import { approvalConsole, confirmInTerminal, type ConsoleTerminal } from "../src/approval-console.js";
 import { taskTarget } from "../src/activity.js";
 
@@ -1580,24 +1580,6 @@ describe("melra CLI", () => {
     });
   });
 
-  it("knows a workspace that is home or a filesystem root, however it is spelled", async () => {
-    const root = await mkdtemp(join(tmpdir(), "melra-cli-broad-"));
-    roots.push(root);
-    const home = join(root, "home");
-    await mkdir(join(home, "project"), { recursive: true });
-    await symlink(home, join(root, "link"));
-    expect(await broadWorkspace(home, home)).toBe("home");
-    // Through a link, either side: a symlinked home is still home.
-    expect(await broadWorkspace(join(root, "link"), home)).toBe("home");
-    expect(await broadWorkspace(home, join(root, "link"))).toBe("home");
-    expect(await broadWorkspace(join(home, "project"), home)).toBeUndefined();
-    expect(await broadWorkspace(root, home)).toBeUndefined();
-    // `/`, or the drive root on Windows.
-    expect(await broadWorkspace(parse(root).root, home)).toBe("root");
-    // One that does not resolve is doctor's to report.
-    expect(await broadWorkspace(join(root, "missing"), home)).toBeUndefined();
-  });
-
   it("will not quietly make the home directory or a filesystem root the workspace", async () => {
     // Real path, so the working directory the CLI reads back is spelled the same.
     const home = await realpath(await mkdtemp(join(tmpdir(), "melra-cli-home-")));
@@ -1615,15 +1597,16 @@ describe("melra CLI", () => {
     for (const [cwd, what] of [
       [home, "is your home directory"],
       [parse(home).root, "is the root of the file system"],
+      // Every user's home, as /Users, /home or C:\Users is.
+      [resolve(home, ".."), "holds your home directory"],
     ] as const) {
       for (const command of [["setup"], ["init"], ["setup", "--json"]]) {
         const refused = await execute(process.execPath, [entry, ...command, "--client", "claude"], { cwd, env }).catch(
           (error: { code: number; stdout: string; stderr: string }) => error,
         );
         expect(refused).toMatchObject({ code: 1, stdout: "" });
-        expect(refused.stderr).toContain(`workspace_too_broad: `);
-        expect(refused.stderr).toContain(what);
-        expect(refused.stderr).toContain("Rerun from your project directory, or set MELRA_WORKSPACE to it");
+        expect(refused.stderr).toContain(`workspace_too_broad: ${cwd} ${what}`);
+        expect(refused.stderr).toContain("Set MELRA_WORKSPACE to your project directory, or run this from there");
       }
     }
     // Before anything was written.
@@ -1644,6 +1627,60 @@ describe("melra CLI", () => {
       (error: { stdout: string }) => error,
     );
     expect((JSON.parse(setup.stdout) as { workspace: string }).workspace).toBe(project);
+    // A MELRA_POLICY file pins the workspace, so running from the project
+    // cannot change it; its workspaceRoot, or MELRA_WORKSPACE, can. Spelled
+    // through macOS's /System/Volumes/Data firmlink where there is one, which
+    // realpath leaves as it is (a working directory comes back folded).
+    const firmlink = join("/System/Volumes/Data", home);
+    const pin = existsSync(firmlink) ? firmlink : home;
+    await writeFile(join(home, "team.json"), JSON.stringify({ workspaceRoot: pin }));
+    const pinned = await execute(process.execPath, [entry, "setup", "--json"], {
+      cwd: project,
+      env: { ...env, MELRA_POLICY: join(home, "team.json") },
+    }).catch((error: { code: number; stderr: string }) => error);
+    expect(pinned).toMatchObject({ code: 1 });
+    expect(pinned.stderr).toContain(`workspace_too_broad: ${pin} is your home directory`);
+    expect(pinned.stderr).toContain(
+      `Set MELRA_WORKSPACE to your project directory, or make that the workspaceRoot in ${join(home, "team.json")}`,
+    );
+    expect(pinned.stderr).not.toContain("run this from there");
+  });
+
+  it("tells doctor and approve what fixes a data directory in the workspace, by layout", async () => {
+    const home = await realpath(await mkdtemp(join(tmpdir(), "melra-cli-home-")));
+    roots.push(home);
+    const project = join(home, "project");
+    await mkdir(project);
+    const env = { ...process.env, HOME: home, USERPROFILE: home, MELRA_WORKSPACE: "", MELRA_POLICY: "", MELRA_HOME: "" };
+    const next = async (cwd: string, extra: Record<string, string>) => {
+      const result = await execute(process.execPath, [entry, "doctor"], { cwd, env: { ...env, ...extra } }).catch(
+        (error: { stdout: string }) => error,
+      );
+      const report = JSON.parse(result.stdout) as { checks: Array<{ name: string; next?: string }> };
+      return report.checks.find((check) => check.name === "data-location")?.next;
+    };
+    // From a fresh terminal, home holds the default ~/.melra: narrow the
+    // workspace, and leave the database where it is.
+    const narrow =
+      "set MELRA_WORKSPACE to your project directory, or run this from there; " +
+      "keep MELRA_HOME where it is (moving it orphans the database)";
+    expect(await next(home, {})).toBe(narrow);
+    // MELRA_HOME put inside the project: the workspace is right, the data is not.
+    expect(await next(project, { MELRA_WORKSPACE: project, MELRA_HOME: join(project, ".melra") })).toBe(
+      "move the MELRA_HOME directory, with everything in it, out of the workspace, and set MELRA_HOME to where it went",
+    );
+    // Pinned by a policy file, which running from the project cannot change.
+    await writeFile(join(home, "team.json"), JSON.stringify({ workspaceRoot: home }));
+    expect(await next(project, { MELRA_POLICY: join(home, "team.json") })).toContain(
+      `or make that the workspaceRoot in ${join(home, "team.json")}; keep MELRA_HOME where it is`,
+    );
+    // Enforced, `approve` from home is refused with the same advice: rerunning
+    // setup would not change the workspace it works out.
+    const refused = await execute(process.execPath, [entry, "approve", "1234", "--yes"], {
+      cwd: home,
+      env: { ...env, MELRA_MODE: "enforced" },
+    }).catch((error: { code: number; stderr: string }) => error);
+    expect(refused.stderr).toContain(`enforced_mode_refuses_data_inside_workspace: ${narrow}`);
   });
 
   it("keeps each project in its own workspace when they share MELRA_HOME", async () => {

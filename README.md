@@ -153,8 +153,8 @@ npx @melra/cli@alpha setup
 ```
 
 That directory becomes the agent's workspace, the boundary for its file and command
-operations. `setup` shows it, and asks before making your home directory (or `/`)
-the workspace; set `MELRA_WORKSPACE` to choose another.
+operations. `setup` shows it, and asks before making your home directory, a directory
+holding it, or `/` the workspace; set `MELRA_WORKSPACE` to choose another.
 
 In a terminal, `setup` is a short wizard. It writes a safe local policy, finds the
 agent apps on your machine, asks which one should use MELRA, and writes MELRA into

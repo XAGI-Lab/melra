@@ -16,11 +16,14 @@ readiness check fails, and it never overwrites an existing policy.
 Run it from the directory the agent should work in. That directory becomes the
 workspace, the boundary for the agent's file and command operations, which
 the config carries as `MELRA_WORKSPACE` and `setup` shows as `Workspace`.
-If it would be your home directory or a filesystem root (`/`, or a drive root
-on Windows), `setup` and `init` say so and ask, defaulting to no; where nobody
-can answer (piped, captured, or with `--json`) they refuse with
-`workspace_too_broad` and write nothing. Set `MELRA_WORKSPACE` to choose the
-workspace yourself, home included, without the question.
+If it would be your home directory, a directory holding it (such as `/Users`
+or `/home`), or a filesystem root (`/`, or a drive root on Windows), `setup`
+and `init` say so and ask, defaulting to no; where nobody can answer (piped,
+captured, or with `--json`) they refuse with `workspace_too_broad` and write
+nothing. Set `MELRA_WORKSPACE` to choose the workspace yourself, home
+included, without the question. When a `MELRA_POLICY` file's `workspaceRoot`
+sets the workspace, the working directory does not count: change it there,
+or set `MELRA_WORKSPACE`.
 
 In a terminal it asks which client to set up, listing the ones it finds on
 this machine first, then offers to write the config for you:
@@ -51,7 +54,8 @@ anything but `y` at the workspace question exits with status 1, likewise.
 Piped, captured, or run with `--json`, `setup`, `init`, and `doctor` ask
 nothing and print the same JSON they always have, plus the `workspace` the
 config names, so scripts and CI are unaffected unless the workspace would be
-home or a filesystem root (see above); `NO_COLOR` turns the colours off.
+home, a directory holding it, or a filesystem root (see above); `NO_COLOR`
+turns the colours off.
 
 Name your client and MELRA writes itself into that client's own config file,
 in that client's own format, keeping everything already there and saving the
@@ -223,7 +227,7 @@ MELRA uses these environment variables:
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `MELRA_WORKSPACE` | Hard boundary for file and process operations; a policy file's `workspaceRoot` can only narrow it to a directory inside. `setup` and `init` write it into the client config, and ask before making home or a filesystem root the workspace unless it is set | the `workspaceRoot` of a `MELRA_POLICY` file, else the current directory |
+| `MELRA_WORKSPACE` | Hard boundary for file and process operations; a policy file's `workspaceRoot` can only narrow it to a directory inside. `setup` and `init` write it into the client config, and ask before making home, a directory holding it, or a filesystem root the workspace unless it is set | the `workspaceRoot` of a `MELRA_POLICY` file, else the current directory |
 | `MELRA_HOME` | SQLite database and browser artifacts | `~/.melra` |
 | `MELRA_POLICY` | Optional local policy JSON | safe built-in policy |
 | `MELRA_BROWSER` | Chrome, Chromium, or Edge executable | auto-detected |
@@ -846,11 +850,14 @@ closing every door it owns:
 - **`MELRA_HOME` must sit outside `MELRA_WORKSPACE`.** A workspace holding the
   data directory lets a recursive search of no path at all reach the database
   and the payload key, so the process exits with
-  `enforced_mode_refuses_data_inside_workspace` instead. The usual cause is a
-  workspace that is your home directory, which holds the default `~/.melra`:
-  run `setup` from the project directory or set `MELRA_WORKSPACE` to it, and
-  keep `MELRA_HOME` where it is. Moved, it starts an empty database, and the
-  tasks and approvals in the old one are orphaned.
+  `enforced_mode_refuses_data_inside_workspace` instead, naming the fix that
+  fits. The usual cause is a workspace that is your home directory (or holds
+  it), which holds the default `~/.melra`: set `MELRA_WORKSPACE` to the
+  project directory, or run the command from there, and keep `MELRA_HOME`
+  where it is. Moved on its own, it starts an empty database, and the tasks
+  and approvals in the old one are orphaned. Only a `MELRA_HOME` you put
+  inside the project itself moves: out of the workspace, with everything in
+  it, and `MELRA_HOME` set to its new place.
 - **Only an operator approves.** A challenge carries no phrase, so the agent
   is handed nothing to echo, and `melra_execute` refuses any approval it is
   sent with `approval_in_band_refused`. A mutation runs only on a decision an

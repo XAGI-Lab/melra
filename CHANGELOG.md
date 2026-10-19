@@ -109,24 +109,34 @@ All notable changes are documented here. The format follows
 
 - **Breaking:** `melra setup` and `melra init` show the workspace they give
   the agent, as a `Workspace` row and as `workspace` in the JSON, and no
-  longer make it the home directory or a filesystem root (`/`, or a drive
-  root on Windows) unasked. The workspace is the current directory unless
-  `MELRA_WORKSPACE` is set, so the README's `npx @melra/cli@alpha setup` run
-  in a fresh terminal gave the agent the whole home directory, with nothing
-  printed to say so. In a terminal they now say so and ask, defaulting to
-  no; elsewhere (piped, captured, `--json`) they refuse with
-  `workspace_too_broad` and write nothing. A script that means it sets
-  `MELRA_WORKSPACE`, which is never questioned. Home is compared by real
-  path, and on Windows regardless of case.
+  longer make it the home directory, a directory holding it (`/Users`,
+  `/home`, `C:\Users`) or a filesystem root (`/`, or a drive root on
+  Windows) unasked. The workspace is the current directory unless
+  `MELRA_WORKSPACE` is set or a `MELRA_POLICY` file's `workspaceRoot` pins
+  it, so the README's `npx @melra/cli@alpha setup` run in a fresh terminal
+  gave the agent the whole home directory, with nothing printed to say so.
+  In a terminal they now say so and ask, defaulting to no; elsewhere (piped,
+  captured, `--json`) they refuse with `workspace_too_broad` and write
+  nothing. Either way they say to set `MELRA_WORKSPACE` to the project
+  directory or run from there; when a `MELRA_POLICY` file set the workspace,
+  to make the project that file's `workspaceRoot` instead of running from
+  it. A script that means it sets `MELRA_WORKSPACE`, which is never
+  questioned. Directories
+  are compared by identity, so a symlinked home and macOS's
+  `/System/Volumes/Data/...` spelling of it count.
 
 ### Fixed
 
 - `melra doctor`'s `data-location` advice and the enforced-mode refusal
-  `enforced_mode_refuses_data_inside_workspace` say to run setup from the
-  project directory or set `MELRA_WORKSPACE` to it, and to keep `MELRA_HOME`
-  where it is. They said to move `MELRA_HOME` outside the workspace, which
-  points the server at a new, empty database and orphans the tasks and
-  approvals in the old one.
+  `enforced_mode_refuses_data_inside_workspace` give the fix that fits the
+  layout. A workspace that is home or holds it, the usual cause, gets: set
+  `MELRA_WORKSPACE` to the project directory or run the command from there
+  (with a `MELRA_POLICY` file, or make the project its `workspaceRoot`), and
+  keep `MELRA_HOME` where it is. Only a `MELRA_HOME` put inside a project
+  gets: move it out of the workspace, with everything in it. Both always
+  said to move `MELRA_HOME`, which for the usual cause points the server at
+  a new, empty database and orphans the tasks and approvals in the old one.
+  `doctor --json` carries the advice as the check's `next`.
 
 - `melra policy test` previews a mutation that declares no evidence with the
   evidence the server derives for it, as `melra_plan` does, and prints it as

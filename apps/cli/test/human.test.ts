@@ -11,8 +11,10 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { detectClients, type ClientChoice } from "../src/client-status.js";
 import {
+  broadWorkspaceWarning,
   confirmBroadWorkspace,
   nextStep,
+  prompter,
   renderConformance,
   renderDoctor,
   renderInit,
@@ -50,7 +52,8 @@ async function wizard(answers: string[], end = true) {
   output.on("data", (chunk) => (printed += String(chunk)));
   input.write(answers.map((answer) => `${answer}\n`).join(""));
   if (end) input.end();
-  const result = await setupWizard({ input, output }, CHOICES);
+  const reader = prompter({ input, output });
+  const result = await setupWizard(reader, CHOICES).finally(() => reader.close());
   return { result, printed };
 }
 
@@ -92,18 +95,35 @@ describe("broad workspace question", () => {
     let printed = "";
     output.on("data", (chunk) => (printed += String(chunk)));
     input.end(answer === undefined ? "" : `${answer}\n`);
-    return { agreed: await confirmBroadWorkspace({ input, output }, "/h", "home"), printed };
+    const reader = prompter({ input, output });
+    const warning = broadWorkspaceWarning("/h", "home", "set MELRA_WORKSPACE to your project directory");
+    return { agreed: await confirmBroadWorkspace(reader, "/h", warning).finally(() => reader.close()), printed };
   };
 
   it("says why, and goes ahead only on a yes", async () => {
     const { agreed, printed } = await ask("y");
     expect(agreed).toBe(true);
-    expect(printed).toContain("/h is your home directory, and the agent could read every file under it");
-    expect(printed).toContain("set MELRA_WORKSPACE to it");
+    expect(printed).toContain(
+      "/h is your home directory, and the agent could read every file under it. Set MELRA_WORKSPACE to your project directory",
+    );
     expect(printed).toContain("Use /h as the workspace anyway? [y/N]");
     expect((await ask("YES")).agreed).toBe(true);
     // No is the default, and so is anything else, or no answer at all.
     for (const answer of ["", "n", "sure", undefined]) expect((await ask(answer)).agreed).toBe(false);
+  });
+
+  it("keeps the answers typed ahead of the wizard that follows it", async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    // Typed, or pasted, before the first prompt: yes, Claude Code, don't write.
+    input.write("y\n2\nn\n");
+    const reader = prompter({ input, output });
+    try {
+      expect(await confirmBroadWorkspace(reader, "/h", broadWorkspaceWarning("/h", "home", "x"))).toBe(true);
+      expect(await setupWizard(reader, CHOICES)).toEqual({ client: "claude-code", write: false });
+    } finally {
+      reader.close();
+    }
   });
 });
 
@@ -185,15 +205,14 @@ describe("human doctor report", () => {
     expect(renderDoctor(clean).trimEnd().endsWith("Ready")).toBe(true);
   });
 
-  it("says to narrow a workspace that holds the data directory, not to move the data", () => {
+  it("gives the data-location advice doctor chose for the layout", () => {
+    // Which advice is right depends on the layout, so doctor works it out (see
+    // cli.test.ts) and the check carries it.
     const inside = report({
-      checks: [{ name: "data-location", status: "warn", detail: "/w/.melra is inside the workspace" }],
+      checks: [{ name: "data-location", status: "warn", detail: "/w/.melra is inside the workspace", next: "move it" }],
       clients: [],
     });
-    // Moving MELRA_HOME opens an empty database; the workspace is what is wrong.
-    expect(nextStep(inside)).toBe(
-      "run setup from the project directory, or set MELRA_WORKSPACE to it; keep MELRA_HOME where it is (moving it orphans the database)",
-    );
+    expect(nextStep(inside)).toBe("move it");
     const unresolved = report({
       checks: [{ name: "data-location", status: "fail", detail: "could not resolve the workspace: EISDIR" }],
       clients: [],

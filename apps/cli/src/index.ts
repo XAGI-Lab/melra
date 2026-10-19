@@ -24,8 +24,11 @@ import {
 } from "@melra/protocol";
 import {
   assertEnforceable,
+  broadWorkspace,
   confinedRoot,
   createMelraRuntime,
+  dataLocationAdvice,
+  narrowWorkspaceAdvice,
   serveHttp,
   OAuthProvider,
   clientPrincipal,
@@ -49,7 +52,6 @@ import {
 import {
   type CliEnvironment,
   approverLabel,
-  broadWorkspace,
   parseCliEnvironment,
   serverLaunch,
 } from "./environment.js";
@@ -62,6 +64,7 @@ import { detectIsolation, isolationCheck } from "./isolation.js";
 import {
   broadWorkspaceWarning,
   confirmBroadWorkspace,
+  prompter,
   renderConformance,
   renderDoctor,
   renderInit,
@@ -71,6 +74,7 @@ import {
   type DoctorCheck,
   type DoctorReport,
   type InitResult,
+  type Prompter,
 } from "./human.js";
 import { isHuman, paint, printJsonOrHuman } from "./output.js";
 import {
@@ -585,6 +589,8 @@ async function doctor(env: CliEnvironment): Promise<{
               // The server refuses to start this way in enforced mode.
               status: env.mode === "enforced" ? "fail" : "warn",
               detail: `${env.dataDirectory} is inside the workspace, where a recursive read reaches payload.key without naming it`,
+              // As the server words its refusal.
+              next: await dataLocationAdvice(env.workspaceRoot, env.dataDirectory, env.policyPath),
             }
           : { name: "data-location", status: "pass", detail: "outside the workspace" },
       );
@@ -741,46 +747,55 @@ async function init(args: string[], env: CliEnvironment): Promise<InitResult> {
   };
 }
 
-// Home or a filesystem root as the workspace hands the agent every project at
-// once, and a fresh terminal starts in home. MELRA_WORKSPACE naming it is a
-// choice already made; otherwise a person at a terminal is asked, defaulting
-// to no, and anything else is refused before a file is written.
-async function workspaceAgreed(args: string[], env: CliEnvironment): Promise<boolean> {
+// A broad workspace (home, a directory holding it, or a filesystem root) hands
+// the agent every project at once, and a fresh terminal starts in home.
+// MELRA_WORKSPACE naming it is a choice already made; otherwise a person at a
+// terminal is asked, defaulting to no, and anything else is refused before a
+// file is written.
+async function workspaceAgreed(env: CliEnvironment, reader: Prompter | undefined): Promise<boolean> {
   const broad = env.workspaceSet === true ? undefined : await broadWorkspace(env.workspaceRoot);
   if (broad === undefined) return true;
-  if (!isHuman(args) || !process.stdin.isTTY) {
-    throw new Error(
-      `workspace_too_broad: ${broadWorkspaceWarning(env.workspaceRoot, broad)} ` +
-        `(MELRA_WORKSPACE=${env.workspaceRoot} to use it anyway)`,
-    );
+  const warning = broadWorkspaceWarning(
+    env.workspaceRoot,
+    broad,
+    narrowWorkspaceAdvice(env.dataDirectory, env.policyPath),
+  );
+  if (reader === undefined) {
+    throw new Error(`workspace_too_broad: ${warning} (MELRA_WORKSPACE=${env.workspaceRoot} to use it anyway)`);
   }
-  if (await confirmBroadWorkspace({ input: process.stdin, output: process.stdout }, env.workspaceRoot, broad)) {
-    return true;
-  }
+  if (await confirmBroadWorkspace(reader, env.workspaceRoot, warning)) return true;
   process.stdout.write("Nothing was written.\n");
   return false;
+}
+
+// Only a person at a terminal on both ends is asked anything. Anything else —
+// a pipe, a test, `--json` — gets the non-interactive behaviour.
+function questions(args: string[]): Prompter | undefined {
+  return isHuman(args) && process.stdin.isTTY ? prompter({ input: process.stdin, output: process.stdout }) : undefined;
 }
 
 // One command for the whole local setup: write the policy, emit a working
 // client config, and verify the machine can actually run it.
 async function setup(args: string[], env: CliEnvironment): Promise<number> {
-  if (!(await workspaceAgreed(args, env))) return 1;
   let chosen = args;
-  // Only a person at a terminal on both ends is asked. Anything else — a pipe,
-  // a test, `--json` — gets today's non-interactive generic setup unchanged.
-  if (argument("--client", args) === undefined && isHuman(args) && process.stdin.isTTY) {
-    const answer = await setupWizard(
-      { input: process.stdin, output: process.stdout },
-      detectClients(env.workspaceRoot),
-    );
-    if (answer === undefined) {
-      process.stdout.write("\nCancelled; nothing was written.\n");
-      return 130;
+  // One reader for the workspace question and the wizard, so answers typed
+  // ahead of the second are not dropped with the first.
+  const reader = questions(args);
+  try {
+    if (!(await workspaceAgreed(env, reader))) return 1;
+    if (argument("--client", args) === undefined && reader !== undefined) {
+      const answer = await setupWizard(reader, detectClients(env.workspaceRoot));
+      if (answer === undefined) {
+        process.stdout.write("\nCancelled; nothing was written.\n");
+        return 130;
+      }
+      process.stdout.write("\n");
+      // The same arguments the person could have typed, so the wizard cannot
+      // drift from what `--client X --write` does.
+      chosen = ["--client", answer.client, ...(answer.write ? ["--write"] : [])];
     }
-    process.stdout.write("\n");
-    // The same arguments the person could have typed, so the wizard cannot
-    // drift from what `--client X --write` does.
-    chosen = ["--client", answer.client, ...(answer.write ? ["--write"] : [])];
+  } finally {
+    reader?.close();
   }
   const initialized = await init(chosen, env);
   const { report, failed } = await doctor(env);
@@ -1038,7 +1053,13 @@ server uses. Without a terminal or a browser to open, it refuses to start.
 
 In a terminal, doctor, setup, init, and version print a readable report, and
 'melra setup' with no --client asks which detected client to set up. Piped or
-captured, they print JSON (version: the bare number), exactly as before.
+captured, they print JSON (version: the bare number).
+
+The workspace setup and init write into the config is the current directory,
+unless MELRA_WORKSPACE (or a MELRA_POLICY file's workspaceRoot) names one. If
+that is your home directory, a directory holding it, or a filesystem root,
+they ask first in a terminal, and refuse with workspace_too_broad otherwise;
+setting MELRA_WORKSPACE to it skips the question.
 
 Flags:
   --json           Print JSON even in a terminal, and never ask a question.
@@ -1167,14 +1188,16 @@ async function main(): Promise<void> {
       process.exitCode = failed ? 1 : 0;
       return;
     }
-    case "init":
+    case "init": {
       rejectUnknownFlags(args, ["--client", "--write", "--json"]);
-      if (!(await workspaceAgreed(args, env))) {
+      const reader = questions(args);
+      if (!(await workspaceAgreed(env, reader).finally(() => reader?.close()))) {
         process.exitCode = 1;
         return;
       }
       printJsonOrHuman(await init(args, env), renderInit, args);
       return;
+    }
     case "setup":
       rejectUnknownFlags(args, ["--client", "--write", "--json"]);
       process.exitCode = await setup(args, env);
