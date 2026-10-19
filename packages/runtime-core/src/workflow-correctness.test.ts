@@ -180,6 +180,39 @@ describe("workflow decisions that have to stay made", () => {
 });
 
 describe("workflow recovery", () => {
+  it("keeps only the committed condition branch and cancels the abandoned challenge", async () => {
+    const { controller, store, tasks, cipher, done } = await setup();
+    const planned = controller.plan(
+      workflow([
+        { id: "inspect", type: "operation", request: read() },
+        {
+          id: "choose",
+          type: "condition",
+          dependsOn: ["inspect"],
+          sourceNodeId: "inspect",
+          predicate: { type: "result_equals", path: "success", value: true },
+          whenTrue: [put("patch"), put("patch2")],
+          whenFalse: [put("create")],
+        },
+      ]),
+    );
+    await controller.advance(planned.id);
+    const trueKey = sha256({ workflowId: planned.id, nodeId: "choose", iteration: 0, branch: "true:0", request: put("patch") });
+    const falseKey = sha256({ workflowId: planned.id, nodeId: "choose", iteration: 0, branch: "false:0", request: put("create") });
+    const abandoned = tasks.plan(put("patch"), { idempotencyKey: trueKey, attempt: 1, stored: true });
+    const committed = tasks.plan(put("create"), { idempotencyKey: falseKey, attempt: 1, stored: true });
+    await tasks.execute(committed.id, {
+      approvalId: committed.approval!.approvalId,
+      phrase: committed.approval!.phrase!,
+    });
+
+    const restarted = new WorkflowController(store, tasks, cipher);
+    const [recovered] = await restarted.recoverInterrupted();
+    expect(recovered?.nodes.choose).toMatchObject({ status: "verified_complete", taskIds: [committed.id] });
+    expect(tasks.status(abandoned.id).status).toBe("cancelled");
+    expect(done).toEqual(["create"]);
+  });
+
   it("does not fail an approved effect because a restart came between the ask and the answer", async () => {
     const { controller, store, tasks, cipher, done } = await setup();
     const planned = controller.plan(

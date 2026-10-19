@@ -679,8 +679,66 @@ export class WorkflowController {
     allTasks: TaskRecord[],
     recorded: WorkflowNodeState,
   ): { state: WorkflowNodeState; found: Array<TaskRecord | undefined> } {
-    const found = expectedTaskKeys(runId, node, definition).map((key) =>
-      preferredTask(allTasks, key),
+    const keys = expectedTaskKeys(runId, node, definition);
+    const ignored = new Set<string>();
+    if (node.type === "condition") {
+      const trueKeys = keys.slice(0, node.whenTrue.length);
+      const falseKeys = keys.slice(node.whenTrue.length);
+      const hasCommit = (branchKeys: string[]) =>
+        branchKeys.some((key) => this.store.getIdempotencyCommit(key) !== undefined);
+      const trueCommitted = hasCommit(trueKeys);
+      const falseCommitted = hasCommit(falseKeys);
+      if (trueCommitted && falseCommitted) {
+        const found = keys.map((key) => preferredTask(allTasks, key));
+        return {
+          state: {
+            status: "recovery_required",
+            taskIds: found.flatMap((task) => task === undefined ? [] : [task.id]),
+            error: "workflow_condition_branch_conflict",
+          },
+          found,
+        };
+      }
+      let chosen: "true" | "false" | undefined =
+        trueCommitted ? "true" : falseCommitted ? "false" : undefined;
+      const trueTasks = trueKeys.map((key) => preferredTask(allTasks, key));
+      const falseTasks = falseKeys.map((key) => preferredTask(allTasks, key));
+      if (chosen === undefined && trueTasks.some(Boolean) !== falseTasks.some(Boolean)) {
+        chosen = trueTasks.some(Boolean) ? "true" : "false";
+      }
+      if (chosen === undefined && recorded.taskIds[0] !== undefined) {
+        if (trueTasks.some((task) => task?.id === recorded.taskIds[0])) chosen = "true";
+        if (falseTasks.some((task) => task?.id === recorded.taskIds[0])) chosen = "false";
+      }
+      if (chosen !== undefined) {
+        const abandonedKeys = chosen === "true" ? falseKeys : trueKeys;
+        const abandoned = abandonedKeys
+          .map((key) => preferredTask(allTasks, key))
+          .filter((task): task is TaskRecord => task !== undefined);
+        if (abandoned.some((task) =>
+          !["planned", "awaiting_approval", "cancelled", "policy_blocked"].includes(task.status),
+        )) {
+          const found = keys.map((key) => preferredTask(allTasks, key));
+          return {
+            state: {
+              status: "recovery_required",
+              taskIds: found.flatMap((task) => task === undefined ? [] : [task.id]),
+              error: "workflow_condition_branch_conflict",
+            },
+            found,
+          };
+        }
+        for (const key of abandonedKeys) {
+          const task = preferredTask(allTasks, key);
+          if (task !== undefined && ["planned", "awaiting_approval"].includes(task.status)) {
+            this.tasks.cancel(task.id);
+          }
+        }
+        for (const key of abandonedKeys) ignored.add(key);
+      }
+    }
+    const found = keys.map((key) =>
+      ignored.has(key) ? undefined : preferredTask(allTasks, key),
     );
     let state = recoveredNodeState(
       node,
@@ -1141,20 +1199,45 @@ export class WorkflowController {
         // task here. Asking the predicate again would read a workspace that
         // branch already changed, and could run the other one as well.
         const committed = (branch: "true" | "false", requests: TaskRequest[]) =>
-          requests.length > 0 &&
-          this.store.getIdempotencyCommit(
-            taskIdempotencyKey({ ...identity, branch: `${branch}:0` }, requests[0]!),
-          ) !== undefined;
+          requests.some((request, index) =>
+            this.store.getIdempotencyCommit(
+              taskIdempotencyKey({ ...identity, branch: `${branch}:${index}` }, request),
+            ) !== undefined,
+          );
+        const trueCommitted = committed("true", node.whenTrue);
+        const falseCommitted = committed("false", node.whenFalse);
+        if (trueCommitted && falseCommitted) {
+          const taskIds = [
+            ...node.whenTrue.flatMap((request, index) => {
+              const commit = this.store.getIdempotencyCommit(
+                taskIdempotencyKey({ ...identity, branch: `true:${index}` }, request),
+              );
+              return commit === undefined ? [] : [commit.taskId];
+            }),
+            ...node.whenFalse.flatMap((request, index) => {
+              const commit = this.store.getIdempotencyCommit(
+                taskIdempotencyKey({ ...identity, branch: `false:${index}` }, request),
+              );
+              return commit === undefined ? [] : [commit.taskId];
+            }),
+          ];
+          return {
+            state: { status: "recovery_required", taskIds, error: "workflow_condition_branch_conflict" },
+            tasks: [],
+          };
+        }
         const chosen =
-          started !== undefined
-            ? node.whenTrue.length > 0 &&
-              started === taskIdempotencyKey({ ...identity, branch: "true:0" }, node.whenTrue[0]!)
-            : committed("true", node.whenTrue) ||
-              (!committed("false", node.whenFalse) &&
-                (await answered(node.id, this.tasks.verifyPersisted(sourceTaskId, [node.predicate]), {
-                  state,
-                  tasks: [],
-                })));
+          trueCommitted
+            ? true
+            : falseCommitted
+              ? false
+              : started !== undefined
+                ? node.whenTrue.length > 0 &&
+                  started === taskIdempotencyKey({ ...identity, branch: "true:0" }, node.whenTrue[0]!)
+                : await answered(node.id, this.tasks.verifyPersisted(sourceTaskId, [node.predicate]), {
+                    state,
+                    tasks: [],
+                  });
         return await this.runSequential(
           chosen ? node.whenTrue : node.whenFalse,
           state,
@@ -1355,12 +1438,26 @@ export class WorkflowController {
     const taskIds = [...state.taskIds];
     const tasks: TaskRecord[] = [];
     for (const [index, request] of requests.entries()) {
+      const taskIdentity = { ...identity, branch: `${identity.branch}:${index}` };
+      const expectedKey = taskIdempotencyKey(taskIdentity, request);
+      const existing = taskIds[index] === undefined ? undefined : this.tasks.status(taskIds[index]!);
+      const existingId = existing?.idempotencyKey === expectedKey ? existing.id : undefined;
+      if (existing !== undefined && existingId === undefined) {
+        if (["planned", "awaiting_approval"].includes(existing.status)) {
+          this.tasks.cancel(existing.id);
+        } else if (!["cancelled", "policy_blocked"].includes(existing.status)) {
+          return {
+            state: { status: "recovery_required", taskIds, error: "workflow_task_key_mismatch" },
+            tasks,
+          };
+        }
+      }
       const result = await this.runTask(
         request,
-        taskIds[index],
+        existingId,
         approvals,
         true,
-        { ...identity, branch: `${identity.branch}:${index}` },
+        taskIdentity,
       );
       tasks.push(...result.tasks);
       taskIds[index] = result.state.taskIds[0]!;
