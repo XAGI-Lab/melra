@@ -19,6 +19,18 @@ describe("hold", () => {
     expect(session.busy).toBe(0);
   });
 
+  it("releases once when the socket's close closes the response, as node:http does", () => {
+    const session = { busy: 0 };
+    const socket = new EventEmitter();
+    const response = new EventEmitter();
+    // node:http listens on the socket before any handler does, and closes
+    // the response from inside the socket's own close.
+    socket.on("close", () => response.emit("close"));
+    hold(session, { socket }, response);
+    socket.emit("close");
+    expect(session.busy).toBe(0);
+  });
+
   it("counts each request once, released by its own response", () => {
     const session = { busy: 0 };
     const socket = new EventEmitter();

@@ -15,7 +15,13 @@ export function hold(
 ): void {
   session.busy += 1;
   const { socket } = request;
+  // Once only: node:http's own socket listener closes the response while the
+  // socket's close is still being emitted, so both listeners run even though
+  // the first takes the other off.
+  let held = true;
   const release = () => {
+    if (!held) return;
+    held = false;
     socket.off("close", release);
     response.off("close", release);
     session.busy -= 1;
