@@ -67,8 +67,10 @@ Node types: `operation`, `approval`, `condition`, `parallel`, `bounded_loop`,
 
 Actions: `list`, `read`, `stat`, `hash`, `write`, `move`, `delete`, `mkdir`.
 
-- Paths are resolved inside one workspace root. `list` takes the root however
-  it is spelled (`.`, `./`, its absolute path); no other action takes it.
+- Paths are resolved inside one workspace root. An absolute path may spell
+  the root as configured or as resolved, where a link lies between them.
+  `list` takes the root however it is spelled (`.`, `./`, its absolute path);
+  no other action takes it.
 - Existing symlinks cannot escape that root. A `write` to a symlink inside it
   writes the file it points to, as `read` reads it; one whose target does not
   exist is refused (`file_write_dangling_symlink`).

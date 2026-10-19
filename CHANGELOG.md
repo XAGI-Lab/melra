@@ -116,7 +116,10 @@ All notable changes are documented here. The format follows
 
 - A file `list` of the workspace root works however the root is spelled
   (`./`, `sub/..`, its absolute path), not only `.`. The others were refused
-  as `path_outside_workspace`. (#282)
+  as `path_outside_workspace`. Any file action now also takes an absolute path
+  spelled through the root as configured, which is what MELRA reports, when
+  that runs through a link: `/tmp/ws/a` for a root at `/private/tmp/ws`, as on
+  macOS. (#282)
 
 - An `http` response past `maxResponseBytes` returns the body up to the cap.
   The chunk that crossed the cap was dropped whole, so a body that arrived in
