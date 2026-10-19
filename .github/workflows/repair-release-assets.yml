@@ -86,7 +86,19 @@ jobs:
         run: |
           version="$(node -p "require('./package.json').version")"
           test "${RELEASE_TAG}" = "v${version}"
-      - uses: ./.github/actions/release-artifacts
+      # The tag's tree builds the files, but a tag cut before #205 (alpha.14
+      # among them) has no .github/actions, so the build steps come from this
+      # workflow's own commit. Checked out after the tag (checkout cleans the
+      # workspace), into a folder that is untracked there, so `git archive
+      # HEAD` and the release/ globs never see it.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: .repair-tools
+          persist-credentials: false
+          sparse-checkout: .github/actions/release-artifacts/
+          sparse-checkout-cone-mode: false
+      - uses: ./.repair-tools/.github/actions/release-artifacts
       - name: Verify release files
         shell: bash
         run: |
