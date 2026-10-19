@@ -176,7 +176,9 @@ All notable changes are documented here. The format follows
   Each now takes the run's lease for the moment it writes, as recovery does:
   while an advance in any process holds it, each is refused with
   `workflow_lease_held` and changes nothing, so retry once the advance
-  returns (to stop a running step, cancel its task with `melra_task_cancel`).
+  returns. Cancelling a running step's task with `melra_task_cancel` instead
+  fails that step, and the advance still running it starts the run's unwind
+  before the cancel can land.
   An advance whose lease lapsed (it stalled, as across a laptop's sleep) is
   taken over instead: it stops with `workflow_lease_lost` before its next
   step, where before it ran that step on a paused or cancelled run. A pause,

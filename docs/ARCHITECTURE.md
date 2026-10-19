@@ -693,7 +693,11 @@ its own approval, and denying it stops the unwind as a failed compensation does.
 To end a run without unwinding it, cancel the run (`workflow cancel`,
 `melra_workflow_cancel`); that also stops an unwind already under way, before
 its next compensation, once the advance running one returns (until then the
-cancel is refused with `workflow_lease_held`).
+cancel is refused with `workflow_lease_held`). Cancelling a running step's
+task (`melra_task_cancel`) does not end the run: it fails that step, and the
+advance running it starts the unwind before a `workflow cancel` can land. A
+step's task that another process starts just as the run is cancelled still
+runs; its own record says how it ended.
 
 An interrupted mutation becomes `recovery_required` rather than being repeated,
 because the durable record can say what was in flight but not what the provider

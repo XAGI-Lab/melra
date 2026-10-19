@@ -2646,6 +2646,37 @@ describe("WorkflowController execution", () => {
     expect(controller.status(planned.id).status).toBe("cancelled");
     expect(store.listTasks(100, "awaiting_approval")).toEqual([]);
   });
+
+  it("unwinds a run whose running step's task is cancelled before a workflow cancel can land", async () => {
+    let shipping!: () => void;
+    const started = new Promise<void>((resolve) => {
+      shipping = resolve;
+    });
+    const calls: string[] = [];
+    const { controller, store, tasks } = await setup(
+      async (operation, signal) => {
+        if (operation.kind !== "http") return { success: true };
+        calls.push(new URL(operation.url).pathname);
+        if (operation.url.endsWith("/shipments")) {
+          shipping();
+          await new Promise((_, reject) => signal?.addEventListener("abort", () => reject(signal.reason)));
+        }
+        return { success: true };
+      },
+      { unhinged: true },
+    );
+    const planned = controller.plan(fanOutSaga());
+    await controller.advance(planned.id);
+    const advancing = controller.advance(planned.id);
+    await started;
+    expect(() => controller.cancel(planned.id)).toThrow("workflow_lease_held");
+    // What melra_workflow_cancel once advised: stop the step's task first.
+    const shipment = store.listTasks(10, "running").find((task) => JSON.stringify(task.request).includes("/shipments"));
+    tasks.cancel(shipment!.id);
+    expect((await advancing).run.status).toBe("failed");
+    expect(controller.cancel(planned.id).status).toBe("cancelled");
+    expect(calls).toContain("/refunds");
+  });
 });
 
 describe("WorkflowController recovery", () => {
