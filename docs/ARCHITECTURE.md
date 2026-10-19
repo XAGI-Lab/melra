@@ -317,9 +317,13 @@ under an advance, whose commit would then fail and leave the effects it ran
 out of the run: while an advance holds the lease, in any process, each is
 refused with `workflow_lease_held` and changes nothing, so retry once it
 returns. An advance whose lease lapsed (it stalled, as across a laptop's
-sleep) is taken over: it stops with `workflow_lease_lost` before its next step,
-and its expired lease is left in place, so whoever advances the run next
-recovers it first. The public schema also reserves
+sleep) is taken over: it stops with `workflow_lease_lost` before its next step.
+A halt or resume leaves its expired lease in place, so whoever advances the run
+next recovers it first; a cancel, which ends the run for good, recovers it
+itself before cancelling it, reading each step's tasks under its keys, so what
+that advance (or one that died holding the lease) ran is recorded on the
+cancelled run, and a task still running there is cancelled as the run's own.
+The public schema also reserves
 `partially_complete`, which no command enters today.
 
 `cancelled` is entered only by `workflow cancel`. A step whose task is denied

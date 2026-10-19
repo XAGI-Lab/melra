@@ -1308,6 +1308,49 @@ describe("a halt or cancel while an advance runs a step (#244)", () => {
     expect(run.nodes.loop?.taskIds).toHaveLength(2);
     expect(done).toEqual(["a", "a"]);
   });
+
+  it.each(["stalled mid-step", "a pause took over once it stalled", "died before its commit"] as const)(
+    "records on a run it cancels the step of an advance that %s",
+    async (how) => {
+      const { controller, store, tasks, cipher, done, on } = await setup({ policy: { unhinged: true } });
+      const peer = new WorkflowController(store, tasks, cipher);
+      const planned = controller.plan(
+        workflow([
+          { id: "a", type: "operation", request: put("a") },
+          { id: "b", type: "operation", dependsOn: ["a"], request: put("b") },
+        ]),
+      );
+      const lapse = () => store.renewWorkflowLease(planned.id, store.getWorkflowLease(planned.id)!.owner, new Date(0).toISOString());
+      let cancelled: WorkflowRun | undefined;
+      if (how === "died before its commit") {
+        vi.spyOn(store, "transitionWorkflow").mockImplementationOnce(() => {
+          throw new Error("killed");
+        });
+        // Its lease stays behind, and expires.
+        vi.spyOn(store, "releaseWorkflowLease").mockImplementationOnce(() => undefined);
+        await expect(controller.advance(planned.id)).rejects.toThrow("killed");
+        lapse();
+      } else {
+        on.put = () => {
+          delete on.put;
+          if (how === "stalled mid-step") {
+            lapse();
+            cancelled = peer.cancel(planned.id);
+          } else lapseAndPause(peer, store, planned.id);
+        };
+        await expect(controller.advance(planned.id)).rejects.toThrow("workflow_lease_lost");
+      }
+      cancelled ??= peer.cancel(planned.id);
+      await peer.recoverInterrupted();
+      const [ran] = store.listTasks(10, "verified_success");
+      // Cancelled as the run read, before anything recovered it: a never
+      // named the task that ran, and nothing recovers a cancelled run.
+      expect(cancelled.status).toBe("cancelled");
+      expect(peer.status(planned.id).nodes.a?.taskIds).toEqual([ran!.id]);
+      expect(peer.status(planned.id).nodes.b).toEqual({ status: "cancelled", taskIds: [] });
+      expect(done).toEqual(["a"]);
+    },
+  );
 });
 
 describe("a step whose advance lost its commit (#319)", () => {

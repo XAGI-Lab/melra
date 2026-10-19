@@ -179,9 +179,13 @@ All notable changes are documented here. The format follows
   returns (to stop a running step, cancel its task with `melra_task_cancel`).
   An advance whose lease lapsed (it stalled, as across a laptop's sleep) is
   taken over instead: it stops with `workflow_lease_lost` before its next
-  step, where before it ran that step on a paused or cancelled run, and its
-  expired lease is left in place, so the run is recovered before it is next
-  advanced. (#244)
+  step, where before it ran that step on a paused or cancelled run. A pause,
+  suspend or resume leaves its expired lease in place, so the run is
+  recovered before it is next advanced. A cancel recovers the run itself
+  first, as it does for one whose advance died holding the lease: each step
+  is read again from the tasks under its keys, so the steps that advance ran
+  are recorded on the cancelled run rather than left off it for good, and a
+  task still running there is cancelled as the run's own. (#244)
 
 - `workflow cancel` (`melra_workflow_cancel`) cancels a run's tasks only once
   the run's own cancel is recorded. It cancelled the challenges on the run's

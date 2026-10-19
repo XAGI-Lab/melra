@@ -914,34 +914,54 @@ export class WorkflowController {
     }
   }
 
+  /**
+   * Each node of `stored` read again from the tasks under its keys, as
+   * recovery reads it, into `draft`. Returns the ids of the tasks now on the
+   * nodes it changed.
+   */
+  private recoverNodes(
+    stored: WorkflowRun,
+    definition: WorkflowDefinition,
+    allTasks: TaskRecord[],
+    draft: WorkflowRun,
+    emit: EmitEvent,
+  ): string[] {
+    const replayed = this.replay(stored);
+    if (replayed.stateVersion !== stored.stateVersion) {
+      throw new Error("workflow_event_history_invalid");
+    }
+    const found: string[] = [];
+    for (const node of definition.nodes) {
+      // An advance on a failed run only ever runs compensations, so only
+      // they can be stale. Re-deriving the forward nodes would rank their
+      // tasks differently from the live path and could take the run out of
+      // failed: a branch awaiting approval beside a failed one reopened.
+      if (stored.status === "failed" && node.type !== "compensation") continue;
+      const { state } = this.recoveredNode(stored.id, node, definition, allTasks, replayed.nodes[node.id]!);
+      if (canonicalJson(draft.nodes[node.id]) === canonicalJson(state)) {
+        continue;
+      }
+      const from = draft.nodes[node.id]!.status;
+      // A copy: the caller goes on to change the node in the draft (cancels
+      // it, or skips a compensation), which must not rewrite this event.
+      draft.nodes[node.id] = structuredClone(state);
+      emit("workflow.node_changed", {
+        nodeId: node.id,
+        from,
+        state,
+      });
+      found.push(...state.taskIds);
+    }
+    return found;
+  }
+
   private recoverRun(
     stored: WorkflowRun,
     definition: WorkflowDefinition,
     allTasks: TaskRecord[],
   ): WorkflowRun {
-    const replayed = this.replay(stored);
-    if (replayed.stateVersion !== stored.stateVersion) {
-      throw new Error("workflow_event_history_invalid");
-    }
     return this.transition(stored, (draft, emit) => {
-      for (const node of definition.nodes) {
-        // An advance on a failed run only ever runs compensations, so only
-        // they can be stale. Re-deriving the forward nodes would rank their
-        // tasks differently from the live path and could take the run out of
-        // failed: a branch awaiting approval beside a failed one reopened.
-        if (stored.status === "failed" && node.type !== "compensation") continue;
-        const { state } = this.recoveredNode(stored.id, node, definition, allTasks, replayed.nodes[node.id]!);
-        if (canonicalJson(draft.nodes[node.id]) === canonicalJson(state)) {
-          continue;
-        }
-        const from = draft.nodes[node.id]!.status;
-        draft.nodes[node.id] = state;
-        emit("workflow.node_changed", {
-          nodeId: node.id,
-          from,
-          state,
-        });
-      }
+      this.recoverNodes(stored, definition, allTasks, draft, emit);
       let status = this.deriveStatus(draft, definition);
       if (status === "verified_complete") {
         for (const node of definition.nodes) {
@@ -1039,13 +1059,27 @@ export class WorkflowController {
   }
 
   cancel(workflowId: string): WorkflowRun {
-    return this.underLease(workflowId, (current) => {
+    return this.underLease(workflowId, (current, taken) => {
       if (current.status === "verified_complete") return current;
+      let definition: WorkflowDefinition | undefined;
+      try {
+        definition = this.loadDefinition(current);
+      } catch {
+        definition = undefined;
+      }
       const stopped: string[] = [];
       const run =
         current.status === "cancelled"
           ? current
           : this.transition(current, (draft, emit) => {
+              // Taken over from an advance that stalled or died, the run names
+              // none of the steps that advance planned or ran, and nothing
+              // recovers a cancelled run: read again from the tasks under its
+              // keys first, as the next advance would, so they are on its
+              // nodes. A task still running there is stopped as the run's own.
+              if (taken === "replaced" && definition !== undefined) {
+                stopped.push(...this.recoverNodes(current, definition, this.store.listTasks(100_000), draft, emit));
+              }
               for (const [nodeId, node] of Object.entries(draft.nodes)) {
                 if (
                   !["pending", "ready", "awaiting_approval"].includes(node.status)
@@ -1078,12 +1112,6 @@ export class WorkflowController {
       // A store failure is reported, so the operator cancels again and that
       // sweeps; only a definition that can no longer be opened goes unswept,
       // and still lets the run end.
-      let definition: WorkflowDefinition | undefined;
-      try {
-        definition = this.loadDefinition(current);
-      } catch {
-        definition = undefined;
-      }
       if (definition !== undefined) {
         const opened = definition;
         this.cancelChallenges(
@@ -1103,9 +1131,14 @@ export class WorkflowController {
    * workflow_lease_held while an advance in any process holds the lease. A
    * lapsed lease is taken over, so the advance that held it stops with
    * workflow_lease_lost before its next step, and is left expired, as it was:
-   * whoever advances the run next recovers it first.
+   * whoever advances the run next recovers it first. `change` is told it
+   * replaced one: a cancel then recovers the run itself, as nothing
+   * recovers a cancelled run.
    */
-  private underLease(workflowId: string, change: (current: WorkflowRun) => WorkflowRun): WorkflowRun {
+  private underLease(
+    workflowId: string,
+    change: (current: WorkflowRun, taken: "created" | "replaced") => WorkflowRun,
+  ): WorkflowRun {
     this.status(workflowId);
     const at = Date.now();
     const taken = this.store.takeWorkflowLease(
@@ -1117,7 +1150,7 @@ export class WorkflowController {
     if (taken === "refused") throw new Error("workflow_lease_held");
     try {
       // Read under the lease: an advance may have committed since.
-      return change(this.status(workflowId));
+      return change(this.status(workflowId), taken);
     } finally {
       if (taken === "created") this.store.releaseWorkflowLease(workflowId, this.controlOwner);
       else this.store.renewWorkflowLease(workflowId, this.controlOwner, new Date(0).toISOString());
