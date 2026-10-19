@@ -265,15 +265,17 @@ export class WorkflowController {
     const renewal = setInterval(() => {
       // Thrown from a timer, nothing catches it and the process dies: a store
       // closed under a long advance (a shutdown) stops the renewing instead,
-      // and the advance fails on its own next write.
+      // and the advance fails on its own next write. Any other failure (a busy
+      // database) is tried again next tick: stopping would let the lease lapse
+      // mid-advance and a second process run the same step.
       try {
         this.store.renewWorkflowLease(
           workflowId,
           this.owner,
           new Date(Date.now() + this.leaseDurationMs).toISOString(),
         );
-      } catch {
-        clearInterval(renewal);
+      } catch (error) {
+        if ((error as { code?: unknown }).code === "ERR_INVALID_STATE") clearInterval(renewal);
       }
     }, Math.max(1_000, Math.floor(this.leaseDurationMs / 2)));
     renewal.unref();
