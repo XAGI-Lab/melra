@@ -1017,8 +1017,14 @@ class LinuxXdotoolAdapter implements ComputerAdapter {
         const button = clicks < 0 ? "4" : "5";
         // One helper for every notch: one per notch, a cancel between two of
         // them read as nothing sent, though the earlier ones had scrolled.
+        // xdotool sleeps 100 ms after each click by default, the last one
+        // included, so twenty notches would need two seconds of timeoutMs.
         if (clicks !== 0) {
-          await this.xdotool(["click", "--repeat", String(Math.abs(clicks)), button], operation, signal);
+          await this.xdotool(
+            ["click", "--delay", "10", "--repeat", String(Math.abs(clicks)), button],
+            operation,
+            signal,
+          );
         }
         return { success: true, action: "scroll", deltaY: operation.deltaY ?? 0 };
       }
