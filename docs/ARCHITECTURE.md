@@ -216,7 +216,9 @@ material and must not be committed or publicly synchronized.
 A definition is an immutable, versioned DAG with at most 500 nodes. Node IDs
 are unique; dependencies must exist; self-dependencies and cycles are rejected
 before persistence. Every nested task is capability- and policy-preflighted
-before the workflow is accepted.
+before the workflow is accepted, and a `condition`, `until` or `delegation`
+check no registered verifier can ask (`evidence_verifier_unavailable`), or on a
+file path outside the workspace (`evidence_path_outside_workspace`), is refused.
 
 | Node | Implemented semantics and bounds |
 |---|---|
@@ -237,6 +239,27 @@ retries. Mutations are never automatically retried.
 A delegate reporting "done" is not evidence. A `delegation` node that declared
 predicates and whose predicates fail is `failed`, exactly as an `operation`
 node would be.
+
+A check whose provider did not answer is not a "no". When a `condition`'s
+predicate, a `bounded_loop`'s `until` or a `delegation`'s evidence comes back
+`inconclusive` (a 503 or 429, a 401 or 403, a redirect, a refused destination,
+a body cut at the size cap, no connection), nothing is decided: `advance`
+records the other nodes and fails with `workflow_check_inconclusive:<node>`.
+The condition stays `pending` and runs neither branch, the loop stays `pending`
+with the iterations it ran, and the delegation stays `awaiting_input` and keeps
+the report it was sent; each names the check it waits on as its `error`, by
+type and source (a URL without its query, which can carry a token), so status
+shows what the run waits on. Every later `advance` asks again, and one still
+unanswered writes nothing, however the provider words its failure. A definite
+no among several items decides even while another is unanswered. A provider
+that never answers holds the run there; `workflow cancel` ends it, and does not
+compensate, so effects already done stay done. A check the kernel refuses to
+ask (an `unanswerable` item: a URL `{{token}}` its source result cannot fill, a
+verifier gone since planning, a reserved path) is refused again of the same
+result, so a `condition` or `delegation` fails
+(`workflow_check_unresolvable:<node>`) and the run unwinds. A loop's `until`
+asks of each iteration's new result, so it reads such a check as a no and runs
+the next iteration, up to `maxIterations`.
 
 ## Workflow state and events
 
@@ -515,6 +538,18 @@ or pushed its branch first, and a computer input helper (click, move, drag,
 type, key, scroll) stopped by its timeout or a cancel may already have landed.
 Each is `effect_outcome_unknown:`, not `failed`.
 
+A mutation whose adapter returned, but whose result, receipt or task could not
+then be written, parks the same way: the target answered, and nothing recorded
+says what. One that had already verified and committed its idempotency key is
+settled by that commit, which is written only once the effect verified:
+reconciling it asks nobody and it becomes `verified_success`
+(`committed_before_interruption`), declared `reconciliation` or not. A workflow
+step whose outcome was recorded but whose certificate was not gets it at the
+run's next advance, so the run still finishes. Only what writes the run (an
+advance, recovery, a resume) writes it, and only if none is stored yet, as
+`execute` writes its own: reading receipts writes nothing, and no two
+processes hand out different certificates for one task.
+
 Settling a parked task is what `reconciliation` predicates are for. They are
 read against the facts that were true *before* the call — the task id, the URL,
 the method, the `idempotencyKey` MELRA sent — because a lost reply left no
@@ -527,9 +562,20 @@ safe thing:
 | the effect is applied | `verified_success`, receipted as `recovered` |
 | no such effect | `failed`, `reconciliation_confirms_effect_not_applied` |
 | nothing — unreachable | stays `recovery_required`, `reconciliation_inconclusive` |
+| nothing — the kernel refuses to ask | stays `recovery_required`, `reconciliation_unanswerable:<refusal>` |
 | *(none declared)* | stays `recovery_required`, `reconciliation_not_declared` |
 
 An unreachable provider did not say no, so nothing is concluded from silence.
+A predicate the kernel itself refuses to ask — a path outside the workspace or
+one the filesystem will not take whole, a URL token with nothing to fill it, a
+verifier this runtime lacks — is
+inconclusive too, and its item also carries `unanswerable: true`, because
+asking again is refused again; a caller deciding whether to wait reads that
+flag, never the summary, and the task's `error` names it
+(`reconciliation_unanswerable:` and the refusal) so the declaration gets fixed
+rather than waited on. Planning refuses a file path that could only be
+refused (`evidence_path_outside_workspace`), and a URL token those four facts
+cannot fill (`reconciliation_unanswerable:verification_token_unresolved:<token>`).
 The same path runs on restart: `recoverInterrupted` reconciles a crashed
 mutation that declared how to settle one, and parks the rest.
 

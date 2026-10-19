@@ -18,14 +18,14 @@ import type {
   Identity,
   Operation,
   PolicyDecision,
+  PolicyFileInput,
   Risk,
   TaskRequest,
 } from "@melra/protocol";
 import {
-  CapabilityGrantSchema,
-  CredentialsSchema,
   deploymentMode,
   LOCAL_IDENTITY,
+  PolicyFileSchema,
   principalRef,
   terminalArgumentPaths,
 } from "@melra/protocol";
@@ -136,6 +136,15 @@ export interface LocalPolicy {
    */
   mode: DeploymentMode;
 }
+
+// The file and the policy it becomes name the same keys, checked both ways at
+// compile time: a key added to one alone is a type error naming it, rather than
+// one the file refuses or one it can never set.
+type NoKeys<Keys extends never> = Keys;
+type _PolicyFileKeysMatch = [
+  NoKeys<Exclude<keyof LocalPolicy, keyof PolicyFileInput>>,
+  NoKeys<Exclude<keyof PolicyFileInput, keyof LocalPolicy>>,
+];
 
 export interface PolicyEvaluation {
   decision: PolicyDecision;
@@ -572,25 +581,53 @@ export function approvalTtl(policy: Pick<LocalPolicy, "approvalTtlMs" | "mode">)
   return policy.approvalTtlMs ?? (policy.mode === "enforced" ? 30 * 60_000 : 5 * 60_000);
 }
 
-const MAX_APPROVAL_TTL_MS = 24 * 60 * 60_000;
-
 export async function loadPolicy(
   path: string | undefined,
   workspaceRoot: string,
 ): Promise<LocalPolicy> {
   const defaults = createDefaultPolicy(workspaceRoot);
   if (path === undefined) return defaults;
-  const parsed = JSON.parse(await readFile(path, "utf8")) as Partial<LocalPolicy>;
-  // A window of zero, a negative one or a string would leave every challenge
-  // expired, or never expiring; refused loudly rather than read as a default.
-  if (
-    parsed.approvalTtlMs !== undefined &&
-    !(Number.isInteger(parsed.approvalTtlMs) && parsed.approvalTtlMs >= 1 && parsed.approvalTtlMs <= MAX_APPROVAL_TTL_MS)
-  ) {
+  const text = await readFile(path, "utf8");
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
+    // Where, never what: V8 quotes the text around the error, and a file that
+    // holds a token would put it in `doctor --json`, `status` and every bug
+    // report the message is pasted into. A V8 that gives no position gets none.
+    const position = /at position (\d+)/.exec(error.message)?.[1];
+    const before = position === undefined ? undefined : text.slice(0, Number(position));
     throw new Error(
-      `policy_approval_ttl_invalid: approvalTtlMs must be a whole number of milliseconds from 1 to ${MAX_APPROVAL_TTL_MS} (24 hours)`,
+      `policy_invalid: ${path}: not valid JSON${
+        before === undefined
+          ? ""
+          : ` at line ${before.split("\n").length} column ${before.length - before.lastIndexOf("\n")}`
+      }`,
     );
   }
+  // Every problem at once, each by its path, so one edit fixes the file.
+  const result = PolicyFileSchema.safeParse(raw);
+  if (!result.success) {
+    // A record key that is not an identifier goes in brackets, so
+    // `credentials["a.b"]` cannot read as a key `b` inside `a`.
+    const at = (segments: readonly PropertyKey[]) =>
+      segments
+        .map((segment) =>
+          typeof segment === "string" && /^[A-Za-z_$][\w$]*$/.test(segment)
+            ? `.${segment}`
+            : `[${typeof segment === "number" ? segment : JSON.stringify(String(segment))}]`,
+        )
+        .join("")
+        .replace(/^\./, "") || "(root)";
+    const problems = result.error.issues.flatMap((issue) =>
+      issue.code === "unrecognized_keys"
+        ? issue.keys.map((key) => `${at([...issue.path, key])}: unknown key`)
+        : [`${at(issue.path)}: ${issue.message}`],
+    );
+    throw new Error(`policy_invalid: ${path}: ${problems.join("; ")}`);
+  }
+  const parsed = result.data;
   return {
     ...defaults,
     ...parsed,
@@ -607,20 +644,12 @@ export async function loadPolicy(
     memoryRetention: { ...defaults.memoryRetention, ...parsed.memoryRetention },
     circuitBreaker: { ...defaults.circuitBreaker, ...parsed.circuitBreaker },
     deniedTraits: parsed.deniedTraits ?? defaults.deniedTraits,
-    // Parsed, not spread: a grant is the file claiming authority exists, so a
-    // malformed one has to fail loudly rather than land as an object that
-    // matches nothing or — worse — everything.
-    capabilities:
-      parsed.capabilities === undefined
-        ? defaults.capabilities
-        : CapabilityGrantSchema.array().max(200).parse(parsed.capabilities),
-    // Same reasoning as `capabilities`: a malformed credential definition must
-    // not land as an object whose `hosts` happen to match nothing — an operator
-    // would read that as "scoped" when it is "silently absent".
-    credentials:
-      parsed.credentials === undefined
-        ? defaults.credentials
-        : CredentialsSchema.parse(parsed.credentials),
+    // Through `PolicyFileSchema`, never spread raw: a grant is the file claiming
+    // authority exists, and a malformed grant or credential definition must
+    // fail loudly rather than land as an object that matches nothing or — worse
+    // — everything.
+    capabilities: parsed.capabilities ?? defaults.capabilities,
+    credentials: parsed.credentials ?? defaults.credentials,
     // Through the same parser the environment variable and the flag go through,
     // so `"mode": "enfroced"` in a policy file fails loudly instead of leaving a
     // machine in developer mode with a file that claims otherwise.
@@ -925,8 +954,9 @@ function domainAllowed(operation: Operation, policy: LocalPolicy): boolean {
   return policy.allowedDomains.some(
     (domain) =>
       domain === "*" ||
-      host === domain.toLowerCase() ||
-      host.endsWith(`.${domain.toLowerCase()}`),
+      // Empty, `.${domain}` is "." and every host spelled with a trailing dot
+      // ends with it.
+      (domain !== "" && (host === domain.toLowerCase() || host.endsWith(`.${domain.toLowerCase()}`))),
   );
 }
 

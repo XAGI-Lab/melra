@@ -1738,6 +1738,22 @@ describe("melra CLI", () => {
     expect((await doctor(second, { MELRA_POLICY: typo })).checks.find((check) => check.name === "policy")?.status).toBe(
       "fail",
     );
+    // So does a key the server does not know, by name, rather than its default.
+    const misspelt = join(root, "misspelt.json");
+    await writeFile(misspelt, JSON.stringify({ allowedComands: ["git"] }));
+    expect((await doctor(second, { MELRA_POLICY: misspelt })).checks.find((check) => check.name === "policy")).toEqual({
+      name: "policy",
+      status: "fail",
+      detail: `policy_invalid: ${misspelt}: allowedComands: unknown key`,
+    });
+    // And `policy test` says the same in one line, not a stack trace.
+    const request = join(root, "read.json");
+    await writeFile(request, JSON.stringify({ goal: "Read", operation: { kind: "file", action: "list", path: "." } }));
+    const refused = await execute(process.execPath, [entry, "policy", "test", "--request", request], {
+      cwd: second,
+      env: { ...process.env, MELRA_HOME: home, MELRA_WORKSPACE: "", MELRA_MODE: "", MELRA_POLICY: misspelt },
+    }).catch((error: { stderr: string }) => error);
+    expect(refused.stderr).toBe(`melra: policy_invalid: ${misspelt}: allowedComands: unknown key\n`);
     // An empty MELRA_HOME is unset, not the working directory.
     const emptyHome = await execute(process.execPath, [entry, "doctor"], {
       cwd: second,

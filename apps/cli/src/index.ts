@@ -97,8 +97,9 @@ import {
  * runs wrote their own workspace into the shared ~/.melra/policy.json, and a
  * server for any later project was then confined to the first one instead.
  *
- * A file that does not parse changes nothing here; `doctor` reports it and the
- * server refuses to start on it.
+ * A file that does not load changes nothing here, the mode included: nothing in
+ * an invalid file is trusted to mean what it seems to. `doctor`, `status` and
+ * `tasks` report it, and `serve`, `run` and `approve` refuse to start on it.
  */
 async function settle(env: CliEnvironment): Promise<CliEnvironment> {
   const path = await existingPolicyPath(env);
@@ -1341,13 +1342,23 @@ async function main(): Promise<void> {
       }
       const status = argument("--status", args);
       // Approvals are read by the window and mode a server started here would
-      // use; a policy file that does not load leaves the defaults, as status does.
+      // use; a policy file that does not load leaves the defaults, and says so,
+      // as status does: a server would refuse to start on it.
       const policyPath = await existingPolicyPath(env);
-      const policy = policyPath === undefined ? undefined : await loadPolicy(policyPath, env.workspaceRoot).catch(() => undefined);
+      let policy: LocalPolicy | undefined;
+      let policyError: string | undefined;
+      if (policyPath !== undefined) {
+        try {
+          policy = await loadPolicy(policyPath, env.workspaceRoot);
+        } catch (error) {
+          policyError = error instanceof Error ? error.message : String(error);
+        }
+      }
       process.exitCode = tasksCommand(env, {
         limit,
         json: args.includes("--json"),
         ...(status === undefined ? {} : { status: TaskStatusSchema.parse(status) }),
+        ...(policyError === undefined ? {} : { policyError }),
         window: {
           mode: env.mode === "enforced" || policy?.mode === "enforced" ? "enforced" : "developer",
           ...(policy?.approvalTtlMs === undefined ? {} : { approvalTtlMs: policy.approvalTtlMs }),

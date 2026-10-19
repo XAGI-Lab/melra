@@ -720,10 +720,14 @@ export type CapabilityGrant = z.infer<typeof CapabilityGrantSchema>;
  */
 export const CredentialDefinitionSchema = z
   .object({
-    source: z.union([
-      z.object({ env: z.string().min(1).max(256) }).strict(),
-      z.object({ file: z.string().min(1).max(4096) }).strict(),
-    ]),
+    source: z.union(
+      [
+        z.object({ env: z.string().min(1).max(256) }).strict(),
+        z.object({ file: z.string().min(1).max(4096) }).strict(),
+      ],
+      // Rather than zod's bare "Invalid input", which names neither shape.
+      { error: 'expected {"env": ...} or {"file": ...}' },
+    ),
     inject: z
       .object({
         header: z.string().min(1).max(256),
@@ -749,6 +753,68 @@ export const CredentialsSchema = z
   .refine((value) => Object.keys(value).length <= 64, {
     message: "too_many_credentials",
   });
+
+const MAX_APPROVAL_TTL_MS = 24 * 60 * 60_000;
+const APPROVAL_TTL_INVALID = `policy_approval_ttl_invalid: must be a whole number of milliseconds from 1 to ${MAX_APPROVAL_TTL_MS} (24 hours)`;
+
+/**
+ * A policy file as written, every key optional (`loadPolicy` fills in the
+ * defaults).
+ *
+ * Strict at every level because the file is a trust boundary. Read loosely, a
+ * typo'd key (`"allowedComands"`) was dropped for the default the operator
+ * meant to replace, and a wrong type flowed straight into policy:
+ * `"unhinged": "false"` is a truthy string and switched the guardrails off.
+ * `approvalTtlMs` keeps its range and its code, `policy_approval_ttl_invalid`,
+ * as one problem among the others rather than ahead of them.
+ */
+export const PolicyFileSchema = z
+  .object({
+    version: z.string().exactOptional(),
+    workspaceRoot: z.string().exactOptional(),
+    // An empty entry, as an unset variable leaves, is no name: in the domain
+    // allowlist it matched every host written with a trailing dot.
+    allowedCommands: z.array(z.string().min(1)).exactOptional(),
+    allowedDomains: z.array(z.string().min(1)).exactOptional(),
+    allowLocalhost: z.boolean().exactOptional(),
+    popups: z.enum(["allow", "block"]).exactOptional(),
+    mutations: z.enum(["deny", "confirm"]).exactOptional(),
+    // A window of zero, a negative one or a string would leave every challenge
+    // expired, or never expiring.
+    approvalTtlMs: z
+      .number({ error: APPROVAL_TTL_INVALID })
+      .refine((ttl) => Number.isInteger(ttl) && ttl >= 1 && ttl <= MAX_APPROVAL_TTL_MS, APPROVAL_TTL_INVALID)
+      .exactOptional(),
+    maxFileBytes: z.number().exactOptional(),
+    memoryRetention: z
+      .object({ maxAgeDays: z.number().exactOptional(), maxPerScope: z.number().exactOptional() })
+      .strict()
+      .exactOptional(),
+    deniedTraits: z.array(CapabilityTraitSchema).exactOptional(),
+    capabilities: z.array(CapabilityGrantSchema).max(200).exactOptional(),
+    credentials: CredentialsSchema.exactOptional(),
+    circuitBreaker: z
+      .object({ threshold: z.number().exactOptional(), cooldownMs: z.number().exactOptional() })
+      .strict()
+      .exactOptional(),
+    unhinged: z.boolean().exactOptional(),
+    // `deployment_mode_unknown` as the flag and MELRA_MODE give it, but with
+    // the file and path, so a typo here is not blamed on the environment.
+    mode: z
+      .string()
+      .refine((value) => {
+        try {
+          deploymentMode(value);
+          return true;
+        } catch {
+          return false;
+        }
+      }, "deployment_mode_unknown")
+      .exactOptional(),
+  })
+  .strict();
+
+export type PolicyFileInput = z.input<typeof PolicyFileSchema>;
 
 /**
  * What MELRA promises about how many times an effect can run.

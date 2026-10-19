@@ -82,7 +82,7 @@ export function nextStep(report: DoctorReport): string | undefined {
         // Inside the workspace carries its own `next`, which depends on the layout.
         return "point MELRA_WORKSPACE at a directory you can read and write";
       case "policy":
-        return "fix the policy file's JSON, or unset MELRA_POLICY to use the defaults";
+        return "fix the policy file as the policy line above says, or unset MELRA_POLICY to use the defaults";
       case "socket":
         return "fix or unset MELRA_SOCKET (see the socket line above)";
       case "isolation":
