@@ -101,9 +101,11 @@ All notable changes are documented here. The format follows
 - A file `move` that only changes letter case (`Readme.md` to `README.md`)
   verifies on a case-insensitive disk, such as macOS's default. The
   `file_absent` evidence derived for the source found the renamed file under
-  the old spelling, so a correct rename ended `partial`. `file_absent` now
-  counts a path as present only when its directory holds that name; a name
-  that differs only in Unicode normalization still counts as present. (#280)
+  the old spelling, so a correct rename ended `partial`. Against a move's own
+  result, the source now reads absent when what its spelling reaches is the
+  move's destination and the directory no longer holds that spelling.
+  Anywhere else, a path that reaches a file still reads present, however it
+  is spelled. (#280)
 
 - `docs/COMPATIBILITY.md` names MCP Python SDK `1.30.x`, the version `sdk-py`
   pins and tests, not `1.28.x`. `pnpm check` now fails when either SDK line

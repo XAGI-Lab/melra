@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createHash } from "node:crypto";
-import { lstat, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
+import { link, lstat, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -82,32 +82,43 @@ describe("Verifier", () => {
     expect(hashed.evidence[0]?.summary).toBe("verification_path_reserved");
   });
 
-  it("reads a case-only rename's old spelling as absent, and a present file as present", async () => {
+  it("reads a case-only rename's old spelling as absent, and nothing else spelled differently", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-verifier-"));
     roots.push(root);
     await writeFile(join(root, "Readme.md"), "x");
     await rename(join(root, "Readme.md"), join(root, "README.md"));
     const verifier = await Verifier.create(root);
-    // What a move derives. On a case-insensitive disk the old spelling still
-    // reached the renamed file, and the move verified as partial.
+    // What a move derives, against the move's own result. On a
+    // case-insensitive disk the old spelling still reached the renamed file,
+    // and the move verified as partial.
     const moved = await verifier.verify(
       [
         { type: "file_absent", path: "Readme.md" },
         { type: "file_exists", path: "README.md" },
       ],
-      {},
+      { moved: true, path: "Readme.md", destination: "README.md" },
     );
     expect(moved.verified).toBe(true);
-    expect((await verifier.verify([{ type: "file_absent", path: "README.md" }], {})).verified).toBe(false);
-    // Stored decomposed, asked for composed: the same name to a disk that
-    // folds normalization, so never absent there.
-    const decomposed = "cafe\u0301.txt";
-    await writeFile(join(root, decomposed), "x");
-    const composed = decomposed.normalize("NFC");
-    const folds = await lstat(join(root, composed)).then(() => true, () => false);
+    // Anywhere else a path that reaches a file is that file: a guard asking
+    // whether settings.json is absent beside Settings.json is told no.
+    await writeFile(join(root, "Settings.json"), "{}");
+    const folds = await lstat(join(root, "settings.json")).then(() => true, () => false);
     if (folds) {
-      expect((await verifier.verify([{ type: "file_absent", path: composed }], {})).verified).toBe(false);
+      for (const result of [{}, { moved: true, path: "x", destination: "README.md" }]) {
+        const guard = await verifier.verify([{ type: "file_absent", path: "settings.json" }], result);
+        expect(guard.verified, JSON.stringify(result)).toBe(false);
+      }
     }
+    // A move rename(2) ignores, between two hard links to one file, leaves the
+    // source listed: the same file as the destination, but still there.
+    await writeFile(join(root, "a.txt"), "x");
+    await link(join(root, "a.txt"), join(root, "b.txt"));
+    const linked = await verifier.verify([{ type: "file_absent", path: "a.txt" }], {
+      moved: true,
+      path: "a.txt",
+      destination: "b.txt",
+    });
+    expect(linked.verified).toBe(false);
   });
 
   it("stamps each item with how it was established", async () => {

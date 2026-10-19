@@ -188,20 +188,39 @@ const fileExists: Built<"file_exists"> = {
   },
 };
 
+/**
+ * Whether `path`, which lstat reached as `found`, is the source of a move that
+ * only changed its case: a case-insensitive disk folds the old spelling onto
+ * the renamed file, and a correct rename verified as partial. Only for that
+ * move's own result, only when what was found is the move's destination, and
+ * only when the directory no longer holds the old spelling (a hard link would)
+ * is it absent. Anywhere else a path lstat reaches is there, however spelled:
+ * a guard asking whether settings.json is absent beside Settings.json must not
+ * be told yes.
+ */
+async function renamedByCase(
+  path: string,
+  found: { dev: number; ino: number },
+  result: Record<string, unknown>,
+  context: VerificationContext,
+): Promise<boolean> {
+  if (result.moved !== true || typeof result.destination !== "string") return false;
+  const destination = await lstat(await context.workspacePath(result.destination)).catch(() => undefined);
+  if (destination === undefined || destination.dev !== found.dev || destination.ino !== found.ino) return false;
+  // Compared as the OS sees names: UTF-8 (a lone surrogate becomes U+FFFD),
+  // and normalization aside, which such disks ignore too.
+  const spelled = (name: string) => Buffer.from(name).toString("utf8").normalize("NFC");
+  const name = spelled(basename(path));
+  return !(await readdir(dirname(path))).some((entry) => spelled(entry) === name);
+}
+
 const fileAbsent: Built<"file_absent"> = {
   type: "file_absent",
-  async check(predicate, _result, context) {
+  async check(predicate, result, context) {
     const path = await context.workspacePath(predicate.path, { mayBeAbsent: true });
     let passed = false;
     try {
-      await lstat(path);
-      // Found, but perhaps only because the disk ignores case: after a move
-      // from Readme.md to README.md, the old spelling still reaches the renamed
-      // file, and a correct rename verified as partial. It is there only if the
-      // directory holds this name, Unicode normalization aside, which such
-      // disks ignore too and which must never make a present file read absent.
-      const name = basename(path).normalize("NFC");
-      passed = !(await readdir(dirname(path))).some((entry) => entry.normalize("NFC") === name);
+      passed = await renamedByCase(path, await lstat(path), result, context);
     } catch (error) {
       passed = error instanceof Error && "code" in error && error.code === "ENOENT";
       if (!passed) throw error;
