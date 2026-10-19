@@ -134,9 +134,10 @@ function certificateResult(task: TaskRecord): CertificateResult {
  * Applied once, where the request is normalized, so the derived predicates flow
  * identically into the policy decision, the sealed payload, the persisted task
  * record, and verification. A caller that declared its own evidence is left
- * untouched — this only replaces an empty list.
+ * untouched — this only replaces an empty list. Exported for `melra policy
+ * test`, whose preview must decide on the request the server would.
  */
-function withDefaultEvidence(request: TaskRequest): TaskRequest {
+export function withDefaultEvidence(request: TaskRequest): TaskRequest {
   if (request.requiredEvidence.length > 0) return request;
   const derived = defaultEvidenceFor(request.operation);
   if (derived.length === 0) return request;

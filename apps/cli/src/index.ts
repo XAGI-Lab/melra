@@ -37,7 +37,7 @@ import {
 } from "@melra/server";
 import { detectBrowserExecutable } from "@melra/browser-runtime";
 import { createSystemComputerAdapter } from "@melra/computer-runtime";
-import { capabilityUsageReader } from "@melra/runtime-core";
+import { capabilityUsageReader, withDefaultEvidence } from "@melra/runtime-core";
 import { SqliteStore } from "@melra/storage-sqlite";
 import {
   classifyOperation,
@@ -859,7 +859,10 @@ async function inspectTask(args: string[], env: CliEnvironment): Promise<void> {
 }
 
 async function policyTest(args: string[], env: CliEnvironment): Promise<void> {
-  const request = await readTaskRequest(args);
+  // With the evidence the server derives for a mutation that declares none, as
+  // plan does: without it, a file write the server would ask approval for was
+  // previewed as denied for want of evidence.
+  const request = withDefaultEvidence(await readTaskRequest(args));
   // Reports what this process would actually decide, unhinged mode included —
   // a dry run that disagreed with the server it is previewing is worse than
   // none. That is also why the operator's own `policy.json` is loaded rather
@@ -884,6 +887,7 @@ async function policyTest(args: string[], env: CliEnvironment): Promise<void> {
     output({
       ...evaluatePolicy(taskId, request, policy, capabilityUsageReader(store)),
       classified: { capability, target },
+      requiredEvidence: request.requiredEvidence,
     });
   } finally {
     store.close();
@@ -1270,15 +1274,31 @@ async function main(): Promise<void> {
       return;
     case "tasks": {
       rejectUnknownFlags(args, ["--limit", "--status", "--json"]);
+      // A trailing --status, as an unquoted `--status $S` sends with S unset,
+      // listed every status: an unfiltered list that looked filtered.
+      for (const flag of ["--limit", "--status"]) {
+        const value = argument(flag, args);
+        if (args.includes(flag) && (value === undefined || value.startsWith("--"))) {
+          throw new Error(`${flag} requires a value`);
+        }
+      }
       const limit = Number(argument("--limit", args) ?? "20");
       if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
         throw new Error("--limit must be a whole number from 1 to 500");
       }
       const status = argument("--status", args);
+      // Approvals are read by the window and mode a server started here would
+      // use; a policy file that does not load leaves the defaults, as status does.
+      const policyPath = await existingPolicyPath(env);
+      const policy = policyPath === undefined ? undefined : await loadPolicy(policyPath, env.workspaceRoot).catch(() => undefined);
       process.exitCode = tasksCommand(env, {
         limit,
         json: args.includes("--json"),
         ...(status === undefined ? {} : { status: TaskStatusSchema.parse(status) }),
+        window: {
+          mode: env.mode === "enforced" || policy?.mode === "enforced" ? "enforced" : "developer",
+          ...(policy?.approvalTtlMs === undefined ? {} : { approvalTtlMs: policy.approvalTtlMs }),
+        },
       });
       return;
     }
