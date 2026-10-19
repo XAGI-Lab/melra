@@ -1,7 +1,7 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -26,6 +26,15 @@ const rowExists: PredicateVerifier<{ type: "row_exists"; id: string }> = {
     const passed = Array.isArray(result.rows) && result.rows.includes(predicate.id);
     // Tries to claim the strongest kind of knowing, and a different type.
     return { passed, summary: `row ${predicate.id}`, strength: "independent", type: "file_hash" } as never;
+  },
+};
+
+// A verifier reaching a file the one way any can: `context.workspacePath`.
+const reads: PredicateVerifier<{ type: "reads"; path: string }> = {
+  type: "reads",
+  async check(predicate, _result, context) {
+    const path = await context.workspacePath(predicate.path);
+    return { passed: true, summary: "read", source: context.relative(path) };
   },
 };
 
@@ -75,13 +84,6 @@ describe("pluggable verifiers", () => {
   it("keeps a verifier's file reads inside the workspace", async () => {
     const root = await workspace();
     await writeFile(join(root, "inside.txt"), "x");
-    const reads: PredicateVerifier<{ type: "reads"; path: string }> = {
-      type: "reads",
-      async check(predicate, _result, context) {
-        const path = await context.workspacePath(predicate.path);
-        return { passed: true, summary: "read", source: context.relative(path) };
-      },
-    };
     const verifier = await Verifier.create(root, { verifiers: [reads] });
     const { evidence } = await verifier.verify(
       [
@@ -95,6 +97,46 @@ describe("pluggable verifiers", () => {
       [true, "inside.txt"],
       [false, "verification_path_outside_workspace"],
       [false, "verification_path_outside_workspace"],
+    ]);
+  });
+
+  it("reads the root as configured the same way for every verifier and for planning, and keeps it confined", async () => {
+    // Reached through a directory link above it, as macOS's /tmp is (a
+    // junction on Windows), beside a real sibling whose name starts the same.
+    const base = await workspace();
+    const real = join(base, "real", "ws");
+    await mkdir(join(base, "real", "ws-evil"), { recursive: true });
+    await mkdir(real);
+    await writeFile(join(real, "out.json"), "{}");
+    await writeFile(join(base, "real", "ws-evil", "out.json"), "{}");
+    const link = process.platform === "win32" ? "junction" : "dir";
+    await symlink(join(base, "real"), join(base, "alias"), link);
+    await symlink(join(base, "real", "ws-evil"), join(real, "escape"), link);
+    const configured = join(base, "alias", "ws");
+    const verifier = await Verifier.create(configured, { verifiers: [reads] });
+    const paths = [
+      join(configured, "out.json"),
+      configured,
+      join(`${configured}-evil`, "out.json"),
+      join(configured, "escape", "out.json"),
+    ];
+    const { evidence } = await verifier.verify(
+      paths.map((path) => ({ type: "custom", verifier: "reads", params: { path } })),
+      {},
+    );
+    expect(evidence.map((item) => [item.passed, item.source ?? item.summary])).toEqual([
+      [true, "out.json"],
+      [false, "verification_path_outside_workspace"],
+      [false, "verification_path_outside_workspace"],
+      [false, "verification_path_outside_workspace"],
+    ]);
+    // Planning reads the spelling alone, so the link that leads out is left
+    // to the check above.
+    expect(paths.map((path) => verifier.outsideWorkspace({ type: "file_exists", path }))).toEqual([
+      false,
+      true,
+      true,
+      false,
     ]);
   });
 

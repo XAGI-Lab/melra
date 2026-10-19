@@ -70,8 +70,15 @@ Node types: `operation`, `approval`, `condition`, `parallel`, `bounded_loop`,
 Actions: `list`, `read`, `stat`, `hash`, `write`, `move`, `delete`, `mkdir`.
 
 - Paths are resolved inside one workspace root. `list` takes the root however
-  it is spelled (`.`, `./`, its absolute path with any links in it resolved);
-  no other action takes it.
+  it is spelled (`.`, `./`, its absolute path as configured or with its links
+  resolved); no other action takes the root itself.
+- An absolute path spelled through the root as configured, with a symlink or
+  junction in it left unresolved (macOS's `/tmp`, a symlinked project
+  directory), is read as the same path under the root as resolved when the
+  server started, and then checked like any other. The same holds for a
+  move's `destination`, file evidence, a terminal `cwd` and a browser
+  upload's `filePaths`. The root is resolved once: a link in it re-pointed
+  while the server runs takes effect after a restart.
 - Existing symlinks cannot escape that root. A `write` to a symlink inside it
   writes the file it points to, as `read` reads it; one whose target does not
   exist is refused (`file_write_dangling_symlink`).

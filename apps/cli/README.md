@@ -1,17 +1,24 @@
 # MELRA CLI
 
-Everything in one command, with nothing installed beforehand:
+Everything in one command, with nothing installed beforehand, run from the
+project the agent should work in:
 
 ```bash
+cd ~/project
 npx @melra/cli@alpha setup
 ```
 
-`setup` writes a safe local policy, produces an MCP client configuration, and
-runs every readiness check (Node, workspace, SQLite, browser, computer-use
-adapter, policy, MCP clients). In a terminal it asks which detected client to
-set up and offers to write MELRA into that client's own config file;
-`--client <name> --write` does the same without asking, and piped or with
-`--json` it prints JSON. It exits non-zero if a check fails and never
+That directory becomes the agent's workspace, the boundary for its file and
+command operations; set `MELRA_WORKSPACE` to choose another. `setup` writes a
+safe local policy, produces an MCP client configuration, and runs every
+readiness check (Node, workspace, SQLite, browser, computer-use adapter,
+policy, MCP clients). In a terminal it asks which detected client to set up
+and offers to write MELRA into that client's own config file;
+`--client <name> --write` does the same without asking which, and piped or
+with `--json` it prints JSON. If the workspace would be your home directory, a
+directory holding it, or a filesystem root, `setup` and `init` ask first in a
+terminal and otherwise refuse with `workspace_too_broad`, unless
+`MELRA_WORKSPACE` is set. It exits non-zero if a check fails and never
 overwrites an existing policy.
 
 To keep a resolved copy on the machine instead of resolving on every run:

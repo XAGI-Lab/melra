@@ -420,6 +420,88 @@ describe("FileRuntime", () => {
     ).rejects.toThrow("path_outside_workspace");
   });
 
+  it("accepts absolute paths spelled through the configured workspace link", async () => {
+    const base = await mkdtemp(join(tmpdir(), "melra-file-"));
+    roots.push(base);
+    const root = join(base, "workspace");
+    const linked = join(base, "workspace-link");
+    await mkdir(join(root, "sub"), { recursive: true });
+    await symlink(root, linked, process.platform === "win32" ? "junction" : "dir");
+    const runtime = await FileRuntime.create({ root: linked });
+    const source = join(linked, "source.txt");
+    const destination = join(linked, "sub", "moved.txt");
+
+    await expect(
+      runtime.execute(FileOperationSchema.parse({ kind: "file", action: "list", path: linked })),
+    ).resolves.toMatchObject({ path: ".", entries: [{ name: "sub", type: "directory" }] });
+    await runtime.execute(FileOperationSchema.parse({ kind: "file", action: "write", path: source, content: "linked" }));
+    await runtime.execute(FileOperationSchema.parse({ kind: "file", action: "move", path: source, destination }));
+
+    expect(await readFile(join(root, "sub", "moved.txt"), "utf8")).toBe("linked");
+
+    await mkdir(join(root, ".git"));
+    await writeFile(join(root, ".git", "config"), "protected");
+    await writeFile(join(root, "plain.txt"), "plain");
+    await symlink(join(linked, ".git", "config"), join(root, "swap"));
+    const resolvePath = runtime.resolvePath.bind(runtime);
+    let swapped = false;
+    runtime.resolvePath = async (...args: Parameters<typeof resolvePath>) => {
+      const resolved = await resolvePath(...args);
+      if (!swapped) {
+        swapped = true;
+        await rename(join(root, "swap"), join(root, "plain.txt"));
+      }
+      return resolved;
+    };
+    await expect(
+      runtime.execute(
+        FileOperationSchema.parse({ kind: "file", action: "write", path: join(linked, "plain.txt"), content: "x" }),
+      ),
+    ).rejects.toThrow("path_git_metadata");
+    expect(await readFile(join(root, ".git", "config"), "utf8")).toBe("protected");
+  });
+
+  it("keeps a path spelled through the configured root confined", async () => {
+    // Reached through a directory link above it, as macOS's /tmp is (a
+    // junction on Windows), beside a real sibling whose name starts the same.
+    const base = await mkdtemp(join(tmpdir(), "melra-file-"));
+    roots.push(base);
+    const real = join(base, "real", "ws");
+    await mkdir(join(base, "real", "ws-evil"), { recursive: true });
+    await mkdir(real);
+    await writeFile(join(base, "real", "ws-evil", "secret.txt"), "secret");
+    const link = process.platform === "win32" ? "junction" : "dir";
+    await symlink(join(base, "real"), join(base, "alias"), link);
+    await symlink(join(base, "real", "ws-evil"), join(real, "escape"), link);
+    const configured = join(base, "alias", "ws");
+    const runtime = await FileRuntime.create({ root: configured });
+    const file = (action: "read" | "write" | "delete", path: string) =>
+      runtime.execute(
+        FileOperationSchema.parse({ kind: "file", action, path, ...(action === "write" ? { content: "x" } : {}) }),
+      );
+
+    await file("write", join(configured, "a.txt"));
+    expect(await readFile(join(real, "a.txt"), "utf8")).toBe("x");
+    for (const path of [join(`${configured}-evil`, "secret.txt"), join(configured, "escape", "secret.txt")]) {
+      for (const action of ["read", "write", "delete"] as const) {
+        await expect(file(action, path)).rejects.toThrow("path_outside_workspace");
+      }
+    }
+    await expect(file("delete", configured)).rejects.toThrow("path_outside_workspace");
+    await expect(
+      runtime.execute(
+        FileOperationSchema.parse({
+          kind: "file",
+          action: "move",
+          path: join(configured, "a.txt"),
+          destination: join(`${configured}-evil`, "a.txt"),
+        }),
+      ),
+    ).rejects.toThrow("path_outside_workspace");
+    expect(await readFile(join(base, "real", "ws-evil", "secret.txt"), "utf8")).toBe("secret");
+    expect(await readFile(join(real, "a.txt"), "utf8")).toBe("x");
+  });
+
   it("creates a missing root but accepts one it cannot create", async () => {
     // A workspace the user has not made yet is created for them.
     const parent = await mkdtemp(join(tmpdir(), "melra-file-"));

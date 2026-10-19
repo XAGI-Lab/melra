@@ -447,6 +447,7 @@ export class Verifier {
 
   private constructor(
     readonly root: string,
+    private readonly lexicalRoot: string,
     private readonly probe: EvidenceProbe | undefined,
     extra: ReadonlyArray<RegisteredVerifier>,
     private readonly reserved?: (path: string) => Promise<boolean>,
@@ -502,7 +503,15 @@ export class Verifier {
     root: string,
     options: VerifierOptions = {},
   ): Promise<Verifier> {
-    return new Verifier(await realpath(root), options.probe, options.verifiers ?? [], options.reserved);
+    return new Verifier(await realpath(root), resolve(root), options.probe, options.verifiers ?? [], options.reserved);
+  }
+
+  private inputPath(input: string): string {
+    if (!isAbsolute(input)) return input;
+    const candidate = resolve(input);
+    return inside(this.lexicalRoot, candidate)
+      ? resolve(this.root, relative(this.lexicalRoot, candidate))
+      : input;
   }
 
   /**
@@ -536,9 +545,14 @@ export class Verifier {
     }
   }
 
-  /** `input` under the root before any link is followed; undefined outside it or at the root. */
+  /**
+   * `input` under the root before any link is followed; undefined outside it
+   * or at the root. Every file path a verifier, built-in or registered, or
+   * planning asks about comes through here, so the root's configured spelling
+   * is mapped once, for all of them.
+   */
   private spelled(input: string): string | undefined {
-    const candidate = resolve(this.root, input);
+    const candidate = resolve(this.root, this.inputPath(input));
     return inside(this.root, candidate) && relative(this.root, candidate) !== "" ? candidate : undefined;
   }
 
