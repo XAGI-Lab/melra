@@ -4,11 +4,13 @@
 import { mkdtemp, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   TaskRequestSchema,
   WorkflowDefinitionSchema,
+  outcomeUnknown,
   type Operation,
+  type TaskRecord,
   type TaskRequest,
   type WorkflowRun,
 } from "@melra/protocol";
@@ -31,6 +33,7 @@ const stores: SqliteStore[] = [];
 const definitionId = "22222222-2222-4222-8222-222222222222";
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const store of stores.splice(0)) store.close();
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
@@ -43,9 +46,14 @@ async function setup(options: { delayMs?: number; policy?: Partial<LocalPolicy> 
   stores.push(store);
   const cipher = new PayloadCipher(Buffer.alloc(32, 23));
   const done: string[] = [];
+  // What a test does as a put runs: throws, or lands a pause.
+  const on: { put?: (key: string) => void } = {};
   const execute = async (operation: Operation): Promise<Record<string, unknown>> => {
     if (options.delayMs !== undefined) await new Promise((resolve) => setTimeout(resolve, options.delayMs));
-    if (operation.kind === "memory") done.push(operation.key ?? "");
+    if (operation.kind === "memory") {
+      on.put?.(operation.key ?? "");
+      done.push(operation.key ?? "");
+    }
     return { success: true, stored: true };
   };
   const tasks = new TaskController(
@@ -55,7 +63,7 @@ async function setup(options: { delayMs?: number; policy?: Partial<LocalPolicy> 
     await Verifier.create(root),
     cipher,
   );
-  return { root, store, cipher, tasks, done, controller: new WorkflowController(store, tasks, cipher) };
+  return { root, store, cipher, tasks, done, on, controller: new WorkflowController(store, tasks, cipher) };
 }
 
 const put = (key: string): TaskRequest =>
@@ -295,6 +303,228 @@ describe("workflow recovery", () => {
   });
 });
 
+describe("a condition's branch not taken (#268)", () => {
+  // inspect, then a branch on the flag file, then a step after it.
+  const choice = (whenTrue: TaskRequest[], whenFalse: TaskRequest[]) =>
+    workflow([
+      { id: "inspect", type: "operation", request: read() },
+      {
+        id: "choose",
+        type: "condition",
+        dependsOn: ["inspect"],
+        sourceNodeId: "inspect",
+        predicate: { type: "file_exists", path: "flag" },
+        whenTrue,
+        whenFalse,
+      },
+      { id: "after", type: "operation", dependsOn: ["choose"], request: put("after") },
+    ]);
+  /** An advance that plans a challenge, under which an operator's pause lands before it commits. */
+  const losingCommit = async (controller: WorkflowController, tasks: TaskController, id: string) => {
+    const plan = tasks.plan.bind(tasks);
+    let planned: TaskRecord | undefined;
+    vi.spyOn(tasks, "plan").mockImplementationOnce((request, options) => {
+      const task = plan(request, options);
+      planned = task;
+      controller.pause(id);
+      return task;
+    });
+    await expect(controller.advance(id)).rejects.toThrow("workflow_state_conflict");
+    expect(controller.status(id).nodes.choose).toMatchObject({ status: "pending", taskIds: [] });
+    controller.resume(id);
+    return planned!;
+  };
+  const settle = async (controller: WorkflowController, id: string) => {
+    let run = (await controller.advance(id)).run;
+    for (let step = 0; step < 6 && !["verified_complete", "recovery_required", "failed"].includes(run.status); step += 1) {
+      run = (await controller.advance(id, approvalsFor(run))).run;
+    }
+    return run;
+  };
+
+  it("cancels the challenge a lost advance left on the branch it then did not take", async () => {
+    const { controller, root, tasks, done } = await setup();
+    await writeFile(join(root, "flag"), "on");
+    const planned = controller.plan(choice([put("patch"), put("patch2")], [put("create")]));
+    await controller.advance(planned.id);
+    const abandoned = await losingCommit(controller, tasks, planned.id);
+    expect(abandoned.status).toBe("awaiting_approval");
+    await unlink(join(root, "flag"));
+
+    const run = await settle(controller, planned.id);
+    expect(run.status).toBe("verified_complete");
+    expect(done).toEqual(["create", "after"]);
+    // It stayed approvable once the run had finished, and approving it ran patch.
+    expect(tasks.status(abandoned.id).status).toBe("cancelled");
+    await tasks
+      .execute(abandoned.id, { approvalId: abandoned.approval!.approvalId, phrase: abandoned.approval!.phrase! })
+      .catch(() => undefined);
+    expect(done).toEqual(["create", "after"]);
+  });
+
+  it("keeps an empty branch it took across a restart, not the one a lost advance started", async () => {
+    const { controller, root, store, tasks, cipher, done } = await setup();
+    const planned = controller.plan(choice([], [put("create")]));
+    await controller.advance(planned.id);
+    // Decided false, and create's challenge planned; the pause lost it.
+    const abandoned = await losingCommit(controller, tasks, planned.id);
+    await writeFile(join(root, "flag"), "on");
+    let run = (await controller.advance(planned.id)).run;
+    run = (await controller.advance(planned.id)).run;
+    expect(run.nodes.choose).toMatchObject({ status: "verified_complete", taskIds: [] });
+    expect(run.nodes.after?.status).toBe("awaiting_approval");
+
+    const restarted = new WorkflowController(store, tasks, cipher);
+    await restarted.recoverInterrupted();
+    run = restarted.status(planned.id);
+    // Read as the branch with tasks, the condition reopened on create.
+    expect(run.nodes.choose).toMatchObject({ status: "verified_complete", taskIds: [] });
+    expect(tasks.status(abandoned.id).status).toBe("cancelled");
+    run = (await restarted.advance(planned.id, approvalsFor(run))).run;
+    expect(run.status).toBe("verified_complete");
+    expect(done).toEqual(["after"]);
+  });
+
+  it("halts on a step a lost advance ran on the other branch until it is reconciled as never applied", async () => {
+    const { controller, root, store, tasks, cipher, done, on } = await setup({ policy: { unhinged: true } });
+    await writeFile(join(root, "flag"), "on");
+    // Its provider can say whether it happened: here, that it did not.
+    const patch = TaskRequestSchema.parse({ ...put("patch"), reconciliation: [{ type: "file_exists", path: "patched" }] });
+    const planned = controller.plan(choice([patch], [put("create")]));
+    await controller.advance(planned.id);
+    // The true branch runs patch, whose reply is lost; a pause lands meanwhile.
+    on.put = (key) => {
+      if (key !== "patch") return;
+      controller.pause(planned.id);
+      throw outcomeUnknown("socket hang up");
+    };
+    await expect(controller.advance(planned.id)).rejects.toThrow("workflow_state_conflict");
+    const [unknown] = store.listTasks(10, "recovery_required");
+    expect(controller.status(planned.id).nodes.choose).toMatchObject({ status: "pending", taskIds: [] });
+    controller.resume(planned.id);
+    await unlink(join(root, "flag"));
+
+    // Read false now, the condition ran create beside a patch that may stand.
+    let run = (await controller.advance(planned.id)).run;
+    expect(run.nodes.choose).toMatchObject({
+      status: "recovery_required",
+      taskIds: [unknown!.id],
+      error: "workflow_condition_branch_conflict",
+    });
+    expect(run.status).toBe("recovery_required");
+    expect(run.error).toBe("workflow_condition_branch_conflict:choose");
+    expect(done).toEqual([]);
+
+    const restarted = new WorkflowController(store, tasks, cipher);
+    await restarted.recoverInterrupted();
+    expect(restarted.status(planned.id).nodes.choose?.error).toBe("workflow_condition_branch_conflict");
+    // Reconciled, it never happened: the condition is decided again and the run moves on.
+    expect((await tasks.execute(unknown!.id)).task.error).toBe("reconciliation_confirms_effect_not_applied");
+    run = await settle(restarted, planned.id);
+    expect(run.status).toBe("verified_complete");
+    expect(run.nodes.choose?.taskIds).toHaveLength(1);
+    expect(done).toEqual(["create", "after"]);
+  });
+
+  it("carries on with the committed branch once a step on the other is reconciled as never applied", async () => {
+    const { controller, store, tasks, cipher, done, on } = await setup();
+    const patch = TaskRequestSchema.parse({ ...put("patch"), reconciliation: [{ type: "file_exists", path: "patched" }] });
+    const planned = controller.plan(choice([patch], [put("create")]));
+    await controller.advance(planned.id);
+    const key = (branch: string, request: TaskRequest) =>
+      sha256({ workflowId: planned.id, nodeId: "choose", iteration: 0, branch, request });
+    // Advances that lost their commits ran both: patch, whose reply was
+    // lost, and create.
+    on.put = (name) => {
+      if (name === "patch") throw outcomeUnknown("socket hang up");
+    };
+    for (const [branch, request] of [["true:0", patch], ["false:0", put("create")]] as const) {
+      const task = tasks.plan(request, { idempotencyKey: key(branch, request), attempt: 1, stored: true });
+      await tasks.execute(task.id, { approvalId: task.approval!.approvalId, phrase: task.approval!.phrase! });
+    }
+    const [unknown] = store.listTasks(10, "recovery_required");
+    const created = store.getIdempotencyCommit(key("false:0", put("create")));
+
+    const restarted = new WorkflowController(store, tasks, cipher);
+    const [recovered] = await restarted.recoverInterrupted();
+    expect(recovered?.nodes.choose).toMatchObject({
+      status: "recovery_required",
+      taskIds: [unknown!.id],
+      error: "workflow_condition_branch_conflict",
+    });
+    expect(recovered?.error).toBe("workflow_condition_branch_conflict:choose");
+    // Settled as never applied, it was still read as a conflict, for good.
+    expect((await tasks.execute(unknown!.id)).task.error).toBe("reconciliation_confirms_effect_not_applied");
+    const run = await settle(restarted, planned.id);
+    expect(run.status).toBe("verified_complete");
+    expect(run.nodes.choose?.taskIds).toEqual([created!.taskId]);
+    expect(done).toEqual(["create", "after"]);
+  });
+
+  it("finds a step's task by its key where the run names another branch's or another step's", async () => {
+    const { controller, tasks, done } = await setup();
+    const planned = controller.plan(choice([put("patch")], [put("create"), put("register")]));
+    await controller.advance(planned.id);
+    const key = (branch: string, request: TaskRequest) =>
+      sha256({ workflowId: planned.id, nodeId: "choose", iteration: 0, branch, request });
+    const patch = tasks.plan(put("patch"), { idempotencyKey: key("true:0", put("patch")), attempt: 1, stored: true });
+    const create = tasks.plan(put("create"), { idempotencyKey: key("false:0", put("create")), attempt: 1, stored: true });
+    await tasks.execute(create.id, { approvalId: create.approval!.approvalId, phrase: create.approval!.phrase! });
+    // What an earlier version's recovery recorded: both branches' tasks, in key order.
+    type Emit = (type: string, data: Record<string, unknown>) => void;
+    const legacy = controller as unknown as {
+      transition(run: WorkflowRun, change: (draft: WorkflowRun, emit: Emit) => void): WorkflowRun;
+    };
+    legacy.transition(controller.status(planned.id), (draft, emit) => {
+      const state = { status: "awaiting_approval" as const, taskIds: [patch.id, create.id], approval: patch.approval! };
+      emit("workflow.node_changed", { nodeId: "choose", from: draft.nodes.choose!.status, state });
+      draft.nodes.choose = state;
+      emit("workflow.status_changed", { from: draft.status, to: "awaiting_approval" });
+      draft.status = "awaiting_approval";
+    });
+
+    let run = (await controller.advance(planned.id)).run;
+    // Not a new challenge for create, which already ran, nor a halt on the
+    // committed create recorded where register belongs.
+    const [first, second] = run.nodes.choose!.taskIds;
+    expect(first).toBe(create.id);
+    expect(tasks.status(second!).request.operation).toMatchObject({ key: "register" });
+    expect(tasks.status(patch.id).status).toBe("cancelled");
+    for (let step = 0; step < 4 && run.status !== "verified_complete"; step += 1) {
+      run = (await controller.advance(planned.id, approvalsFor(run))).run;
+    }
+    expect(run.status).toBe("verified_complete");
+    expect(done).toEqual(["create", "register", "after"]);
+  });
+
+  it("does not drop a challenge on the other branch whose cancel did not land", async () => {
+    const { controller, store, tasks, cipher, done } = await setup();
+    const planned = controller.plan(choice([put("patch")], [put("create")]));
+    await controller.advance(planned.id);
+    const key = (branch: string, request: TaskRequest) =>
+      sha256({ workflowId: planned.id, nodeId: "choose", iteration: 0, branch, request });
+    const abandoned = tasks.plan(put("patch"), { idempotencyKey: key("true:0", put("patch")), attempt: 1, stored: true });
+    const committed = tasks.plan(put("create"), { idempotencyKey: key("false:0", put("create")), attempt: 1, stored: true });
+    await tasks.execute(committed.id, { approvalId: committed.approval!.approvalId, phrase: committed.approval!.phrase! });
+    // An approver starts it through melra_execute as recovery goes to cancel it.
+    vi.spyOn(tasks, "cancel").mockImplementationOnce((taskId) => {
+      store.saveTask({ ...tasks.status(taskId), status: "running" });
+      return tasks.status(taskId);
+    });
+
+    const restarted = new WorkflowController(store, tasks, cipher);
+    const [recovered] = await restarted.recoverInterrupted();
+    // Taken as cancelled, it ran under a run recovered as finished.
+    expect(recovered?.nodes.choose).toMatchObject({
+      status: "recovery_required",
+      taskIds: [abandoned.id],
+      error: "workflow_condition_branch_conflict",
+    });
+    expect(recovered?.status).toBe("recovery_required");
+    expect(done).toEqual(["create"]);
+  });
+});
+
 describe("a step an operator denies", () => {
   // Pay, then two branches that each wait for approval; refunding pays back.
   const fanOut = () =>
@@ -360,7 +590,7 @@ describe("a step an operator denies", () => {
   });
 
   it("does not run a condition's other branch once one branch committed", async () => {
-    const { controller, store, tasks, cipher, done } = await setup();
+    const { controller, tasks, done } = await setup();
     const planned = controller.plan(
       workflow([
         { id: "inspect", type: "operation", request: read() },
@@ -384,18 +614,10 @@ describe("a step an operator denies", () => {
     const ran = tasks.plan(put("patch"), { idempotencyKey: key, attempt: 1, stored: true });
     await tasks.execute(ran.id, { approvalId: ran.approval!.approvalId, phrase: ran.approval!.phrase! });
 
-    for (let step = 0; step < 4 && run.status !== "recovery_required"; step += 1) {
-      run = (await controller.advance(planned.id, approvalsFor(run))).run;
-    }
+    run = (await controller.advance(planned.id)).run;
     // Asking the predicate again chose the other branch and ran it too. Now
-    // the committed branch is kept, its step planned again is a duplicate,
-    // and the run halts for recovery.
-    expect(done).toEqual(["patch"]);
-    expect(run.status).toBe("recovery_required");
-
-    const restarted = new WorkflowController(store, tasks, cipher);
-    await restarted.recoverInterrupted();
-    run = restarted.status(planned.id);
+    // the committed branch is kept and its step found by its key, where it
+    // was planned again: a second challenge for an effect already done.
     expect(run.nodes.choose?.taskIds).toEqual([ran.id]);
     expect(run.status).toBe("verified_complete");
     expect(done).toEqual(["patch"]);

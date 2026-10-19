@@ -261,6 +261,18 @@ result, so a `condition` or `delegation` fails
 asks of each iteration's new result, so it reads such a check as a no and runs
 the next iteration, up to `maxIterations`.
 
+A `condition` takes one branch, once. A branch with a committed step is the
+one taken, even when the advance that took it lost its commit (a pause landed
+while it ran); then the branch the run recorded; only then the predicate. An
+advance that lost its commit can have left tasks on the branch not taken:
+its challenges are cancelled when the branch is decided, so none is approved
+later. One there that may have had an effect halts the run as
+`recovery_required` with `workflow_condition_branch_conflict:<node>`, rather
+than run the other branch beside it. Reconciled as never applied, it no
+longer counts and the run moves on. Where both branches took effect,
+`workflow cancel` ends the run without compensating, and what each branch did
+is undone by hand.
+
 ## Workflow state and events
 
 Workflow statuses are:

@@ -109,6 +109,27 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- A condition step whose advance lost its commit (a pause landed while it ran)
+  keeps to one branch. Recovery read both branches' tasks together and could
+  reopen the step on the branch it had abandoned, or, when the branch it took
+  was empty, on the other one: that offered the abandoned branch's approval
+  again, ran both branches' effects, and counted a step done that never ran.
+  Without a restart, the challenge such an advance left on the branch not
+  taken stayed approvable, even once the run had finished. Now the branch with
+  a committed step is the branch, then the one the run recorded (a condition
+  recorded done with no task took its empty branch), and only then the
+  predicate. At recovery and at the advance that decides, the other branch's
+  tasks still planned or waiting for approval are cancelled, and each cancel
+  is read back. A task there that may have had an effect, or one started
+  before its cancel landed, halts the run as `recovery_required` with
+  `workflow_condition_branch_conflict:<node>` instead of running the other
+  branch beside it. Reconciled as never applied, that task no longer counts
+  and the run moves on; where both branches took effect, `workflow cancel`
+  ends the run and what each did is undone by hand. A branch's step is found
+  by its idempotency key, so an advance no longer asks again for a step whose
+  effect already committed, nor reuses another branch's task by position.
+  (#268)
+
 - A parked mutation whose `reconciliation` predicate could not be asked stays
   `recovery_required`: a URL token with nothing to fill it (`{{json.id}}`,
   when there is no response on that path), a custom verifier the runtime does
