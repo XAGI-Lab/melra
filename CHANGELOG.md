@@ -152,6 +152,23 @@ All notable changes are documented here. The format follows
   `advance` ran the step again. The task, its receipt and the node now keep
   the first 10,000 characters.
 
+- A workflow `condition`, a `bounded_loop`'s `until` and a `delegation`'s
+  `requiredEvidence` no longer read a check the provider did not answer (an
+  `http_resource_matches` read that got a 503, a 429 or no connection) as a
+  "no". The condition took its other branch for good, refunding a charge that
+  went through while the provider was briefly down; the loop ran another
+  iteration of its body; and the delegation failed its run. Nothing is decided
+  on such a check now: the advance records the other nodes and fails with
+  `workflow_check_inconclusive:<node>`, the condition runs neither branch, the
+  loop keeps the iteration it ran and starts no other, the delegation stays
+  `awaiting_input`, and the next advance asks again.
+
+- `melra_workflow_advance` on a run with nothing due, such as a step still
+  waiting for approval or input, changes nothing, as its description says. Each
+  call recorded each waiting step again, so every poll bumped `stateVersion`
+  and appended a `workflow.node_changed` event per waiting step. It now returns
+  the run as it was, with no events, and the waiting steps' tasks as before.
+
 - A file `write` with `encoding: "base64"` refuses content that is not base64
   (`file_content_invalid_base64`) before anything is written; line breaks,
   missing padding and the URL-safe alphabet are accepted. Node's lenient

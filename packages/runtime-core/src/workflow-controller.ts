@@ -21,6 +21,7 @@ import {
   canonicalJson,
   redactStructuredValue,
   sha256,
+  type EvidenceItem,
 } from "@melra/receipt-schema";
 import { SqliteStore } from "@melra/storage-sqlite";
 import { PayloadCipher } from "./payload-cipher.js";
@@ -54,8 +55,9 @@ interface NodeAdvance {
 
 /**
  * A node one of whose tasks refused (a wrong approval phrase, say) after the
- * others had run: what they did is recorded with the node before the refusal
- * is reported, as a sibling node's would be.
+ * others had run, or whose check could not be asked after its steps had: what
+ * they did is recorded with the node before the refusal is reported, as a
+ * sibling node's would be.
  */
 class NodeRefused extends Error {
   constructor(
@@ -497,6 +499,10 @@ export class WorkflowController {
     }
     let run = this.transition(current, (draft, emit) => {
       for (const { nodeId, result } of results) {
+        // A node offered again and still waiting (an approval nobody has
+        // answered) did not change. Recorded anyway, every poll bumped the
+        // run's version and added an event.
+        if (canonicalJson(result.state) === canonicalJson(draft.nodes[nodeId])) continue;
         const from = draft.nodes[nodeId]!.status;
         draft.nodes[nodeId] = result.state;
         emit("workflow.node_changed", {
@@ -1125,7 +1131,7 @@ export class WorkflowController {
               started === taskIdempotencyKey({ ...identity, branch: "true:0" }, node.whenTrue[0]!)
             : committed("true", node.whenTrue) ||
               (!committed("false", node.whenFalse) &&
-                (await this.tasks.verifyPersisted(sourceTaskId, [node.predicate])).verified);
+                (await answered(node.id, this.tasks.verifyPersisted(sourceTaskId, [node.predicate]))));
         return await this.runSequential(
           chosen ? node.whenTrue : node.whenFalse,
           state,
@@ -1216,10 +1222,12 @@ export class WorkflowController {
         // predicates, they decide — a node whose evidence fails is `failed`,
         // never complete, exactly as for an operation node.
         if (node.requiredEvidence.length > 0) {
-          const verification = await this.tasks.verifyStandalone(
-            node.requiredEvidence,
-          );
-          if (!verification.verified) {
+          // Unanswered, the node waits for the report again rather than fail.
+          const verified = await answered(node.id, this.tasks.verifyStandalone(node.requiredEvidence), {
+            state: { status: "awaiting_input", taskIds: [], prompt },
+            tasks: [],
+          });
+          if (!verified) {
             return {
               state: {
                 status: "failed",
@@ -1405,7 +1413,7 @@ export class WorkflowController {
       taskIds.length === iterations * node.body.length &&
       finished !== undefined &&
       node.until !== undefined &&
-      (await this.tasks.verifyPersisted(finished, [node.until])).verified
+      (await answered(node.id, this.tasks.verifyPersisted(finished, [node.until])))
     ) {
       return { state: { status: "verified_complete", taskIds, iterations }, tasks };
     }
@@ -1439,9 +1447,16 @@ export class WorkflowController {
       }
       iterations += 1;
       const lastTaskId = taskIds[offset + node.body.length - 1]!;
+      // Unanswered, the iteration is recorded and `until` asked again on the
+      // next advance, where the check above picks it up. Not asked after the
+      // last iteration, which ends the loop whatever the answer.
       if (
         node.until !== undefined &&
-        (await this.tasks.verifyPersisted(lastTaskId, [node.until])).verified
+        iterations < node.maxIterations &&
+        (await answered(node.id, this.tasks.verifyPersisted(lastTaskId, [node.until]), {
+          state: { status: "pending", taskIds, iterations },
+          tasks,
+        }))
       ) {
         break;
       }
@@ -1635,6 +1650,24 @@ function makeEvent(
     data,
     occurredAt: new Date().toISOString(),
   });
+}
+
+/**
+ * A workflow check's answer. One the verifier could not ask (a provider that
+ * answered 503, or not at all) is not a "no": nothing is decided on it, and
+ * the node waits, as `undecided` records it, for the next advance to ask again.
+ * Read as a no, a condition took its other branch for good, a loop ran another
+ * iteration, and a delegation failed its run.
+ */
+async function answered(
+  nodeId: string,
+  check: Promise<{ verified: boolean; evidence: EvidenceItem[] }>,
+  undecided?: NodeAdvance,
+): Promise<boolean> {
+  const { verified, evidence } = await check;
+  if (!evidence.some((item) => item.inconclusive === true)) return verified;
+  const error = new Error(`workflow_check_inconclusive:${nodeId}`);
+  throw undecided === undefined ? error : new NodeRefused(error, undecided);
 }
 
 // Human- and delegate-supplied text is untrusted like any other input, so it is
