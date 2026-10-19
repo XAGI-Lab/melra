@@ -107,6 +107,15 @@ All notable changes are documented here. The format follows
   passes `--socket "$MELRA_SOCKET"` instead. The stderr warning `serve` printed
   in that case is gone with it. (#105)
 
+- Each GitHub release's notes are its version's `CHANGELOG.md` section, so a
+  breaking change is called out in them as `GOVERNANCE.md` asks, instead of a
+  list of pull request titles. A version with no section, or an empty one,
+  stops the release before anything is published. The container's floating
+  tag follows the release channel (`:alpha`, `:beta`, `:rc`, or `:latest` for
+  a stable version) instead of always `:alpha`. The release dry run also runs
+  `pnpm security:audit` and extracts the notes, which otherwise stopped a
+  release only once its tag was cut.
+
 ### Fixed
 
 - `melra policy test` previews a mutation that declares no evidence with the
@@ -457,6 +466,14 @@ All notable changes are documented here. The format follows
   `docs/COMPATIBILITY.md`, and the README's `melra version` sample), which had
   stayed at 0.3.0-alpha.12 through two releases. `docs/RELEASES.md` lists the
   MCP Registry publish step.
+
+- A release run that stops before its GitHub release is created no longer
+  moves the container image: the 0.3.0-alpha.13 and alpha.14 runs pushed
+  `ghcr.io/xagi-lab/melra:alpha` although their release gates had failed,
+  because the container job did not wait for them. npm packages publish in
+  dependency order with `@melra/cli` last, so a run that stops partway leaves
+  no published package whose `@melra/*` dependencies are missing; the order
+  came from a glob that could put the CLI first.
 
 ### Security
 

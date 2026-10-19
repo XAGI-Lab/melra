@@ -19,11 +19,18 @@
 4. Run dependency, secret, license, and public-content scans.
 5. Record the supported OS and named-client results in `VALIDATION.md`.
 6. Review `SECURITY.md`, the threat model, compatibility notes, and changelog.
+   Move `## [Unreleased]` into `## [<version>] - <date>`: that section becomes
+   the GitHub release's notes word for word, so every breaking change must be
+   marked **Breaking:** there, as [GOVERNANCE.md](../GOVERNANCE.md#compatibility)
+   requires before `1.0.0`.
 7. Run the release dry run on the commit to be tagged (`gh workflow run
    release-dry-run.yml --ref main`, or open the Actions tab) and wait for it to
    pass: it builds the binaries and every release file through the same steps
-   the tag release uses, checks the versions, `npm publish --dry-run`s every
-   package and checks the release's asset list, all without publishing.
+   the tag release uses, checks the versions, runs `pnpm security:audit`,
+   extracts and prints the release notes, `npm publish --dry-run`s every
+   package in publish order and checks the release's asset list, all without
+   publishing. Each of these stops a tag release too, but only once the tag
+   exists.
 8. Create a signed, protected `v*` tag only from an approved main-branch commit.
 9. Once the tag's npm packages are out, publish the MCP Registry listing from
    the tagged checkout: `mcp-publisher login github`, then `mcp-publisher
@@ -46,10 +53,19 @@ The tag workflow:
 - writes SHA-256 checksums, the single executables included;
 - generates signed Sigstore-backed GitHub provenance attestations;
 - publishes every public `@melra/*` package to npm by **trusted publishing**
-  (see below), with provenance;
-- publishes the artifacts to the GitHub release;
-- builds and publishes the container to GitHub Container Registry with
-  provenance for Linux AMD64 and ARM64.
+  (see below), with provenance, under the release's channel as dist-tag
+  (`alpha`, `beta`, `rc`, or `latest` for a version with no prerelease id). It
+  publishes in dependency order (`scripts/publish-order.mjs`), the CLI last, so
+  a run that stops partway leaves no published package whose `@melra/*`
+  dependencies are missing;
+- publishes the artifacts to the GitHub release, whose notes are the version's
+  `CHANGELOG.md` section (`node scripts/check-changelog.mjs --notes <file>`). A
+  version with no section, or an empty one, stops the run before anything is
+  published;
+- only once all of that has passed, builds and publishes the container to
+  GitHub Container Registry with provenance for Linux AMD64 and ARM64, tagged
+  with the version and with the channel (`:alpha`, `:beta`, `:rc` or
+  `:latest`), so a release that stops at any gate moves no container tag.
 
 Verify downloaded artifacts:
 
@@ -86,7 +102,7 @@ with the command to move it by hand.
 
 **A failed release run can be re-run.** Packages already on the registry at the
 tag's version are skipped, so a re-run continues with the provenance check,
-the GitHub release and the install smoke. A re-run uses the workflow as it was
+the GitHub release, the container and the install smoke. A re-run uses the workflow as it was
 at the tag, so this applies to tags cut after this change. A **brand-new** package cannot be trusted until it exists on the
 registry: publish its first version by hand as an owner, then run the script.
 

@@ -6,7 +6,7 @@
 // `### Added`, a doubled entry, a stray marker, or a release with no notes. This keeps it in
 // Keep a Changelog shape (https://keepachangelog.com/en/1.1.0/).
 
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 
 const KINDS = ["Added", "Changed", "Deprecated", "Removed", "Fixed", "Security"];
 const lines = readFileSync("CHANGELOG.md", "utf8").split(/\r?\n/);
@@ -101,6 +101,20 @@ if (!releases.some(({ name }) => name === version)) {
 const links = new Set(lines.flatMap((text) => /^\[([^\]]+)\]: \S/.exec(text)?.[1] ?? []));
 for (const { name, line } of releases) {
   if (!links.has(name)) fail(line, `[${name}] has no link reference at the bottom of the file`);
+}
+
+// `--notes <file>` writes this version's section to <file> as the GitHub
+// release's notes, where GOVERNANCE.md wants breaking changes called out. The
+// release runs it before publishing anything, so a version with no notes stops
+// there rather than after npm has used the version up.
+if (process.argv[2] === "--notes") {
+  const index = releases.findIndex(({ name }) => name === version);
+  if (index !== -1) {
+    const end = (releases[index + 1]?.line ?? lines.length + 1) - 1;
+    const notes = lines.slice(releases[index].line, end).join("\n").trim();
+    if (notes === "") fail(releases[index].line, `[${version}] has no notes to release`);
+    else writeFileSync(process.argv[3], `${notes}\n`);
+  }
 }
 
 if (failures.length > 0) {
