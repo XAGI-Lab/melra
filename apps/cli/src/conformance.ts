@@ -572,7 +572,12 @@ export async function runConformance(
   // Over HTTP the session outlives the client unless it is ended.
   const transport = client.transport;
   if (transport instanceof StreamableHTTPClientTransport) {
-    await transport.terminateSession().catch(() => undefined);
+    // Bounded: a target that stopped answering would hold the report for
+    // minutes. client.close() aborts the DELETE, which shares its signal.
+    await Promise.race([
+      transport.terminateSession().catch(() => undefined),
+      new Promise((settled) => setTimeout(settled, 2_000).unref()),
+    ]);
   }
   await client.close();
 

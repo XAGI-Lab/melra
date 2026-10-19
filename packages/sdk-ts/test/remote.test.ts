@@ -1,10 +1,16 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
+import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { createMelraRuntime, serveHttp } from "@melra/server";
 import { MelraClient } from "../src/index.js";
 
@@ -107,6 +113,43 @@ describe("MelraClient over remote transports", () => {
     });
     expect(reused.status).toBe(404);
   });
+
+  it("closes within seconds when the server never answers the end of its session", async () => {
+    // A server that answers MCP but never the DELETE: a wedged or stopped
+    // process held close() for minutes over HTTP, and for good over a socket.
+    const sessions = new Map<string, StreamableHTTPServerTransport>();
+    const server = createServer((request, response) => {
+      if (request.method === "DELETE") return;
+      void (async () => {
+        const id = request.headers["mcp-session-id"];
+        let transport = typeof id === "string" ? sessions.get(id) : undefined;
+        if (transport === undefined) {
+          const created: StreamableHTTPServerTransport = new StreamableHTTPServerTransport({
+            sessionIdGenerator: () => randomUUID(),
+            onsessioninitialized: (sessionId) => {
+              sessions.set(sessionId, created);
+            },
+          });
+          await new McpServer({ name: "silent", version: "0.0.0" }).connect(created as unknown as Transport);
+          transport = created;
+        }
+        await transport.handleRequest(request, response);
+      })();
+    });
+    await new Promise<void>((listening) => server.listen(0, "127.0.0.1", listening));
+    try {
+      const melra = await MelraClient.connect({
+        url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/mcp`,
+        token: "test-token",
+      });
+      const started = Date.now();
+      await melra.close();
+      expect(Date.now() - started).toBeLessThan(5_000);
+    } finally {
+      server.closeAllConnections();
+      server.close();
+    }
+  }, 15_000);
 
   it("accepts the bare origin, as the console URL prints it", async () => {
     const served = await serve();

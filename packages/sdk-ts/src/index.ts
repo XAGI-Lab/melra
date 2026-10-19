@@ -123,6 +123,18 @@ function melraSettings(environment: NodeJS.ProcessEnv, cwd: string | undefined):
   );
 }
 
+/**
+ * Ends an HTTP or socket session, waiting at most two seconds: a server that
+ * never answers the DELETE held close() for minutes, or for good over a
+ * socket. client.close() then aborts the request, which shares its signal.
+ */
+async function endSession(transport: StreamableHTTPClientTransport): Promise<void> {
+  await Promise.race([
+    transport.terminateSession().catch(() => undefined),
+    new Promise((settled) => setTimeout(settled, 2_000).unref()),
+  ]);
+}
+
 export class MelraClient {
   private constructor(
     private readonly client: Client,
@@ -321,7 +333,7 @@ export class MelraClient {
     // is already gone has no session left to end.
     const transport = this.client.transport;
     if (transport instanceof StreamableHTTPClientTransport) {
-      await transport.terminateSession().catch(() => undefined);
+      await endSession(transport);
     }
     await this.client.close();
   }

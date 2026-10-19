@@ -749,14 +749,14 @@ export async function serveHttp(
           session.busy -= 1;
         });
         sessions.set(id, session);
-        if (sessions.size <= MAX_MCP_SESSIONS) return;
-        // Every session busy means every client is still there, so none is
-        // ended and the map stays over the cap until one goes idle.
+        // Back down to the cap, not one at a time: after a burst of busy
+        // sessions it would otherwise stay at its peak. A busy one is a client
+        // still there, so while every session is busy the map stays over.
         for (const [idle, { transport: stale, busy }] of sessions) {
+          if (sessions.size <= MAX_MCP_SESSIONS) return;
           if (busy > 0) continue;
           sessions.delete(idle);
           void stale.close().catch(() => undefined);
-          return;
         }
       },
       onsessionclosed: (id) => {

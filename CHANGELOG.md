@@ -100,9 +100,11 @@ All notable changes are documented here. The format follows
 
 - `melra serve --http` and `--socket` no longer keep every MCP session for the
   life of the process. The TypeScript SDK's `close()` and `melra conformance
-  --url` now end their session, which they never did. A session whose client
-  vanished without ending it is dropped once the server holds 256: a new
-  session ends the least recently used one with no request in flight. A
+  --url` now end their session, which they never did, waiting at most two
+  seconds for the server. Past 256 sessions, a new one ends the least
+  recently used session with no request in flight and no event stream open,
+  such as one whose client vanished; a client holding the event stream open,
+  as both SDKs do, is never ended. A
   request naming a session the server does not have, such as one from before
   a restart, gets 404 with JSON-RPC error -32001, which tells an MCP client to
   start a new session. It used to get 400. (#253, #257)

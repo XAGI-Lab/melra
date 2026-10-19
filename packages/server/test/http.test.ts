@@ -395,11 +395,46 @@ describe("melra http server", () => {
         expect(await listTools(url, unused)).toBe(404);
         expect(await listTools(url, used)).toBe(200);
         expect(await listTools(url, held)).toBe(200);
+        // Referenced to the end: a response collected as garbage closes its
+        // stream, and the held session would go idle under the test.
+        expect(listening.bodyUsed).toBe(false);
       } finally {
         stream.abort();
         await own.close();
       }
     }, 60_000);
+
+    it("comes back down to 256 once a burst of busy sessions goes idle", async () => {
+      const own = await serveHttp({ runtime, port: 0, token: "test-token", environment: {} });
+      const url = own.mcpUrl;
+      const streams = new AbortController();
+      try {
+        // 258 clients each holding an event stream: all busy, so none ended.
+        // The responses are kept: one collected as garbage closes its stream.
+        const held: string[] = [];
+        const listening: Response[] = [];
+        for (let count = 0; count < 258; count += 1) {
+          const id = await open(url);
+          const stream = await fetch(url, {
+            headers: { authorization: "Bearer test-token", accept: "text/event-stream", "mcp-session-id": id },
+            signal: streams.signal,
+          });
+          expect(stream.status).toBe(200);
+          listening.push(stream);
+          held.push(id);
+        }
+        streams.abort();
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        // One more, with all 258 idle: back down to the cap, not one at a time.
+        await open(url);
+        let alive = 0;
+        for (const id of held) if ((await listTools(url, id)) === 200) alive += 1;
+        expect(alive).toBe(255);
+      } finally {
+        streams.abort();
+        await own.close();
+      }
+    }, 120_000);
   });
 
   it("streams workflow events and replays from a cursor", async () => {
