@@ -441,6 +441,8 @@ export class TerminalRuntime {
       });
 
       const timer = setTimeout(() => {
+        // Already exited, with only its pipes left to drain: it finished.
+        if (child.exitCode !== null || child.signalCode !== null) return;
         timedOut = true;
         stopTree(child, KILL_GRACE_MS);
       }, prepared.timeoutMs);

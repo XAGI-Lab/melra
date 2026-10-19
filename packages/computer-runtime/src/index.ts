@@ -375,6 +375,19 @@ async function executable(path: string): Promise<boolean> {
   }
 }
 
+/**
+ * A helper that never started because a cancel had already landed, so nothing
+ * it would have sent was sent: a plain cancellation, not an unknown outcome.
+ */
+class HelperNotStarted extends Error {}
+
+/** Why the signal fired: the task's budget, or a cancel (a bare abort included). */
+function abortReason(signal: AbortSignal): string {
+  return signal.reason instanceof Error && signal.reason.name !== "AbortError"
+    ? signal.reason.message
+    : "task_cancelled";
+}
+
 async function run(
   file: string,
   args: string[],
@@ -382,6 +395,7 @@ async function run(
   signal?: AbortSignal,
   env?: Record<string, string>,
 ): Promise<{ stdout: string; stderr: string }> {
+  if (signal?.aborted === true) throw new HelperNotStarted(abortReason(signal));
   try {
     const result = await execFileAsync(file, args, {
       timeout: timeoutMs,
@@ -415,7 +429,8 @@ async function run(
     if (error.killed === true || error.code === "ETIMEDOUT") {
       throw new Error(`computer_helper_timeout:${program}:${timeoutMs}ms`);
     }
-    if (signal?.aborted === true) throw new Error("task_cancelled");
+    // Read afresh: the check above ran before the helper did.
+    if ((signal as AbortSignal | undefined)?.aborted === true) throw new Error(abortReason(signal!));
     // First line only: interpreters follow the reason with a stack trace naming
     // the script we generated, which is noise to whoever reads this.
     const reason = (error.stderr ?? "").trim().split("\n")[0]?.trim();
@@ -808,10 +823,15 @@ class LinuxXdotoolAdapter implements ComputerAdapter {
     operation: ComputerOperation,
     signal?: AbortSignal,
   ): Promise<{ width: number; height: number }> {
-    const { stdout } = await this.xdotoolOutput(
-      ["getdisplaygeometry"],
-      operation,
-      signal,
+    // A probe ahead of the input: stopped, it sent nothing, so its timeout is
+    // a plain failure and a cancel during it a plain cancellation.
+    const { stdout } = await this.xdotoolOutput(["getdisplaygeometry"], operation, signal).catch(
+      (error: unknown) => {
+        if (signal?.aborted === true) throw new HelperNotStarted(abortReason(signal));
+        throw new Error(
+          `computer_display_geometry_unavailable: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      },
     );
     const [width, height] = stdout.trim().split(/\s+/).map(Number);
     if (
@@ -1584,13 +1604,16 @@ export class ComputerRuntime {
     try {
       result = await this.adapter.execute(resolved, this.options.artifactDirectory, signal);
     } catch (error) {
-      // A helper stopped by its timeout, or by a cancel once it was running,
-      // may already have clicked, typed or scrolled: not "it did not happen".
-      // A screenshot changes nothing, so it stays a plain failure.
+      // A helper stopped by its timeout, or by a cancel or the budget once it
+      // was running, may already have clicked, typed or scrolled: not "it did
+      // not happen". A screenshot changes nothing, so it stays a plain failure,
+      // as does a helper a cancel kept from starting.
       const message = error instanceof Error ? error.message : String(error);
       if (
         operation.action !== "screenshot" &&
-        (message.startsWith("computer_helper_timeout:") || (message === "task_cancelled" && !cancelledBefore))
+        !(error instanceof HelperNotStarted) &&
+        (message.startsWith("computer_helper_timeout:") ||
+          ((signal as AbortSignal | undefined)?.aborted === true && !cancelledBefore))
       ) {
         throw outcomeUnknown(message);
       }

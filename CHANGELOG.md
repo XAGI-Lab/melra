@@ -109,8 +109,10 @@ All notable changes are documented here. The format follows
   may have done its work first, and a retry then ran it again. A computer
   input action (click, move, drag, type, key, scroll) whose helper is stopped
   by its timeout, or by a cancel while it runs, is an unknown outcome too.
-  Reads, screenshots and target resolution are unchanged. A timed-out `run`
-  no longer returns a result with `timedOut: true`. (#248)
+  Reads, screenshots and target resolution are unchanged, except that a
+  terminal read stopped by its timeout is now retried up to
+  `budget.maxRetries`, as other failed reads are. A timed-out `run` no longer
+  returns a result with `timedOut: true`. (#248)
 
 - An `http` response past `maxResponseBytes` returns the body up to the cap.
   The chunk that crossed the cap was dropped whole, so a body that arrived in

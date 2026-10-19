@@ -38,7 +38,9 @@ describe("a terminal mutation stopped by its own timeoutMs", () => {
             action: "run",
             command: process.execPath,
             args: ["-e", "require('fs').writeFileSync('a.txt', '1'); setTimeout(() => {}, 10_000)"],
-            timeoutMs: 1_000,
+            // Ample for the file to be written on a loaded runner, before the
+            // timeout stops what is left.
+            timeoutMs: 5_000,
           },
           requiredEvidence: [{ type: "file_exists", path: "a.txt" }],
         }),
@@ -55,5 +57,5 @@ describe("a terminal mutation stopped by its own timeoutMs", () => {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
     }
-  }, 20_000);
+  });
 });

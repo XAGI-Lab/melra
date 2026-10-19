@@ -212,7 +212,8 @@ describe("an input helper stopped mid-run", () => {
       await super.execute(operation);
       if (this.how === "timeout") throw new Error("computer_helper_timeout:osascript:10000ms");
       await new Promise((resolve) => signal?.addEventListener("abort", resolve, { once: true }));
-      throw new Error("task_cancelled");
+      // As the real helper runner reports it: why the task controller aborted.
+      throw new Error((signal?.reason as Error).message);
     }
   }
   const act = (action: string, extra: Record<string, unknown> = {}) =>
@@ -237,10 +238,16 @@ describe("an input helper stopped mid-run", () => {
     const runtime = new ComputerRuntime({ artifactDirectory: "/tmp", adapter: new StoppedAdapter("cancel") });
     const controller = new AbortController();
     const clicking = runtime.execute(act("click", { x: 0.5, y: 0.5 }), controller.signal);
-    setTimeout(() => controller.abort(), 10);
+    setTimeout(() => controller.abort(new Error("task_cancelled")), 10);
     await expect(clicking).rejects.toThrow("effect_outcome_unknown:task_cancelled");
     // Cancelled before anything ran, nothing could have landed.
     await expect(runtime.execute(act("click", { x: 0.5, y: 0.5 }), controller.signal)).rejects.toThrow(/^task_cancelled$/);
+    // Stopped by the task's budget, it is unknown for the same reason, and
+    // says so rather than that someone cancelled it.
+    const budget = new AbortController();
+    const typing = runtime.execute(act("type", { text: "hello" }), budget.signal);
+    setTimeout(() => budget.abort(new Error("task_budget_exhausted")), 10);
+    await expect(typing).rejects.toThrow("effect_outcome_unknown:task_budget_exhausted");
   });
 });
 
