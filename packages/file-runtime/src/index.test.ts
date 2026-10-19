@@ -408,21 +408,16 @@ describe("FileRuntime", () => {
     const root = await mkdtemp(join(tmpdir(), "melra-file-"));
     roots.push(root);
     await mkdir(join(root, "sub"));
-    // A root given through a link, as MELRA reports it: macOS's tmpdir is
-    // behind /var -> /private/var, and a junction needs no privilege on Windows.
-    const alias = `${root}-alias`;
-    roots.push(alias);
-    await symlink(root, alias, "junction");
-    for (const given of [root, alias]) {
-      const runtime = await FileRuntime.create({ root: given });
-      for (const path of [".", "./", "sub/..", given, `${given}/`, await realpath(root)]) {
-        const listed = await runtime.execute(FileOperationSchema.parse({ kind: "file", action: "list", path }));
-        expect(listed, path).toMatchObject({ path: ".", entries: [{ name: "sub", type: "directory" }] });
-      }
-      await expect(
-        runtime.execute(FileOperationSchema.parse({ kind: "file", action: "delete", path: given, recursive: true })),
-      ).rejects.toThrow("path_outside_workspace");
+    const runtime = await FileRuntime.create({ root });
+    // The absolute spelling as the runtime resolved its root (macOS's tmpdir
+    // is behind a /var -> /private/var link).
+    for (const path of [".", "./", "sub/..", await realpath(root)]) {
+      const listed = await runtime.execute(FileOperationSchema.parse({ kind: "file", action: "list", path }));
+      expect(listed, path).toMatchObject({ path: ".", entries: [{ name: "sub", type: "directory" }] });
     }
+    await expect(
+      runtime.execute(FileOperationSchema.parse({ kind: "file", action: "delete", path: "./", recursive: true })),
+    ).rejects.toThrow("path_outside_workspace");
   });
 
   it("creates a missing root but accepts one it cannot create", async () => {

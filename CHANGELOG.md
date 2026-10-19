@@ -121,11 +121,8 @@ All notable changes are documented here. The format follows
   link is refused (`file_write_dangling_symlink`). (#281)
 
 - A file `list` of the workspace root works however the root is spelled
-  (`./`, `sub/..`, its absolute path), not only `.`. The others were refused
-  as `path_outside_workspace`. Any file action now also takes an absolute path
-  spelled through the root as configured, which is what MELRA reports, when
-  that runs through a link: `/tmp/ws/a` for a root at `/private/tmp/ws`, as on
-  macOS. (#282)
+  relative to itself (`./`, `sub/..`) or by its resolved absolute path, not
+  only `.`. The others were refused as `path_outside_workspace`. (#282)
 
 - A workflow with an `exit_code` evidence predicate can be planned, and so can
   one with a node id, verifier name or URL that looks like an API key

@@ -85,15 +85,12 @@ function decodeContent(content: string, encoding: "utf8" | "base64"): Buffer {
 
 export class FileRuntime {
   readonly root: string;
-  /** The root as it was given, before links in it were resolved. */
-  private readonly configured: string;
   readonly maxFileBytes: number;
   readonly maxEntries: number;
   private readonly reserved: string[];
 
   private constructor(options: FileRuntimeOptions, root: string) {
     this.root = root;
-    this.configured = resolve(options.root);
     this.reserved = (options.reserved ?? []).map((path) => resolve(path));
     this.maxFileBytes = options.maxFileBytes ?? 10 * 1024 * 1024;
     this.maxEntries = options.maxEntries ?? 1_000;
@@ -124,14 +121,7 @@ export class FileRuntime {
    * reserved-file check has the same Windows follow-up.
    */
   async resolvePath(input: string, allowRoot = false, creating = false): Promise<string> {
-    // An absolute path spelled through the root as it was given, which is the
-    // workspace MELRA reports, is the same place as through the root it
-    // resolves to: `/tmp/ws/a` for a root at `/private/tmp/ws`.
-    const requested = resolve(this.root, input);
-    const lexical =
-      isAbsolute(input) && this.configured !== this.root && inside(this.configured, requested)
-        ? resolve(this.root, relative(this.configured, requested))
-        : requested;
+    const lexical = resolve(this.root, input);
     // "Is it the root" asked the way `inside` asks "is it within": through
     // `relative`, which ignores case on Windows. A string compare let `..\\WS`
     // past it for a root spelled `ws`, and a recursive delete took everything.
