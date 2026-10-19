@@ -136,12 +136,15 @@ GitHub release files and the container image also carry signed build attestation
 ### Container
 
 ```bash
-docker run --rm ghcr.io/xagi-lab/melra:alpha doctor
+docker run --rm ghcr.io/xagi-lab/melra:latest doctor
 ```
 
 Images are published for `linux/amd64` and `linux/arm64` with build
-provenance and an SBOM attested to the registry. Use `:alpha` for the latest
-alpha or pin an exact tag such as `:v0.3.0-alpha.12`. See
+provenance and an SBOM attested to the registry. `:latest` follows every
+release before 1.0, as npm's `latest` does; the first release to push it is the
+one after `0.3.0-alpha.14`. `:alpha`, `:beta` and `:rc` follow only their own
+channel, like the npm dist-tags of the same name, so `:alpha` stays on the last
+alpha once betas begin. Or pin an exact tag such as `:v0.3.0-alpha.12`. See
 [Docker](#docker) below for the hardened `serve` invocation an MCP client
 should use.
 

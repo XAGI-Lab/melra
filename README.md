@@ -185,7 +185,7 @@ show me the system info"*. That's it.
 | One client, no questions | `npx @melra/cli@alpha setup --client cursor --write` |
 | Print the config instead of writing it | `npx @melra/cli@alpha setup --client codex` |
 | Install globally | `npm install -g @melra/cli@alpha && melra setup` |
-| Container (no Node needed) | `docker run --rm ghcr.io/xagi-lab/melra:alpha doctor` |
+| Container (no Node needed) | `docker run --rm ghcr.io/xagi-lab/melra:latest doctor` |
 | Prebuilt release | download from [releases](https://github.com/XAGI-Lab/melra/releases), verify against `SHA256SUMS`, then `node melra/dist/bin.js doctor` |
 | From source | `git clone https://github.com/XAGI-Lab/melra.git && cd melra && corepack enable && pnpm install --frozen-lockfile && pnpm build && pnpm melra setup` |
 | One file, no Node needed *(experimental)* | from a checkout: `pnpm build:sea`, then `./dist-sea/melra setup`; see [single executable](docs/INSTALLATION.md#single-executable-experimental) |

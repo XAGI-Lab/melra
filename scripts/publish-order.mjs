@@ -20,17 +20,27 @@ for (const root of ["packages", "apps"]) {
   }
 }
 
-// ponytail: a dependency cycle recurses until the stack overflows, which fails
-// the release step; pnpm already warns about one long before a release.
-const listed = new Set();
+// The whole order is worked out before any of it is printed, so a cycle (pnpm
+// does not warn about one through peerDependencies) stops the release with
+// nothing listed, and so nothing published, rather than partway through.
+const order = [];
+const done = new Set();
+const visiting = [];
 const visit = (name) => {
-  if (listed.has(name)) return;
+  if (done.has(name)) return;
+  if (visiting.includes(name)) {
+    process.stderr.write(`dependency cycle: ${[...visiting.slice(visiting.indexOf(name)), name].join(" -> ")}\n`);
+    process.exit(1);
+  }
+  visiting.push(name);
   const { dir, manifest } = workspace.get(name);
   const { dependencies, optionalDependencies, peerDependencies } = manifest;
   for (const dependency of Object.keys({ ...dependencies, ...optionalDependencies, ...peerDependencies }).sort()) {
     if (workspace.has(dependency)) visit(dependency);
   }
-  listed.add(name);
-  if (!manifest.private) console.log(`${dir} ${name}`);
+  visiting.pop();
+  done.add(name);
+  if (!manifest.private) order.push(`${dir} ${name}\n`);
 };
 for (const name of workspace.keys()) visit(name);
+process.stdout.write(order.join(""));

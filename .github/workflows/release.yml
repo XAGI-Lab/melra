@@ -39,8 +39,8 @@ jobs:
       attestations: write
       artifact-metadata: write
     outputs:
-      # alpha, beta, rc or latest: the npm dist-tag this release publishes
-      # under, and the container's floating tag.
+      # alpha, beta, rc or latest (scripts/release-channel.mjs): the npm
+      # dist-tag this release publishes under, and the container tag it moves.
       channel: ${{ steps.channel.outputs.channel }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -81,12 +81,7 @@ jobs:
         id: channel
         shell: bash
         run: |
-          case "${GITHUB_REF_NAME}" in
-            *-alpha*) channel=alpha ;;
-            *-beta*)  channel=beta ;;
-            *-rc*)    channel=rc ;;
-            *)        channel=latest ;;
-          esac
+          channel="$(node scripts/release-channel.mjs)"
           echo "channel=${channel}" >> "${GITHUB_OUTPUT}"
       - uses: ./.github/actions/release-artifacts
       - name: Attest release artifacts
@@ -178,6 +173,9 @@ jobs:
           # prerelease happened to publish untagged, and an end user following the
           # most obvious command installs a build several releases behind. Delete
           # this step at 1.0, where `latest` has to mean the stable line.
+          #
+          # The container's :latest follows the same rule, so delete its line
+          # in the container job with this step.
           #
           # Trusted publishing moves a dist-tag only for a package whose
           # trusted-publisher settings on npmjs.com allow it ("Allow npm
@@ -306,13 +304,15 @@ jobs:
           done < "${RUNNER_TEMP}/retag-packages.txt"
           test "${failed}" = 0
 
-  # Only once the artifacts job has passed every gate and published, so a run
-  # that stops moves no container tag either: 0.3.0-alpha.13 and alpha.14
-  # pushed :alpha from runs whose artifacts job had failed. The floating tag
-  # is the release's channel, as on npm.
+  # Last, once the artifacts job and the install smoke on every runner have
+  # passed: 0.3.0-alpha.13 and alpha.14 pushed :alpha while their artifacts
+  # jobs failed, after the npm publish and before creating the GitHub release.
+  # npm still moves first, so until a failed run is re-run to the end, npm's
+  # dist-tags are a release ahead of the image's. The image takes the tags
+  # npm does: the channel, and latest on every release before 1.0.
   container:
     if: github.event_name == 'push'
-    needs: artifacts
+    needs: [artifacts, installed]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -345,6 +345,7 @@ jobs:
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.artifacts.outputs.channel }}
+            ${{ contains(github.ref_name, '-') && format('{0}/{1}:latest', env.REGISTRY, env.IMAGE_NAME) || '' }}
       - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}

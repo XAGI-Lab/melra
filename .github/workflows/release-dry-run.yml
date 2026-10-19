@@ -2,8 +2,9 @@
 # and every release file through the same steps (the release-artifacts
 # action), check the versions, run the dependency audit, extract the release
 # notes from CHANGELOG.md, pack each npm package and `npm publish --dry-run`
-# it in publish order, and check the GitHub release's asset list. Read-only:
-# no job here can publish, attest, or write a release (#204).
+# it in publish order under the release's channel, and check the GitHub
+# release's asset list. Read-only: no job here can publish, attest, or write a
+# release (#204).
 name: Release dry run
 
 on:
@@ -18,6 +19,7 @@ on:
       - "scripts/check-versions.mjs"
       - "scripts/check-changelog.mjs"
       - "scripts/publish-order.mjs"
+      - "scripts/release-channel.mjs"
       - "server.json"
 
 permissions:
@@ -69,12 +71,14 @@ jobs:
         run: |
           mkdir -p "${RUNNER_TEMP}/npm"
           version="$(node -p "require('./package.json').version")"
+          # The dist-tag the release would publish under.
+          channel="$(node scripts/release-channel.mjs)"
           node scripts/publish-order.mjs \
             | while read -r dir name; do
                 (cd "${dir}" && pnpm pack --pack-destination "${RUNNER_TEMP}/npm" >/dev/null)
                 # The tarball name release.yml computes, checked here too.
                 tarball="${RUNNER_TEMP}/npm/$(printf '%s' "${name#@}" | tr '/' '-')-${version}.tgz"
-                npm publish "${tarball}" --dry-run --tag alpha --access public
+                npm publish "${tarball}" --dry-run --tag "${channel}" --access public
               done
       - name: Check the GitHub release asset list
         shell: bash
