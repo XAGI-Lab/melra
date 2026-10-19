@@ -131,10 +131,28 @@ export interface RegisteredVerifier {
 
 type Built<T extends EvidencePredicate["type"]> = PredicateVerifier<Extract<EvidencePredicate, { type: T }>>;
 
+/**
+ * A body cut at the size cap is longer than what arrived, so it is neither the
+ * `content` that arrived nor the `bytes` counted, whatever those happen to
+ * equal: an exact match on either is no match at all.
+ */
+function cutBody(result: Record<string, unknown>, path: string): boolean {
+  // An http body: other results carry `truncated` about something else, such
+  // as a terminal `send`, whose `bytes` are what it wrote and whose
+  // `truncated` is about the job's output.
+  return (
+    result.truncated === true &&
+    typeof result.content === "string" &&
+    (path === "content" || path === "bytes")
+  );
+}
+
 const resultEquals: Built<"result_equals"> = {
   type: "result_equals",
   async check(predicate, result) {
-    const passed = Object.is(readResultPath(result, predicate.path), predicate.value);
+    const passed =
+      !cutBody(result, predicate.path) &&
+      Object.is(readResultPath(result, predicate.path), predicate.value);
     return { passed, summary: `${predicate.path} ${passed ? "matched" : "did not match"} expected value` };
   },
 };
@@ -282,7 +300,10 @@ const httpResourceMatches: Built<"http_resource_matches"> = {
         source: url,
       };
     }
-    const passed = Object.is(readResultPath(observed, predicate.path), predicate.value);
+    const cut = observed.truncated === true;
+    const passed =
+      !cutBody(observed, predicate.path) &&
+      Object.is(readResultPath(observed, predicate.path), predicate.value);
     // A provider that answered 503 or 429 did not say no; it did not answer.
     // Only a success or "not found" is its word on the resource, so a miss on
     // any other status is as inconclusive as a dropped connection. Read as a
@@ -294,6 +315,33 @@ const httpResourceMatches: Built<"http_resource_matches"> = {
         passed: false,
         inconclusive: true,
         summary: `independent read unavailable: the provider answered ${status}`,
+        source: url,
+      };
+    }
+    // A body cut at the probe's size cap is not the provider saying no about
+    // what is in it: the value may be past the cut, and a cut JSON body is not
+    // parsed at all. Its status and headers arrived whole, and so did a 404.
+    // The whole body is longer than what arrived, so a `content` or `bytes`
+    // that fits within what arrived cannot be it, and that miss is the answer.
+    const arrived = Number(observed.bytes ?? 0);
+    const unknowable =
+      predicate.path === "content"
+        ? typeof predicate.value === "string" && Buffer.byteLength(predicate.value) > arrived
+        : predicate.path === "bytes"
+          ? typeof predicate.value === "number" && predicate.value > arrived
+          : /^(json|content|bytes)(\.|$)/u.test(predicate.path);
+    if (
+      !passed &&
+      cut &&
+      typeof status === "number" &&
+      status >= 200 &&
+      status < 300 &&
+      unknowable
+    ) {
+      return {
+        passed: false,
+        inconclusive: true,
+        summary: "independent read unavailable: the response passed the size cap and was cut off",
         source: url,
       };
     }
