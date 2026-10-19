@@ -161,7 +161,7 @@ describe("receipt and certificate primitives", () => {
     expect(redactSecrets("the secret ingredient is love").value).toBe("the secret ingredient is love");
   });
 
-  it("keeps an exit status, which carries no secret and must stay a number", () => {
+  it("keeps an exit status, which carries no secret", () => {
     const stored = redactStructuredValue({
       requiredEvidence: [
         { type: "exit_code", value: 0 },

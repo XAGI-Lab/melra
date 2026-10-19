@@ -61,6 +61,12 @@ All notable changes are documented here. The format follows
 
 ### Changed
 
+- **Breaking:** `SqliteStore.getWorkflowDefinition` in `@melra/storage-sqlite`
+  returns a `RedactedWorkflowDefinition`: the redacted copy kept for reading,
+  of which only `id` and `version` are checked, since redaction may have
+  rewritten a node id or a URL in it. The definition a run uses is the sealed
+  payload. `createWorkflow` takes that redacted copy as `unknown`. (#278)
+
 - The eleven MCP tools describe themselves fully: each says what it does,
   when to use it instead of its siblings, what it returns and how its
   parameters relate, and every top-level parameter now carries a description
