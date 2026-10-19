@@ -203,7 +203,7 @@ describe("melra tasks, status, and watch", () => {
     expect([status.expiredApprovals, status.expiredWorkflowSteps]).toEqual([0, 1]);
   });
 
-  it("counts an expired step of a run that has already failed the plain way", async () => {
+  it("counts an expired step of any workflow run as a step, whatever the run's state", async () => {
     const { root, options } = await workspace();
     const write = (path: string) => ({
       goal: `Write ${path}`,
@@ -230,10 +230,11 @@ describe("melra tasks, status, and watch", () => {
     const { run } = JSON.parse(await cli("workflow", "advance", id)) as { run: WorkflowRun };
     await cli("approve", run.nodes.a!.taskIds[0]!, "--deny");
     expect((JSON.parse(await cli("workflow", "advance", id)) as { run: WorkflowRun }).run.status).toBe("failed");
-    // The failed run's advance offers b nothing again: only a deny clears it.
+    // Whether its advance asks again depends on the run, failed here, so the
+    // step is pointed at the run rather than told to plan again or deny.
     lapse(root, run.nodes.b!.taskIds[0]!);
     const status = await statusOf(options);
-    expect([status.expiredApprovals, status.expiredWorkflowSteps]).toEqual([1, 0]);
+    expect([status.expiredApprovals, status.expiredWorkflowSteps]).toEqual([0, 1]);
   });
 
   it("does not count as waiting what enforced mode will not take an answer for", async () => {

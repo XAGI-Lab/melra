@@ -141,11 +141,12 @@ function expiredHints({ expired, expiredSteps }: ApprovalCounts): string[] {
     ...(expired > 0
       ? [`${expired} whose approval expired — plan again, or clear with \`melra approve <task-id> --deny\``]
       : []),
-    // A deny would fail the run, or stall its unwind, where the next advance
-    // asks again.
+    // Not a deny: on a run that can go on, the next advance asks again, and a
+    // deny would fail the run or stall its unwind. Whether it can go on is
+    // the run's to say, so the hint points there rather than guess.
     ...(expiredSteps > 0
       ? [
-          `${expiredSteps} workflow step(s) whose approval expired — \`melra workflow advance <workflow-id>\` asks again (resume a paused run first)`,
+          `${expiredSteps} workflow step(s) whose approval expired — \`melra workflow inspect <workflow-id>\` shows the run; its next advance asks again where it can go on`,
         ]
       : []),
   ];
@@ -161,34 +162,8 @@ interface ApprovalCounts {
 }
 
 /**
- * Tasks of steps the run's next advance asks again once their challenge has
- * expired: forward steps of a run waiting on approval (or halted, once it is
- * resumed), and the compensations a failed run's unwind still offers. A step
- * of any other run, one already failed say, is cleared the plain way.
- */
-function stepsAskedAgain(store: SqliteStore, runs: WorkflowRun[]): Set<string> {
-  return new Set(
-    runs.flatMap((run) => {
-      if (["awaiting_approval", "paused", "suspended"].includes(run.status)) {
-        return Object.values(run.nodes).flatMap((node) => node.taskIds);
-      }
-      if (run.status !== "failed") return [];
-      // The stored copy is redacted but keeps each node's type.
-      const nodes = (
-        store.getWorkflowDefinition(run.definitionId, run.definitionVersion) as
-          | { nodes?: Array<{ id: string; type: string }> }
-          | undefined
-      )?.nodes;
-      return (nodes ?? [])
-        .filter((node) => node.type === "compensation")
-        .flatMap((node) => run.nodes[node.id]?.taskIds ?? []);
-    }),
-  );
-}
-
-/**
  * Tasks waiting for an operator's approval, and those whose challenge expired
- * unanswered, workflow steps asked again apart. An expired one stays
+ * unanswered, workflow steps apart. An expired one stays
  * awaiting_approval, and counted as waiting it was reported forever and
  * pointed at `melra approve`, which then refused it. An answer given in time
  * is honoured for a TTL after it, as `TaskController` honours it, so that task
@@ -198,7 +173,7 @@ function stepsAskedAgain(store: SqliteStore, runs: WorkflowRun[]): Set<string> {
 function approvalCounts(
   store: SqliteStore,
   window: ApprovalWindow,
-  runs: () => WorkflowRun[] = () => store.listWorkflowRuns(["awaiting_approval", "paused", "suspended", "failed"]),
+  runs: () => WorkflowRun[] = () => store.listWorkflowRuns(),
 ): ApprovalCounts {
   const now = Date.now();
   let steps: Set<string> | undefined;
@@ -215,7 +190,7 @@ function approvalCounts(
       continue;
     }
     // Read only once something has expired: a store keeps every run.
-    steps ??= stepsAskedAgain(store, runs());
+    steps ??= new Set(runs().flatMap((run) => Object.values(run.nodes).flatMap((node) => node.taskIds)));
     if (steps.has(task.id)) counts.expiredSteps += 1;
     else counts.expired += 1;
   }
