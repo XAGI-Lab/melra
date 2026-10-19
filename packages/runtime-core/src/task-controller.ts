@@ -86,11 +86,11 @@ function now(): string {
  * an adapter result so one predicate type reads the same on both paths.
  */
 function reconciliationFacts(
-  task: TaskRecord,
+  taskId: string,
   operation: Operation,
 ): Record<string, unknown> {
   return {
-    taskId: task.id,
+    taskId,
     ...(operation.kind === "http"
       ? {
           url: operation.url,
@@ -310,12 +310,24 @@ export class TaskController {
       }
     }
     // Refused before anything is approved: a mutation run against evidence no
-    // registered verifier can check would end `partial` after the effect.
-    for (const predicate of parsed.requiredEvidence) {
-      if (!this.verifier.supports(predicate)) {
-        throw new Error(
-          `evidence_verifier_unavailable:${predicate.type === "custom" ? predicate.verifier : predicate.type}`,
-        );
+    // registered verifier can check would end `partial` after the effect, and
+    // one that could not be reconciled would stay parked for good. A stored
+    // step's reconciliation was never checked, and refusing it now would stop
+    // a run whose earlier steps already ran.
+    this.assertVerifiable(
+      options.stored === true
+        ? parsed.requiredEvidence
+        : [...parsed.requiredEvidence, ...parsed.reconciliation],
+      options,
+    );
+    // Read only against the facts known before the call, so a URL token they
+    // cannot fill (`{{json.id}}`: no response is read on this path) is
+    // refused every time it is asked, and the task would stay parked.
+    if (options.stored !== true) {
+      const facts = reconciliationFacts("00000000-0000-4000-8000-000000000000", parsed.operation);
+      for (const predicate of parsed.reconciliation) {
+        const refused = this.verifier.unfilledToken(predicate, facts);
+        if (refused !== undefined) throw new Error(`reconciliation_unanswerable:${refused}`);
       }
     }
     return evaluatePolicy(
@@ -324,6 +336,23 @@ export class TaskController {
       this.policy,
       this.capabilityUsage,
     ).decision;
+  }
+
+  /** Refuses a predicate no registered verifier can check, or that it would refuse to. */
+  assertVerifiable(predicates: EvidencePredicate[], options: { stored?: boolean } = {}): void {
+    for (const predicate of predicates) {
+      if (!this.verifier.supports(predicate)) {
+        throw new Error(
+          `evidence_verifier_unavailable:${predicate.type === "custom" ? predicate.verifier : predicate.type}`,
+        );
+      }
+      // A file path the verifier refuses however often it is asked. New work
+      // only, like the reconciliation check: a run accepted before this
+      // check existed is not stopped at the step.
+      if (options.stored !== true && this.verifier.outsideWorkspace(predicate)) {
+        throw new Error("evidence_path_outside_workspace");
+      }
+    }
   }
 
   status(taskId: string): TaskRecord {
@@ -450,6 +479,8 @@ export class TaskController {
     let timeout: NodeJS.Timeout | undefined;
     let budgetExhausted = false;
     let shortCircuited = false;
+    let effectReturned = false;
+    let settled: ExecutionResult | undefined;
     if (rechecked.grantId !== undefined) {
       const held = this.reserved.get(rechecked.grantId) ?? new Map<string, number>();
       held.set(task.id, classified.spend?.amount ?? 0);
@@ -477,6 +508,7 @@ export class TaskController {
         classified.effect,
         controller.signal,
       );
+      effectReturned = true;
       const sanitizedResult = redactStructuredValue(result);
       task.status = "verifying";
       task.result = sanitizedResult.value as Record<string, unknown>;
@@ -561,25 +593,37 @@ export class TaskController {
       }
       task.updatedAt = now();
       this.store.saveTask(task);
-      const certificate = this.createAndSaveCertificate(task, evidence);
-      return { task, output: result, receipt, certificate };
+      settled = { task, output: result, receipt };
+      const certificate = this.createAndSaveCertificate(task, evidence, true);
+      return { ...settled, certificate };
     } catch (error) {
+      // The outcome is recorded, beside its receipt and idempotency commit,
+      // and only the certificate summarising it failed to write. Rewriting it
+      // would contradict them, and an error would read as the effect not
+      // having happened, so the caller gets what was recorded. A workflow
+      // step's certificate is written by the run's next advance (`certify`).
+      if (settled !== undefined) return settled;
       const rawMessage = error instanceof Error ? error.message : String(error);
-      const message = redactStructuredValue(rawMessage).value as string;
+      // Capped after redaction, which can lengthen it, at the 10,000 characters
+      // a workflow node's `error` holds: a longer one failed the node's write
+      // after the effect ran, and the next advance ran the step again.
+      const message = (redactStructuredValue(rawMessage).value as string).slice(0, 10_000);
       const aborted = controller.signal.aborted;
       // A refusal by the breaker is not fresh evidence about the target, and an
       // operator's cancellation is not evidence about it at all. A budget that
-      // ran out is: the target did not answer in time.
-      if (!shortCircuited && (!aborted || budgetExhausted)) {
+      // ran out is: the target did not answer in time. Nor is anything after
+      // the adapter returned, which the target already answered.
+      if (!shortCircuited && !effectReturned && (!aborted || budgetExhausted)) {
         this.breaker.recordFailure(classified.target);
       }
-      // Checked on the raw message and ahead of every other outcome, because it
-      // is the strongest thing known: the adapter says the effect may already
-      // have happened. `failed`, `cancelled` and `budget_exhausted` all assert
-      // more than that. Reads are exempt — a read that may or may not have run
-      // changed nothing either way, so there is nothing to reconcile.
+      // Ahead of every other outcome, because it is the strongest thing known:
+      // the effect may already have happened, either because the adapter says
+      // so or because it returned and a write after it failed. `failed`,
+      // `cancelled` and `budget_exhausted` all assert more than that. Reads
+      // are exempt — a read that may or may not have run changed nothing
+      // either way, so there is nothing to reconcile.
       const unknownOutcome =
-        classified.effect !== "read" && isOutcomeUnknown(rawMessage);
+        classified.effect !== "read" && (effectReturned || isOutcomeUnknown(rawMessage));
       task.status = unknownOutcome
         ? "recovery_required"
         : aborted
@@ -621,7 +665,7 @@ export class TaskController {
       this.store.saveReceipt(receipt);
       task.receiptIds.push(receipt.receiptId);
       this.store.saveTask(task);
-      const certificate = this.createAndSaveCertificate(task, evidence);
+      const certificate = this.createAndSaveCertificate(task, evidence, true);
       return { task, receipt, certificate };
     } finally {
       if (timeout !== undefined) clearTimeout(timeout);
@@ -696,13 +740,25 @@ export class TaskController {
       this.store.saveTask(task);
       return { task };
     };
+    // Its own commit already answers: the effect verified, and only a write
+    // after it failed. Parked for good otherwise, with nothing declared.
+    const committed = this.settleCommitted(task, request, classified);
+    if (committed !== undefined) return committed;
     if (request.reconciliation.length === 0) {
       return park("reconciliation_not_declared");
     }
     const verification = await this.verifier.verify(
       request.reconciliation,
-      reconciliationFacts(task, request.operation),
+      reconciliationFacts(task.id, request.operation),
     );
+    // Refused by the kernel itself, it is refused again however often it is
+    // asked: the declaration needs fixing, which waiting on the provider will
+    // not do. Named, so a caller can tell the two apart.
+    const unanswerable = verification.evidence.filter((item) => item.unanswerable === true);
+    if (unanswerable.length > 0) {
+      const reason = `reconciliation_unanswerable:${unanswerable.map((item) => item.summary).join("; ")}`;
+      return park((redactStructuredValue(reason).value as string).slice(0, 10_000));
+    }
     // An unreachable provider did not say no. Resolving on this would be the
     // same lie as the `failed` this whole path exists to avoid.
     if (verification.evidence.some((item) => item.inconclusive === true)) {
@@ -808,6 +864,38 @@ export class TaskController {
   }
 
   /**
+   * Settle a task whose idempotency key is committed to it. A key is
+   * committed only once its effect verified, so whatever stopped the task
+   * came after the effect: an interruption, or a write that failed.
+   */
+  private settleCommitted(
+    task: TaskRecord,
+    request: TaskRequest,
+    classified: ReturnType<typeof classifyOperation>,
+  ): ExecutionResult | undefined {
+    if (
+      task.idempotencyKey === undefined ||
+      this.store.getIdempotencyCommit(task.idempotencyKey)?.taskId !== task.id
+    ) {
+      return undefined;
+    }
+    return this.resolveAsVerified(
+      task,
+      request,
+      classified,
+      [
+        {
+          type: "idempotency",
+          passed: true,
+          strength: evidenceStrength("idempotency"),
+          summary: "verified and committed before the interruption",
+        },
+      ],
+      { recovery: "committed_before_interruption" },
+    );
+  }
+
+  /**
    * With `failed`, each task that could not be recovered is recorded there by
    * id instead of the first failure being thrown at the end.
    */
@@ -883,26 +971,9 @@ export class TaskController {
     // A read that verified and committed its key before the interruption is
     // done. Run again, it would only be cancelled as a duplicate of itself,
     // and a workflow reads a cancelled step as a denial.
-    if (
-      classified.effect === "read" &&
-      task.idempotencyKey !== undefined &&
-      this.store.getIdempotencyCommit(task.idempotencyKey)?.taskId === task.id
-    ) {
-      this.resolveAsVerified(
-        task,
-        request,
-        classified,
-        [
-          {
-            type: "idempotency",
-            passed: true,
-            strength: evidenceStrength("idempotency"),
-            summary: "verified and committed before the interruption",
-          },
-        ],
-        { recovery: "committed_before_interruption" },
-      );
-      return task;
+    if (classified.effect === "read") {
+      const committed = this.settleCommitted(task, request, classified);
+      if (committed !== undefined) return committed.task;
     }
     const effect = classified.effect;
     task.status = effect === "read" ? "planned" : "recovery_required";
@@ -1018,6 +1089,29 @@ export class TaskController {
       receipts,
       ...(certificate === undefined ? {} : { certificate }),
     };
+  }
+
+  /**
+   * A task's certificate, written now for a `verified_success` task whose
+   * certificate failed to write after it was recorded: a workflow counts a
+   * step done only on its certificate. For a writer of the run, never a
+   * read. Only that status, because every other path to it writes the
+   * certificate before the task, and `execute`, which does not, writes it
+   * only if none is stored: whoever writes first, both hand out the same one.
+   * A write that fails again is left for the next writer.
+   */
+  certify(taskId: string): ExecutionCertificate | undefined {
+    const certificate = this.store.getCertificateForTask(taskId);
+    if (certificate !== undefined) return certificate;
+    const task = this.store.getTask(taskId);
+    const last = task?.receiptIds.at(-1);
+    const receipt = last === undefined ? undefined : this.store.getReceipt(last);
+    if (task?.status !== "verified_success" || receipt === undefined) return undefined;
+    try {
+      return this.createAndSaveCertificate(task, receipt.evidence, true);
+    } catch {
+      return undefined;
+    }
   }
 
   /**
@@ -1146,6 +1240,8 @@ export class TaskController {
   private createAndSaveCertificate(
     task: TaskRecord,
     evidence: EvidenceItem[],
+    // A task's first: one another writer stored meanwhile stays, and is used.
+    first = false,
   ): ExecutionCertificate {
     const approvalChannel =
       task.approvedBy?.channel ??
@@ -1170,11 +1266,11 @@ export class TaskController {
       ...(mode === undefined ? {} : { mode }),
       ...(approvalChannel === undefined ? {} : { approvalChannel }),
     });
-    task.certificateId = certificate.certificateId;
+    const stored = this.store.saveCertificate(certificate, { ifAbsent: first });
+    task.certificateId = stored.certificateId;
     task.updatedAt = now();
-    this.store.saveCertificate(certificate);
     this.store.saveTask(task);
-    return certificate;
+    return stored;
   }
 
   private finishWithoutReceipt(

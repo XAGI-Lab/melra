@@ -109,6 +109,86 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- A parked mutation whose `reconciliation` predicate could not be asked stays
+  `recovery_required`: a URL token with nothing to fill it (`{{json.id}}`,
+  when there is no response on that path), a custom verifier the runtime does
+  not have, or one whose backend timed out. It was settled as `failed`,
+  `reconciliation_confirms_effect_not_applied`, without the provider being
+  asked, and the agent ran the effect again. A predicate whose check throws is
+  now `inconclusive` in the receipt, as an unreachable provider already was; a
+  missing file is still a plain no for `file_exists` and `file_hash`, and a
+  path under a regular file (`ENOTDIR`) is absent for `file_absent`, where it
+  was an error. An item the kernel itself refused to ask (a path outside the
+  workspace or reserved, a path the filesystem will not take whole, a URL
+  token with nothing to fill it, a verifier or probe the runtime does not
+  have) also carries `unanswerable: true`, so a caller can tell a question that
+  is refused every time from one worth asking again without reading its
+  summary; a verifier cannot set it. The task's `error` says which:
+  `reconciliation_unanswerable:<refusal>` means the declaration needs fixing,
+  `reconciliation_inconclusive` that the provider may answer later. Planning
+  refuses a `reconciliation` verifier the runtime does not have
+  (`evidence_verifier_unavailable`), as it did for `requiredEvidence`, a
+  `file_exists`, `file_absent` or `file_hash` path in either that can only
+  land outside the workspace or on its root
+  (`evidence_path_outside_workspace`), and a reconciliation URL token the
+  facts it is read against (`taskId`, `url`, `method`, `idempotencyKey`)
+  cannot fill (`reconciliation_unanswerable:verification_token_unresolved:<token>`):
+  such evidence ended `partial` after the effect ran, and such a
+  reconciliation left the task parked for good. A workflow run accepted before
+  this change is not stopped at that step.
+
+- A mutation whose adapter returned, but whose result, receipt or task could
+  not then be written (a locked or full database), parks as
+  `recovery_required` with inconclusive evidence. It was recorded as
+  `failed`, which reads as the effect not having happened, and counted against
+  the target's circuit breaker though the target had answered. A task already
+  recorded as `verified_success` keeps that outcome when only its certificate
+  fails to write; it was rewritten as `failed` beside its own verified
+  receipt. A workflow step's certificate is then written by the run's next
+  `advance`, so the run still finishes. It is written only if none is stored,
+  as the executor's own now is, so two processes never hand out different
+  certificates for one task, and reading receipts writes nothing. A mutation
+  that had verified and committed its idempotency key before the write failed
+  settles as `verified_success` when it is next reconciled (`melra_execute`),
+  declared `reconciliation` or not.
+
+- A workflow step whose adapter error runs past 10,000 characters is
+  recorded. The task kept the whole message and a workflow node's `error`
+  holds 10,000, so writing the run failed after the step ran, and the next
+  `advance` ran the step again. The task, its receipt and the node now keep
+  the first 10,000 characters.
+
+- A workflow `condition`, a `bounded_loop`'s `until` and a `delegation`'s
+  `requiredEvidence` no longer read a check the provider did not answer (an
+  `http_resource_matches` read that got a 503, a 429 or no connection) as a
+  "no". The condition took its other branch for good, refunding a charge that
+  went through while the provider was briefly down; the loop ran another
+  iteration of its body; and the delegation failed its run. Nothing is decided
+  on such a check now: the advance records the other nodes and fails with
+  `workflow_check_inconclusive:<node>`, the condition runs neither branch, the
+  loop keeps the iteration it ran and starts no other, the delegation stays
+  `awaiting_input` and keeps the report it was sent, and the next advance asks
+  again. The node's `error` names the check it waits on, by type and source (a
+  URL without its query, which can carry a token), and asking again writes
+  nothing, however the provider words its failure. A definite no among a
+  delegation's checks still fails it while another goes unanswered. A provider
+  that never answers holds the run until `melra_workflow_cancel`, which does
+  not compensate. Planning refuses a check no registered verifier can ask
+  (`evidence_verifier_unavailable`) or on a file path outside the workspace
+  (`evidence_path_outside_workspace`). A condition or delegation check the
+  kernel refuses to ask when it runs (an `unanswerable` item: a URL `{{token}}`
+  its source result cannot fill, a verifier gone since planning, a reserved
+  path) fails its node (`workflow_check_unresolvable:<node>`) rather than
+  waiting on an answer that cannot change. A loop's `until` reads it as a no,
+  since the next iteration's result may fill the token, and runs to
+  `maxIterations` at most.
+
+- `melra_workflow_advance` on a run with nothing due, such as a step still
+  waiting for approval or input, changes nothing, as its description says. Each
+  call recorded each waiting step again, so every poll bumped `stateVersion`
+  and appended a `workflow.node_changed` event per waiting step. It now returns
+  the run as it was, with no events, and the waiting steps' tasks as before.
+
 - `melra policy test` previews a mutation that declares no evidence with the
   evidence the server derives for it, as `melra_plan` does, and prints it as
   `requiredEvidence`. It previewed such a mutation as `deny
