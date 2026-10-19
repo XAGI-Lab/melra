@@ -103,7 +103,8 @@ All notable changes are documented here. The format follows
   `inspect`, and each `click`, `move` or `drag` given a `target`, used to leave
   a full-screen capture in `<MELRA_HOME>/artifacts` that no result named. A
   reading that fails no longer fails the `inspect`: it returns what the adapter
-  observed, without `elements`, as on a host without `tesseract`. (#251)
+  observed, without `elements`, as on a host without `tesseract`. A `target`
+  still fails with the reason the reading failed. (#251)
 
 - `send` to an interactive terminal job whose program has closed its stdin is
   refused as `terminal_job_stdin_closed`. Every send after the failed write

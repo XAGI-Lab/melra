@@ -1,7 +1,7 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -214,8 +214,9 @@ describe.skipIf(process.platform === "win32")("reading the screen when no tree c
     constructor(
       private readonly directory: string,
       private readonly capture: "ok" | "fails" = "ok",
+      ocr = true,
     ) {
-      super({ elements: false, ocr: true });
+      super({ elements: false, ocr });
     }
 
     override async execute(operation: ComputerOperation): Promise<Record<string, unknown>> {
@@ -231,8 +232,10 @@ describe.skipIf(process.platform === "win32")("reading the screen when no tree c
   }
 
   const scenario = (ocr: string, capture: "ok" | "fails" = "ok") => {
-    const directory = mkdtempSync(join(tmpdir(), "melra-ocr-"));
-    const program = join(mkdtempSync(join(tmpdir(), "melra-ocr-bin-")), "tesseract");
+    const root = mkdtempSync(join(tmpdir(), "melra-ocr-"));
+    const directory = join(root, "artifacts");
+    mkdirSync(directory);
+    const program = join(root, "tesseract");
     writeFileSync(program, `#!/bin/sh\n${ocr}\n`, { mode: 0o755 });
     const runtime = new ComputerRuntime({
       artifactDirectory: directory,
@@ -241,7 +244,9 @@ describe.skipIf(process.platform === "win32")("reading the screen when no tree c
     });
     const inspect = () =>
       runtime.execute(ComputerOperationSchema.parse({ kind: "computer", action: "inspect" }));
-    return { directory, inspect, done: () => rmSync(directory, { recursive: true, force: true }) };
+    const click = () =>
+      runtime.execute(ComputerOperationSchema.parse({ kind: "computer", action: "click", target: { name: "Save" } }));
+    return { directory, inspect, click, done: () => rmSync(root, { recursive: true, force: true }) };
   };
 
   it("reads the words and keeps no screenshot", async () => {
@@ -257,15 +262,36 @@ describe.skipIf(process.platform === "win32")("reading the screen when no tree c
 
   it("returns the observation, and no screenshot, when the reading fails", async () => {
     for (const [ocr, capture] of [["exit 1", "ok"], [`printf '${TSV}'`, "fails"]] as const) {
-      const { directory, inspect, done } = scenario(ocr, capture);
+      const { directory, inspect, click, done } = scenario(ocr, capture);
       try {
         const observed = await inspect();
         expect(observed, `${ocr} / ${capture}`).toMatchObject({ application: "Finder", displayWidth: 100 });
         expect(observed).not.toHaveProperty("elements");
         expect(readdirSync(directory)).toEqual([]);
+        // A target has nothing to fall back on: it reports why the reading
+        // failed, not a bare computer_elements_unavailable.
+        await expect(click(), `${ocr} / ${capture}`).rejects.toThrow(/computer_helper_failed|screen recording denied/);
       } finally {
         done();
       }
+    }
+  });
+
+  it("reads the screen with an OCR program outside tesseract's usual paths", async () => {
+    // The adapter reports no OCR, as the real ones do when tesseract is not
+    // where they look; naming the program is what makes it available.
+    const directory = mkdtempSync(join(tmpdir(), "melra-ocr-"));
+    const program = join(directory, "ocr");
+    writeFileSync(program, `#!/bin/sh\nprintf '${TSV}'\n`, { mode: 0o755 });
+    const adapter = new BlindAdapter(directory, "ok", false);
+    try {
+      const runtime = new ComputerRuntime({ artifactDirectory: directory, adapter, ocrProgram: program });
+      const observed = (await runtime.execute(
+        ComputerOperationSchema.parse({ kind: "computer", action: "inspect" }),
+      )) as { elements?: DesktopElement[] };
+      expect(observed.elements?.map(({ name }) => name)).toEqual(["Save"]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
     }
   });
 });

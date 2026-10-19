@@ -291,9 +291,10 @@ Actions: `capabilities`, `inspect`, `screenshot`, `click`, `move`, `drag`,
   every coordinate. `capabilities.ocr` says whether the host has `tesseract` at
   all, and the read only ever runs when the tree was empty — a tree states what
   a control *is*, a reading only what it looks like. The screenshot is deleted
-  once it has been read, and a read that fails (no screen-recording permission,
-  a Wayland session) leaves `inspect` as it is without `tesseract`: no
-  `elements`, so a `target` is refused as `computer_elements_unavailable`.
+  once it has been read. A read that fails (no screen-recording permission, a
+  Wayland session) leaves `inspect` as it is without `tesseract`, with no
+  `elements`; a `target`, which has nothing to fall back on, is refused with
+  the reason the read failed.
 - A word read this way carries a `confidence` between 0 and 1; an element the
   platform reported carries none, so an absent `confidence` means "stated", not
   "certain". Below `0.3` a word is not reported; below `0.7` it is reported but
