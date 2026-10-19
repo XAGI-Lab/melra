@@ -1,7 +1,7 @@
 {
   "name": "@melra/cli",
   "version": "0.3.0-alpha.14",
-  "description": "MELRA autonomy kernel and command-line interface.",
+  "description": "Open-source local runtime for MCP and CLI agent tools, with policy checks, scoped approvals, outcome verification, and interrupted-write recovery.",
   "keywords": [
     "mcp",
     "mcp-server",
