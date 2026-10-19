@@ -436,6 +436,21 @@ export class SqliteStore {
   }
 
   /**
+   * `saveTask` only while the stored status is one of `expected`, saying
+   * whether it wrote: a compare-and-set, so of two processes moving one task
+   * out of a status (an execute and a deny, or two executes) exactly one does.
+   */
+  saveTaskIf(task: TaskRecord, expected: readonly TaskRecord["status"][], owner?: string): boolean {
+    const result = this.database
+      .prepare(`
+        UPDATE tasks SET data = ?, updated_at = ?, owner = COALESCE(?, owner)
+        WHERE id = ? AND json_extract(data, '$.status') IN (SELECT value FROM json_each(?))
+      `)
+      .run(JSON.stringify(task), task.updatedAt, owner ?? null, task.id, JSON.stringify(expected));
+    return Number(result.changes) === 1;
+  }
+
+  /**
    * This store's owner id, created on first use. "Alive" means someone holds
    * an exclusive SQLite lock on `<db>-owners/<id>`; the kernel drops that lock
    * however the process ends, so a crash needs no clock or heartbeat to show.

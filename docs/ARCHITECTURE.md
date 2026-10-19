@@ -363,6 +363,14 @@ interface is served.
 - Competing advances for one workflow are serialized inside a server process.
   Concurrent independent branches remain parallel.
 
+A task leaves `planned` or `awaiting_approval` by a compare-and-set on its
+status, so of an execute and a deny (`melra approve --deny`, the console,
+`melra_task_cancel`) in different processes, or of two executes, exactly one
+moves it. The execute that loses is refused with `task_not_executable:<status>`
+before its adapter runs; the cancel that loses returns the task as it now
+stands, which `melra approve --deny` reports with exit 1 and the console as
+`task_not_cancellable:<status>`.
+
 Multiple MELRA server processes may share one `MELRA_HOME`. Advancing a workflow
 takes an expiring SQLite lease before any adapter runs, so a second process is
 refused with `workflow_lease_held` rather than starting duplicate side effects.

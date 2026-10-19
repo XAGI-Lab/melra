@@ -10,6 +10,7 @@ import {
   outcomeUnknown,
   WorkflowDefinitionSchema,
   type Operation,
+  type TaskRecord,
   type TaskRequest,
   type WorkflowRun,
 } from "@melra/protocol";
@@ -304,6 +305,50 @@ describe("task recovery that does not finish", () => {
     expect(await b.tasks.recoverInterrupted()).toEqual([]);
     const [recovered] = await a.tasks.recoverInterrupted();
     expect(recovered).toMatchObject({ id: task.id, status: "recovery_required" });
+  });
+});
+
+describe("starting and denying a task across processes", () => {
+  // `melra approve --deny` and the console deny in one process while the
+  // agent's server executes in another: whichever moves the task first wins,
+  // and the other says so instead of reporting what did not happen.
+  it("lets exactly one of a deny and an execute, or of two executes, win", async () => {
+    const at = await home();
+    const a = await side(at);
+    const b = await side(at);
+    /** Runs `between` after this store's next read of a task, before its caller writes. */
+    const afterRead = (store: SqliteStore, between: () => void) => {
+      const read = store.getTask.bind(store);
+      vi.spyOn(store, "getTask").mockImplementationOnce((id) => {
+        const task = read(id);
+        between();
+        return task;
+      });
+    };
+
+    // The deny lands after the execute read the task.
+    const denied = a.tasks.plan(charge());
+    let cancelled: TaskRecord | undefined;
+    afterRead(a.store, () => (cancelled = b.tasks.cancel(denied.id)));
+    await expect(a.tasks.execute(denied.id, approve(denied))).rejects.toThrow("task_not_executable:cancelled");
+    expect(cancelled?.status).toBe("cancelled");
+    expect(a.adapter).not.toHaveBeenCalled();
+
+    // The execute lands after the deny read the task.
+    const started = a.tasks.plan(charge());
+    let executing: ReturnType<TaskController["execute"]> | undefined;
+    afterRead(b.store, () => (executing = a.tasks.execute(started.id, approve(started))));
+    expect(b.tasks.cancel(started.id).status).toBe("running");
+    expect((await executing!).task.status).toBe("verified_success");
+    expect(a.adapter).toHaveBeenCalledTimes(1);
+
+    // Two executes, one in each process.
+    const twice = a.tasks.plan(charge());
+    afterRead(a.store, () => (executing = b.tasks.execute(twice.id, approve(twice))));
+    await expect(a.tasks.execute(twice.id, approve(twice))).rejects.toThrow("task_not_executable:running");
+    expect((await executing!).task.status).toBe("verified_success");
+    expect(a.adapter).toHaveBeenCalledTimes(1);
+    expect(b.adapter).toHaveBeenCalledTimes(1);
   });
 });
 

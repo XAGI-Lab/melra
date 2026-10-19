@@ -668,9 +668,11 @@ export async function serveHttp(
       return;
     }
     if (route[2] === "deny") {
-      runtime.controller.cancel(taskId);
-      // Read back: another process may have started it in the meantime.
-      json(response, 200, { task: runtime.controller.status(taskId) });
+      // Another process may have started it since the page drew it: then it
+      // runs, and the page must not say it was denied.
+      const task = runtime.controller.cancel(taskId);
+      if (task.status !== "cancelled") throw new Error(`task_not_cancellable:${task.status}`);
+      json(response, 200, { task });
       return;
     }
     const body = (await readBody(request)) as { taskId?: unknown; renderDigest?: unknown } | undefined;

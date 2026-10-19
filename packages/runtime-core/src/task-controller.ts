@@ -159,6 +159,9 @@ export function capabilityUsageReader(store: SqliteStore): CapabilityUsageReader
   };
 }
 
+/** Statuses a task leaves only once: by starting, by a deny, or by a refusal. */
+const UNSTARTED: TaskRecord["status"][] = ["planned", "awaiting_approval"];
+
 /** The one browser action that reads each list. */
 const BROWSER_LIST_ACTIONS = [
   ["values", "select"],
@@ -375,7 +378,7 @@ export class TaskController {
     if (task.status === "recovery_required") {
       return await this.reconcile(taskId);
     }
-    if (!["planned", "awaiting_approval"].includes(task.status)) {
+    if (!UNSTARTED.includes(task.status)) {
       throw new Error(`task_not_executable:${task.status}`);
     }
     if (
@@ -385,7 +388,7 @@ export class TaskController {
       task.status = "cancelled";
       task.error = "duplicate_attempt_prevented";
       task.updatedAt = now();
-      this.store.saveTask(task);
+      this.leaveUnstarted(task);
       return this.finishWithoutReceipt(task, [
         {
           type: "idempotency",
@@ -407,7 +410,7 @@ export class TaskController {
       task.status = "policy_blocked";
       task.policyDecision = rechecked.decision;
       task.updatedAt = now();
-      this.store.saveTask(task);
+      this.leaveUnstarted(task);
       return this.finishWithoutReceipt(task, []);
     }
 
@@ -466,14 +469,14 @@ export class TaskController {
     }
     task.policyDecision = rechecked.decision;
 
-    const controller = new AbortController();
-    this.active.set(task.id, controller);
-    this.store.inFlight.add(task.id);
     task.status = "running";
     task.mode = this.policy.mode;
     task.updatedAt = now();
     // Status and owner land in one write, so no running row is ever unowned.
-    this.store.saveTask(task, this.store.ownerId());
+    this.leaveUnstarted(task, this.store.ownerId());
+    const controller = new AbortController();
+    this.active.set(task.id, controller);
+    this.store.inFlight.add(task.id);
     const startedAt = now();
     const classified = classifyOperation(request.operation);
     let timeout: NodeJS.Timeout | undefined;
@@ -682,12 +685,25 @@ export class TaskController {
       controller.abort(new Error("task_cancelled"));
       return task;
     }
-    if (["planned", "awaiting_approval"].includes(task.status)) {
+    if (UNSTARTED.includes(task.status)) {
       task.status = "cancelled";
       task.updatedAt = now();
-      this.store.saveTask(task);
+      // Started meanwhile by another process: it runs, so the caller is told
+      // what the task is now rather than that it was cancelled.
+      if (!this.store.saveTaskIf(task, UNSTARTED)) return this.status(taskId);
     }
     return task;
+  }
+
+  /**
+   * Writes a task out of planned or awaiting_approval, unless a deny or an
+   * execute in another process got there after this one read it: that one
+   * stands, and this one is refused as it would have been had it read later.
+   */
+  private leaveUnstarted(task: TaskRecord, owner?: string): void {
+    if (!this.store.saveTaskIf(task, UNSTARTED, owner)) {
+      throw new Error(`task_not_executable:${this.status(task.id).status}`);
+    }
   }
 
   async verifyPersisted(

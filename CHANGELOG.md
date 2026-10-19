@@ -144,6 +144,19 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- A deny and an execute in different processes no longer both win. Starting a
+  task, and cancelling one (`melra approve --deny`, the console's Deny,
+  `melra_task_cancel`), now moves it out of `planned` or `awaiting_approval`
+  only if it is still there when written. Before, an execute that read the
+  task just before a deny landed went on to run the effect the deny had
+  reported cancelled; a deny that read it just before an execute started it
+  rewrote the running task as `cancelled` while its effect ran; and two
+  processes executing one task could both run it. Now the second writer
+  loses: an execute is refused with `task_not_executable:<status>`, a cancel
+  returns the task as it now stands (exit 1 from `melra approve --deny`), and
+  the console refuses the Deny with `task_not_cancellable:<status>` where it
+  showed the task as denied. (#244)
+
 - A condition step whose advance lost its commit (a pause landed while it ran)
   keeps to one branch. Recovery read both branches' tasks together and could
   reopen the step on the branch it had abandoned, or, when the branch it took
