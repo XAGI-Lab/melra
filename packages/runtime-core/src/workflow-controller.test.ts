@@ -1234,12 +1234,19 @@ describe("WorkflowController execution", () => {
     });
   }
 
+  /** Whether the run was ever recorded `failed`, the status that unwinds. */
+  const everFailed = (controller: WorkflowController, id: string) =>
+    controller
+      .events(id)
+      .some((event) => event.type === "workflow.status_changed" && (event.data as { to?: string }).to === "failed");
+
   it("halts rather than unwind past a step whose outcome is unknown when another fails", async () => {
     const { calls, execute } = unknownBesideFailure();
     const { controller } = await setup(execute);
     const planned = controller.plan(fanOutSaga());
 
     const result = await settle(controller, planned.id);
+    expect(everFailed(controller, planned.id)).toBe(false);
 
     // The refund could give away goods that may already be in transit.
     expect(calls).not.toContain("payments.example.test/refunds");
@@ -1251,12 +1258,16 @@ describe("WorkflowController execution", () => {
 
   it("halts a parallel node with a failed branch beside an unknown one, live and after a restart", async () => {
     const { calls, execute } = unknownBesideFailure();
-    const { controller, store, tasks, cipher } = await setup(execute);
+    // Unsafe-local, so both branches run in one wave: under approvals the
+    // node offers one branch's challenge at a time.
+    const { controller, store, tasks, cipher } = await setup(execute, { unhinged: true });
     const planned = controller.plan(parallelSaga());
 
     const result = await settle(controller, planned.id);
+    expect(calls).toContain("payments.example.test/notify");
     expect(result.run.nodes.fan?.status).toBe("recovery_required");
     expect(result.run.status).toBe("recovery_required");
+    expect(everFailed(controller, planned.id)).toBe(false);
 
     // Recovery used to rank the failed branch first, fail the run, and offer
     // the refund on the next advance.
@@ -1277,6 +1288,36 @@ describe("WorkflowController execution", () => {
     const unwound = await settle(settled, planned.id);
     expect(unwound.run.nodes["undo-charge"]?.status).toBe("compensated");
     expect(calls.filter((call) => call.endsWith("/refunds"))).toHaveLength(1);
+  });
+
+  it("starts no further step on a run halted beside a failure", async () => {
+    const { calls, execute } = unknownBesideFailure();
+    const { controller } = await setup(execute);
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Charge, then ship, notify and prepare a report",
+        nodes: [
+          { id: "charge", type: "operation", request: call("Charge", `${PAYMENTS}/charges`) },
+          { id: "ship", type: "operation", dependsOn: ["charge"], request: call("Ship", `${LOGISTICS}/shipments`) },
+          { id: "notify", type: "operation", dependsOn: ["charge"], request: call("Notify", `${PAYMENTS}/notify`) },
+          { id: "prepare", type: "operation", dependsOn: ["charge"], request: call("Prepare", `${PAYMENTS}/drafts`) },
+          { id: "report", type: "operation", dependsOn: ["prepare"], request: call("Report", `${PAYMENTS}/reports`) },
+          { id: "undo-charge", type: "compensation", forNodeId: "charge", request: call("Refund", `${PAYMENTS}/refunds`) },
+        ],
+      }),
+    );
+
+    const result = await settle(controller, planned.id);
+
+    // The report became ready once the draft verified, on a run that will
+    // unwind: its effect would only be undone.
+    expect(result.run.status).toBe("recovery_required");
+    expect(result.run.nodes.prepare?.status).toBe("verified_complete");
+    expect(result.run.nodes.report?.status).toBe("pending");
+    expect(calls).not.toContain("payments.example.test/reports");
   });
 
   it("halts a run an earlier version left failed beside a step whose outcome is unknown", async () => {
