@@ -6,13 +6,32 @@
 // `### Added`, a doubled entry, a stray marker, or a release with no notes. This keeps it in
 // Keep a Changelog shape (https://keepachangelog.com/en/1.1.0/).
 
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 
 const KINDS = ["Added", "Changed", "Deprecated", "Removed", "Fixed", "Security"];
 const lines = readFileSync("CHANGELOG.md", "utf8").split(/\r?\n/);
 const version = JSON.parse(readFileSync("package.json", "utf8")).version;
 const failures = [];
 const fail = (line, message) => failures.push(`CHANGELOG.md:${line}: ${message}`);
+
+// GitHub renders every newline inside a release body's paragraph or list item
+// as a line break (a hard-wrapped release's body_html has a <br> at each one),
+// so the notes join each wrapped line onto the line it continues.
+const unwrap = (section) => {
+  const out = [];
+  let inFence = false;
+  for (const text of section) {
+    const fenceLine = /^\s*(`{3,}|~{3,})/.test(text);
+    const previous = out.at(-1) ?? "";
+    const continues =
+      !inFence && !fenceLine && text.trim() !== "" && previous.trim() !== "" &&
+      !/^\s*([-*+] |\d+[.)] |#{1,6} |>|\|)/.test(text) && !/^\s*(#{1,6} |\||`{3,}|~{3,})/.test(previous);
+    if (continues) out[out.length - 1] = `${previous} ${text.trim()}`;
+    else out.push(text);
+    if (fenceLine) inFence = !inFence;
+  }
+  return out;
+};
 
 const releases = [];
 let release;
@@ -94,14 +113,27 @@ for (let i = 1; i < dated.length; i += 1) {
   if (dated[i].date > dated[i - 1].date) fail(dated[i].line, `[${dated[i].name}] is dated after the release above it`);
 }
 
-if (!releases.some(({ name }) => name === version)) {
+// This version's section is the GitHub release's notes, where GOVERNANCE.md
+// wants breaking changes called out, so a missing or empty one fails every
+// pull request instead of the tag release, after the tag is cut.
+const current = releases.findIndex(({ name }) => name === version);
+let notes = "";
+if (current === -1) {
   fail(1, `package.json is ${version} but there is no ## [${version}] section`);
+} else {
+  const end = (releases[current + 1]?.line ?? lines.length + 1) - 1;
+  notes = unwrap(lines.slice(releases[current].line, end)).join("\n").trim();
+  if (notes === "") fail(releases[current].line, `[${version}] has no notes to release`);
 }
 
 const links = new Set(lines.flatMap((text) => /^\[([^\]]+)\]: \S/.exec(text)?.[1] ?? []));
 for (const { name, line } of releases) {
   if (!links.has(name)) fail(line, `[${name}] has no link reference at the bottom of the file`);
 }
+
+// `--notes <file>` writes them to <file>. The release runs it before
+// publishing anything.
+if (process.argv[2] === "--notes" && notes !== "") writeFileSync(process.argv[3], `${notes}\n`);
 
 if (failures.length > 0) {
   process.stderr.write(`${failures.join("\n")}\n`);

@@ -144,11 +144,17 @@ system sits underneath your apps:
 
 ## Quick start
 
-You need **Node.js 22.13 or newer, or 23.4 or newer**. One command sets everything up:
+You need **Node.js 22.13 or newer, or 23.4 or newer**. From the project the agent
+should work in, one command sets everything up:
 
 ```bash
+cd ~/project
 npx @melra/cli@alpha setup
 ```
+
+That directory becomes the agent's workspace, the boundary for its file and command
+operations. `setup` shows it, and asks before making your home directory, a directory
+holding it, or `/` the workspace; set `MELRA_WORKSPACE` to choose another.
 
 In a terminal, `setup` is a short wizard. It writes a safe local policy, finds the
 agent apps on your machine, asks which one should use MELRA, and writes MELRA into
@@ -165,6 +171,7 @@ Which MCP client should use MELRA?
 Choose 1-26 [1]: 1
 Write it into ~/project/.mcp.json? [Y/n]
 
+  ✓  Workspace    ~/project
   ✓  Policy       ~/.melra/policy.json
   ✓  Claude Code  ~/project/.mcp.json
 

@@ -107,6 +107,41 @@ All notable changes are documented here. The format follows
   passes `--socket "$MELRA_SOCKET"` instead. The stderr warning `serve` printed
   in that case is gone with it. (#105)
 
+- **Breaking:** `melra setup` and `melra init` show the workspace they give
+  the agent, as a `Workspace` row and as `workspace` in the JSON, and no
+  longer make it the home directory, a directory holding it (`/Users`,
+  `/home`, `C:\Users`) or a filesystem root (`/`, or a drive root on
+  Windows) unasked. The workspace is the current directory unless
+  `MELRA_WORKSPACE` is set or a `MELRA_POLICY` file's `workspaceRoot` pins
+  it, so the README's `npx @melra/cli@alpha setup` run in a fresh terminal
+  gave the agent the whole home directory, with nothing printed to say so.
+  In a terminal they now say so and ask, defaulting to no; elsewhere (piped,
+  captured, `--json`) they refuse with `workspace_too_broad` and write
+  nothing. Either way they say to set `MELRA_WORKSPACE` to the project
+  directory or run from there; when a `MELRA_POLICY` file set the workspace,
+  to make the project that file's `workspaceRoot` instead of running from
+  it. A script that means it sets `MELRA_WORKSPACE`, which is never
+  questioned. Directories
+  are compared by identity, so a symlinked home and macOS's
+  `/System/Volumes/Data/...` spelling of it count.
+
+- Each GitHub release's notes are its version's `CHANGELOG.md` section, so a
+  breaking change is called out in them as `GOVERNANCE.md` asks, instead of a
+  list of pull request titles. Wrapped lines are joined, since a release body
+  shows every newline as a line break. `pnpm docs:check` fails while
+  `package.json`'s version has no section or an empty one, so a version bump
+  without notes fails its pull request rather than the tag release. The
+  container takes the tags npm does: the version, the release channel
+  (`:alpha`, `:beta`, `:rc`, or `:latest` for a stable version) and, before
+  1.0, `:latest` on every release, instead of always `:alpha`. The README and
+  `docs/INSTALLATION.md` now run `:latest`, which follows every release, while
+  `:alpha` stays on the last alpha once betas begin, as npm's `@alpha` does.
+  `scripts/release-channel.mjs` picks the channel for the release and its dry
+  run alike, and a prerelease id other than alpha, beta or rc fails
+  `pnpm check` instead of publishing under `latest`. The release dry run also
+  runs `pnpm security:audit` and extracts the notes, which otherwise stopped a
+  release only once its tag was cut.
+
 ### Fixed
 
 - An absolute path spelled through the workspace root as configured is
@@ -127,6 +162,17 @@ All notable changes are documented here. The format follows
   where it leads. The browser runtime now resolves the root once at startup,
   as the others do, so a link in the root re-pointed while the server runs
   takes effect after a restart. (#305)
+
+- `melra doctor`'s `data-location` advice and the enforced-mode refusal
+  `enforced_mode_refuses_data_inside_workspace` give the fix that fits the
+  layout. A workspace that is home or holds it, the usual cause, gets: set
+  `MELRA_WORKSPACE` to the project directory or run the command from there
+  (with a `MELRA_POLICY` file, or make the project its `workspaceRoot`), and
+  keep `MELRA_HOME` where it is. Only a `MELRA_HOME` put inside a project
+  gets: move it out of the workspace, with everything in it. Both always
+  said to move `MELRA_HOME`, which for the usual cause points the server at
+  a new, empty database and orphans the tasks and approvals in the old one.
+  `doctor --json` carries the advice as the check's `next`.
 
 - A parked mutation whose `reconciliation` predicate could not be asked stays
   `recovery_required`: a URL token with nothing to fill it (`{{json.id}}`,
@@ -556,6 +602,18 @@ All notable changes are documented here. The format follows
   `docs/COMPATIBILITY.md`, and the README's `melra version` sample), which had
   stayed at 0.3.0-alpha.12 through two releases. `docs/RELEASES.md` lists the
   MCP Registry publish step.
+
+- The container image moves only once a release run has passed everything
+  else, the install smoke on every runner included. The 0.3.0-alpha.13 and
+  alpha.14 runs pushed `ghcr.io/xagi-lab/melra:alpha` while their artifacts
+  jobs failed after the npm publish and before creating the GitHub release,
+  because the container job waited for nothing. npm still moves first, so
+  after such a failure npm's dist-tags lead the image's until the failed jobs
+  are re-run. npm packages publish in dependency order with `@melra/cli` last,
+  so a run that stops partway leaves no published package whose `@melra/*`
+  dependencies are missing; the order came from a glob that could put the CLI
+  first. The order is worked out in full before the first publish, so a
+  dependency cycle stops the run with nothing published.
 
 ### Security
 
