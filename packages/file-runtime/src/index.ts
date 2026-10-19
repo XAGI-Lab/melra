@@ -72,11 +72,22 @@ async function sameEntry(left: string, right: string): Promise<boolean> {
 
 /** `path` with the deepest part of it that exists resolved through links, and the rest as written. */
 async function realSpelling(path: string): Promise<string> {
+  const whole = await realpath(path).catch(() => undefined);
+  if (whole !== undefined) return whole;
+  // Root first, stopping at the first missing part: from the leaf up, a 4 KB
+  // argument that does not exist would cost a failed lookup per part.
+  const chain: string[] = [];
   for (let probe = path; ; probe = dirname(probe)) {
-    const actual = await realpath(probe).catch(() => undefined);
-    if (actual !== undefined) return join(actual, relative(probe, path));
-    if (dirname(probe) === probe) return path;
+    chain.unshift(probe);
+    if (dirname(probe) === probe) break;
   }
+  let real = path;
+  for (const probe of chain) {
+    const actual = await realpath(probe).catch(() => undefined);
+    if (actual === undefined) break;
+    real = join(actual, relative(probe, path));
+  }
+  return real;
 }
 
 /**
@@ -175,7 +186,12 @@ export class FileRuntime {
     return lexical;
   }
 
-  /** Whether `path` is one of `entries`: by a case-insensitive name and the identity of the directory holding it. */
+  /**
+   * Whether `path` is one of `entries`: by a case-insensitive name and the
+   * identity of the directory holding it. On a case-sensitive filesystem a
+   * sibling whose name differs from an entry only in case, such as a twin of
+   * the data directory, is matched too; that refuses more, never less.
+   */
   private async named(path: string, entries: string[]): Promise<boolean> {
     const name = spelling(basename(path));
     for (const entry of entries) {
@@ -189,9 +205,18 @@ export class FileRuntime {
    * Whether `path` is, or is inside, one of the reserved entries. `reading`
    * says nothing will change it, so the contents of a readable directory are
    * judged only below that directory, where a link to reserved data is still
-   * refused.
+   * refused. Judged as spelled and again with the part that exists resolved
+   * through links: a link may lead below a reserved directory, where neither
+   * the names nor the identities compared here would recognise the path.
    */
   async isReserved(path: string, reading = false): Promise<boolean> {
+    const spelled = resolve(path);
+    if (await this.reservedAsSpelled(spelled, reading)) return true;
+    const real = await realSpelling(spelled);
+    return real !== spelled && (await this.reservedAsSpelled(real, reading));
+  }
+
+  private async reservedAsSpelled(path: string, reading: boolean): Promise<boolean> {
     // A descriptor path names whatever this process has open, MELRA's locked
     // files included, and on macOS realpath leaves it under /dev/fd.
     if (process.platform !== "win32" && inside("/dev/fd", resolve(path))) return true;

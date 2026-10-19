@@ -544,23 +544,26 @@ All notable changes are documented here. The format follows
   verification, in every mode. A file effect can no longer write into it, or
   move, replace or remove it or any directory that holds it (`path_reserved`),
   and the files there are no longer read through the file adapter or named in
-  a terminal command. Artifacts (screenshots and downloads) are the exception
-  for reading: the file adapter's `list`, `read`, `stat` and `hash` and file
-  verification still reach them where they did before, but nothing may change
-  them. The browser no longer uploads reserved files or loads them through a
-  `file:` URL, which only `--unsafe-local` allows (`browser_path_reserved`),
-  whether or not the file exists; a download refused that way is still an
-  unknown outcome, since the click went out, and now names
-  `browser_path_reserved`. `file_exists`, `file_absent` and registered
-  verifiers get no answer about a reserved path, whether or not it exists
-  (`verification_path_reserved`). On macOS, enforced mode now also recognises
-  a workspace that holds the data directory through the data volume, and
-  refuses to start there.
+  a terminal command. A path is judged both as written and with links
+  resolved. Artifacts (screenshots and downloads) are the exception for
+  reading: the file adapter's `list`, `read`, `stat` and `hash`, file
+  verification, and the browser's upload and `file:` loads still reach them
+  where they did before, but nothing may change them. The browser no longer
+  uploads other reserved files or loads them through a `file:` URL, which only
+  `--unsafe-local` allows (`browser_path_reserved`), whether or not the file
+  exists; a download refused that way is still an unknown outcome, since the
+  click went out, and now names `browser_path_reserved`. `file_exists`,
+  `file_absent` and registered verifiers get no answer about a reserved path,
+  whether or not it exists (`verification_path_reserved`), and a path a link
+  leads out of the workspace gets the same refusal present or absent. On
+  macOS, enforced mode now also recognises a workspace that holds the data
+  directory through the data volume, and refuses to start there.
 
-- A workspace that is the data directory, or sits inside it, is refused at
-  startup in every mode with `workspace_inside_data_directory`, and
-  `melra doctor` fails its `data-location` check for it, rather than starting
-  with every path refused. Point `MELRA_WORKSPACE` at the project instead.
+- A workspace that is the data directory, or sits inside it, including through
+  a link, is refused at startup in every mode with
+  `workspace_inside_data_directory`, and `melra doctor` fails its
+  `data-location` check for it, rather than starting with every path refused.
+  Point `MELRA_WORKSPACE` at the project instead.
 
 - **Breaking:** the policy file is read strictly, against `PolicyFileSchema`
   in `@melra/protocol`. A key MELRA does not know, at any depth

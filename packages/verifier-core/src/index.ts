@@ -543,13 +543,9 @@ export class Verifier {
   }
 
   private async filePath(input: string): Promise<string> {
-    const candidate = this.spelled(input);
-    if (candidate === undefined) throw new Refusal("verification_path_outside_workspace");
-    const actual = await realpath(candidate).catch(async (error: unknown) => {
-      // Not there is an answer, and none is given about a reserved name.
-      if ((await this.reserved?.(candidate)) === true) throw new Refusal("verification_path_reserved");
-      throw error;
-    });
+    // Where the path leads is decided before whether it is there, which is an
+    // answer, so a refused path gets the same refusal present or absent.
+    const actual = await realpath(await this.potentiallyAbsentFilePath(input));
     if (!inside(this.root, actual)) {
       throw new Refusal("verification_path_outside_workspace");
     }

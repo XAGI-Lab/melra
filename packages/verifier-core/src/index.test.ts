@@ -113,6 +113,34 @@ describe("Verifier", () => {
     );
   });
 
+  it("gives the same refusal, present or absent, for a name a link leads out to", async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), "melra-verifier-")));
+    roots.push(base);
+    const root = join(base, "workspace");
+    const data = join(base, "data");
+    await mkdir(root);
+    await mkdir(data);
+    await symlink(data, join(root, "linked"));
+    const verifier = await Verifier.create(root, {
+      reserved: async (path) => path === data || path.startsWith(`${data}${sep}`),
+    });
+    const ask = () =>
+      verifier.verify(
+        [
+          { type: "file_exists", path: "linked/policy.json" },
+          { type: "file_hash", path: "linked/policy.json", sha256: "0".repeat(64) },
+        ],
+        {},
+      );
+    await writeFile(join(data, "policy.json"), "{}");
+    const present = await ask();
+    await rm(join(data, "policy.json"));
+    const absent = await ask();
+    expect([...present.evidence, ...absent.evidence].map(({ summary }) => summary)).toEqual(
+      Array.from({ length: 4 }, () => "verification_path_outside_workspace"),
+    );
+  });
+
   it("answers a missing file as no, not as no answer", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-verifier-"));
     roots.push(root);

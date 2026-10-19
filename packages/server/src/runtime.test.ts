@@ -13,6 +13,7 @@ import {
   createMelraRuntime,
   unconfinedRoot,
   unhingedFromEnvironment,
+  workspaceInsideData,
   type MelraRuntime,
 } from "./runtime.js";
 
@@ -437,11 +438,18 @@ describe("terminal arguments", () => {
   });
 
   it("refuses, in every mode, a workspace that is or sits inside the data directory", async () => {
+    // Also one reached through a link that leads well inside it.
+    const linked = join(base, "linked");
+    await mkdir(join(data, "projects", "app"), { recursive: true });
+    await symlink(join(data, "projects", "app"), linked);
+    expect(await workspaceInsideData(linked, data)).toBe(true);
     for (const [workspaceRoot, environment] of [
       [data, {}],
       [join(data, "workspace"), {}],
       [join(data, "workspace"), { MELRA_MODE: "enforced" }],
       [join(data, "workspace"), { MELRA_UNHINGED: "1" }],
+      [linked, {}],
+      [linked, { MELRA_MODE: "enforced" }],
     ] as const) {
       await expect(
         createMelraRuntime({ workspaceRoot, dataDirectory: data, environment }),

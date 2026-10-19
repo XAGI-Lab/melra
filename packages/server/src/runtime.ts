@@ -336,7 +336,8 @@ export async function createMelraRuntime(
     allowLocalhost: policy.allowLocalhost,
     popups: policy.popups,
     unhinged,
-    reserved: (path) => files.isReserved(path),
+    // Upload and file: loads only read, so its own artifacts stay usable.
+    reserved: (path) => files.isReserved(path, true),
     ...(options.browserExecutablePath === undefined
       ? {}
       : { executablePath: options.browserExecutablePath }),

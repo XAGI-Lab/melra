@@ -233,8 +233,8 @@ Actions: `navigate`, `back`, `forward`, `reload`, `inspect`, `wait`, `click`,
 - Resolves and checks the destination and every intercepted request.
 - Blocks private, link-local, multicast, unspecified, and cloud-metadata
   addresses. Localhost is opt-in.
-- Confines uploaded files to the workspace, never MELRA's own data directory,
-  and downloaded files to the artifact directory.
+- Confines uploaded files to the workspace, never MELRA's own data directory
+  except its artifacts, and downloaded files to the artifact directory.
 
 - `MELRA_BROWSER_PROFILE` names a directory to keep, so a site logged into once
   stays logged in across runs. Unset, every run gets a throwaway profile.
@@ -279,8 +279,8 @@ Actions: `capabilities`, `inspect`, `screenshot`, `click`, `move`, `drag`,
   limitations.
 - Screenshots return a bounded artifact path, byte size, and SHA-256.
   Artifacts sit in MELRA's data directory, so where a workspace reaches them
-  the file adapter and file verification may read them, and nothing may
-  change them.
+  the file adapter, file verification and the browser may read them, and
+  nothing may change them.
 - Input actions are high-risk mutations requiring evidence and exact scoped
   approval.
 - Coordinates name normalized or pixel space; key input uses a fixed allowlist.

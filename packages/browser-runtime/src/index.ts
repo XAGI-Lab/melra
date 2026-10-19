@@ -69,7 +69,8 @@ export interface BrowserRuntimeOptions extends NetworkPolicy {
   popups?: "allow" | "block";
   /**
    * Whether a path is one the browser may not upload or load, in any mode:
-   * the data MELRA itself holds. The runtime passes the file runtime's check.
+   * the data MELRA itself holds. The runtime passes the file runtime's
+   * reading check, so its artifacts may be uploaded and loaded again.
    */
   reserved?: (path: string) => Promise<boolean>;
 }

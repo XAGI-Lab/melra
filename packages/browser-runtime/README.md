@@ -39,7 +39,9 @@ leaves the browser, so treat them as sensitive artifacts.
 cloud-metadata block, which is the check most likely to matter on a hosted
 machine. A `reserved` callback, which the MELRA server always passes, still
 refuses uploading a path it names or loading one through a `file:` URL, in
-every mode.
+every mode. The server's callback names MELRA's data directory but leaves its
+artifacts (screenshots and downloads) readable, so the browser can use them
+again.
 
 Requires Node.js 22 or newer, and a Chromium that Playwright can launch. Full
 documentation: [github.com/XAGI-Lab/melra](https://github.com/XAGI-Lab/melra)

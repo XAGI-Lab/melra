@@ -5,9 +5,10 @@
 // are. Building a runtime recovers, and recovery used to take the other one's
 // live task for a crashed one.
 
-import { link, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { link, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { detectBrowserExecutable } from "@melra/browser-runtime";
 import { BrowserOperationSchema, FileOperationSchema, TaskRequestSchema, TerminalOperationSchema } from "@melra/protocol";
@@ -220,6 +221,42 @@ describe("recovery between runtimes sharing a home", () => {
     });
     expect(checked.task.status).toBe("verified_success");
   });
+
+  it("lets the unsafe-local browser read its artifacts, and nothing else there", async () => {
+    if ((await detectBrowserExecutable()) === undefined) return;
+    const base = await realpath(await mkdtemp(join(tmpdir(), "melra-runtime-recovery-")));
+    roots.push(base);
+    const workspace = join(base, "workspace");
+    const data = join(base, "data");
+    await mkdir(workspace);
+    const runtime = await createMelraRuntime({
+      workspaceRoot: workspace,
+      dataDirectory: data,
+      environment: { MELRA_UNHINGED: "1" },
+    });
+    runtimes.push(runtime);
+    const artifacts = join(data, "artifacts");
+    await mkdir(artifacts, { recursive: true });
+    await writeFile(join(artifacts, "shot.png"), "png");
+    await link(join(data, "payload.key"), join(artifacts, "key.png"));
+    // Something kept deeper in the data directory, linked from the workspace.
+    await mkdir(join(data, "profile", "Default"), { recursive: true });
+    await writeFile(join(data, "profile", "Default", "page.html"), "<p>kept</p>");
+    await symlink(join(data, "profile", "Default"), join(workspace, "linked"));
+    await writeFile(join(workspace, "form.html"), `<input type="file" id="f">`);
+    const run = (operation: Record<string, unknown>) =>
+      runtime.router.execute(BrowserOperationSchema.parse({ kind: "browser", ...operation }));
+    await run({ action: "navigate", url: pathToFileURL(join(workspace, "form.html")).href });
+    await expect(
+      run({ action: "upload", target: { selector: "#f" }, filePaths: [join(artifacts, "shot.png")] }),
+    ).resolves.toMatchObject({ uploaded: 1 });
+    await expect(
+      run({ action: "upload", target: { selector: "#f" }, filePaths: [join(artifacts, "key.png")] }),
+    ).rejects.toThrow("browser_path_reserved");
+    await expect(
+      run({ action: "navigate", url: pathToFileURL(join(workspace, "linked", "page.html")).href }),
+    ).rejects.toThrow("browser_path_reserved");
+  }, 120_000);
 
   it("waits for a sweep in flight before closing the database under it", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-runtime-recovery-"));
