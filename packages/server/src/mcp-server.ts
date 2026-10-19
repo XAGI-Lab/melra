@@ -444,7 +444,7 @@ export function createMcpServer(
     {
       title: "Cancel a MELRA workflow",
       description:
-        "End a workflow run by workflowId, the run id melra_workflow_plan returned. Its pending, ready and awaiting_approval nodes, compensations included, become cancelled, the tasks recorded on them are cancelled as melra_task_cancel would, and the run becomes cancelled; neither resume nor melra_workflow_advance continues it. It starts and undoes no effect: no compensation runs, other nodes keep their status, and a step already running may still finish. Works on paused, suspended and failed runs too. Returns the updated run, unchanged if already verified_complete or cancelled. To halt a run and continue later, use melra_workflow_control.",
+        "End a workflow run by workflowId, the run id melra_workflow_plan returned. Its pending, ready and awaiting_approval nodes, compensations included, become cancelled, the tasks recorded on them are cancelled as melra_task_cancel would, and the run becomes cancelled; neither resume nor melra_workflow_advance continues it. It starts and undoes no effect: no compensation runs, and other nodes keep their status. While an advance holds the run's lease, in this process or another, it fails with workflow_lease_held and changes nothing, so the steps that advance runs are recorded: retry once it returns, or stop a running step's task first with melra_task_cancel. Works on paused, suspended and failed runs too. Returns the updated run, unchanged if already verified_complete or cancelled. To halt a run and continue later, use melra_workflow_control.",
       inputSchema: WorkflowIdInputSchema,
       annotations: {
         readOnlyHint: false,
@@ -464,7 +464,7 @@ export function createMcpServer(
     {
       title: "Pause, resume, or suspend a MELRA workflow",
       description:
-        "Halt a workflow run or lift the halt, without changing node state. action pause or suspend (same behaviour; only the status name differs) sets the run's status to paused or suspended unless it is verified_complete, cancelled or failed; melra_workflow_advance then fails with workflow_halted:<status> while the run is halted. Halt between advances: an advance already in flight still finishes the steps it started. resume needs a paused or suspended run, sets the status its nodes imply and runs nothing, so call melra_workflow_advance next. Returns the updated run. To end a run instead, use melra_workflow_cancel.",
+        "Halt a workflow run or lift the halt, without changing node state. action pause or suspend (same behaviour; only the status name differs) sets the run's status to paused or suspended unless it is verified_complete, cancelled or failed; melra_workflow_advance then fails with workflow_halted:<status> while the run is halted. Halt between advances: while an advance holds the run's lease, in this process or another, pause, suspend and resume fail with workflow_lease_held and change nothing, so retry once it returns. resume needs a paused or suspended run, sets the status its nodes imply and runs nothing, so call melra_workflow_advance next. Returns the updated run. To end a run instead, use melra_workflow_cancel.",
       inputSchema: WorkflowControlInputSchema,
       annotations: {
         readOnlyHint: false,

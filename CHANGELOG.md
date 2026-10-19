@@ -157,6 +157,22 @@ All notable changes are documented here. The format follows
   the console refuses the Deny with `task_not_cancellable:<status>` where it
   showed the task as denied. (#244)
 
+- `workflow pause`, `suspend`, `resume` and `cancel` (`melra_workflow_control`,
+  `melra_workflow_cancel`) no longer land under an advance that is running a
+  step. They wrote the run at once, so the advance's commit then failed with
+  `workflow_state_conflict`: a step whose effect ran and verified was left
+  `pending` with no task, a resumed run planned it again and wedged on the
+  duplicate, and a cancelled run left the effect out of its record for good.
+  Each now takes the run's lease for the moment it writes, as recovery does:
+  while an advance in any process holds it, each is refused with
+  `workflow_lease_held` and changes nothing, so retry once the advance
+  returns (to stop a running step, cancel its task with `melra_task_cancel`).
+  An advance whose lease lapsed (it stalled, as across a laptop's sleep) is
+  taken over instead: it stops with `workflow_lease_lost` before its next
+  step, where before it ran that step on a paused or cancelled run, and its
+  expired lease is left in place, so the run is recovered before it is next
+  advanced. (#244)
+
 - A condition step whose advance lost its commit (a pause landed while it ran)
   keeps to one branch. Recovery read both branches' tasks together and could
   reopen the step on the branch it had abandoned, or, when the branch it took

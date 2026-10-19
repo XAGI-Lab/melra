@@ -85,6 +85,17 @@ const approvalsFor = (run: WorkflowRun) =>
     node.approval === undefined ? [] : [{ approvalId: node.approval.approvalId, phrase: node.approval.phrase! }],
   );
 
+/**
+ * An operator's pause landing under an advance, as it still can once the
+ * advance's lease has lapsed (a laptop's sleep; a live lease refuses it,
+ * #244): it takes the run over, and the advance stops with
+ * workflow_lease_lost, its commit lost.
+ */
+const lapseAndPause = (controller: WorkflowController, store: SqliteStore, id: string) => {
+  store.renewWorkflowLease(id, store.getWorkflowLease(id)!.owner, new Date(0).toISOString());
+  controller.pause(id);
+};
+
 describe("workflow ordering", () => {
   it("does not run an approved effect before its other dependencies", async () => {
     const { controller, done } = await setup();
@@ -320,16 +331,16 @@ describe("a condition's branch not taken (#268)", () => {
       { id: "after", type: "operation", dependsOn: ["choose"], request: put("after") },
     ]);
   /** An advance that plans a challenge, under which an operator's pause lands before it commits. */
-  const losingCommit = async (controller: WorkflowController, tasks: TaskController, id: string) => {
+  const losingCommit = async (controller: WorkflowController, store: SqliteStore, tasks: TaskController, id: string) => {
     const plan = tasks.plan.bind(tasks);
     let planned: TaskRecord | undefined;
     vi.spyOn(tasks, "plan").mockImplementationOnce((request, options) => {
       const task = plan(request, options);
       planned = task;
-      controller.pause(id);
+      lapseAndPause(controller, store, id);
       return task;
     });
-    await expect(controller.advance(id)).rejects.toThrow("workflow_state_conflict");
+    await expect(controller.advance(id)).rejects.toThrow("workflow_lease_lost");
     expect(controller.status(id).nodes.choose).toMatchObject({ status: "pending", taskIds: [] });
     controller.resume(id);
     return planned!;
@@ -343,11 +354,11 @@ describe("a condition's branch not taken (#268)", () => {
   };
 
   it("cancels the challenge a lost advance left on the branch it then did not take", async () => {
-    const { controller, root, tasks, done } = await setup();
+    const { controller, root, store, tasks, done } = await setup();
     await writeFile(join(root, "flag"), "on");
     const planned = controller.plan(choice([put("patch"), put("patch2")], [put("create")]));
     await controller.advance(planned.id);
-    const abandoned = await losingCommit(controller, tasks, planned.id);
+    const abandoned = await losingCommit(controller, store, tasks, planned.id);
     expect(abandoned.status).toBe("awaiting_approval");
     await unlink(join(root, "flag"));
 
@@ -367,7 +378,7 @@ describe("a condition's branch not taken (#268)", () => {
     const planned = controller.plan(choice([], [put("create")]));
     await controller.advance(planned.id);
     // Decided false, and create's challenge planned; the pause lost it.
-    const abandoned = await losingCommit(controller, tasks, planned.id);
+    const abandoned = await losingCommit(controller, store, tasks, planned.id);
     await writeFile(join(root, "flag"), "on");
     let run = (await controller.advance(planned.id)).run;
     run = (await controller.advance(planned.id)).run;
@@ -392,16 +403,18 @@ describe("a condition's branch not taken (#268)", () => {
     const patch = TaskRequestSchema.parse({ ...put("patch"), reconciliation: [{ type: "file_exists", path: "patched" }] });
     const planned = controller.plan(choice([patch], [put("create")]));
     await controller.advance(planned.id);
-    // The true branch runs patch, whose reply is lost; a pause lands meanwhile.
+    // The true branch runs patch, whose reply is lost, and the advance's
+    // commit fails (a locked database). Not a pause: one that takes a lapsed
+    // advance over leaves the run to recovery first (#244).
     on.put = (key) => {
-      if (key !== "patch") return;
-      controller.pause(planned.id);
-      throw outcomeUnknown("socket hang up");
+      if (key === "patch") throw outcomeUnknown("socket hang up");
     };
-    await expect(controller.advance(planned.id)).rejects.toThrow("workflow_state_conflict");
+    vi.spyOn(store, "transitionWorkflow").mockImplementationOnce(() => {
+      throw new Error("database is locked");
+    });
+    await expect(controller.advance(planned.id)).rejects.toThrow("database is locked");
     const [unknown] = store.listTasks(10, "recovery_required");
     expect(controller.status(planned.id).nodes.choose).toMatchObject({ status: "pending", taskIds: [] });
-    controller.resume(planned.id);
     await unlink(join(root, "flag"));
 
     // Read false now, the condition ran create beside a patch that may stand.
@@ -537,10 +550,10 @@ describe("a condition's branch not taken (#268)", () => {
     // The adapter says patch did not happen; a pause lands meanwhile.
     on.put = (key) => {
       if (key !== "patch") return;
-      controller.pause(planned.id);
+      lapseAndPause(controller, store, planned.id);
       throw new Error("patch_refused");
     };
-    await expect(controller.advance(planned.id)).rejects.toThrow("workflow_state_conflict");
+    await expect(controller.advance(planned.id)).rejects.toThrow("workflow_lease_lost");
     delete on.put;
     expect(store.listTasks(10, status)).toHaveLength(1);
     controller.resume(planned.id);
@@ -562,9 +575,9 @@ describe("a condition's branch not taken (#268)", () => {
       const planned = controller.plan(choice([patch], [put("create")]));
       await controller.advance(planned.id);
       on.put = (key) => {
-        if (key === "patch") controller.pause(planned.id);
+        if (key === "patch") lapseAndPause(controller, store, planned.id);
       };
-      await expect(controller.advance(planned.id)).rejects.toThrow("workflow_state_conflict");
+      await expect(controller.advance(planned.id)).rejects.toThrow("workflow_lease_lost");
       delete on.put;
       const [partial] = store.listTasks(10, "partial");
       controller.resume(planned.id);
@@ -586,7 +599,7 @@ describe("a condition's branch not taken (#268)", () => {
   );
 
   it("cancels with the run a challenge a lost advance left on an operation, and no other run's", async () => {
-    const { controller, tasks, done } = await setup();
+    const { controller, store, tasks, done } = await setup();
     const planned = controller.plan(workflow([{ id: "op", type: "operation", request: put("op") }]));
     const other = controller.plan(workflow([{ id: "op", type: "operation", request: put("op") }]));
     const waiting = (await controller.advance(other.id)).run.nodes.op!.taskIds[0]!;
@@ -595,10 +608,10 @@ describe("a condition's branch not taken (#268)", () => {
     vi.spyOn(tasks, "plan").mockImplementationOnce((request, options) => {
       const task = plan(request, options);
       leftover = task;
-      controller.pause(planned.id);
+      lapseAndPause(controller, store, planned.id);
       return task;
     });
-    await expect(controller.advance(planned.id)).rejects.toThrow("workflow_state_conflict");
+    await expect(controller.advance(planned.id)).rejects.toThrow("workflow_lease_lost");
     controller.resume(planned.id);
     expect(controller.status(planned.id).nodes.op).toMatchObject({ status: "pending", taskIds: [] });
     expect(controller.cancel(planned.id).status).toBe("cancelled");
@@ -609,17 +622,17 @@ describe("a condition's branch not taken (#268)", () => {
   });
 
   it("leaves the run uncancelled when its sweep fails, so cancelling again sweeps", async () => {
-    const { controller, tasks, done } = await setup();
+    const { controller, store, tasks, done } = await setup();
     const planned = controller.plan(workflow([{ id: "op", type: "operation", request: put("op") }]));
     const plan = tasks.plan.bind(tasks);
     let leftover: TaskRecord | undefined;
     vi.spyOn(tasks, "plan").mockImplementationOnce((request, options) => {
       const task = plan(request, options);
       leftover = task;
-      controller.pause(planned.id);
+      lapseAndPause(controller, store, planned.id);
       return task;
     });
-    await expect(controller.advance(planned.id)).rejects.toThrow("workflow_state_conflict");
+    await expect(controller.advance(planned.id)).rejects.toThrow("workflow_lease_lost");
     controller.resume(planned.id);
     const cancel = tasks.cancel.bind(tasks);
     vi.spyOn(tasks, "cancel").mockImplementationOnce(() => {
@@ -652,7 +665,7 @@ describe("a condition's branch not taken (#268)", () => {
     await writeFile(join(root, "flag"), "on");
     const planned = controller.plan(choice([put("ship")], [put("other")]));
     await controller.advance(planned.id);
-    const challenge = await losingCommit(controller, tasks, planned.id);
+    const challenge = await losingCommit(controller, store, tasks, planned.id);
     expect(challenge.status).toBe("awaiting_approval");
 
     const restarted = new WorkflowController(store, tasks, cipher);
@@ -699,10 +712,10 @@ describe("a condition step a lost advance left unknown (#270)", () => {
     await controller.advance(planned.id);
     on.put = (key) => {
       if (key !== "ship") return;
-      controller.pause(planned.id);
+      lapseAndPause(controller, store, planned.id);
       throw outcomeUnknown("socket hang up");
     };
-    await expect(controller.advance(planned.id)).rejects.toThrow("workflow_state_conflict");
+    await expect(controller.advance(planned.id)).rejects.toThrow("workflow_lease_lost");
     delete on.put;
     const [ship] = store.listTasks(10, "recovery_required");
     controller.resume(planned.id);
@@ -1208,5 +1221,68 @@ describe("operator halts", () => {
     const resumed = restarted.resume(planned.id);
     expect(resumed.status).toBe("recovery_required");
     expect(resumed.error).toBe("workflow_contains_unreconciled_mutation");
+  });
+});
+
+describe("a halt or cancel while an advance runs a step (#244)", () => {
+  it.each(["pause", "suspend", "cancel"] as const)(
+    "refuses %s from this process or another until the advance has recorded its step",
+    async (action) => {
+      const { controller, store, tasks, cipher, done, on } = await setup({ policy: { unhinged: true } });
+      const peer = new WorkflowController(store, tasks, cipher);
+      const planned = controller.plan(
+        workflow([
+          { id: "a", type: "operation", request: put("a") },
+          { id: "b", type: "operation", dependsOn: ["a"], request: put("b") },
+        ]),
+      );
+      const refused: string[] = [];
+      on.put = (key) => {
+        if (key !== "a") return;
+        for (const operator of [controller, peer]) {
+          try {
+            operator[action](planned.id);
+          } catch (error) {
+            refused.push((error as Error).message);
+          }
+        }
+      };
+      // Landed, it failed the advance's commit, and a ran with no task on the run.
+      let run = (await controller.advance(planned.id)).run;
+      expect(refused).toEqual(["workflow_lease_held", "workflow_lease_held"]);
+      expect(run.nodes.a?.status).toBe("verified_complete");
+      const ran = run.nodes.a!.taskIds;
+      // Between advances it lands, and the run carries on from where it was.
+      run = peer[action](planned.id);
+      if (action !== "cancel") {
+        peer.resume(planned.id);
+        run = (await controller.advance(planned.id)).run;
+      }
+      expect(run.status).toBe(action === "cancel" ? "cancelled" : "verified_complete");
+      expect(run.nodes.a).toMatchObject({ status: "verified_complete", taskIds: ran });
+      expect(done).toEqual(action === "cancel" ? ["a"] : ["a", "b"]);
+    },
+  );
+
+  it("takes over an advance whose lease lapsed, which stops before its next step, and is recovered first", async () => {
+    const { controller, store, tasks, cipher, done, on } = await setup({ policy: { unhinged: true } });
+    const peer = new WorkflowController(store, tasks, cipher);
+    const planned = controller.plan(
+      workflow([{ id: "loop", type: "bounded_loop", maxIterations: 2, body: [put("a")] }]),
+    );
+    on.put = () => {
+      delete on.put;
+      lapseAndPause(peer, store, planned.id);
+    };
+    // Paused beside the lease, the advance ran the next iteration on a paused run.
+    await expect(controller.advance(planned.id)).rejects.toThrow("workflow_lease_lost");
+    expect(done).toEqual(["a"]);
+    // Left expired, as the advance left it: the run is recovered before it is advanced again.
+    expect(store.expiredWorkflowLeases(new Date().toISOString())).toContain(planned.id);
+    peer.resume(planned.id);
+    const run = (await controller.advance(planned.id)).run;
+    expect(run.status).toBe("verified_complete");
+    expect(run.nodes.loop?.taskIds).toHaveLength(2);
+    expect(done).toEqual(["a", "a"]);
   });
 });

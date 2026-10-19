@@ -64,6 +64,23 @@ async function setup(
   };
 }
 
+/**
+ * `workflow cancel` landing while an advance runs. Refused while the advance
+ * holds the run's lease (#244), it takes the run over once that lease has
+ * lapsed, as across a laptop's sleep. Returns the refusal it met first.
+ */
+function cancelUnderAdvance(controller: WorkflowController, store: SqliteStore, id: string): string {
+  let refused = "";
+  try {
+    controller.cancel(id);
+  } catch (error) {
+    refused = (error as Error).message;
+  }
+  store.renewWorkflowLease(id, store.getWorkflowLease(id)!.owner, new Date(0).toISOString());
+  controller.cancel(id);
+  return refused;
+}
+
 function request(goal: string): TaskRequest {
   return {
     goal,
@@ -1476,6 +1493,7 @@ describe("WorkflowController execution", () => {
   it("stops a later advance's unwind when the run is cancelled under it", async () => {
     let cancelRun = () => {};
     const calls: string[] = [];
+    const refused: string[] = [];
     let statusAtRefund: string | undefined;
     const { controller, store } = await setup(async (operation) => {
       if (operation.kind !== "http") throw new Error("unexpected_operation");
@@ -1502,7 +1520,9 @@ describe("WorkflowController execution", () => {
         ],
       }),
     );
-    cancelRun = () => controller.cancel(planned.id);
+    cancelRun = () => {
+      refused.push(cancelUnderAdvance(controller, store, planned.id));
+    };
     // Each challenge approved as it parks: the refund then runs in the next
     // advance's unwind, and `workflow cancel` lands while it does.
     let run = controller.status(planned.id);
@@ -1517,6 +1537,7 @@ describe("WorkflowController execution", () => {
     }
 
     expect(run.status).toBe("cancelled");
+    expect(refused).toEqual(["workflow_lease_held"]);
     // Only an advance that starts on a failed run unwinds, so this is the
     // unwind() path and not the trigger loop of the advance where ship failed.
     expect(statusAtRefund).toBe("failed");
@@ -1528,7 +1549,8 @@ describe("WorkflowController execution", () => {
   it("stops an unwind when the run is cancelled under it", async () => {
     let cancelRun = () => {};
     const calls: string[] = [];
-    const { controller } = await setup(
+    const refused: string[] = [];
+    const { controller, store } = await setup(
       async (operation) => {
         if (operation.kind !== "http") throw new Error("unexpected_operation");
         const path = new URL(operation.url).pathname;
@@ -1555,12 +1577,15 @@ describe("WorkflowController execution", () => {
       }),
     );
     // `workflow cancel` lands while the refund runs, the first step undone.
-    cancelRun = () => controller.cancel(planned.id);
+    cancelRun = () => {
+      refused.push(cancelUnderAdvance(controller, store, planned.id));
+    };
     for (let step = 0; step < 6 && controller.status(planned.id).status !== "cancelled"; step += 1) {
       await controller.advance(planned.id).catch(() => undefined);
     }
 
     expect(controller.status(planned.id).status).toBe("cancelled");
+    expect(refused).toEqual(["workflow_lease_held"]);
     expect(calls).toContain("/refunds");
     expect(calls).not.toContain("/releases");
   });
@@ -2613,7 +2638,7 @@ describe("WorkflowController execution", () => {
     // `workflow cancel` lands while the shipment runs, and aborts it.
     const advancing = controller.advance(planned.id, approve(run, "ship"));
     await started;
-    controller.cancel(planned.id);
+    expect(cancelUnderAdvance(controller, store, planned.id)).toBe("workflow_lease_held");
     await advancing.catch(() => undefined);
 
     // A refund planned now would be a live challenge on a run its operator

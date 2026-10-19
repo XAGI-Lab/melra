@@ -307,7 +307,15 @@ draft → planned → running → verified_complete
 
 `paused` and `suspended` are entered by the operator commands `workflow pause`
 and `workflow suspend`, and left by `workflow resume`; an `advance` against
-either is refused rather than queued. The public schema also reserves
+either is refused rather than queued. These three and `workflow cancel` take
+the run's lease for the moment they write, as recovery does, so none lands
+under an advance, whose commit would then fail and leave the effects it ran
+out of the run: while an advance holds the lease, in any process, each is
+refused with `workflow_lease_held` and changes nothing, so retry once it
+returns. An advance whose lease lapsed (it stalled, as across a laptop's
+sleep) is taken over: it stops with `workflow_lease_lost` before its next step,
+and its expired lease is left in place, so whoever advances the run next
+recovers it first. The public schema also reserves
 `partially_complete`, which no command enters today.
 
 `cancelled` is entered only by `workflow cancel`. A step whose task is denied
@@ -375,8 +383,8 @@ Multiple MELRA server processes may share one `MELRA_HOME`. Advancing a workflow
 takes an expiring SQLite lease before any adapter runs, so a second process is
 refused with `workflow_lease_held` rather than starting duplicate side effects.
 The advance renews that lease before each step it starts and before it commits.
-One that stalled long enough for another process to take the run over fails
-with `workflow_lease_lost` instead, starting no further step and committing
+One that stalled long enough for another process, or an operator's halt or
+cancel, to take the run over fails with `workflow_lease_lost` instead, starting no further step and committing
 nothing; advancing again carries on from wherever the other process left it.
 
 Recovery touches only work whose process is gone. The process that starts a
@@ -657,7 +665,8 @@ compensation is still its own governed task, so one that is a mutation waits for
 its own approval, and denying it stops the unwind as a failed compensation does.
 To end a run without unwinding it, cancel the run (`workflow cancel`,
 `melra_workflow_cancel`); that also stops an unwind already under way, before
-its next compensation.
+its next compensation, once the advance running one returns (until then the
+cancel is refused with `workflow_lease_held`).
 
 An interrupted mutation becomes `recovery_required` rather than being repeated,
 because the durable record can say what was in flight but not what the provider
