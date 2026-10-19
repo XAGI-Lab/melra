@@ -289,8 +289,13 @@ Actions: `capabilities`, `inspect`, `screenshot`, `click`, `move`, `drag`,
   screenshot through the adapter and runs `tesseract` over it, scaling each word
   from the captured image onto the display so a Retina capture does not double
   every coordinate. `capabilities.ocr` says whether the host has `tesseract` at
-  all, and the read only ever runs when the tree was empty — a tree states what
-  a control *is*, a reading only what it looks like.
+  its usual install paths (or, for a library embedder, whether a program was
+  named with `ComputerRuntimeOptions.ocrProgram` and screenshots work), and the read only ever runs when the tree was empty — a tree states what
+  a control *is*, a reading only what it looks like. The screenshot is deleted
+  once it has been read. A read that fails (no screen-recording permission, a
+  Wayland session) leaves `inspect` as it is without `tesseract`, with no
+  `elements`; a `target`, which has nothing to fall back on, is refused with
+  the reason the read failed.
 - A word read this way carries a `confidence` between 0 and 1; an element the
   platform reported carries none, so an absent `confidence` means "stated", not
   "certain". Below `0.3` a word is not reported; below `0.7` it is reported but
@@ -331,7 +336,8 @@ Action: `request`. Fields: `method`, `url`, `headers`, `content`,
 - `idempotencyKey` is sent as `Idempotency-Key` for providers that honour it.
   MELRA cannot check that they do, so it does not change the guarantee.
 - Response bodies are capped by `maxResponseBytes` (1 MiB by default); a body
-  past the cap stops being read and the result reports `truncated: true`.
+  past the cap stops being read: the result carries the body up to the cap,
+  `bytes` counts what was delivered, and it reports `truncated: true`.
 - The request payload travels as `content`, which redaction strips before
   anything is persisted. Raw bytes reach the live caller only.
 - Credentials the operator configured under `policy.credentials` are injected at
