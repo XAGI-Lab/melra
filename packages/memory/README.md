@@ -42,7 +42,9 @@ task cannot read what another stored by guessing a key.
 
 Expired and superseded records are already invisible to every read path;
 `LocalMemory` reclaims them on the next write to that scope, after
-`MemoryRetention.maxAgeDays` (default 30). Pass `maxPerScope` to also cap live
+`MemoryRetention.maxAgeDays` (default 30). The record a live one replaced is
+kept, so deleting a correction always brings back what it corrected; an older
+record in the chain is kept only that long. Pass `maxPerScope` to also cap live
 memories — that one deletes records you can still read, so it defaults to `0`
 (no ceiling).
 
