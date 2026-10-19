@@ -123,6 +123,13 @@ jobs:
           EXPECTED_TAG_SHA: ${{ needs.validate.outputs.tag_sha }}
         shell: bash
         run: |
+          # The executables' pattern names their platforms: a bare melra-[0-9]*
+          # also matches the Python sdist and wheel.
+          assets=(release/*.tar.gz release/*.whl release/*.json release/melra-[0-9]*-{linux,darwin,win}-* release/SHA256SUMS)
+          # A name listed twice fails the upload partway, and a release left with
+          # some assets is one this workflow refuses to touch again.
+          dupes="$(printf '%s\n' "${assets[@]##*/}" | sort | uniq -d)"
+          [ -z "${dupes}" ] || { echo "::error::listed twice: ${dupes}"; exit 1; }
           release="$(gh release view "${RELEASE_TAG}" --json tagName,isPrerelease,assets)"
           test "$(jq -r .tagName <<<"${release}")" = "${RELEASE_TAG}"
           test "$(jq -r .isPrerelease <<<"${release}")" = true
@@ -135,7 +142,6 @@ jobs:
             echo "::error::the release tag moved after validation; refusing to attach mismatched files"
             exit 1
           }
-          assets=(release/*.tar.gz release/*.whl release/*.json release/melra-[0-9]* release/SHA256SUMS)
           gh release upload "${RELEASE_TAG}" "${assets[@]}"
           diff -u \
             <(printf '%s\n' "${assets[@]##*/}" | sort) \
