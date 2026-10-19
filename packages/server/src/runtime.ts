@@ -207,15 +207,21 @@ export function narrowWorkspaceAdvice(dataDirectory: string, policyPath?: string
  * broad workspace is the mistake (the default ~/.melra is in home), and moving
  * MELRA_HOME would only point the server at a new, empty database. A project
  * someone put MELRA_HOME inside is fixed by moving it out, database and all.
+ * Only the default location is said to stay: one inside a project under a
+ * broad workspace still has to move once the workspace is narrowed.
  */
 export async function dataLocationAdvice(
   workspaceRoot: string,
   dataDirectory: string,
   policyPath?: string,
 ): Promise<string> {
-  return (await broadWorkspace(workspaceRoot)) === undefined
-    ? "move the MELRA_HOME directory, with everything in it, out of the workspace, and set MELRA_HOME to where it went"
-    : `${narrowWorkspaceAdvice(dataDirectory, policyPath)}; keep MELRA_HOME where it is (moving it orphans the database)`;
+  if ((await broadWorkspace(workspaceRoot)) === undefined) {
+    return "move the MELRA_HOME directory, with everything in it, out of the workspace, and set MELRA_HOME to where it went";
+  }
+  const narrow = narrowWorkspaceAdvice(dataDirectory, policyPath);
+  return resolve(dataDirectory) === resolve(homedir(), ".melra")
+    ? `${narrow}; keep MELRA_HOME where it is (moving it orphans the database)`
+    : narrow;
 }
 
 /**

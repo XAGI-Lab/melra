@@ -510,6 +510,17 @@ describe("a broad workspace", () => {
       `set MELRA_WORKSPACE to your project directory, or make that the workspaceRoot in ${join(base, "team.json")}; ` +
         "keep MELRA_HOME where it is",
     );
+    // MELRA_HOME inside a project under home: narrowing comes first, but it
+    // is not told to stay, since the next refusal would say to move it.
+    await expect(
+      createMelraRuntime({
+        workspaceRoot: base,
+        dataDirectory: join(base, "project", ".melra"),
+        environment: { MELRA_MODE: "enforced" },
+      }),
+    ).rejects.toThrow(
+      /^enforced_mode_refuses_data_inside_workspace: set MELRA_WORKSPACE to your project directory, or run this from there\.$/,
+    );
   });
 });
 
