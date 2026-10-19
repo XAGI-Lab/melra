@@ -1,8 +1,4 @@
-<
-
-https://github.com/user-attachments/assets/e5cf895d-7ea6-4797-a1ef-e69cc5860d3f
-
-div align="center">
+<div align="center">
 
 <img src="docs/assets/melra-logo.png" alt="MELRA logo" width="132" />
 
