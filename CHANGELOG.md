@@ -134,6 +134,13 @@ All notable changes are documented here. The format follows
   They were ignored, so `--status $S` with `S` unset listed every status as if
   filtered. (#285)
 
+- A process whose database is closed while a workflow advance is still
+  running, as at shutdown, no longer dies on an uncaught `database is not
+  open` from the lease renewal timer. The timer stops renewing, and the
+  advance fails on its own next write. A renewal that fails for any other
+  reason, such as a database too busy to answer, is tried again on the next
+  tick, so the lease never lapses under a running step (#304).
+
 - A file `move` that only changes letter case (`Readme.md` to `README.md`)
   verifies on a case-insensitive disk, such as macOS's default. The
   `file_absent` evidence derived for the source found the renamed file under
