@@ -575,6 +575,15 @@ generated each start. **Anyone who can read the token can drive this machine** â
 the server binds loopback only, and putting it behind a proxy on a reachable
 interface hands out that reach.
 
+Each MCP client gets its own session, which lasts until the client ends it
+(both SDKs do, on close) or the server stops. Past 256 sessions, a new one ends
+the least recently used session with no request in flight and no event stream
+open: a client that vanished without ending its own, or one that only posts and
+has been quiet longest. A client that keeps the MCP event stream open, as both
+SDKs do, is never ended while connected. A request
+naming a session the server no longer has, such as one from before a restart,
+gets 404, which tells an MCP client to start a new session.
+
 The console this server serves is read-only, and the server has no approval
 route. To approve in a browser, run [`melra console`](#approving-in-a-browser),
 a separate process.

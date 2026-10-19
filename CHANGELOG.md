@@ -119,6 +119,17 @@ All notable changes are documented here. The format follows
   back deleting corrections reaches once compaction has run. Edits and
   deletes of one chain from two processes no longer interleave. (#250)
 
+- `melra serve --http` and `--socket` no longer keep every MCP session for the
+  life of the process. The TypeScript SDK's `close()` and `melra conformance
+  --url` now end their session, which they never did, waiting at most two
+  seconds for the server. Past 256 sessions, a new one ends the least
+  recently used session with no request in flight and no event stream open,
+  such as one whose client vanished; a client holding the event stream open,
+  as both SDKs do, is never ended. A
+  request naming a session the server does not have, such as one from before
+  a restart, gets 404 with JSON-RPC error -32001, which tells an MCP client to
+  start a new session. It used to get 400. (#253, #257)
+
 - A file `write` with `encoding: "base64"` refuses content that is not base64
   (`file_content_invalid_base64`) before anything is written; line breaks,
   missing padding and the URL-safe alphabet are accepted. Node's lenient
