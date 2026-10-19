@@ -721,7 +721,10 @@ describe("effect contract and principal", () => {
   });
 
   describe("a write that fails after the adapter returned", () => {
-    async function charge(execute: () => Promise<Record<string, unknown>>) {
+    async function charge(
+      execute: () => Promise<Record<string, unknown>>,
+      options: { idempotencyKey?: string } = {},
+    ) {
       const { controller, store } = await setup({ execute });
       const task = controller.plan(
         TaskRequestSchema.parse({
@@ -736,6 +739,7 @@ describe("effect contract and principal", () => {
             { type: "result_equals", path: "success", value: true },
           ],
         }),
+        options,
       );
       const approval = { approvalId: task.approval!.approvalId, phrase: task.approval!.phrase! };
       return { controller, store, task, approval };
@@ -774,6 +778,25 @@ describe("effect contract and principal", () => {
       expect(result.task.status).toBe("verified_success");
       expect(store.getTask(task.id)?.status).toBe("verified_success");
       expect(controller.receipts({ taskId: task.id }).receipts).toHaveLength(1);
+      expect(execute).toHaveBeenCalledTimes(1);
+    });
+
+    it("settles a mutation that verified and committed its key before a later write failed", async () => {
+      const execute = vi.fn(async () => ({ success: true }));
+      const { controller, store, task, approval } = await charge(execute, {
+        idempotencyKey: "c".repeat(64),
+      });
+      vi.spyOn(store, "saveReceipt").mockImplementationOnce(() => {
+        throw new Error("database is locked");
+      });
+      expect((await controller.execute(task.id, approval)).task.status).toBe("recovery_required");
+
+      // Its key is committed only once it verified, so with no reconciliation
+      // declared it was parked for good.
+      const settled = await controller.execute(task.id);
+
+      expect(settled.task.status).toBe("verified_success");
+      expect(settled.certificate?.result).toBe("VERIFIED_SUCCESS");
       expect(execute).toHaveBeenCalledTimes(1);
     });
   });

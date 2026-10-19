@@ -229,7 +229,7 @@ const fileAbsent: Built<"file_absent"> = {
     try {
       await lstat(path);
     } catch (error) {
-      passed = error instanceof Error && "code" in error && error.code === "ENOENT";
+      passed = missing(error);
       if (!passed) throw error;
     }
     return {

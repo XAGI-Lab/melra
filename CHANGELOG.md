@@ -117,9 +117,11 @@ All notable changes are documented here. The format follows
   without the provider being asked, and the agent ran the effect again. A
   predicate whose check throws is now `inconclusive` in the receipt, as an
   unreachable provider already was; a missing file is still a plain no for
-  `file_exists` and `file_hash`. Planning refuses a `reconciliation`
-  verifier the runtime does not have (`evidence_verifier_unavailable`), as it
-  did for `requiredEvidence`.
+  `file_exists` and `file_hash`, and a path under a regular file (`ENOTDIR`)
+  is absent for `file_absent`, where it was an error. Planning refuses a
+  `reconciliation` verifier the runtime does not have
+  (`evidence_verifier_unavailable`), as it did for `requiredEvidence`; a
+  workflow run accepted before this change is not stopped at that step.
 
 - A mutation whose adapter returned, but whose result, receipt or task could
   not then be written (a locked or full database), parks as
@@ -128,7 +130,12 @@ All notable changes are documented here. The format follows
   the target's circuit breaker though the target had answered. A task already
   recorded as `verified_success` keeps that outcome when only its certificate
   fails to write; it was rewritten as `failed` beside its own verified
-  receipt.
+  receipt. The certificate is written the next time the task's receipts are
+  read (`melra_receipt`, or a workflow deriving its run's status), so a run
+  with that step still finishes. A mutation that had verified and committed
+  its idempotency key before the write failed settles as `verified_success`
+  when it is next reconciled (`melra_execute`), declared `reconciliation` or
+  not.
 
 - A workflow step whose adapter error runs past 10,000 characters is
   recorded. The task kept the whole message and a workflow node's `error`

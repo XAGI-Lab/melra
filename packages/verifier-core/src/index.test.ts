@@ -104,6 +104,17 @@ describe("Verifier", () => {
     ]);
   });
 
+  it("answers a path under a regular file as absent", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-verifier-"));
+    roots.push(root);
+    await writeFile(join(root, "build"), "a file, not a directory");
+    const verifier = await Verifier.create(root);
+    const { evidence } = await verifier.verify([{ type: "file_absent", path: "build/out.txt" }], {});
+    // ENOTDIR: the path cannot exist, which is an answer, not a failure to ask.
+    expect(evidence[0]).toMatchObject({ passed: true, summary: "workspace path is absent" });
+    expect(evidence[0]?.inconclusive).toBeUndefined();
+  });
+
   it("stamps each item with how it was established", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-verifier-"));
     roots.push(root);

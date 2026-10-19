@@ -194,6 +194,35 @@ describe("WorkflowController planning", () => {
     expect(advanced.run.nodes.click?.status).not.toBe("pending");
   });
 
+  it("refuses a reconciliation verifier it does not have only for new work", async () => {
+    const { controller, tasks } = await setup();
+    const ledger = WorkflowDefinitionSchema.parse({
+      schemaVersion: "1.0.0",
+      id: definitionId,
+      version: 1,
+      name: "Remember",
+      nodes: [
+        {
+          id: "remember",
+          type: "operation",
+          request: {
+            ...mutationRequest("Remember the project"),
+            reconciliation: [{ type: "custom", verifier: "ledger_row" }],
+          },
+        },
+      ],
+    });
+    expect(() => controller.plan(ledger)).toThrow("evidence_verifier_unavailable:ledger_row");
+    // Accepted by a version that never checked reconciliation, the run must
+    // not stop at the step, whose earlier steps may already have run.
+    const preflight = tasks.preflight.bind(tasks);
+    const spy = vi.spyOn(tasks, "preflight").mockImplementation((request) => preflight(request, { stored: true }));
+    const run = controller.plan(ledger);
+    spy.mockRestore();
+    const advanced = await controller.advance(run.id);
+    expect(advanced.run.nodes.remember?.status).not.toBe("pending");
+  });
+
   it("rejects a denied nested request before writing anything", async () => {
     const { controller, store } = await setup();
     const denied = WorkflowDefinitionSchema.parse({
@@ -1252,6 +1281,28 @@ describe("WorkflowController execution", () => {
     const result = await settle(controller, planned.id);
     expect(result.run.nodes.remember?.status).toBe("failed");
     expect(result.run.nodes.remember?.error).toHaveLength(10_000);
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("finishes a run whose step's certificate failed to write", async () => {
+    const execute = vi.fn(async () => ({ success: true, stored: true }));
+    const { controller, store } = await setup(execute);
+    vi.spyOn(store, "saveCertificate").mockImplementationOnce(() => {
+      throw new Error("disk full");
+    });
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Remember",
+        nodes: [{ id: "remember", type: "operation", request: mutationRequest("Remember the project") }],
+      }),
+    );
+    // The run is complete only on each step's certificate, and nothing wrote
+    // this one later: the run stayed `running` with nothing left to do.
+    const result = await settle(controller, planned.id);
+    expect(result.run.status).toBe("verified_complete");
     expect(execute).toHaveBeenCalledTimes(1);
   });
 

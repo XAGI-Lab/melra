@@ -310,8 +310,14 @@ export class TaskController {
     }
     // Refused before anything is approved: a mutation run against evidence no
     // registered verifier can check would end `partial` after the effect, and
-    // one that could not be reconciled would stay parked for good.
-    for (const predicate of [...parsed.requiredEvidence, ...parsed.reconciliation]) {
+    // one that could not be reconciled would stay parked for good. A stored
+    // step's reconciliation was never checked, and refusing it now would stop
+    // a run whose earlier steps already ran.
+    const checked =
+      options.stored === true
+        ? parsed.requiredEvidence
+        : [...parsed.requiredEvidence, ...parsed.reconciliation];
+    for (const predicate of checked) {
       if (!this.verifier.supports(predicate)) {
         throw new Error(
           `evidence_verifier_unavailable:${predicate.type === "custom" ? predicate.verifier : predicate.type}`,
@@ -571,7 +577,8 @@ export class TaskController {
       // The outcome is recorded, beside its receipt and idempotency commit,
       // and only the certificate summarising it failed to write. Rewriting it
       // would contradict them, and an error would read as the effect not
-      // having happened, so the caller gets what was recorded.
+      // having happened, so the caller gets what was recorded. The next read
+      // of its receipts writes the certificate.
       if (settled !== undefined) return settled;
       const rawMessage = error instanceof Error ? error.message : String(error);
       // Capped after redaction, which can lengthen it, at the 10,000 characters
@@ -710,6 +717,10 @@ export class TaskController {
       this.store.saveTask(task);
       return { task };
     };
+    // Its own commit already answers: the effect verified, and only a write
+    // after it failed. Parked for good otherwise, with nothing declared.
+    const committed = this.settleCommitted(task, request, classified);
+    if (committed !== undefined) return committed;
     if (request.reconciliation.length === 0) {
       return park("reconciliation_not_declared");
     }
@@ -822,6 +833,38 @@ export class TaskController {
   }
 
   /**
+   * Settle a task whose idempotency key is committed to it. A key is
+   * committed only once its effect verified, so whatever stopped the task
+   * came after the effect: an interruption, or a write that failed.
+   */
+  private settleCommitted(
+    task: TaskRecord,
+    request: TaskRequest,
+    classified: ReturnType<typeof classifyOperation>,
+  ): ExecutionResult | undefined {
+    if (
+      task.idempotencyKey === undefined ||
+      this.store.getIdempotencyCommit(task.idempotencyKey)?.taskId !== task.id
+    ) {
+      return undefined;
+    }
+    return this.resolveAsVerified(
+      task,
+      request,
+      classified,
+      [
+        {
+          type: "idempotency",
+          passed: true,
+          strength: evidenceStrength("idempotency"),
+          summary: "verified and committed before the interruption",
+        },
+      ],
+      { recovery: "committed_before_interruption" },
+    );
+  }
+
+  /**
    * With `failed`, each task that could not be recovered is recorded there by
    * id instead of the first failure being thrown at the end.
    */
@@ -895,26 +938,9 @@ export class TaskController {
     // A read that verified and committed its key before the interruption is
     // done. Run again, it would only be cancelled as a duplicate of itself,
     // and a workflow reads a cancelled step as a denial.
-    if (
-      classified.effect === "read" &&
-      task.idempotencyKey !== undefined &&
-      this.store.getIdempotencyCommit(task.idempotencyKey)?.taskId === task.id
-    ) {
-      this.resolveAsVerified(
-        task,
-        request,
-        classified,
-        [
-          {
-            type: "idempotency",
-            passed: true,
-            strength: evidenceStrength("idempotency"),
-            summary: "verified and committed before the interruption",
-          },
-        ],
-        { recovery: "committed_before_interruption" },
-      );
-      return task;
+    if (classified.effect === "read") {
+      const committed = this.settleCommitted(task, request, classified);
+      if (committed !== undefined) return committed.task;
     }
     const effect = classified.effect;
     task.status = effect === "read" ? "planned" : "recovery_required";
@@ -1017,7 +1043,7 @@ export class TaskController {
     if (input.receiptId !== undefined) {
       const receipt = this.store.getReceipt(input.receiptId);
       if (receipt === undefined) throw new Error("receipt_not_found");
-      const certificate = this.store.getCertificateForTask(receipt.taskId);
+      const certificate = this.certificateFor(receipt.taskId);
       return {
         receipts: [receipt],
         ...(certificate === undefined ? {} : { certificate }),
@@ -1025,11 +1051,33 @@ export class TaskController {
     }
     if (input.taskId === undefined) throw new Error("task_or_receipt_required");
     const receipts = this.store.getReceiptsForTask(input.taskId);
-    const certificate = this.store.getCertificateForTask(input.taskId);
+    const certificate = this.certificateFor(input.taskId);
     return {
       receipts,
       ...(certificate === undefined ? {} : { certificate }),
     };
+  }
+
+  /**
+   * A task's certificate, written now if its outcome was recorded and only
+   * the certificate failed to write: a workflow counts a step done only on
+   * its certificate, so the run would never finish. Not for a task in flight
+   * or parked, which something else may be settling while this writes.
+   */
+  private certificateFor(taskId: string): ExecutionCertificate | undefined {
+    const certificate = this.store.getCertificateForTask(taskId);
+    if (certificate !== undefined) return certificate;
+    const task = this.store.getTask(taskId);
+    const last = task?.receiptIds.at(-1);
+    const receipt = last === undefined ? undefined : this.store.getReceipt(last);
+    if (
+      task === undefined ||
+      receipt === undefined ||
+      ["running", "verifying", "recovery_required"].includes(task.status)
+    ) {
+      return undefined;
+    }
+    return this.createAndSaveCertificate(task, receipt.evidence);
   }
 
   /**
