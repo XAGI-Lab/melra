@@ -1,6 +1,9 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { MemoryOperationSchema } from "@melra/protocol";
 import { SqliteStore } from "@melra/storage-sqlite";
@@ -338,6 +341,142 @@ describe("LocalMemory", () => {
       "memory_supersedes_target_invalid",
     );
     expect(store.getMemory(second.id)?.value).toBe("Use version two (fixed)");
+  });
+
+  it("puts as one transaction another process cannot cut into", () => {
+    const root = mkdtempSync(join(tmpdir(), "melra-memory-"));
+    const path = join(root, "melra.sqlite");
+    store = new SqliteStore(path);
+    const other = new SqliteStore(path);
+    try {
+      const memory = new LocalMemory(store);
+      const put = (fields: Record<string, unknown>) =>
+        memory.execute(
+          MemoryOperationSchema.parse({ kind: "memory", action: "put", scope: "workspace", key: "runtime", ...fields }),
+        ) as { id: string };
+      const first = put({ value: "Use version one" });
+      const second = put({ value: "Use version two", supersedesId: first.id });
+      const third = put({ value: "Use version three", supersedesId: second.id });
+      // Another process deletes the middle record while this edit of the third
+      // runs. Let in, its splice pointed the first at the third just as the
+      // edit dropped what the third replaced: the first stayed hidden, with
+      // nothing pointing at it, for compaction to reclaim.
+      other.database.exec("PRAGMA busy_timeout = 50");
+      const write = store.putMemory.bind(store);
+      let cutIn: unknown = "not refused";
+      store.putMemory = (record) => {
+        try {
+          other.deleteMemory(second.id, "workspace");
+        } catch (error) {
+          cutIn = error;
+        }
+        write(record);
+      };
+      put({ id: third.id, value: "Use version three, alone" });
+      expect(String(cutIn)).toMatch(/locked|busy/i);
+      expect(store.getMemory(second.id)?.supersededBy).toBeUndefined();
+    } finally {
+      other.close();
+      store.close();
+      store = undefined;
+      rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+
+  it("brings back what a deleted or edited-away correction replaced", () => {
+    store = new SqliteStore(":memory:");
+    const memory = new LocalMemory(store);
+    const run = (fields: Record<string, unknown>) =>
+      memory.execute(MemoryOperationSchema.parse({ kind: "memory", scope: "workspace", ...fields }));
+    const put = (fields: Record<string, unknown>) =>
+      run({ action: "put", key: "runtime", ...fields }) as { id: string };
+    const listed = () =>
+      (run({ action: "list" }) as { memories: { id: string }[] }).memories.map(({ id }) => id).sort();
+
+    const first = put({ value: "Use version one" });
+    const second = put({ value: "Use version two", supersedesId: first.id });
+    expect(listed()).toEqual([second.id]);
+    // Undoing a mistaken correction used to leave the original hidden for
+    // good: unreadable, immutable, impossible to supersede, then compacted.
+    run({ action: "delete", id: second.id });
+    expect(listed()).toEqual([first.id]);
+    put({ id: first.id, value: "Use version one, still" });
+    const third = put({ value: "Use version three", supersedesId: first.id });
+    expect(listed()).toEqual([third.id]);
+    // An edit that stops superseding it hands it back the same way.
+    put({ id: third.id, value: "Use version three, on its own" });
+    expect(listed()).toEqual([first.id, third.id].sort());
+  });
+
+  it("links a chain around a deleted middle record, and keeps an expired correction's original retired", async () => {
+    store = new SqliteStore(":memory:");
+    const memory = new LocalMemory(store);
+    const run = (fields: Record<string, unknown>) =>
+      memory.execute(MemoryOperationSchema.parse({ kind: "memory", scope: "workspace", ...fields }));
+    const put = (fields: Record<string, unknown>) =>
+      run({ action: "put", key: "runtime", ...fields }) as { id: string };
+    const listed = () =>
+      (run({ action: "list" }) as { memories: { value: string }[] }).memories.map(({ value }) => value).sort();
+
+    const a = put({ value: "v1" });
+    const b = put({ value: "v2", supersedesId: a.id });
+    const c = put({ value: "v3", supersedesId: b.id });
+    // Deleting the middle one revived v1 beside v3, its current replacement.
+    run({ action: "delete", id: b.id });
+    expect(listed()).toEqual(["v3"]);
+    expect(store.getMemory(c.id)?.supersedesId).toBe(a.id);
+    // The chain is whole again: undoing v3 brings back v1.
+    run({ action: "delete", id: c.id });
+    expect(listed()).toEqual(["v1"]);
+
+    // A correction that expired after its put, deleted before any later put
+    // compacts it away: the same as after, its original stays retired.
+    const d = put({ key: "other", value: "w1" });
+    const e = put({ key: "other", value: "w2", supersedesId: d.id, expiresAt: new Date(Date.now() + 200).toISOString() });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(store.getMemory(e.id)).toBeDefined();
+    run({ action: "delete", id: e.id });
+    expect(listed()).toEqual(["v1"]);
+
+    // The same for one in the middle of a chain: deleting it before
+    // compaction spliced the chain, and deleting its successor then revived
+    // the original, which compaction removing it first never did.
+    const f = put({ key: "third", value: "x1" });
+    const g = put({ key: "third", value: "x2", supersedesId: f.id, expiresAt: new Date(Date.now() + 200).toISOString() });
+    const h = put({ key: "third", value: "x3", supersedesId: g.id });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    run({ action: "delete", id: g.id });
+    run({ action: "delete", id: h.id });
+    expect(listed()).toEqual(["v1"]);
+
+    // And for an edit of an expired correction that drops what it superseded.
+    const k = put({ key: "fourth", value: "y1" });
+    const m = put({ key: "fourth", value: "y2", supersedesId: k.id, expiresAt: new Date(Date.now() + 200).toISOString() });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    put({ id: m.id, key: "fourth", value: "y3" });
+    expect(listed()).toEqual(["v1", "y3"]);
+  });
+
+  it("leaves what an expired correction replaced retired", () => {
+    store = new SqliteStore(":memory:");
+    const memory = new LocalMemory(store);
+    const run = (fields: Record<string, unknown>) =>
+      memory.execute(MemoryOperationSchema.parse({ kind: "memory", scope: "workspace", ...fields }));
+    const first = run({ action: "put", key: "runtime", value: "Use version one" }) as { id: string };
+    run({
+      action: "put",
+      key: "runtime",
+      value: "Use version two until the migration",
+      supersedesId: first.id,
+      expiresAt: "2020-01-01T00:00:00.000Z",
+    });
+    // The lapse of a correction is not evidence the old fact is true again.
+    run({ action: "put", key: "other", value: "Any write compacts the scope" });
+    const { memories } = run({ action: "list", includeSuperseded: true }) as {
+      memories: { id: string; key: string }[];
+    };
+    expect(memories.filter(({ key }) => key === "runtime").map(({ id }) => id)).toEqual([first.id]);
+    expect(store.getMemory(first.id)?.supersededBy).toBeDefined();
   });
 
   it("supports expiry and scoped supersession", () => {

@@ -109,6 +109,16 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- Deleting a live memory that superseded another makes the one it replaced
+  live again, and so does editing it to supersede something else or nothing;
+  deleting one in the middle of a chain links the records on either side. The
+  replaced record used to stay hidden with nothing live pointing at it: it
+  could not be read, edited or superseded, and compaction deleted it a
+  `maxAgeDays` later. A correction that expires, or that `maxPerScope`
+  evicts, revives nothing, and `docs/INSTALLATION.md` says why, and how far
+  back deleting corrections reaches once compaction has run. Edits and
+  deletes of one chain from two processes no longer interleave. (#250)
+
 - A terminal `run` stopped by its own `timeoutMs` is an unknown outcome
   (`recovery_required` for a mutation), as it already was when the task's
   budget or a cancel stopped it. It was recorded `failed`, though the program
