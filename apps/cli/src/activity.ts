@@ -16,7 +16,7 @@ import {
   type TaskStatus,
   type WorkflowRun,
 } from "@melra/protocol";
-import { classifyOperation, loadPolicy } from "@melra/policy-core";
+import { approvalTtl, classifyOperation, loadPolicy, type LocalPolicy } from "@melra/policy-core";
 import { SqliteStore } from "@melra/storage-sqlite";
 import type { CliEnvironment } from "./environment.js";
 import { isHuman, paint, table } from "./output.js";
@@ -136,19 +136,102 @@ function approvalHint(waiting: number): string {
   return `${waiting} waiting for approval — ${APPROVAL_HINT}`;
 }
 
+function expiredHints({ expired, expiredSteps }: ApprovalCounts): string[] {
+  return [
+    ...(expired > 0
+      ? [`${expired} whose approval expired — plan again, or clear with \`melra approve <task-id> --deny\``]
+      : []),
+    // No deny: where the run still waits on the step, its next advance asks
+    // again, and a deny would fail it, or for a compensation stall its unwind. Which run a task is from, and
+    // whether that run can go on, the task alone cannot say, so the hint
+    // points at the run and states what each would do rather than advise.
+    ...(expiredSteps > 0
+      ? [
+          `${expiredSteps} workflow step(s) whose approval expired — see its run with \`melra workflow inspect <workflow-id>\`: where the run still waits on the step, its next advance asks again, and a deny would fail the run, or for a compensation stall its unwind`,
+        ]
+      : []),
+  ];
+}
+
+/** The approval window and mode a server started here would decide by. */
+export type ApprovalWindow = Pick<LocalPolicy, "approvalTtlMs" | "mode">;
+
+interface ApprovalCounts {
+  waiting: number;
+  expired: number;
+  expiredSteps: number;
+}
+
+/**
+ * Whether an expired task is a workflow's. Only a workflow plans under an
+ * idempotency key, so a keyed task is one, unless a run that is over (it never
+ * advances again) names a task under that key: only a deny clears that one,
+ * and harmlessly.
+ */
+function stepJudge(store: SqliteStore, runs: () => WorkflowRun[]): (task: TaskRecord) => boolean {
+  let over: Set<string> | undefined;
+  return (task) => {
+    if (task.idempotencyKey === undefined) return false;
+    over ??= new Set(
+      runs()
+        .filter((run) => run.status === "cancelled" || run.status === "verified_complete")
+        .flatMap((run) => Object.values(run.nodes).flatMap((node) => node.taskIds))
+        .flatMap((taskId) => store.getTask(taskId)?.idempotencyKey ?? []),
+    );
+    return !over.has(task.idempotencyKey);
+  };
+}
+
+/**
+ * Tasks waiting for an operator's approval, and those whose challenge expired
+ * unanswered, workflow steps apart. An expired one stays
+ * awaiting_approval, and counted as waiting it was reported forever and
+ * pointed at `melra approve`, which then refused it. An answer given in time
+ * is honoured for a TTL after it, as `TaskController` honours it, so that task
+ * waits for its agent and counts as neither. In enforced mode an in-band
+ * answer is no answer, and the challenge it took cannot be answered again.
+ */
+function approvalCounts(
+  store: SqliteStore,
+  window: ApprovalWindow,
+  runs: () => WorkflowRun[] = () => store.listWorkflowRuns(),
+): ApprovalCounts {
+  const now = Date.now();
+  let step: ((task: TaskRecord) => boolean) | undefined;
+  const counts = { waiting: 0, expired: 0, expiredSteps: 0 };
+  for (const task of store.listTasks(100_000, "awaiting_approval")) {
+    const expiresAt = task.approval === undefined ? Infinity : Date.parse(task.approval.expiresAt);
+    const decision = task.approval === undefined ? undefined : store.getApprovalDecision(task.approval.approvalId);
+    const unusable = window.mode === "enforced" && decision !== undefined && decision.channel !== "out_of_band";
+    const decidedAt = decision === undefined || unusable ? undefined : Date.parse(decision.decidedAt);
+    if (decidedAt !== undefined && decidedAt <= expiresAt) {
+      if (now < decidedAt + approvalTtl(window)) continue;
+    } else if (!unusable && now < expiresAt) {
+      counts.waiting += 1;
+      continue;
+    }
+    // Judged only once something has expired: a store keeps every run.
+    if ((step ??= stepJudge(store, runs))(task)) {
+      counts.expiredSteps += 1;
+    } else counts.expired += 1;
+  }
+  return counts;
+}
+
 export interface TasksOptions {
   limit: number;
   status?: TaskStatus;
   json: boolean;
+  window: ApprovalWindow;
 }
 
 export function tasksCommand(env: CliEnvironment, options: TasksOptions): number {
-  const { tasks, waiting } = withStore(
+  const { tasks, approvals } = withStore(
     env,
-    { tasks: [] as TaskRecord[], waiting: 0 },
+    { tasks: [] as TaskRecord[], approvals: { waiting: 0, expired: 0, expiredSteps: 0 } },
     (store) => ({
       tasks: store.listTasks(options.limit, options.status),
-      waiting: store.taskStatusCounts().awaiting_approval ?? 0,
+      approvals: approvalCounts(store, options.window),
     }),
   );
   if (!humanOutput(options.json)) {
@@ -183,10 +266,9 @@ export function tasksCommand(env: CliEnvironment, options: TasksOptions): number
       ),
     ]),
   );
-  if (waiting > 0) {
-    write();
-    write(approvalHint(waiting));
-  }
+  const hints = [...(approvals.waiting > 0 ? [approvalHint(approvals.waiting)] : []), ...expiredHints(approvals)];
+  if (hints.length > 0) write();
+  for (const hint of hints) write(hint);
   return 0;
 }
 
@@ -381,20 +463,27 @@ export async function statusCommand(
   let policyError: string | undefined;
   let policyMode: string | undefined;
   let policyUnhinged = false;
+  let policyTtlMs: number | undefined;
   if (options.policyPath !== undefined) {
     try {
       const loaded = await loadPolicy(options.policyPath, env.workspaceRoot);
       policyMode = loaded.mode;
       policyUnhinged = loaded.unhinged;
+      policyTtlMs = loaded.approvalTtlMs;
     } catch (error) {
       policyError = error instanceof Error ? error.message : String(error);
     }
   }
   const mode = env.mode === "enforced" || policyMode === "enforced" ? "enforced" : "developer";
   const path = databasePath(env);
-  const { tasks, workflows, lastActivity } = withStore(
+  const { tasks, workflows, lastActivity, approvals } = withStore(
     env,
-    { tasks: {} as Record<string, number>, workflows: {} as Record<string, number>, lastActivity: undefined as string | undefined },
+    {
+      tasks: {} as Record<string, number>,
+      workflows: {} as Record<string, number>,
+      lastActivity: undefined as string | undefined,
+      approvals: { waiting: 0, expired: 0, expiredSteps: 0 },
+    },
     (store) => {
       const runs = store.listWorkflowRuns();
       const latest = [store.listTasks(1)[0]?.updatedAt, runs.at(-1)?.updatedAt]
@@ -405,6 +494,11 @@ export async function statusCommand(
         tasks: store.taskStatusCounts(),
         workflows: countBy(runs.map((run) => run.status)),
         lastActivity: latest,
+        approvals: approvalCounts(
+          store,
+          { mode, ...(policyTtlMs === undefined ? {} : { approvalTtlMs: policyTtlMs }) },
+          () => runs,
+        ),
       };
     },
   );
@@ -429,7 +523,9 @@ export async function statusCommand(
     },
     tasks,
     workflows,
-    awaitingApproval: tasks.awaiting_approval ?? 0,
+    awaitingApproval: approvals.waiting,
+    expiredApprovals: approvals.expired,
+    expiredWorkflowSteps: approvals.expiredSteps,
     lastActivity: lastActivity ?? null,
     server: {
       http: { address: `127.0.0.1:${port}`, state: http ? "reachable" : "not running" },
@@ -456,6 +552,7 @@ export async function statusCommand(
   row("Tasks", summary(tasks));
   row("Workflows", summary(workflows));
   if (report.awaitingApproval > 0) row("Waiting", approvalHint(report.awaitingApproval));
+  for (const hint of expiredHints(approvals)) row("Expired", hint);
   row("Last active", lastActivity === undefined ? "never" : ago(lastActivity));
   row("HTTP", `${report.server.http.address} ${report.server.http.state}`);
   if (report.server.socket !== undefined) {

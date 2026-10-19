@@ -2,13 +2,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { execFile, spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
-import type { TaskRecord } from "@melra/protocol";
+import type { TaskRecord, WorkflowRun } from "@melra/protocol";
+import { SqliteStore } from "@melra/storage-sqlite";
 import { taskTarget } from "../src/activity.js";
 
 const execute = promisify(execFile);
@@ -17,6 +20,7 @@ delete process.env.MELRA_MODE;
 const entry = resolve(import.meta.dirname, "../dist/bin.js");
 const systemInfo = resolve(import.meta.dirname, "../../../examples/01-system-info/task.json");
 const fileWrite = resolve(import.meta.dirname, "../../../examples/02-verified-file-write/task.json");
+const restartSafe = resolve(import.meta.dirname, "../../../examples/workflows/restart-safe.json");
 const roots: string[] = [];
 
 afterEach(async () => {
@@ -121,6 +125,293 @@ describe("melra tasks, status, and watch", () => {
     expect(status.database.exists).toBe(true);
     expect(status.database.bytes).toBeGreaterThan(0);
     expect(status.server.http.state).toBe("not running");
+  });
+
+  it("counts an approval that expired apart from one still waiting", async () => {
+    const { root, options, run } = await workspace();
+    await writeFile(join(root, "policy.json"), JSON.stringify({ approvalTtlMs: 300 }));
+    const short = { ...options, env: { ...options.env, MELRA_POLICY: join(root, "policy.json") } };
+    const first = await execute(process.execPath, [entry, "run", "--request", fileWrite], short).catch(
+      (error: { stdout: string }) => error,
+    );
+    expect((JSON.parse(first.stdout) as { task: { status: string } }).task.status).toBe("awaiting_approval");
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    await run(fileWrite);
+    // The first can no longer be approved: counted as waiting, it was reported
+    // forever and pointed at `melra approve`, which refused it.
+    const status = JSON.parse((await execute(process.execPath, [entry, "status", "--json"], options)).stdout) as {
+      awaitingApproval: number;
+      expiredApprovals: number;
+    };
+    expect([status.awaitingApproval, status.expiredApprovals]).toEqual([1, 1]);
+  });
+
+  /** Moves a task's challenge into the past, and records `decidedAt` if given. */
+  function lapse(root: string, taskId: string, decidedAt?: number) {
+    const store = new SqliteStore(join(root, ".melra", "melra.sqlite"));
+    try {
+      const task = store.getTask(taskId)!;
+      const expiresAt = Date.now() - 1_000;
+      store.saveTask({ ...task, approval: { ...task.approval!, expiresAt: new Date(expiresAt).toISOString() } });
+      if (decidedAt !== undefined) {
+        store.recordApprovalDecision({
+          approvalId: task.approval!.approvalId,
+          taskId,
+          renderDigest: task.approval!.actionDigest,
+          channel: "in_band",
+          approver: "operator",
+          decidedAt: new Date(expiresAt - decidedAt).toISOString(),
+        });
+      }
+    } finally {
+      store.close();
+    }
+  }
+
+  const statusOf = async (options: Awaited<ReturnType<typeof workspace>>["options"]) =>
+    JSON.parse((await execute(process.execPath, [entry, "status", "--json"], options)).stdout) as {
+      awaitingApproval: number;
+      expiredApprovals: number;
+      expiredWorkflowSteps: number;
+    };
+
+  it("counts an approval given in time, not yet acted on, as neither waiting nor expired", async () => {
+    const { root, options, run } = await workspace();
+    const { task } = await run(fileWrite);
+    // Approved a second before its challenge lapsed: the agent can still run
+    // it, so the hint to plan again or deny would have cancelled it.
+    lapse(root, task.id, 1_000);
+    const status = await statusOf(options);
+    expect([status.awaitingApproval, status.expiredApprovals]).toEqual([0, 0]);
+  });
+
+  it("counts an expired workflow step apart, since its next advance asks again", async () => {
+    const { root, options } = await workspace();
+    // An advance that stops at an approval exits non-zero, its run on stdout.
+    const workflow = async (...args: string[]) =>
+      JSON.parse(
+        (
+          await execute(process.execPath, [entry, "workflow", ...args], options).catch(
+            (error: { stdout: string }) => error,
+          )
+        ).stdout,
+      ) as { id: string; run: WorkflowRun };
+    const { id } = await workflow("plan", "--definition", restartSafe);
+    await workflow("advance", id);
+    const { run } = await workflow("advance", id);
+    lapse(root, run.nodes.write!.taskIds[0]!);
+    // A deny, as the expired hint advises for a single task, would fail the run.
+    const status = await statusOf(options);
+    expect([status.expiredApprovals, status.expiredWorkflowSteps]).toEqual([0, 1]);
+  });
+
+  it("counts an expired step of a run that is not over as a step, a failed one included", async () => {
+    const { root, options } = await workspace();
+    const write = (path: string) => ({
+      goal: `Write ${path}`,
+      operation: { kind: "file", action: "write", path, content: "x" },
+      requiredEvidence: [{ type: "file_exists", path }],
+    });
+    const definition = join(root, "two-writes.json");
+    await writeFile(
+      definition,
+      JSON.stringify({
+        schemaVersion: "1.0.0",
+        id: "6f0c1a52-3b9e-4c7d-9a1f-2e8b5d4c3a10",
+        version: 1,
+        name: "two-writes",
+        nodes: [
+          { id: "a", type: "operation", request: write("a.txt") },
+          { id: "b", type: "operation", request: write("b.txt") },
+        ],
+      }),
+    );
+    const cli = async (...args: string[]) =>
+      (await execute(process.execPath, [entry, ...args], options).catch((error: { stdout: string }) => error)).stdout;
+    const { id } = JSON.parse(await cli("workflow", "plan", "--definition", definition)) as { id: string };
+    const { run } = JSON.parse(await cli("workflow", "advance", id)) as { run: WorkflowRun };
+    await cli("approve", run.nodes.a!.taskIds[0]!, "--deny");
+    expect((JSON.parse(await cli("workflow", "advance", id)) as { run: WorkflowRun }).run.status).toBe("failed");
+    // Whether its advance asks again depends on the run, failed here, so the
+    // step is pointed at the run rather than told to plan again or deny.
+    lapse(root, run.nodes.b!.taskIds[0]!);
+    const status = await statusOf(options);
+    expect([status.expiredApprovals, status.expiredWorkflowSteps]).toEqual([0, 1]);
+  });
+
+  it("counts a step's attempt asked again as a step, though its advance lost the commit naming it", async () => {
+    const { root, options } = await workspace();
+    const workflow = async (...args: string[]) =>
+      JSON.parse(
+        (
+          await execute(process.execPath, [entry, "workflow", ...args], options).catch(
+            (error: { stdout: string }) => error,
+          )
+        ).stdout,
+      ) as { id: string; run: WorkflowRun };
+    const { id } = await workflow("plan", "--definition", restartSafe);
+    await workflow("advance", id);
+    const { run } = await workflow("advance", id);
+    // What an advance that asked the challenge again leaves when its commit
+    // is lost: the first attempt cancelled, a second under the same key
+    // waiting, and the run still naming the first.
+    const store = new SqliteStore(join(root, ".melra", "melra.sqlite"));
+    let second: string;
+    try {
+      const first = store.getTask(run.nodes.write!.taskIds[0]!)!;
+      store.saveTask({ ...first, status: "cancelled" });
+      second = randomUUID();
+      store.saveTask({
+        ...first,
+        id: second,
+        attempt: (first.attempt ?? 1) + 1,
+        approval: { ...first.approval!, approvalId: randomUUID() },
+      });
+    } finally {
+      store.close();
+    }
+    lapse(root, second);
+    // Told to deny it as a plain task, the next advance read that as a denial.
+    const status = await statusOf(options);
+    expect([status.expiredApprovals, status.expiredWorkflowSteps]).toEqual([0, 1]);
+  });
+
+  it("counts a duplicate challenge beside a run's step as a step, so no hint points a deny at the step", async () => {
+    const { root, options } = await workspace();
+    const workflow = async (...args: string[]) =>
+      JSON.parse(
+        (
+          await execute(process.execPath, [entry, "workflow", ...args], options).catch(
+            (error: { stdout: string }) => error,
+          )
+        ).stdout,
+      ) as { id: string; run: WorkflowRun };
+    const { id } = await workflow("plan", "--definition", restartSafe);
+    await workflow("advance", id);
+    const { run } = await workflow("advance", id);
+    // What an advance whose commit a pause made fail leaves when the next one
+    // plans the step again: an earlier duplicate under the same key, waiting.
+    // Which of the two the run goes on with the task alone cannot say, and
+    // denied, that one fails the run.
+    const store = new SqliteStore(join(root, ".melra", "melra.sqlite"));
+    let orphan: string;
+    try {
+      const named = store.getTask(run.nodes.write!.taskIds[0]!)!;
+      orphan = randomUUID();
+      store.saveTask({
+        ...named,
+        id: orphan,
+        createdAt: new Date(Date.parse(named.createdAt) - 1_000).toISOString(),
+        approval: { ...named.approval!, approvalId: randomUUID() },
+      });
+    } finally {
+      store.close();
+    }
+    lapse(root, orphan);
+    const status = await statusOf(options);
+    expect([status.expiredApprovals, status.expiredWorkflowSteps]).toEqual([0, 1]);
+  });
+
+  it("counts a step's challenge as a step though the run never named it, since recovery takes it up", async () => {
+    const { root, options } = await workspace();
+    const workflow = async (...args: string[]) =>
+      JSON.parse(
+        (
+          await execute(process.execPath, [entry, "workflow", ...args], options).catch(
+            (error: { stdout: string }) => error,
+          )
+        ).stdout,
+      ) as { id: string; run: WorkflowRun };
+    const { id } = await workflow("plan", "--definition", restartSafe);
+    await workflow("advance", id);
+    const { run } = await workflow("advance", id);
+    const asked = run.nodes.write!.taskIds[0]!;
+    // What an advance whose commit a pause made fail leaves when nothing
+    // planned the step again: its challenge waiting, the run naming nothing.
+    const database = new DatabaseSync(join(root, ".melra", "melra.sqlite"));
+    try {
+      const row = database.prepare("SELECT data FROM workflow_runs WHERE id = ?").get(id) as { data: string };
+      const stored = JSON.parse(row.data) as WorkflowRun;
+      stored.nodes.write = { ...stored.nodes.write!, status: "pending", taskIds: [] };
+      database.prepare("UPDATE workflow_runs SET data = ? WHERE id = ?").run(JSON.stringify(stored), id);
+    } finally {
+      database.close();
+    }
+    lapse(root, asked);
+    // Told to deny it as a plain task: the deny's own start-up recovery gave
+    // the step that task, and the next advance read the cancel as a denial.
+    const status = await statusOf(options);
+    expect([status.expiredApprovals, status.expiredWorkflowSteps]).toEqual([0, 1]);
+  });
+
+  it("counts a step left waiting on a run that is over the plain way, since nothing advances it", async () => {
+    const { root, options } = await workspace();
+    const write = (path: string) => ({
+      goal: `Write ${path}`,
+      operation: { kind: "file", action: "write", path, content: "x" },
+      requiredEvidence: [{ type: "file_exists", path }],
+    });
+    const definition = join(root, "parallel.json");
+    await writeFile(
+      definition,
+      JSON.stringify({
+        schemaVersion: "1.0.0",
+        id: "7a1d2b63-4c0e-4d8f-8b2a-3f9c6e5d4b21",
+        version: 1,
+        name: "parallel-writes",
+        nodes: [{ id: "p", type: "parallel", branches: [[write("a.txt")], [write("b.txt")]] }],
+      }),
+    );
+    const cli = async (...args: string[]) =>
+      (await execute(process.execPath, [entry, ...args], options).catch((error: { stdout: string }) => error)).stdout;
+    const { id } = JSON.parse(await cli("workflow", "plan", "--definition", definition)) as { id: string };
+    const { run } = JSON.parse(await cli("workflow", "advance", id)) as { run: WorkflowRun };
+    const [first, second] = run.nodes.p!.taskIds;
+    // One branch denied, the run cancelled: the other branch's task is left
+    // waiting on a run that never advances again.
+    await cli("approve", first!, "--deny");
+    await cli("workflow", "advance", id);
+    await cli("workflow", "cancel", id);
+    lapse(root, second!);
+    const status = await statusOf(options);
+    expect([status.expiredApprovals, status.expiredWorkflowSteps]).toEqual([1, 0]);
+  });
+
+  it("does not count as waiting what enforced mode will not take an answer for", async () => {
+    const { options, run } = await workspace();
+    const { task } = await run(fileWrite);
+    // Answered in band while the deployment was in developer mode; enforced
+    // now, that answer counts for nothing and a second one is refused.
+    await execute(process.execPath, [entry, "approve", task.id, "--yes"], options).catch(() => undefined);
+    const enforced = { ...options, env: { ...options.env, MELRA_MODE: "enforced" } };
+    const status = await statusOf(enforced);
+    expect([status.awaitingApproval, status.expiredApprovals]).toEqual([0, 1]);
+  });
+
+  it("refuses a --status or --limit with nothing after it", async () => {
+    const { options } = await workspace();
+    // What an unquoted `--status $S` sends with S unset: it listed everything.
+    for (const args of [["--status"], ["--limit"], ["--status", "--json"]]) {
+      await expect(execute(process.execPath, [entry, "tasks", ...args], options), args.join(" ")).rejects.toMatchObject({
+        code: 1,
+        stderr: expect.stringContaining("requires a value"),
+      });
+    }
+  });
+
+  it("previews a mutation with the evidence the server would derive for it", async () => {
+    const { root, options } = await workspace();
+    const request = join(root, "write.json");
+    await writeFile(
+      request,
+      JSON.stringify({ goal: "Write a file", operation: { kind: "file", action: "write", path: "notes.txt", content: "hi" } }),
+    );
+    // It said deny, mutation_requires_evidence, where `run` asks for approval.
+    const preview = JSON.parse(
+      (await execute(process.execPath, [entry, "policy", "test", "--request", request], options)).stdout,
+    ) as { decision: { outcome: string }; requiredEvidence: unknown[] };
+    expect(preview.decision.outcome).toBe("confirm");
+    expect(preview.requiredEvidence).toEqual([{ type: "file_exists", path: "notes.txt" }]);
   });
 
   it("reports an empty home without creating a database", async () => {

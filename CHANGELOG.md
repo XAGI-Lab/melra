@@ -109,6 +109,33 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- `melra policy test` previews a mutation that declares no evidence with the
+  evidence the server derives for it, as `melra_plan` does, and prints it as
+  `requiredEvidence`. It previewed such a mutation as `deny
+  mutation_requires_evidence` even where the server derives evidence for it
+  and asks for approval, as for most file, memory, browser, computer and http
+  mutations. (#283)
+
+- `melra tasks` and `melra status` count a task whose approval has expired
+  apart from those still waiting, and say to plan it again or clear it with
+  `melra approve <task-id> --deny`. They counted it as waiting forever and
+  pointed at `melra approve`, which refused it. An expired workflow step is
+  counted on its own and pointed at its run with `melra workflow inspect`,
+  with no advice to deny: where the run still waits on the step, its next
+  advance asks again, and a deny would fail the run, or for a compensation
+  stall its unwind. Only a step that
+  a cancelled or verified_complete run names gets the plain hint, since that
+  run never advances again. A task
+  approved in time and not yet run counts as neither, since its agent can
+  still run it, and in enforced mode a task answered in band is no longer
+  counted as waiting for an answer it cannot take. `status --json` adds
+  `expiredApprovals` and `expiredWorkflowSteps`; `awaitingApproval` counts only
+  approvals that can still be given. (#284)
+
+- `melra tasks --status` and `--limit` with nothing after them are refused.
+  They were ignored, so `--status $S` with `S` unset listed every status as if
+  filtered. (#285)
+
 - A process whose database is closed while a workflow advance is still
   running, as at shutdown, no longer dies on an uncaught `database is not
   open` from the lease renewal timer. The timer stops renewing, and the
