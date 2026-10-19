@@ -183,6 +183,55 @@ All notable changes are documented here. The format follows
   and appended a `workflow.node_changed` event per waiting step. It now returns
   the run as it was, with no events, and the waiting steps' tasks as before.
 
+- A process whose database is closed while a workflow advance is still
+  running, as at shutdown, no longer dies on an uncaught `database is not
+  open` from the lease renewal timer. The timer stops renewing, and the
+  advance fails on its own next write. A renewal that fails for any other
+  reason, such as a database too busy to answer, is tried again on the next
+  tick, so the lease never lapses under a running step (#304).
+
+- A file `move` that only changes letter case (`Readme.md` to `README.md`)
+  verifies on a case-insensitive disk, such as macOS's default. The
+  `file_absent` evidence derived for the source found the renamed file under
+  the old spelling, so a correct rename ended `partial`. Against a move's own
+  result, the move's source now reads absent when what its spelling reaches is
+  the destination's own entry, with no other name, and the directory no longer
+  holds that spelling; a symlink renamed by case included, and one recovered
+  after a crash interrupted its verification. Anywhere else, a path that
+  reaches a file still reads present, however it is spelled. (#280)
+
+- Deleting a live memory that superseded another makes the one it replaced
+  live again, and so does editing it to supersede something else or nothing;
+  deleting one in the middle of a chain links the records on either side. The
+  replaced record used to stay hidden with nothing live pointing at it: it
+  could not be read, edited or superseded, and compaction deleted it a
+  `maxAgeDays` later. A correction that expires, or that `maxPerScope`
+  evicts, revives nothing, and `docs/INSTALLATION.md` says why, and how far
+  back deleting corrections reaches once compaction has run. Edits and
+  deletes of one chain from two processes no longer interleave. (#250)
+
+- A terminal `run` stopped by its own `timeoutMs` is an unknown outcome
+  (`recovery_required` for a mutation), as it already was when the task's
+  budget or a cancel stopped it. It was recorded `failed`, though the program
+  may have done its work first, and a retry then ran it again. A computer
+  input action (click, move, drag, type, key, scroll) whose helper is stopped
+  by its timeout, or by a cancel while it runs, is an unknown outcome too.
+  Reads, screenshots and target resolution are unchanged, except that a
+  terminal read stopped by its timeout is now retried up to
+  `budget.maxRetries`, as other failed reads are. A timed-out `run` no longer
+  returns a result with `timedOut: true`. (#248)
+
+- `melra serve --http` and `--socket` no longer keep every MCP session for the
+  life of the process. The TypeScript SDK's `close()` and `melra conformance
+  --url` now end their session, which they never did, waiting at most two
+  seconds for the server. Past 256 sessions, a new one ends the least
+  recently used session with no request in flight and no event stream open,
+  such as one whose client vanished; a client holding the event stream open,
+  as both SDKs do, is never ended. A
+  request naming a session the server does not have, such as one from before
+  a restart, gets 404 with JSON-RPC error -32001, which tells an MCP client to
+  start a new session. It used to get 400. (#253, #257)
+
 - A file `write` with `encoding: "base64"` refuses content that is not base64
   (`file_content_invalid_base64`) before anything is written; line breaks,
   missing padding and the URL-safe alphabet are accepted. Node's lenient

@@ -230,21 +230,22 @@ describe("TerminalRuntime", () => {
     ).not.toContain("hunter2");
   });
 
-  it("stops commands at the configured timeout", async () => {
+  it("stops commands at the configured timeout, as an outcome it cannot know", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-terminal-"));
     roots.push(root);
     const runtime = await TerminalRuntime.create({ root });
-    const result = await runtime.execute(
-      TerminalOperationSchema.parse({
-        kind: "terminal",
-        action: "run",
-        command: process.execPath,
-        args: ["-e", "setTimeout(() => {}, 10_000)"],
-        timeoutMs: 150,
-      }),
-    );
-    expect(result.timedOut).toBe(true);
-    expect(result.success).toBe(false);
+    // Stopped mid-run, it may have done its work: the same answer a cancel gets.
+    await expect(
+      runtime.execute(
+        TerminalOperationSchema.parse({
+          kind: "terminal",
+          action: "run",
+          command: process.execPath,
+          args: ["-e", "setTimeout(() => {}, 10_000)"],
+          timeoutMs: 150,
+        }),
+      ),
+    ).rejects.toThrow("effect_outcome_unknown:terminal_timeout:150ms");
   });
 
   it("supervises bounded background jobs and output", async () => {

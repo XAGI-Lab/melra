@@ -532,6 +532,12 @@ receipt's evidence carries `inconclusive: true`, and the certificate says
 `RECOVERY_REQUIRED` rather than `FAILED`. Reads are exempt: a read that may or
 may not have run changed nothing either way.
 
+The same holds for a program stopped mid-run. A terminal `run` stopped by its
+own `timeoutMs`, as by the task's budget or a cancel, may have written its file
+or pushed its branch first, and a computer input helper (click, move, drag,
+type, key, scroll) stopped by its timeout or a cancel may already have landed.
+Each is `effect_outcome_unknown:`, not `failed`.
+
 A mutation whose adapter returned, but whose result, receipt or task could not
 then be written, parks the same way: the target answered, and nothing recorded
 says what. One that had already verified and committed its idempotency key is

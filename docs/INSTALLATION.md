@@ -482,9 +482,18 @@ bounding their own secret, which is a different thing.
 Memories are reclaimed on the next `melra_execute` that writes to the same
 scope. `memoryRetention.maxAgeDays` (default `30`) is how long an expired or
 superseded record is kept after it stops being readable — no search or list can
-return one, so removing it changes nothing you can observe, it only stops the
-database growing forever. A superseded record survives while a live record still
-supersedes it, so `supersedesId` never dangles.
+return one, and removing it stops the database growing forever. A superseded
+record survives while a live record still supersedes it. Deleting the record
+that superseded another, or editing it to supersede something else or nothing,
+makes the one it replaced live again; deleting one in the middle of a chain
+links the records on either side, so the latest stays the only live one. So
+undoing the latest correction always brings back the one before it, but going
+back further, deleting a second correction too, finds an older record only
+within `maxAgeDays` of its replacement: after that compaction may have reclaimed
+it, and deleting both corrections leaves nothing for that key. A correction that expires, or that
+`maxPerScope` evicts, does not revive anything: its removal says the correction
+has lapsed or made room, not that the fact it replaced is true again, so that
+fact stays unreadable and compaction later reclaims it.
 
 `memoryRetention.maxPerScope` is a hard ceiling on *live* memories per scope and
 defaults to `0`, meaning none. It is different in kind: it deletes records you
@@ -565,6 +574,15 @@ Every route needs that token, as `Authorization: Bearer <token>` or `?token=`
 generated each start. **Anyone who can read the token can drive this machine** —
 the server binds loopback only, and putting it behind a proxy on a reachable
 interface hands out that reach.
+
+Each MCP client gets its own session, which lasts until the client ends it
+(both SDKs do, on close) or the server stops. Past 256 sessions, a new one ends
+the least recently used session with no request in flight and no event stream
+open: a client that vanished without ending its own, or one that only posts and
+has been quiet longest. A client that keeps the MCP event stream open, as both
+SDKs do, is never ended while connected. A request
+naming a session the server no longer has, such as one from before a restart,
+gets 404, which tells an MCP client to start a new session.
 
 The console this server serves is read-only, and the server has no approval
 route. To approve in a browser, run [`melra console`](#approving-in-a-browser),
