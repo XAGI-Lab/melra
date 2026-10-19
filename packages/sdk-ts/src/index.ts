@@ -24,7 +24,29 @@ import {
 interface ClientIdentity {
   clientName?: string;
   clientVersion?: string;
+  /**
+   * How long `execute()` and `advanceWorkflow()` wait for the server, in whole
+   * milliseconds from 1 to 2 147 483 647. The default, 36 minutes, covers a
+   * task's budget (15 minutes at most) and then its built-in evidence reads (20
+   * predicates of up to a minute each), so the client does not give up on an
+   * effect the server is still running and may still verify. Raise it for what
+   * that does not cover: custom verifiers and `file_hash` on a very large file,
+   * which have no time limit, and an `advanceWorkflow()` call that runs several
+   * tasks in turn (a loop's or a branch's steps, or, when a step fails, every
+   * compensation). After a timeout, read the task or the run before acting on
+   * it: the server may still be at work.
+   */
+  runTimeoutMs?: number;
 }
+
+/**
+ * `budget.maxDurationMs`'s cap, then 20 evidence predicates at the 60 s probe
+ * cap (verification is not timed by the budget), with a minute to answer in.
+ */
+const RUN_TIMEOUT_MS = 900_000 + 20 * 60_000 + 60_000;
+
+/** Node's timer ceiling: past it, as for 0, NaN or a negative, a timer fires at once. */
+const MAX_TIMEOUT_MS = 2_147_483_647;
 
 /** Spawn `melra serve` (or `command`) as a child and speak MCP over stdio. */
 export interface MelraStdioOptions extends ClientIdentity {
@@ -99,9 +121,20 @@ function melraSettings(environment: NodeJS.ProcessEnv, cwd: string | undefined):
 }
 
 export class MelraClient {
-  private constructor(private readonly client: Client) {}
+  private constructor(
+    private readonly client: Client,
+    private readonly runTimeoutMs: number,
+  ) {}
 
   static async connect(options: MelraClientOptions = {}): Promise<MelraClient> {
+    // Anything else becomes a timer that fires in a millisecond, so every
+    // execute() would report a timeout while the server ran the effect.
+    const runTimeoutMs = options.runTimeoutMs ?? RUN_TIMEOUT_MS;
+    if (!Number.isInteger(runTimeoutMs) || runTimeoutMs < 1 || runTimeoutMs > MAX_TIMEOUT_MS) {
+      throw new Error(
+        `melra_run_timeout_invalid: runTimeoutMs must be a whole number of milliseconds from 1 to ${MAX_TIMEOUT_MS}`,
+      );
+    }
     const transport =
       options.url !== undefined
         ? httpTransport(options.url, options.token, options.allowInsecureHttp === true)
@@ -152,15 +185,25 @@ export class MelraClient {
       }
       throw error;
     }
-    return new MelraClient(client);
+    return new MelraClient(client, runTimeoutMs);
   }
 
+  /**
+   * `long` for the two calls that run effects: the MCP client otherwise gives
+   * up after 60 s, while the server goes on running the task and may verify
+   * it, and a caller who reads that error as a failure runs it again.
+   */
   private async call(
     name: string,
     args: Record<string, unknown>,
+    long = false,
   ): Promise<Record<string, unknown>> {
     return parseMelraToolResult(
-      await this.client.callTool({ name, arguments: args }),
+      await this.client.callTool(
+        { name, arguments: args },
+        undefined,
+        long ? { timeout: this.runTimeoutMs } : undefined,
+      ),
     );
   }
 
@@ -184,10 +227,14 @@ export class MelraClient {
     taskId: string,
     approval?: ApprovalResponse,
   ): Promise<Record<string, unknown>> {
-    return await this.call("melra_execute", {
-      taskId,
-      ...(approval === undefined ? {} : { approval }),
-    });
+    return await this.call(
+      "melra_execute",
+      {
+        taskId,
+        ...(approval === undefined ? {} : { approval }),
+      },
+      true,
+    );
   }
 
   async status(taskId: string): Promise<Record<string, unknown>> {
@@ -237,7 +284,7 @@ export class MelraClient {
       inputs,
     });
     return WorkflowAdvanceResultSchema.parse(
-      await this.call("melra_workflow_advance", parsed),
+      await this.call("melra_workflow_advance", parsed, true),
     );
   }
 
