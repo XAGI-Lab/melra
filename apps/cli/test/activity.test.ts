@@ -70,7 +70,9 @@ async function workspace() {
   return { root, options, run };
 }
 
-describe("melra tasks, status, and watch", () => {
+// Every test here starts the real CLI several times over, a second or more
+// apiece on a loaded Windows runner: past the package's 20 s default there.
+describe("melra tasks, status, and watch", { timeout: 60_000 }, () => {
   it("lists newest first, filters, and summarises without approval phrases", async () => {
     const { root, options, run } = await workspace();
     const blockedRequest = join(root, "blocked.json");
