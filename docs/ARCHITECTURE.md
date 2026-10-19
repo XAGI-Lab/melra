@@ -533,6 +533,12 @@ An unreachable provider did not say no, so nothing is concluded from silence.
 The same path runs on restart: `recoverInterrupted` reconciles a crashed
 mutation that declared how to settle one, and parks the rest.
 
+A forward workflow step parked this way moves at the run's next `advance`, in
+the same process: the advance reads the step's tasks again, as recovery does.
+Settled as applied, the step is done and what waits on it runs; settled as not
+applied, it failed, and the run fails and unwinds. A parked compensation is
+covered under [Sagas](#sagas-across-providers).
+
 ## Sagas across providers
 
 A compensation node is an ordinary governed task whose request may name any
@@ -546,7 +552,9 @@ at a time, newest effect first, and the unwind stops at the first that does not
 reach `compensated` — refunding while the goods are still in transit is worse
 than stopping. A stalled unwind makes the run `recovery_required` with
 `workflow_compensation_incomplete:<node>` naming the missing inverse, and
-`advance` refuses to start new work on top of it.
+`advance` refuses to start new work on top of it. Once `melra_execute` settles
+that compensation as applied, the next `advance` marks it `compensated` and the
+unwind carries on; settled as not applied, the unwind stays stalled.
 
 A step denied before it runs starts the same unwind as a failed one. Neither
 starts while another step's outcome is unknown or unsettled (an effect that may
@@ -554,10 +562,10 @@ have happened, or a task still running): the run is `recovery_required` and
 waits, starting no further step, rather than undo what that effect may depend
 on. That step is settled by its `reconciliation`: `melra_execute` on its task,
 or recovery when a process starts, asks the provider whether the effect
-happened. Once settled, the run fails at the next recovery and the next
-`advance` unwinds, the settled step's own compensation included if its effect
-happened. A step that declares no `reconciliation` cannot be settled by MELRA;
-`workflow cancel` ends such a run, without unwinding it. Each
+happened. Once settled, the next `advance` fails the run and unwinds, the
+settled step's own compensation included if its effect happened. A step that
+declares no `reconciliation` cannot be settled by MELRA; `workflow cancel` ends
+such a run, without unwinding it. Each
 compensation is still its own governed task, so one that is a mutation waits for
 its own approval, and denying it stops the unwind as a failed compensation does.
 To end a run without unwinding it, cancel the run (`workflow cancel`,
