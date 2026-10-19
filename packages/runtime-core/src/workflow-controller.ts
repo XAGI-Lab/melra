@@ -698,13 +698,24 @@ export class WorkflowController {
   }
 
   /**
-   * Parked steps whose tasks have since settled, recorded as such. One still
-   * in flight is left for recovery, which waits for its owner as at startup.
+   * Parked steps whose tasks have since settled, recorded as such: forward
+   * steps, and compensations an unwind stopped at. One still in flight is left
+   * for recovery, which waits for its owner as at startup.
    */
   private resettleParked(run: WorkflowRun, definition: WorkflowDefinition): WorkflowRun {
-    const parked = definition.nodes.filter(
-      (node) => node.type !== "compensation" && run.nodes[node.id]?.status === "recovery_required",
-    );
+    const parked = definition.nodes.filter((node) => {
+      const state = run.nodes[node.id];
+      if (state?.status !== "recovery_required") return false;
+      // Read again only once one of its tasks has moved: a harness polls a
+      // parked run, and reading every task each time is not free.
+      return (
+        state.taskIds.length === 0 ||
+        state.taskIds.some((taskId) => {
+          const task = this.store.getTask(taskId);
+          return task === undefined || !["recovery_required", "running", "verifying"].includes(task.status);
+        })
+      );
+    });
     if (parked.length === 0) return run;
     const allTasks = this.store.listTasks(100_000);
     const changed = parked.flatMap((node) => {

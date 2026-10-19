@@ -1381,7 +1381,7 @@ describe("WorkflowController execution", () => {
   /** A charge whose call was never answered, then a shipment that waits on it. */
   async function parkedCharge(answer: { status: number; content: string }) {
     const calls: string[] = [];
-    const { controller, tasks } = await setup(
+    const { controller, tasks, store } = await setup(
       async (operation) => {
         if (operation.kind !== "http") throw new Error("unexpected_operation");
         const url = new URL(operation.url);
@@ -1421,6 +1421,11 @@ describe("WorkflowController execution", () => {
     );
     const parked = await settle(controller, planned.id);
     expect(parked.run.nodes.charge?.status).toBe("recovery_required");
+    // Polled while nothing has moved, it does not read every task again.
+    const everyTask = vi.spyOn(store, "listTasks");
+    await controller.advance(planned.id);
+    expect(everyTask).not.toHaveBeenCalled();
+    everyTask.mockRestore();
     return { controller, tasks, calls, id: planned.id, taskId: parked.run.nodes.charge!.taskIds[0]! };
   }
 
@@ -1488,6 +1493,59 @@ describe("WorkflowController execution", () => {
     expect(result.run.nodes.charge?.status).toBe("verified_complete");
     expect(calls).toContain("/shipments");
     expect(result.run.status).toBe("verified_complete");
+  });
+
+  it("carries an unwind on once its parked compensation is reconciled as done, without a restart", async () => {
+    const calls: string[] = [];
+    const { controller, tasks } = await setup(
+      async (operation) => {
+        if (operation.kind !== "http") throw new Error("unexpected_operation");
+        const url = new URL(operation.url);
+        calls.push(url.pathname);
+        if (url.pathname === "/refunds") throw outcomeUnknown("socket hang up");
+        return { success: url.pathname !== "/shipments" };
+      },
+      { unhinged: true },
+      async () => ({ success: true, status: 200, content: JSON.stringify({ status: "applied" }) }),
+    );
+    const refund = TaskRequestSchema.parse({
+      goal: "Refund",
+      operation: { kind: "http", action: "request", method: "POST", url: `${PAYMENTS}/refunds`, idempotencyKey: "refund-1" },
+      requiredEvidence: [{ type: "result_equals", path: "success", value: true }],
+      reconciliation: [
+        {
+          type: "http_resource_matches",
+          url: `${PAYMENTS}/refunds/{{idempotencyKey}}`,
+          method: "GET",
+          path: "json.status",
+          value: "applied",
+        },
+      ],
+    });
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Charge, then ship",
+        nodes: [
+          { id: "charge", type: "operation", request: call("Charge", `${PAYMENTS}/charges`) },
+          { id: "ship", type: "operation", dependsOn: ["charge"], request: call("Ship", `${LOGISTICS}/shipments`) },
+          { id: "undo-charge", type: "compensation", forNodeId: "charge", request: refund },
+        ],
+      }),
+    );
+    const stalled = await settle(controller, planned.id);
+    expect(stalled.run.nodes["undo-charge"]?.status).toBe("recovery_required");
+    expect(stalled.run.status).toBe("recovery_required");
+    const refundTask = stalled.run.nodes["undo-charge"]!.taskIds[0]!;
+    expect((await tasks.execute(refundTask)).task.status).toBe("verified_success");
+
+    // The unwind used to stay stalled on it until a restart.
+    const result = await settle(controller, planned.id);
+    expect(result.run.nodes["undo-charge"]?.status).toBe("compensated");
+    expect(result.run.status).toBe("failed");
+    expect(calls.filter((path) => path === "/refunds")).toHaveLength(1);
   });
 
   it("fails a run whose parked step is reconciled as never done, without a restart", async () => {

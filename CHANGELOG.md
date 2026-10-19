@@ -100,7 +100,8 @@ All notable changes are documented here. The format follows
 
 - A workflow step parked as `recovery_required` moves at the run's next
   `advance` once its task is settled, for example by `melra_execute`
-  reconciling it against the provider. The run used to stay
+  reconciling it against the provider, and so does a compensation an unwind
+  stopped at. The run used to stay
   `recovery_required`, with no events, until a process restart ran recovery:
   a long-running server could not finish the workflow, the steps waiting on a
   reconciled success never ran, and a reconciled failure never failed the run
