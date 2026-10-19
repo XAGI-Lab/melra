@@ -942,11 +942,15 @@ describe("WorkflowController execution", () => {
     shipping.status = "verifying";
     store.saveTask(shipping);
 
-    run = (await controller.advance(planned.id)).run;
-    // Read as failed, it started the unwind and offered the refund.
-    expect(run.status).toBe("recovery_required");
-    expect(run.nodes.ship?.status).toBe("recovery_required");
-    expect(run.nodes["undo-charge"]?.status).toBe("pending");
+    // Read as failed, it started the unwind and offered the refund. The
+    // second advance reads ship's tasks again, and must leave one still in
+    // flight to recovery rather than read it as anything.
+    for (let step = 0; step < 2; step += 1) {
+      run = (await controller.advance(planned.id)).run;
+      expect(run.status).toBe("recovery_required");
+      expect(run.nodes.ship?.status).toBe("recovery_required");
+      expect(run.nodes["undo-charge"]?.status).toBe("pending");
+    }
     expect(calls).toEqual(["payments.example.test/charges"]);
   });
 
