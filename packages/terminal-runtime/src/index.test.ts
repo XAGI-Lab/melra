@@ -163,14 +163,15 @@ describe("TerminalRuntime", () => {
     const runtime = await TerminalRuntime.create({ root });
     try {
       // What it starts holds its output open, so the job's close (and so
-      // endedAt) waits; its own stdin is gone as soon as it exits.
+      // endedAt) waits, while Node destroys the job's stdin on exit. It holds
+      // stdin too, so a write never fails before Node has seen the exit.
       const started = await runtime.execute(
         op({
           action: "start",
           interactive: true,
           args: [
             "-e",
-            "require('child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 1500)'], { stdio: ['ignore', 'inherit', 'inherit'] }).unref(); require('fs').writeFileSync('spawned', '')",
+            "require('child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 1500)'], { stdio: 'inherit' }).unref(); require('fs').writeFileSync('spawned', '')",
           ],
         }),
       );
