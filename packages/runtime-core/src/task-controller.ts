@@ -866,9 +866,11 @@ export class TaskController {
           ? undefined
           : (this.payloadCipher.open(sealed, `task:${task.id}:result`) as Record<string, unknown>);
       const actionSucceeded = reported?.success !== false;
+      // Against what the adapter reported, as the live path verifies: a
+      // move's own result is what tells a case-only rename's source is gone.
       const verification = await this.verifier.verify(
         request.requiredEvidence,
-        {},
+        reported ?? {},
       );
       if (actionSucceeded && verification.verified) {
         this.resolveAsVerified(task, request, classified, verification.evidence, {

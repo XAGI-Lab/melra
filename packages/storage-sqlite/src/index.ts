@@ -390,7 +390,13 @@ export class SqliteStore {
     });
   }
 
-  private transaction<T>(action: () => T): T {
+  /**
+   * Runs `action` as one write transaction: another process sharing the
+   * database waits, so nothing it read changes before it writes, and a throw
+   * undoes every write it made. `action` must not call a method that opens a
+   * transaction of its own.
+   */
+  transaction<T>(action: () => T): T {
     this.database.exec("BEGIN IMMEDIATE");
     try {
       const result = action();
@@ -1356,11 +1362,64 @@ export class SqliteStore {
     return Number(result.changes) > 0;
   }
 
-  deleteMemory(id: string, scope: MemoryScope): boolean {
+  /**
+   * Make `id` live again if `supersededBy` is what retired it, for when the
+   * record that replaced it is deleted or stops claiming to replace it.
+   * Otherwise it stayed hidden with nothing live pointing at it, so it could
+   * be neither read, edited nor superseded, and compaction later deleted it.
+   */
+  unsupersedeMemory(
+    id: string,
+    scope: MemoryScope,
+    supersededBy: string,
+  ): boolean {
     const result = this.database
-      .prepare("DELETE FROM memories WHERE id = ? AND scope = ?")
-      .run(id, scope);
+      .prepare(`
+        UPDATE memories
+        SET superseded_by = NULL, updated_at = ?
+        WHERE id = ? AND scope = ? AND superseded_by = ?
+      `)
+      .run(new Date().toISOString(), id, scope, supersededBy);
     return Number(result.changes) > 0;
+  }
+
+  /**
+   * Deleting a live correction undoes it: what it replaced is live again.
+   * Deleting one in the middle of a chain links the records on either side of
+   * it, so the latest stays the only live one. An expired correction leaves
+   * what it replaced retired, as it does once compaction has removed it.
+   */
+  deleteMemory(id: string, scope: MemoryScope): boolean {
+    return this.transaction(() => {
+      const row = this.database
+        .prepare(`
+          SELECT supersedes_id AS supersedesId, superseded_by AS supersededBy, expires_at AS expiresAt
+          FROM memories WHERE id = ? AND scope = ?
+        `)
+        .get(id, scope) as
+        | { supersedesId: string | null; supersededBy: string | null; expiresAt: string | null }
+        | undefined;
+      const result = this.database
+        .prepare("DELETE FROM memories WHERE id = ? AND scope = ?")
+        .run(id, scope);
+      const replaced = row?.supersedesId;
+      // An expired correction changes nothing, spliced or not, so deleting it
+      // does what compaction removing it does, whichever comes first.
+      const live = row !== undefined && (row.expiresAt === null || row.expiresAt > new Date().toISOString());
+      if (live && replaced != null) {
+        if (row.supersededBy != null) {
+          this.database
+            .prepare("UPDATE memories SET superseded_by = ? WHERE id = ? AND scope = ? AND superseded_by = ?")
+            .run(row.supersededBy, replaced, scope, id);
+          this.database
+            .prepare("UPDATE memories SET supersedes_id = ? WHERE id = ? AND scope = ? AND supersedes_id = ?")
+            .run(replaced, row.supersededBy, scope, id);
+        } else {
+          this.unsupersedeMemory(replaced, scope, id);
+        }
+      }
+      return Number(result.changes) > 0;
+    });
   }
 
   clearMemories(scope: MemoryScope): number {
@@ -1382,9 +1441,8 @@ export class SqliteStore {
    * memories, which is data the caller stored and can still read. An operator
    * who wants a hard ceiling opts into one.
    *
-   * A superseded row is only dropped once nothing live points at it, so
-   * `supersedes_id` never dangles and a chain is removed from its tail
-   * inwards across successive compactions.
+   * A superseded row is only dropped once nothing live points at it, so a
+   * chain is removed from its tail inwards across successive compactions.
    */
   compactMemories(
     scope: MemoryScope,

@@ -606,17 +606,24 @@ describe("workflow recovery across processes", () => {
 
   it("does not run a compensation again that a dead unwind had started", async () => {
     // a verifies, b fails while its sibling s is still running, and the
-    // process dies. The next process repairs the run to failed and starts
-    // undoing a, then dies inside the compensation. Unsafe-local mode, so a
-    // compensation needs no approval and is planned and run in one advance.
+    // process dies. The next process runs s again, repairs the run to failed
+    // and starts undoing a, then dies inside the compensation. s is a read, so
+    // recovery can settle it by running it again: an interrupted mutation's
+    // outcome is unknown, and the run would halt rather than unwind (#270).
+    // Unsafe-local mode, so a compensation needs no approval and is planned
+    // and run in one advance.
     const at = await home();
     const key = (operation?: Operation) => (operation as { key?: string } | undefined)?.key;
+    const look = TaskRequestSchema.parse({
+      goal: "Look for s",
+      operation: { kind: "memory", action: "search", query: "s" },
+    });
     const sibling = gate();
     const first = await side(
       at,
       async (operation) => {
         if (key(operation) === "b") return { success: false, stored: false };
-        if (key(operation) === "s") {
+        if (operation?.kind === "memory" && operation.action === "search") {
           sibling.open();
           await new Promise(() => undefined);
         }
@@ -634,7 +641,7 @@ describe("workflow recovery across processes", () => {
         nodes: [
           { id: "a", type: "operation", request: put("a") },
           { id: "b", type: "operation", request: put("b"), dependsOn: ["a"] },
-          { id: "s", type: "operation", request: put("s"), dependsOn: ["a"] },
+          { id: "s", type: "operation", request: look, dependsOn: ["a"] },
           { id: "undo-a", type: "compensation", forNodeId: "a", request: put("undo-a") },
         ],
       }),
@@ -671,6 +678,55 @@ describe("workflow recovery across processes", () => {
     const after = (await third.workflows.advance(run.id)).run;
     expect(after.nodes["undo-a"]?.status).toBe("recovery_required");
     expect(third.adapter).not.toHaveBeenCalled();
+  });
+
+  it("halts rather than unwind when a failed step's sibling was a mutation interrupted mid-run", async () => {
+    // b fails while its sibling s, a mutation, is still running, and the
+    // process dies. s's effect may have happened: the next process must not
+    // undo a, which it may depend on, but halt for an operator (#270).
+    const at = await home();
+    const key = (operation?: Operation) => (operation as { key?: string } | undefined)?.key;
+    const sibling = gate();
+    const first = await side(
+      at,
+      async (operation) => {
+        if (key(operation) === "b") return { success: false, stored: false };
+        if (key(operation) === "s") {
+          sibling.open();
+          await new Promise(() => undefined);
+        }
+        return { success: true, stored: true };
+      },
+      undefined,
+      { unhinged: true },
+    );
+    const run = first.workflows.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Rollback",
+        nodes: [
+          { id: "a", type: "operation", request: put("a") },
+          { id: "b", type: "operation", request: put("b"), dependsOn: ["a"] },
+          { id: "s", type: "operation", request: put("s"), dependsOn: ["a"] },
+          { id: "undo-a", type: "compensation", forNodeId: "a", request: put("undo-a") },
+        ],
+      }),
+    );
+    await first.workflows.advance(run.id);
+    void first.workflows.advance(run.id).catch(() => undefined);
+    await sibling.opened;
+    await vi.waitFor(() => expect(first.store.listInterruptedTasks()).toHaveLength(1));
+    first.store.close();
+
+    const second = await side(at, undefined, undefined, { unhinged: true });
+    expireLease(second.store, run.id);
+    const after = (await second.workflows.advance(run.id)).run;
+    expect(after.status).toBe("recovery_required");
+    expect(after.nodes.s?.status).toBe("recovery_required");
+    expect(after.nodes["undo-a"]?.status).toBe("pending");
+    expect(second.adapter).not.toHaveBeenCalled();
   });
 
   it("keeps a failed run failed when it repairs it", async () => {
