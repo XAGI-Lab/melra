@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { execFile, spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -233,6 +234,43 @@ describe("melra tasks, status, and watch", () => {
     // Whether its advance asks again depends on the run, failed here, so the
     // step is pointed at the run rather than told to plan again or deny.
     lapse(root, run.nodes.b!.taskIds[0]!);
+    const status = await statusOf(options);
+    expect([status.expiredApprovals, status.expiredWorkflowSteps]).toEqual([0, 1]);
+  });
+
+  it("counts a step's attempt asked again as a step, though its advance lost the commit naming it", async () => {
+    const { root, options } = await workspace();
+    const workflow = async (...args: string[]) =>
+      JSON.parse(
+        (
+          await execute(process.execPath, [entry, "workflow", ...args], options).catch(
+            (error: { stdout: string }) => error,
+          )
+        ).stdout,
+      ) as { id: string; run: WorkflowRun };
+    const { id } = await workflow("plan", "--definition", restartSafe);
+    await workflow("advance", id);
+    const { run } = await workflow("advance", id);
+    // What an advance that asked the challenge again leaves when its commit
+    // is lost: the first attempt cancelled, a second under the same key
+    // waiting, and the run still naming the first.
+    const store = new SqliteStore(join(root, ".melra", "melra.sqlite"));
+    let second: string;
+    try {
+      const first = store.getTask(run.nodes.write!.taskIds[0]!)!;
+      store.saveTask({ ...first, status: "cancelled" });
+      second = randomUUID();
+      store.saveTask({
+        ...first,
+        id: second,
+        attempt: (first.attempt ?? 1) + 1,
+        approval: { ...first.approval!, approvalId: randomUUID() },
+      });
+    } finally {
+      store.close();
+    }
+    lapse(root, second);
+    // Told to deny it as a plain task, the next advance read that as a denial.
     const status = await statusOf(options);
     expect([status.expiredApprovals, status.expiredWorkflowSteps]).toEqual([0, 1]);
   });

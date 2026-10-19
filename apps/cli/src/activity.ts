@@ -161,6 +161,17 @@ interface ApprovalCounts {
   expiredSteps: number;
 }
 
+/** The task ids the runs name, and the idempotency keys of those tasks. */
+function stepKeys(store: SqliteStore, runs: WorkflowRun[]): Set<string> {
+  const keys = new Set<string>();
+  for (const taskId of runs.flatMap((run) => Object.values(run.nodes).flatMap((node) => node.taskIds))) {
+    keys.add(taskId);
+    const key = store.getTask(taskId)?.idempotencyKey;
+    if (key !== undefined) keys.add(key);
+  }
+  return keys;
+}
+
 /**
  * Tasks waiting for an operator's approval, and those whose challenge expired
  * unanswered, workflow steps apart. An expired one stays
@@ -192,13 +203,16 @@ function approvalCounts(
     // Read only once something has expired: a store keeps every run. A run
     // that is over never advances again, so its leftover step is cleared the
     // plain way, as advance's own first check would have it.
-    steps ??= new Set(
-      runs()
-        .filter((run) => run.status !== "cancelled" && run.status !== "verified_complete")
-        .flatMap((run) => Object.values(run.nodes).flatMap((node) => node.taskIds)),
+    // A step is matched by key as well as by id, as the runtime matches it:
+    // an advance that asked a challenge again and then lost its commit leaves
+    // the run naming the cancelled attempt, not the one now waiting.
+    steps ??= stepKeys(
+      store,
+      runs().filter((run) => run.status !== "cancelled" && run.status !== "verified_complete"),
     );
-    if (steps.has(task.id)) counts.expiredSteps += 1;
-    else counts.expired += 1;
+    if (steps.has(task.id) || (task.idempotencyKey !== undefined && steps.has(task.idempotencyKey))) {
+      counts.expiredSteps += 1;
+    } else counts.expired += 1;
   }
   return counts;
 }
