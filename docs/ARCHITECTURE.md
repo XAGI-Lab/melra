@@ -527,6 +527,11 @@ An unreachable provider did not say no, so nothing is concluded from silence.
 The same path runs on restart: `recoverInterrupted` reconciles a crashed
 mutation that declared how to settle one, and parks the rest.
 
+A workflow step parked this way moves at the run's next `advance`, in the same
+process: the advance reads the step's tasks again, as recovery does. Settled as
+applied, the step is done and what waits on it runs; settled as not applied, it
+failed, and the run fails and unwinds.
+
 ## Sagas across providers
 
 A compensation node is an ordinary governed task whose request may name any
@@ -546,9 +551,9 @@ A step denied before it runs starts the same unwind as a failed one. Neither
 starts while another step's outcome is unknown or unsettled (an effect that may
 have happened, or a task still running): the run is `recovery_required` and
 waits, starting no further step, rather than undo what that effect may depend
-on. Once recovery or an operator settles that step, the run fails and the
-next `advance` unwinds, the settled step's own compensation included if its
-effect happened. Each
+on. Once that step is settled (reconciled with `melra_execute`, or by
+recovery), the next `advance` fails the run and unwinds, the settled step's own
+compensation included if its effect happened. Each
 compensation is still its own governed task, so one that is a mutation waits for
 its own approval, and denying it stops the unwind as a failed compensation does.
 To end a run without unwinding it, cancel the run (`workflow cancel`,

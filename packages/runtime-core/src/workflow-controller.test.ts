@@ -18,7 +18,7 @@ import {
 import { createDefaultPolicy, type LocalPolicy } from "@melra/policy-core";
 import { sha256 } from "@melra/receipt-schema";
 import { SqliteStore } from "@melra/storage-sqlite";
-import { Verifier } from "@melra/verifier-core";
+import { Verifier, type EvidenceProbe } from "@melra/verifier-core";
 import { PayloadCipher } from "./payload-cipher.js";
 import { TaskController } from "./task-controller.js";
 import { applyWorkflowEvent } from "./workflow-events.js";
@@ -42,6 +42,7 @@ async function setup(
     signal?: AbortSignal,
   ) => Promise<Record<string, unknown>> = async () => ({ success: true }),
   policy: Partial<LocalPolicy> = {},
+  probe?: EvidenceProbe,
 ) {
   const root = await mkdtemp(join(tmpdir(), "melra-workflow-controller-"));
   roots.push(root);
@@ -52,7 +53,7 @@ async function setup(
     store,
     { ...createDefaultPolicy(root), ...policy },
     { execute },
-    await Verifier.create(root),
+    await Verifier.create(root, probe === undefined ? {} : { probe }),
     cipher,
   );
   return {
@@ -892,9 +893,9 @@ describe("WorkflowController execution", () => {
     expect(result.run.nodes["undo-charge"]?.status).toBe("pending");
   });
 
-  it("halts, not unwinds, at a step that ran though its advance was not committed", async () => {
+  it("settles, not unwinds, a step that ran though its advance was not committed", async () => {
     const { calls, execute } = saga("none");
-    const { controller, tasks, store, cipher } = await setup(execute);
+    const { controller, tasks } = await setup(execute);
     const definition = sagaDefinition();
     const planned = controller.plan(definition);
     let run = (await controller.advance(planned.id)).run;
@@ -910,17 +911,11 @@ describe("WorkflowController execution", () => {
     await tasks.execute(ran.id, { approvalId: ran.approval!.approvalId, phrase: ran.approval!.phrase! });
 
     // Planned again, ship is cancelled as a duplicate. That is not a denial:
-    // read as one, it refunded the charge while the shipment stood.
-    const halted = await settle(controller, planned.id);
-    expect(halted.run.status).toBe("recovery_required");
-    expect(calls).toEqual(["payments.example.test/charges", "logistics.example.test/shipments"]);
-
-    // Recovery reads every attempt, keeps the one that committed, and the run
-    // carries on from there.
-    const restarted = new WorkflowController(store, tasks, cipher);
-    await restarted.recoverInterrupted();
-    expect(restarted.status(planned.id).nodes.ship).toMatchObject({ status: "verified_complete", taskIds: [ran.id] });
-    const result = await settle(restarted, planned.id);
+    // read as one, it refunded the charge while the shipment stood. The run
+    // halts on it, and the next advance reads its tasks as recovery does,
+    // keeps the attempt that committed, and carries on from there.
+    const result = await settle(controller, planned.id);
+    expect(result.run.nodes.ship).toMatchObject({ status: "verified_complete", taskIds: [ran.id] });
     expect(result.run.status).toBe("verified_complete");
     expect(calls).toEqual([
       "payments.example.test/charges",
@@ -1342,6 +1337,78 @@ describe("WorkflowController execution", () => {
     expect(run.status).toBe("recovery_required");
     expect(run.nodes["undo-charge"]?.status).toBe("pending");
     expect(calls).not.toContain("payments.example.test/refunds");
+  });
+
+  /** A charge whose call was never answered, then a shipment that waits on it. */
+  async function parkedCharge(answer: { status: number; content: string }) {
+    const calls: string[] = [];
+    const { controller, tasks } = await setup(
+      async (operation) => {
+        if (operation.kind !== "http") throw new Error("unexpected_operation");
+        const url = new URL(operation.url);
+        calls.push(url.pathname);
+        if (url.pathname === "/charges") throw outcomeUnknown("socket hang up");
+        return { success: true };
+      },
+      {},
+      async () => ({ success: answer.status < 300, ...answer }),
+    );
+    const charge = TaskRequestSchema.parse({
+      goal: "Charge",
+      operation: { kind: "http", action: "request", method: "POST", url: `${PAYMENTS}/charges`, idempotencyKey: "charge-1" },
+      requiredEvidence: [{ type: "result_equals", path: "success", value: true }],
+      reconciliation: [
+        {
+          type: "http_resource_matches",
+          url: `${PAYMENTS}/charges/{{idempotencyKey}}`,
+          method: "GET",
+          path: "json.status",
+          value: "applied",
+        },
+      ],
+    });
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Charge, then ship",
+        nodes: [
+          { id: "charge", type: "operation", request: charge },
+          { id: "ship", type: "operation", dependsOn: ["charge"], request: call("Ship", `${LOGISTICS}/shipments`) },
+          { id: "undo-charge", type: "compensation", forNodeId: "charge", request: call("Refund", `${PAYMENTS}/refunds`) },
+        ],
+      }),
+    );
+    const parked = await settle(controller, planned.id);
+    expect(parked.run.nodes.charge?.status).toBe("recovery_required");
+    return { controller, tasks, calls, id: planned.id, taskId: parked.run.nodes.charge!.taskIds[0]! };
+  }
+
+  it("runs what waits on a parked step once it is reconciled as done, without a restart", async () => {
+    const { controller, tasks, calls, id, taskId } = await parkedCharge({
+      status: 200,
+      content: JSON.stringify({ status: "applied" }),
+    });
+    expect((await tasks.execute(taskId)).task.status).toBe("verified_success");
+
+    // The run used to stay recovery_required, with no events, until a restart.
+    const result = await settle(controller, id);
+    expect(result.run.nodes.charge?.status).toBe("verified_complete");
+    expect(calls).toContain("/shipments");
+    expect(result.run.status).toBe("verified_complete");
+  });
+
+  it("fails a run whose parked step is reconciled as never done, without a restart", async () => {
+    const { controller, tasks, calls, id, taskId } = await parkedCharge({ status: 404, content: "{}" });
+    expect((await tasks.execute(taskId)).task.status).toBe("failed");
+
+    const result = await settle(controller, id);
+    expect(result.run.nodes.charge?.status).toBe("failed");
+    expect(result.run.status).toBe("failed");
+    // The charge never happened: nothing ships, and there is nothing to refund.
+    expect(calls).not.toContain("/shipments");
+    expect(calls).not.toContain("/refunds");
   });
 
   it("plans no compensation for a run cancelled while its advance was running", async () => {

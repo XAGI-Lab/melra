@@ -271,17 +271,23 @@ export class WorkflowController {
     approvals: ApprovalResponse[],
     inputs: WorkflowInput[],
   ): Promise<WorkflowAdvanceResult> {
-    const current = this.status(workflowId);
-    if (["verified_complete", "cancelled"].includes(current.status)) {
-      return { run: current, tasks: [], events: [] };
+    const stored = this.status(workflowId);
+    if (["verified_complete", "cancelled"].includes(stored.status)) {
+      return { run: stored, tasks: [], events: [] };
     }
     // A halted workflow is a deliberate operator decision. Failing loudly beats
     // returning an unchanged run, which reads to a caller like "nothing to do".
-    if (["paused", "suspended"].includes(current.status)) {
-      throw new Error(`workflow_halted:${current.status}`);
+    if (["paused", "suspended"].includes(stored.status)) {
+      throw new Error(`workflow_halted:${stored.status}`);
     }
-    const definition = this.loadDefinition(current);
+    const definition = this.loadDefinition(stored);
     const graph = validateWorkflow(definition);
+    // A step parked as recovery_required is settled outside the run, by
+    // melra_execute reconciling its task against the provider. Its tasks are
+    // read again here, as recovery reads them, so the run moves on in this
+    // process instead of at the next restart.
+    const current = this.resettleParked(stored, definition);
+    const since = stored.stateVersion;
     const rollback =
       current.status === "failed"
         ? definition.nodes
@@ -303,7 +309,7 @@ export class WorkflowController {
     const stalled = stalledCompensation(definition, current.nodes);
     if (stalled !== undefined) {
       if (current.status === "recovery_required") {
-        return { run: current, tasks: [], events: [] };
+        return { run: current, tasks: [], events: this.events(workflowId, since) };
       }
       // An earlier version recorded a denied compensation and left the run
       // `failed`; say so, as a run that stalls now does, rather than return it
@@ -314,7 +320,7 @@ export class WorkflowController {
         draft.error = `workflow_compensation_incomplete:${stalled.id}`;
         emit("workflow.status_changed", { from, to: draft.status, error: draft.error });
       });
-      return { run, tasks: [], events: this.events(workflowId, current.stateVersion) };
+      return { run, tasks: [], events: this.events(workflowId, since) };
     }
     // An earlier version failed a run beside a step whose outcome is unknown
     // and would now undo what that step may depend on. Halt it as a run that
@@ -326,7 +332,7 @@ export class WorkflowController {
         delete draft.error;
         emit("workflow.status_changed", { from, to: draft.status });
       });
-      return { run, tasks: [], events: this.events(workflowId, current.stateVersion) };
+      return { run, tasks: [], events: this.events(workflowId, since) };
     }
     // A run with a failed or denied step unwinds once nothing is unknown. Until
     // then it is halted, and offers no forward step: not one newly ready, nor
@@ -337,7 +343,7 @@ export class WorkflowController {
         ["failed", "cancelled"].includes(current.nodes[node.id]?.status ?? ""),
     );
     if (doomed && rollback.length === 0) {
-      return { run: current, tasks: [], events: [] };
+      return { run: current, tasks: [], events: this.events(workflowId, since) };
     }
     // A node parked for a human — approval or supplied input — is no
     // longer `pending`, so `readyNodeIds` will not return it. Re-offer it here
@@ -359,7 +365,7 @@ export class WorkflowController {
         ? awaiting
         : readyNodeIds(graph, current.nodes);
     if (nodeIds.length === 0) {
-      return { run: current, tasks: [], events: [] };
+      return { run: current, tasks: [], events: this.events(workflowId, since) };
     }
 
     // A sibling's refusal is reported only after the others' changes are
@@ -479,41 +485,7 @@ export class WorkflowController {
           state: result.state,
         });
       }
-      let status = this.deriveStatus(draft, definition);
-      if (status === "verified_complete") {
-        for (const node of definition.nodes) {
-          const state = draft.nodes[node.id]!;
-          if (node.type !== "compensation" || state.status !== "pending") {
-            continue;
-          }
-          state.status = "skipped";
-          emit("workflow.node_changed", {
-            nodeId: node.id,
-            from: "pending",
-            state,
-          });
-        }
-        status = this.deriveStatus(draft, definition);
-      }
-      if (status !== draft.status) {
-        const from = draft.status;
-        draft.status = status;
-        // Name the step, or "recovery_required" tells an operator that
-        // something needs hands without saying which effect is half-undone.
-        const stalled = stalledCompensation(definition, draft.nodes);
-        if (status === "recovery_required" && stalled !== undefined) {
-          draft.error = `workflow_compensation_incomplete:${stalled.id}`;
-        } else {
-          // The reducer clears `error` on every status change, so the draft has
-          // to as well or replay no longer reproduces the projection.
-          delete draft.error;
-        }
-        emit("workflow.status_changed", {
-          from,
-          to: status,
-          ...(draft.error === undefined ? {} : { error: draft.error }),
-        });
-      }
+      this.settleStatus(draft, definition, emit);
     });
     if (results.some(({ result }) => result.checkpoint === true)) {
       run = this.transition(run, (draft, emit) => {
@@ -535,7 +507,7 @@ export class WorkflowController {
     return {
       run,
       tasks: results.flatMap(({ result }) => result.tasks),
-      events: this.events(workflowId, current.stateVersion),
+      events: this.events(workflowId, since),
     };
   }
 
@@ -650,6 +622,138 @@ export class WorkflowController {
     return recovered;
   }
 
+  /**
+   * A node's state read again from its tasks: what recovery does at startup,
+   * and what an advance does for a step parked as recovery_required.
+   */
+  private recoveredNode(
+    runId: string,
+    node: WorkflowNode,
+    definition: WorkflowDefinition,
+    allTasks: TaskRecord[],
+    recorded: WorkflowNodeState,
+  ): { state: WorkflowNodeState; found: Array<TaskRecord | undefined> } {
+    const found = expectedTaskKeys(runId, node, definition).map((key) =>
+      preferredTask(allTasks, key),
+    );
+    let state = recoveredNodeState(
+      node,
+      found.filter((task): task is TaskRecord => task !== undefined),
+      recorded,
+    );
+    // An operation behind an approval shares its task with the approval
+    // node. Waiting for the approval is that node's state; mirrored onto
+    // the operation, both were re-offered, the approval ran the effect,
+    // and the operation read the running task as failed.
+    if (
+      node.type === "operation" &&
+      state.status === "awaiting_approval" &&
+      definition.nodes.some((other) => other.type === "approval" && other.forNodeId === node.id)
+    ) {
+      state = recorded;
+    }
+    // A sequence whose finished steps all verified is not finished if
+    // steps remain: a crash between a loop's iterations, or between a
+    // branch's steps, recovered as complete with the rest never run.
+    // Pending, so the next advance carries on from the tasks it has.
+    // Unless the projection recorded it finished in a way only the live
+    // path finishes one short: a loop stopped by `until` at a whole
+    // iteration, or a condition whose chosen branch is empty. Reopened,
+    // `until` or the condition would be asked again of a world that has
+    // moved on. Anything else recorded finished but short was written by
+    // a recovery that never downgraded (alpha.12), and is downgraded now.
+    const finishedShort =
+      recorded.status === "verified_complete" &&
+      canonicalJson(recorded.taskIds) === canonicalJson(state.taskIds) &&
+      ((node.type === "bounded_loop" &&
+        node.until !== undefined &&
+        state.taskIds.length > 0 &&
+        state.taskIds.length % node.body.length === 0) ||
+        (node.type === "condition" && state.taskIds.length === 0));
+    if (state.status === "verified_complete" && !sequenceFinished(node, found) && !finishedShort) {
+      state = {
+        status: "pending",
+        taskIds: state.taskIds,
+        // Whole iterations only: the loop resumes at the one in progress.
+        ...(node.type === "bounded_loop"
+          ? { iterations: Math.floor(state.taskIds.length / node.body.length) }
+          : {}),
+      };
+    }
+    // A loop that stopped on a step keeps the iteration it stopped in, as
+    // runLoop records it. Without it the next advance starts again at
+    // iteration 0 and asks `until` of a task long finished.
+    if (node.type === "bounded_loop" && state.iterations === undefined && state.taskIds.length > 0) {
+      state = { ...state, iterations: Math.floor((state.taskIds.length - 1) / node.body.length) };
+    }
+    return { state, found };
+  }
+
+  /**
+   * Parked steps whose tasks have since settled, recorded as such. One still
+   * in flight is left for recovery, which waits for its owner as at startup.
+   */
+  private resettleParked(run: WorkflowRun, definition: WorkflowDefinition): WorkflowRun {
+    const parked = definition.nodes.filter(
+      (node) => node.type !== "compensation" && run.nodes[node.id]?.status === "recovery_required",
+    );
+    if (parked.length === 0) return run;
+    const allTasks = this.store.listTasks(100_000);
+    const changed = parked.flatMap((node) => {
+      const { state, found } = this.recoveredNode(run.id, node, definition, allTasks, run.nodes[node.id]!);
+      if (found.some((task) => task !== undefined && ["running", "verifying"].includes(task.status))) return [];
+      return canonicalJson(state) === canonicalJson(run.nodes[node.id]) ? [] : [{ nodeId: node.id, state }];
+    });
+    if (changed.length === 0) return run;
+    return this.transition(run, (draft, emit) => {
+      for (const { nodeId, state } of changed) {
+        const from = draft.nodes[nodeId]!.status;
+        draft.nodes[nodeId] = state;
+        emit("workflow.node_changed", { nodeId, from, state });
+      }
+      this.settleStatus(draft, definition, emit);
+    });
+  }
+
+  /** The run's status from its nodes, with a finished run's unused compensations skipped. */
+  private settleStatus(draft: WorkflowRun, definition: WorkflowDefinition, emit: EmitEvent): void {
+    let status = this.deriveStatus(draft, definition);
+    if (status === "verified_complete") {
+      for (const node of definition.nodes) {
+        const state = draft.nodes[node.id]!;
+        if (node.type !== "compensation" || state.status !== "pending") {
+          continue;
+        }
+        state.status = "skipped";
+        emit("workflow.node_changed", {
+          nodeId: node.id,
+          from: "pending",
+          state,
+        });
+      }
+      status = this.deriveStatus(draft, definition);
+    }
+    if (status !== draft.status) {
+      const from = draft.status;
+      draft.status = status;
+      // Name the step, or "recovery_required" tells an operator that
+      // something needs hands without saying which effect is half-undone.
+      const stalled = stalledCompensation(definition, draft.nodes);
+      if (status === "recovery_required" && stalled !== undefined) {
+        draft.error = `workflow_compensation_incomplete:${stalled.id}`;
+      } else {
+        // The reducer clears `error` on every status change, so the draft has
+        // to as well or replay no longer reproduces the projection.
+        delete draft.error;
+      }
+      emit("workflow.status_changed", {
+        from,
+        to: status,
+        ...(draft.error === undefined ? {} : { error: draft.error }),
+      });
+    }
+  }
+
   private recoverRun(
     stored: WorkflowRun,
     definition: WorkflowDefinition,
@@ -666,60 +770,7 @@ export class WorkflowController {
         // tasks differently from the live path and could take the run out of
         // failed: a branch awaiting approval beside a failed one reopened.
         if (stored.status === "failed" && node.type !== "compensation") continue;
-        const found = expectedTaskKeys(stored.id, node, definition).map((key) =>
-          preferredTask(allTasks, key),
-        );
-        let state = recoveredNodeState(
-          node,
-          found.filter((task): task is TaskRecord => task !== undefined),
-          replayed.nodes[node.id]!,
-        );
-        // An operation behind an approval shares its task with the approval
-        // node. Waiting for the approval is that node's state; mirrored onto
-        // the operation, both were re-offered, the approval ran the effect,
-        // and the operation read the running task as failed.
-        if (
-          node.type === "operation" &&
-          state.status === "awaiting_approval" &&
-          definition.nodes.some((other) => other.type === "approval" && other.forNodeId === node.id)
-        ) {
-          state = replayed.nodes[node.id]!;
-        }
-        // A sequence whose finished steps all verified is not finished if
-        // steps remain: a crash between a loop's iterations, or between a
-        // branch's steps, recovered as complete with the rest never run.
-        // Pending, so the next advance carries on from the tasks it has.
-        // Unless the projection recorded it finished in a way only the live
-        // path finishes one short: a loop stopped by `until` at a whole
-        // iteration, or a condition whose chosen branch is empty. Reopened,
-        // `until` or the condition would be asked again of a world that has
-        // moved on. Anything else recorded finished but short was written by
-        // a recovery that never downgraded (alpha.12), and is downgraded now.
-        const recorded = replayed.nodes[node.id]!;
-        const finishedShort =
-          recorded.status === "verified_complete" &&
-          canonicalJson(recorded.taskIds) === canonicalJson(state.taskIds) &&
-          ((node.type === "bounded_loop" &&
-            node.until !== undefined &&
-            state.taskIds.length > 0 &&
-            state.taskIds.length % node.body.length === 0) ||
-            (node.type === "condition" && state.taskIds.length === 0));
-        if (state.status === "verified_complete" && !sequenceFinished(node, found) && !finishedShort) {
-          state = {
-            status: "pending",
-            taskIds: state.taskIds,
-            // Whole iterations only: the loop resumes at the one in progress.
-            ...(node.type === "bounded_loop"
-              ? { iterations: Math.floor(state.taskIds.length / node.body.length) }
-              : {}),
-          };
-        }
-        // A loop that stopped on a step keeps the iteration it stopped in, as
-        // runLoop records it. Without it the next advance starts again at
-        // iteration 0 and asks `until` of a task long finished.
-        if (node.type === "bounded_loop" && state.iterations === undefined && state.taskIds.length > 0) {
-          state = { ...state, iterations: Math.floor((state.taskIds.length - 1) / node.body.length) };
-        }
+        const { state } = this.recoveredNode(stored.id, node, definition, allTasks, replayed.nodes[node.id]!);
         if (canonicalJson(draft.nodes[node.id]) === canonicalJson(state)) {
           continue;
         }
