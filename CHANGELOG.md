@@ -144,6 +144,42 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- A condition step whose advance lost its commit (a pause landed while it ran)
+  keeps to one branch. Recovery read both branches' tasks together and could
+  reopen the step on the branch it had abandoned, or, when the branch it took
+  was empty, on the other one: that offered the abandoned branch's approval
+  again, ran both branches' effects, and counted a step done that never ran.
+  Without a restart, the challenge such an advance left on the branch not
+  taken stayed approvable, even once the run had finished. Now the branch with
+  a committed step is the branch, then the one the run recorded (a condition
+  recorded done with no task took its empty branch), and only then the
+  predicate. At recovery and at the advance that decides, the other branch's
+  tasks still planned or waiting for approval are cancelled, and each cancel
+  is read back, as `workflow cancel` does for a condition not yet decided.
+  A task there that may have had an effect, or one started before its cancel
+  landed, halts the run as `recovery_required` with
+  `workflow_condition_branch_conflict:<node>` instead of running the other
+  branch beside it. A task there that did not happen (its adapter reported it
+  failed, it ran out of budget, it was cancelled or refused by policy, or it
+  was reconciled as never applied) counts for nothing, and the run moves on.
+  One that took effect (it verified, or its evidence did not hold) cannot be
+  reconciled, so the run stays halted: inspect what that branch did, undo it
+  by hand, then `workflow cancel`, which compensates nothing, so what earlier
+  steps did is undone by hand too where it should not stand. A restart before
+  the condition is decided still reads a step such an advance ran whose
+  outcome is unknown as the condition's, so it halts the run rather than let
+  a failed sibling unwind past it; anything else such an advance left waits
+  for the next advance, so the run halts or moves on the same with or without
+  a restart, unless the condition cannot be decided on the next advance (its
+  predicate inconclusive or unresolvable) while a sibling fails (#318).
+  `workflow cancel` cancels whatever a lost advance left planned or waiting
+  for approval under any of the run's steps, not only the tasks the run
+  names, and cancelling an already cancelled run sweeps again; a run whose
+  definition can no longer be opened is still ended, but nothing is swept.
+  A branch's step is found by its idempotency key, so an advance no longer
+  asks again for a step whose effect already committed, nor reuses another
+  branch's task by position. (#268)
+
 - A workflow advance that lost its lease starts no further step. This happens
   when the advance stalls past the lease, as across a laptop's sleep or a long
   pause, and another process recovers the run and takes it over. The advance

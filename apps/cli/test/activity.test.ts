@@ -369,11 +369,20 @@ describe("melra tasks, status, and watch", { timeout: 60_000 }, () => {
     const { id } = JSON.parse(await cli("workflow", "plan", "--definition", definition)) as { id: string };
     const { run } = JSON.parse(await cli("workflow", "advance", id)) as { run: WorkflowRun };
     const [first, second] = run.nodes.p!.taskIds;
-    // One branch denied, the run cancelled: the other branch's task is left
-    // waiting on a run that never advances again.
+    // One branch denied, the run cancelled. Cancelling sweeps the other
+    // branch's challenge too; one a run cancelled by an earlier version left
+    // waiting never advances again.
     await cli("approve", first!, "--deny");
     await cli("workflow", "advance", id);
     await cli("workflow", "cancel", id);
+    const store = new SqliteStore(join(root, ".melra", "melra.sqlite"));
+    try {
+      const leftover = store.getTask(second!)!;
+      expect(leftover.status).toBe("cancelled");
+      store.saveTask({ ...leftover, status: "awaiting_approval" });
+    } finally {
+      store.close();
+    }
     lapse(root, second!);
     const status = await statusOf(options);
     expect([status.expiredApprovals, status.expiredWorkflowSteps]).toEqual([1, 0]);
