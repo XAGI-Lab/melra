@@ -1075,11 +1075,15 @@ describe("WorkflowController execution", () => {
   it("stops a later advance's unwind when the run is cancelled under it", async () => {
     let cancelRun = () => {};
     const calls: string[] = [];
+    let statusAtRefund: string | undefined;
     const { controller, store } = await setup(async (operation) => {
       if (operation.kind !== "http") throw new Error("unexpected_operation");
       const path = new URL(operation.url).pathname;
       calls.push(path);
-      if (path === "/refunds") cancelRun();
+      if (path === "/refunds") {
+        statusAtRefund = controller.status(planned.id).status;
+        cancelRun();
+      }
       return { success: path !== "/shipments" };
     });
     const planned = controller.plan(
@@ -1112,7 +1116,10 @@ describe("WorkflowController execution", () => {
     }
 
     expect(run.status).toBe("cancelled");
-    expect(calls).toContain("/refunds");
+    // Only an advance that starts on a failed run unwinds, so this is the
+    // unwind() path and not the trigger loop of the advance where ship failed.
+    expect(statusAtRefund).toBe("failed");
+    expect(calls).not.toContain("/releases");
     // The release would be a live challenge on a run its operator cancelled.
     expect(store.listTasks(100, "awaiting_approval")).toEqual([]);
   });
