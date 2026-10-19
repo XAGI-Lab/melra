@@ -26,12 +26,15 @@ interface ClientIdentity {
   clientVersion?: string;
   /**
    * How long `execute()` and `advanceWorkflow()` wait for the server, in whole
-   * milliseconds from 1 to 2 147 483 647. The default, 36 minutes, is past the
-   * longest a task can take: its budget (15 minutes at most), then its
-   * evidence, read after the budget (20 predicates of up to a minute each). So
-   * the client does not give up on an effect the server is still running and
-   * may still verify. A workflow wave that runs several long steps one after
-   * another can take longer: raise it for those.
+   * milliseconds from 1 to 2 147 483 647. The default, 36 minutes, covers a
+   * task's budget (15 minutes at most) and then its built-in evidence reads (20
+   * predicates of up to a minute each), so the client does not give up on an
+   * effect the server is still running and may still verify. Raise it for what
+   * that does not cover: custom verifiers and `file_hash` on a very large file,
+   * which have no time limit, and an `advanceWorkflow()` call that runs several
+   * tasks in turn (a loop's or a branch's steps, or, when a step fails, every
+   * compensation). After a timeout, read the task or the run before acting on
+   * it: the server may still be at work.
    */
   runTimeoutMs?: number;
 }
