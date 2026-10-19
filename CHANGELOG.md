@@ -61,6 +61,12 @@ All notable changes are documented here. The format follows
 
 ### Changed
 
+- **Breaking:** `SqliteStore.getWorkflowDefinition` in `@melra/storage-sqlite`
+  returns a `RedactedWorkflowDefinition`: the redacted copy kept for reading,
+  of which only `id` and `version` are checked, since redaction may have
+  rewritten a node id or a URL in it. The definition a run uses is the sealed
+  payload. `createWorkflow` takes that redacted copy as `unknown`. (#278)
+
 - The eleven MCP tools describe themselves fully: each says what it does,
   when to use it instead of its siblings, what it returns and how its
   parameters relate, and every top-level parameter now carries a description
@@ -112,6 +118,16 @@ All notable changes are documented here. The format follows
   evicts, revives nothing, and `docs/INSTALLATION.md` says why, and how far
   back deleting corrections reaches once compaction has run. Edits and
   deletes of one chain from two processes no longer interleave. (#250)
+
+- A workflow with an `exit_code` evidence predicate can be planned, and so can
+  one with a node id, verifier name or URL that looks like an API key
+  (`api-integration-tests`). Planning parsed the redacted copy it stores
+  against the definition schema, and redaction had turned the exit status into
+  a string and such names into `[REDACTED_API_KEY]`, so every interface refused
+  the plan and blamed the caller's valid input. The redacted copy is now
+  stored as it is; the sealed definition is the one that runs. An `exit_code`
+  predicate's whole-number value is also kept in that copy, since no secret
+  can hide in it. Any other `value` is still redacted. (#278)
 
 - An `http` response past `maxResponseBytes` returns the body up to the cap.
   The chunk that crossed the cap was dropped whole, so a body that arrived in
