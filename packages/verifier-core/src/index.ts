@@ -545,9 +545,14 @@ export class Verifier {
     }
   }
 
-  /** `input` under the root before any link is followed; undefined outside it or at the root. */
+  /**
+   * `input` under the root before any link is followed; undefined outside it
+   * or at the root. Every file path a verifier, built-in or registered, or
+   * planning asks about comes through here, so the root's configured spelling
+   * is mapped once, for all of them.
+   */
   private spelled(input: string): string | undefined {
-    const candidate = resolve(this.root, input);
+    const candidate = resolve(this.root, this.inputPath(input));
     return inside(this.root, candidate) && relative(this.root, candidate) !== "" ? candidate : undefined;
   }
 
@@ -599,13 +604,7 @@ export class Verifier {
     };
     const evidence: EvidenceItem[] = [];
     for (const predicate of predicates) {
-      const path = "path" in predicate ? predicate.path : undefined;
-      const normalized =
-        ["file_exists", "file_absent", "file_hash"].includes(predicate.type) &&
-        typeof path === "string"
-          ? { ...predicate, path: this.inputPath(path) }
-          : predicate;
-      const { verifier, type, input } = this.resolve(normalized);
+      const { verifier, type, input } = this.resolve(predicate);
       try {
         // An unregistered type is a question nobody here can answer: it fails.
         if (verifier === undefined) throw new Refusal(`verification_unsupported:${type}`);
