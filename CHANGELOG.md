@@ -110,11 +110,13 @@ All notable changes are documented here. The format follows
   outcome is unknown or unsettled (`recovery_required`: an effect that may have
   happened, or a task still running). The run halts as `recovery_required`,
   starts no further step, and fails and unwinds only once that step is
-  settled, as a denied step already did. It used to refund a charge whose
+  settled by its `reconciliation`, as a denied step already did; one that
+  declares none leaves `workflow cancel` as the way out. It used to refund a charge whose
   shipment might be in transit, and skip the compensation of a step that went
   on to verify. This holds for sibling steps and for branches of one
   `parallel` node, live and after a restart. A run an earlier version left
-  `failed` beside such a step is halted the same way at its next advance.
+  `failed` beside such a step is halted the same way at its next advance, and
+  the unknown step's compensation, which that unwind skipped, is offered again.
   (#270)
 
 - The TypeScript SDK's `execute()` and `advanceWorkflow()` wait up to 36

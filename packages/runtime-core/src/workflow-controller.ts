@@ -327,6 +327,19 @@ export class WorkflowController {
     // gets there now halts, so recovery settles the step first.
     if (current.status === "failed" && hasUnknownOutcome(definition, (id) => current.nodes[id]?.status)) {
       const run = this.transition(current, (draft, emit) => {
+        // Its unwind skipped the unknown step's own compensation, the target
+        // not being done; offered again, it runs if that step settles as done.
+        for (const node of definition.nodes) {
+          if (
+            node.type === "compensation" &&
+            draft.nodes[node.id]?.status === "skipped" &&
+            draft.nodes[node.forNodeId]?.status === "recovery_required"
+          ) {
+            const state = { status: "pending" as const, taskIds: [] };
+            emit("workflow.node_changed", { nodeId: node.id, from: "skipped", state });
+            draft.nodes[node.id] = state;
+          }
+        }
         const from = draft.status;
         draft.status = "recovery_required";
         delete draft.error;
@@ -337,12 +350,7 @@ export class WorkflowController {
     // A run with a failed or denied step unwinds once nothing is unknown. Until
     // then it is halted, and offers no forward step: not one newly ready, nor
     // one parked for approval, whose effect would only be undone.
-    const doomed = definition.nodes.some(
-      (node) =>
-        node.type !== "compensation" &&
-        ["failed", "cancelled"].includes(current.nodes[node.id]?.status ?? ""),
-    );
-    if (doomed && rollback.length === 0) {
+    if (this.hasFailure(definition, current.nodes) && rollback.length === 0) {
       return { run: current, tasks: [], events: this.events(workflowId, since) };
     }
     // A node parked for a human — approval or supplied input — is no
@@ -1416,6 +1424,30 @@ export class WorkflowController {
       },
       tasks,
     };
+  }
+
+  /**
+   * Whether a forward step failed or was denied. Also inside a node that an
+   * unknown branch ranks as recovery_required: a parallel node with one branch
+   * unknown and one failed reads recovery_required, and its failure is in its
+   * tasks.
+   */
+  private hasFailure(definition: WorkflowDefinition, nodes: WorkflowRun["nodes"]): boolean {
+    return definition.nodes.some((node) => {
+      if (node.type === "compensation") return false;
+      const state = nodes[node.id];
+      if (state === undefined) return false;
+      if (state.status === "failed" || state.status === "cancelled") return true;
+      if (state.status !== "recovery_required") return false;
+      return state.taskIds.some((taskId) => {
+        const task = this.store.getTask(taskId);
+        return (
+          task !== undefined &&
+          (["failed", "partial", "budget_exhausted", "policy_blocked"].includes(task.status) ||
+            (task.status === "cancelled" && task.error !== "duplicate_attempt_prevented"))
+        );
+      });
+    });
   }
 
   private deriveStatus(
