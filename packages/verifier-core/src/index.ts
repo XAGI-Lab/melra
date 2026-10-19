@@ -223,12 +223,14 @@ async function renamedByCase(
   context: VerificationContext,
 ): Promise<boolean> {
   if (result.moved !== true || typeof result.path !== "string" || typeof result.destination !== "string") return false;
-  const entry = (input: string) => context.workspacePath(input, { mayBeAbsent: true });
-  if ((await entry(result.path).catch(() => undefined)) !== path) return false;
+  // As the runtime reported it, relative to the root: an absolute path that
+  // spells the root in another case (Windows allows it) is the same source.
+  if (context.relative(path) !== result.path) return false;
   if (!found.isDirectory() && found.nlink !== 1n) return false;
   // The destination's own entry, not where a link there leads; gone, it is
   // not what the old spelling reached.
-  const destination = await entry(result.destination)
+  const destination = await context
+    .workspacePath(result.destination, { mayBeAbsent: true })
     .then((resolved) => lstat(resolved, { bigint: true }))
     .catch(() => undefined);
   if (destination === undefined || destination.dev !== found.dev || destination.ino !== found.ino) return false;

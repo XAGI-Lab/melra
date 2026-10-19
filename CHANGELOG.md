@@ -115,8 +115,9 @@ All notable changes are documented here. The format follows
   the old spelling, so a correct rename ended `partial`. Against a move's own
   result, the move's source now reads absent when what its spelling reaches is
   the destination's own entry, with no other name, and the directory no longer
-  holds that spelling; a symlink renamed by case included. Anywhere else, a
-  path that reaches a file still reads present, however it is spelled. (#280)
+  holds that spelling; a symlink renamed by case included, and one recovered
+  after a crash interrupted its verification. Anywhere else, a path that
+  reaches a file still reads present, however it is spelled. (#280)
 
 - A workflow with an `exit_code` evidence predicate can be planned, and so can
   one with a node id, verifier name or URL that looks like an API key
