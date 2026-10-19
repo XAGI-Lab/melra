@@ -157,6 +157,16 @@ All notable changes are documented here. The format follows
   the console refuses the Deny with `task_not_cancellable:<status>` where it
   showed the task as denied. (#244)
 
+- Two reconciles of one parked task no longer both write. `melra_execute` on
+  a `recovery_required` task asks the provider and records the answer; a
+  second call meanwhile, or the sweep's recovery beside an agent's call, asked
+  too, and the slower answer was written over the first: one that could not
+  reach the provider, or that said the effect never happened, rewrote a task
+  already settled `verified_success` as parked or `failed` and dropped its
+  receipt. Now an answer is recorded, with its receipt and certificate, only
+  while the task is still `recovery_required`, and the later call writes
+  nothing and returns the task as it now stands. (#244)
+
 - `workflow pause`, `suspend`, `resume` and `cancel` (`melra_workflow_control`,
   `melra_workflow_cancel`) no longer land under an advance that is running a
   step. They wrote the run at once, so the advance's commit then failed with

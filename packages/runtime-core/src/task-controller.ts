@@ -750,15 +750,16 @@ export class TaskController {
     }
     const request = this.loadRequest(taskId);
     const classified = classifyOperation(request.operation);
-    const park = (reason: string): ExecutionResult => {
-      task.error = reason;
-      task.updatedAt = now();
-      this.store.saveTask(task);
-      return { task };
-    };
+    const park = (reason: string): ExecutionResult =>
+      this.settleParked(taskId, () => {
+        task.error = reason;
+        task.updatedAt = now();
+        this.store.saveTask(task);
+        return { task };
+      });
     // Its own commit already answers: the effect verified, and only a write
     // after it failed. Parked for good otherwise, with nothing declared.
-    const committed = this.settleCommitted(task, request, classified);
+    const committed = this.settleParked(taskId, () => this.settleCommitted(task, request, classified));
     if (committed !== undefined) return committed;
     if (request.reconciliation.length === 0) {
       return park("reconciliation_not_declared");
@@ -781,39 +782,58 @@ export class TaskController {
       return park("reconciliation_inconclusive");
     }
     if (verification.verified) {
-      return this.resolveAsVerified(
-        task,
-        request,
-        classified,
-        verification.evidence,
-        { reconciliation: "provider_state_confirms_effect" },
+      return this.settleParked(taskId, () =>
+        this.resolveAsVerified(
+          task,
+          request,
+          classified,
+          verification.evidence,
+          { reconciliation: "provider_state_confirms_effect" },
+        ),
       );
     }
     // The provider answered, and the answer is that it never happened. Only now
     // is `failed` a claim MELRA is entitled to make.
-    task.status = "failed";
-    task.error = "reconciliation_confirms_effect_not_applied";
-    task.updatedAt = now();
-    this.store.saveTask(task);
-    const receipt = this.createReceipt(
-      task,
-      request,
-      classified.capability,
-      classified.target,
-      classified.effect,
-      task.updatedAt,
-      false,
-      { reconciliation: "provider_state_denies_effect" },
-      verification.evidence,
-      task.error,
+    return this.settleParked(taskId, () => {
+      task.status = "failed";
+      task.error = "reconciliation_confirms_effect_not_applied";
+      task.updatedAt = now();
+      this.store.saveTask(task);
+      const receipt = this.createReceipt(
+        task,
+        request,
+        classified.capability,
+        classified.target,
+        classified.effect,
+        task.updatedAt,
+        false,
+        { reconciliation: "provider_state_denies_effect" },
+        verification.evidence,
+        task.error,
+      );
+      this.store.saveReceipt(receipt);
+      task.receiptIds.push(receipt.receiptId);
+      const certificate = this.createAndSaveCertificate(
+        task,
+        verification.evidence,
+      );
+      return { task, receipt, certificate };
+    });
+  }
+
+  /**
+   * Writes a reconcile's answer in one transaction, and only while the task
+   * still waits for one. Two reconciles of one task (two melra_execute calls,
+   * or the sweep's recovery beside an agent's) each read it parked and ask
+   * the provider; written unconditionally, the slower answer, even one that
+   * could not reach the provider, overwrote a settle the other had recorded
+   * and dropped its receipt. Now the first stands, and the other writes
+   * nothing, not even a receipt, and returns the task as it now stands.
+   */
+  private settleParked<T>(taskId: string, write: () => T): T | ExecutionResult {
+    return this.store.transaction(() =>
+      this.store.getTask(taskId)?.status === "recovery_required" ? write() : { task: this.status(taskId) },
     );
-    this.store.saveReceipt(receipt);
-    task.receiptIds.push(receipt.receiptId);
-    const certificate = this.createAndSaveCertificate(
-      task,
-      verification.evidence,
-    );
-    return { task, receipt, certificate };
   }
 
   /**

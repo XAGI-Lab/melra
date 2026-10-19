@@ -352,6 +352,48 @@ describe("starting and denying a task across processes", () => {
   });
 });
 
+describe("reconciling one task in two processes", () => {
+  // Two melra_execute calls, or the sweep's recovery beside an agent's
+  // execute, ask the provider about one parked task: the first to settle it
+  // stands, and the other writes nothing.
+  it.each([
+    ["is not reached", { status: 503, content: "" }],
+    ["says it never happened", { status: 404, content: JSON.stringify({ status: "none" }) }],
+  ])("keeps a peer's verified settle when its own provider %s", async (_, answer) => {
+    const at = await home();
+    const asked = gate();
+    const answered = gate();
+    const a = await side(
+      at,
+      async () => {
+        throw outcomeUnknown("socket hang up");
+      },
+      vi.fn(async () => {
+        asked.open();
+        await answered.opened;
+        return answer;
+      }),
+    );
+    const b = await side(at, undefined, vi.fn(async () => ({ status: 200, content: JSON.stringify({ status: "applied" }) })));
+    const task = a.tasks.plan(charge());
+    expect((await a.tasks.execute(task.id, approve(task))).task.status).toBe("recovery_required");
+
+    const slow = a.tasks.execute(task.id);
+    await asked.opened;
+    const settled = (await b.tasks.execute(task.id)).task;
+    expect(settled.status).toBe("verified_success");
+    answered.open();
+    // Written over the peer's settle: parked again or failed, the peer's
+    // receipt dropped from the task, and a failed one's receipt in its place.
+    expect((await slow).task).toEqual(b.store.getTask(task.id));
+    expect(b.store.getTask(task.id)).toMatchObject({ status: "verified_success", receiptIds: settled.receiptIds });
+    expect(b.tasks.receipts({ taskId: task.id })).toMatchObject({
+      receipts: settled.receiptIds.map((receiptId) => ({ receiptId })),
+      certificate: { result: "VERIFIED_SUCCESS" },
+    });
+  });
+});
+
 const definitionId = "33333333-3333-4333-8333-333333333333";
 
 const put = (key: string): TaskRequest =>

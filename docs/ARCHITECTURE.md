@@ -642,7 +642,11 @@ rather than waited on. Planning refuses a file path that could only be
 refused (`evidence_path_outside_workspace`), and a URL token those four facts
 cannot fill (`reconciliation_unanswerable:verification_token_unresolved:<token>`).
 The same path runs on restart: `recoverInterrupted` reconciles a crashed
-mutation that declared how to settle one, and parks the rest.
+mutation that declared how to settle one, and parks the rest. An answer is
+recorded, with its receipt and certificate, in one transaction and only while
+the task is still `recovery_required`: of two reconciles of one task (two
+`melra_execute` calls, or the sweep beside one) the first to answer stands, and
+the other writes nothing and returns the task as it now stands.
 
 A forward workflow step parked this way moves at the run's next `advance`, in
 the same process: the advance reads the step's tasks again, as recovery does.
