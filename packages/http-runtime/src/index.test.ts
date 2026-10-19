@@ -112,7 +112,10 @@ describe("http runtime", () => {
       operation({ url: `${origin}/big`, maxResponseBytes: 1_000 }),
     );
     expect(result.truncated).toBe(true);
-    expect(String(result.content).length).toBeLessThan(50_000);
+    // Sent in one write: the chunk crossing the cap is cut at it, not dropped,
+    // which used to leave the content empty.
+    expect(result.content).toBe("x".repeat(1_000));
+    expect(result.bytes).toBe(1_000);
   });
 
   it("refuses a private destination before any socket opens", async () => {
