@@ -1369,16 +1369,38 @@ export class SqliteStore {
     return Number(result.changes) > 0;
   }
 
-  /** Deleting a correction undoes it: what it replaced is live again. */
+  /**
+   * Deleting a live correction undoes it: what it replaced is live again.
+   * Deleting one in the middle of a chain links the records on either side of
+   * it, so the latest stays the only live one. An expired correction leaves
+   * what it replaced retired, as it does once compaction has removed it.
+   */
   deleteMemory(id: string, scope: MemoryScope): boolean {
     return this.transaction(() => {
       const row = this.database
-        .prepare("SELECT supersedes_id AS supersedesId FROM memories WHERE id = ? AND scope = ?")
-        .get(id, scope) as { supersedesId: string | null } | undefined;
+        .prepare(`
+          SELECT supersedes_id AS supersedesId, superseded_by AS supersededBy, expires_at AS expiresAt
+          FROM memories WHERE id = ? AND scope = ?
+        `)
+        .get(id, scope) as
+        | { supersedesId: string | null; supersededBy: string | null; expiresAt: string | null }
+        | undefined;
       const result = this.database
         .prepare("DELETE FROM memories WHERE id = ? AND scope = ?")
         .run(id, scope);
-      if (row?.supersedesId != null) this.unsupersedeMemory(row.supersedesId, scope, id);
+      const replaced = row?.supersedesId;
+      if (row !== undefined && replaced != null) {
+        if (row.supersededBy != null) {
+          this.database
+            .prepare("UPDATE memories SET superseded_by = ? WHERE id = ? AND scope = ? AND superseded_by = ?")
+            .run(row.supersededBy, replaced, scope, id);
+          this.database
+            .prepare("UPDATE memories SET supersedes_id = ? WHERE id = ? AND scope = ? AND supersedes_id = ?")
+            .run(replaced, row.supersededBy, scope, id);
+        } else if (row.expiresAt === null || row.expiresAt > new Date().toISOString()) {
+          this.unsupersedeMemory(replaced, scope, id);
+        }
+      }
       return Number(result.changes) > 0;
     });
   }

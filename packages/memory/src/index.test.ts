@@ -365,6 +365,37 @@ describe("LocalMemory", () => {
     expect(listed()).toEqual([first.id, third.id].sort());
   });
 
+  it("links a chain around a deleted middle record, and keeps an expired correction's original retired", async () => {
+    store = new SqliteStore(":memory:");
+    const memory = new LocalMemory(store);
+    const run = (fields: Record<string, unknown>) =>
+      memory.execute(MemoryOperationSchema.parse({ kind: "memory", scope: "workspace", ...fields }));
+    const put = (fields: Record<string, unknown>) =>
+      run({ action: "put", key: "runtime", ...fields }) as { id: string };
+    const listed = () =>
+      (run({ action: "list" }) as { memories: { value: string }[] }).memories.map(({ value }) => value).sort();
+
+    const a = put({ value: "v1" });
+    const b = put({ value: "v2", supersedesId: a.id });
+    const c = put({ value: "v3", supersedesId: b.id });
+    // Deleting the middle one revived v1 beside v3, its current replacement.
+    run({ action: "delete", id: b.id });
+    expect(listed()).toEqual(["v3"]);
+    expect(store.getMemory(c.id)?.supersedesId).toBe(a.id);
+    // The chain is whole again: undoing v3 brings back v1.
+    run({ action: "delete", id: c.id });
+    expect(listed()).toEqual(["v1"]);
+
+    // A correction that expired after its put, deleted before any later put
+    // compacts it away: the same as after, its original stays retired.
+    const d = put({ key: "other", value: "w1" });
+    const e = put({ key: "other", value: "w2", supersedesId: d.id, expiresAt: new Date(Date.now() + 200).toISOString() });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(store.getMemory(e.id)).toBeDefined();
+    run({ action: "delete", id: e.id });
+    expect(listed()).toEqual(["v1"]);
+  });
+
   it("leaves what an expired correction replaced retired", () => {
     store = new SqliteStore(":memory:");
     const memory = new LocalMemory(store);
