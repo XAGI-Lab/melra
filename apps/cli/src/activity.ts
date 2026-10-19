@@ -136,6 +136,22 @@ function approvalHint(waiting: number): string {
   return `${waiting} waiting for approval — ${APPROVAL_HINT}`;
 }
 
+function expiredHint(expired: number): string {
+  return `${expired} whose approval expired — plan again, or clear with \`melra approve <task-id> --deny\``;
+}
+
+/**
+ * Tasks whose approval can still be given, and those whose challenge expired.
+ * An expired one stays awaiting_approval, and counted as waiting it was
+ * reported forever and pointed at `melra approve`, which then refused it.
+ */
+function approvalCounts(store: SqliteStore): { waiting: number; expired: number } {
+  const now = new Date().toISOString();
+  const pending = store.listTasks(100_000, "awaiting_approval");
+  const expired = pending.filter((task) => task.approval !== undefined && task.approval.expiresAt <= now).length;
+  return { waiting: pending.length - expired, expired };
+}
+
 export interface TasksOptions {
   limit: number;
   status?: TaskStatus;
@@ -143,12 +159,12 @@ export interface TasksOptions {
 }
 
 export function tasksCommand(env: CliEnvironment, options: TasksOptions): number {
-  const { tasks, waiting } = withStore(
+  const { tasks, waiting, expired } = withStore(
     env,
-    { tasks: [] as TaskRecord[], waiting: 0 },
+    { tasks: [] as TaskRecord[], waiting: 0, expired: 0 },
     (store) => ({
       tasks: store.listTasks(options.limit, options.status),
-      waiting: store.taskStatusCounts().awaiting_approval ?? 0,
+      ...approvalCounts(store),
     }),
   );
   if (!humanOutput(options.json)) {
@@ -183,10 +199,9 @@ export function tasksCommand(env: CliEnvironment, options: TasksOptions): number
       ),
     ]),
   );
-  if (waiting > 0) {
-    write();
-    write(approvalHint(waiting));
-  }
+  if (waiting > 0 || expired > 0) write();
+  if (waiting > 0) write(approvalHint(waiting));
+  if (expired > 0) write(expiredHint(expired));
   return 0;
 }
 
@@ -392,9 +407,14 @@ export async function statusCommand(
   }
   const mode = env.mode === "enforced" || policyMode === "enforced" ? "enforced" : "developer";
   const path = databasePath(env);
-  const { tasks, workflows, lastActivity } = withStore(
+  const { tasks, workflows, lastActivity, approvals } = withStore(
     env,
-    { tasks: {} as Record<string, number>, workflows: {} as Record<string, number>, lastActivity: undefined as string | undefined },
+    {
+      tasks: {} as Record<string, number>,
+      workflows: {} as Record<string, number>,
+      lastActivity: undefined as string | undefined,
+      approvals: { waiting: 0, expired: 0 },
+    },
     (store) => {
       const runs = store.listWorkflowRuns();
       const latest = [store.listTasks(1)[0]?.updatedAt, runs.at(-1)?.updatedAt]
@@ -405,6 +425,7 @@ export async function statusCommand(
         tasks: store.taskStatusCounts(),
         workflows: countBy(runs.map((run) => run.status)),
         lastActivity: latest,
+        approvals: approvalCounts(store),
       };
     },
   );
@@ -429,7 +450,8 @@ export async function statusCommand(
     },
     tasks,
     workflows,
-    awaitingApproval: tasks.awaiting_approval ?? 0,
+    awaitingApproval: approvals.waiting,
+    expiredApprovals: approvals.expired,
     lastActivity: lastActivity ?? null,
     server: {
       http: { address: `127.0.0.1:${port}`, state: http ? "reachable" : "not running" },
@@ -456,6 +478,7 @@ export async function statusCommand(
   row("Tasks", summary(tasks));
   row("Workflows", summary(workflows));
   if (report.awaitingApproval > 0) row("Waiting", approvalHint(report.awaitingApproval));
+  if (report.expiredApprovals > 0) row("Expired", expiredHint(report.expiredApprovals));
   row("Last active", lastActivity === undefined ? "never" : ago(lastActivity));
   row("HTTP", `${report.server.http.address} ${report.server.http.state}`);
   if (report.server.socket !== undefined) {

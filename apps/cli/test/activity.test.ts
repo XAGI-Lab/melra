@@ -123,6 +123,51 @@ describe("melra tasks, status, and watch", () => {
     expect(status.server.http.state).toBe("not running");
   });
 
+  it("counts an approval that expired apart from one still waiting", async () => {
+    const { root, options, run } = await workspace();
+    await writeFile(join(root, "policy.json"), JSON.stringify({ approvalTtlMs: 300 }));
+    const short = { ...options, env: { ...options.env, MELRA_POLICY: join(root, "policy.json") } };
+    const first = await execute(process.execPath, [entry, "run", "--request", fileWrite], short).catch(
+      (error: { stdout: string }) => error,
+    );
+    expect((JSON.parse(first.stdout) as { task: { status: string } }).task.status).toBe("awaiting_approval");
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    await run(fileWrite);
+    // The first can no longer be approved: counted as waiting, it was reported
+    // forever and pointed at `melra approve`, which refused it.
+    const status = JSON.parse((await execute(process.execPath, [entry, "status", "--json"], options)).stdout) as {
+      awaitingApproval: number;
+      expiredApprovals: number;
+    };
+    expect([status.awaitingApproval, status.expiredApprovals]).toEqual([1, 1]);
+  });
+
+  it("refuses a --status or --limit with nothing after it", async () => {
+    const { options } = await workspace();
+    // What an unquoted `--status $S` sends with S unset: it listed everything.
+    for (const args of [["--status"], ["--limit"], ["--status", "--json"]]) {
+      await expect(execute(process.execPath, [entry, "tasks", ...args], options), args.join(" ")).rejects.toMatchObject({
+        code: 1,
+        stderr: expect.stringContaining("requires a value"),
+      });
+    }
+  });
+
+  it("previews a mutation with the evidence the server would derive for it", async () => {
+    const { root, options } = await workspace();
+    const request = join(root, "write.json");
+    await writeFile(
+      request,
+      JSON.stringify({ goal: "Write a file", operation: { kind: "file", action: "write", path: "notes.txt", content: "hi" } }),
+    );
+    // It said deny, mutation_requires_evidence, where `run` asks for approval.
+    const preview = JSON.parse(
+      (await execute(process.execPath, [entry, "policy", "test", "--request", request], options)).stdout,
+    ) as { decision: { outcome: string }; requiredEvidence: unknown[] };
+    expect(preview.decision.outcome).toBe("confirm");
+    expect(preview.requiredEvidence).toEqual([{ type: "file_exists", path: "notes.txt" }]);
+  });
+
   it("reports an empty home without creating a database", async () => {
     const { options } = await workspace();
     const listed = await execute(process.execPath, [entry, "tasks"], options);

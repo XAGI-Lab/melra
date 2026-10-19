@@ -98,6 +98,23 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- `melra policy test` previews a mutation that declares no evidence with the
+  evidence the server derives for it, as `melra_plan` does, and prints it as
+  `requiredEvidence`. It previewed every such file, memory, browser, computer
+  and http mutation as `deny mutation_requires_evidence`, where the server asks
+  for approval. (#283)
+
+- `melra tasks` and `melra status` count a task whose approval has expired
+  apart from those still waiting, and say to plan it again or clear it with
+  `melra approve <task-id> --deny`. They counted it as waiting forever and
+  pointed at `melra approve`, which refused it. `status --json` adds
+  `expiredApprovals`; `awaitingApproval` counts only approvals that can still
+  be given. (#284)
+
+- `melra tasks --status` and `--limit` with nothing after them are refused.
+  They were ignored, so `--status $S` with `S` unset listed every status as if
+  filtered. (#285)
+
 - `send` to an interactive terminal job whose program has closed its stdin is
   refused as `terminal_job_stdin_closed`. Every send after the failed write
   was refused as `terminal_job_not_interactive`, and the send whose write
