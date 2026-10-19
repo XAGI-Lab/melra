@@ -90,7 +90,10 @@ describe("approval console", () => {
       if (init.token !== undefined) headers.authorization = `Bearer ${init.token}`;
       if (init.origin !== undefined) headers.origin = init.origin;
       const request = httpRequest(
-        { host: "127.0.0.1", port: server.port, path, method: init.method ?? "GET", headers },
+        // No pooled keep-alive socket: the server, in this same process, can
+        // time one out during a slow turn just as the next request is written
+        // to it, and the request then fails with ECONNRESET (#296).
+        { host: "127.0.0.1", port: server.port, path, method: init.method ?? "GET", headers, agent: false },
         (response) => {
           let data = "";
           response.on("data", (chunk) => (data += chunk));

@@ -235,10 +235,11 @@ describe("browser see/act loop", () => {
   }, 120_000);
 
   it("switches to the tab it checked, even if a tab before it closes meanwhile", async () => {
-    // ?busy stops answering for a while, so its check is slow; ?console is marked.
+    // ?console is marked; ?busy is made to stop answering just before the
+    // switch, so its check is slow. Timed from its own load it raced how fast
+    // the tab opened, and an early check answered before tab 0 closed (#295).
     const context = await fixture(`<!doctype html><html><head><script>
       if (location.search === "?console") document.head.insertAdjacentHTML("beforeend", '<meta name="${APPROVAL_SURFACE}" content="operator-only">');
-      if (location.search === "?busy") setTimeout(() => { const until = Date.now() + 3_000; while (Date.now() < until); }, 1_500);
     </script></head><body>tab</body></html>`);
     if (context === undefined) return;
     const { runtime, url } = context;
@@ -246,12 +247,16 @@ describe("browser see/act loop", () => {
       runtime.execute(BrowserOperationSchema.parse({ kind: "browser", ...operation }));
     try {
       await run({ action: "navigate", url });
-      const opened = Date.now();
       await run({ action: "tab_new", url: `${url}/?busy` });
       await run({ action: "tab_new", url: `${url}/?console` });
-      await new Promise((done) => setTimeout(done, Math.max(0, opened + 1_800 - Date.now())));
       // Tab 1's check waits on its page; tab 0 goes away while it does.
       const pages = (runtime as unknown as { context: { pages: () => Page[] } }).context.pages();
+      void pages[1]!
+        .evaluate(() => {
+          const until = Date.now() + 3_000;
+          while (Date.now() < until);
+        })
+        .catch(() => undefined);
       setTimeout(() => void pages[0]!.close(), 300);
       const switched = await run({ action: "tab_switch", tabIndex: 1 });
       expect(switched.url).toContain("?busy");
