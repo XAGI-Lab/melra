@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createHash } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { link, lstat, mkdtemp, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -80,6 +80,94 @@ describe("Verifier", () => {
     );
     expect(hashed.verified).toBe(false);
     expect(hashed.evidence[0]?.summary).toBe("verification_path_reserved");
+  });
+
+  it("reads a case-only rename's old spelling as absent, and nothing else spelled differently", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-verifier-"));
+    roots.push(root);
+    await writeFile(join(root, "Readme.md"), "x");
+    await rename(join(root, "Readme.md"), join(root, "README.md"));
+    const verifier = await Verifier.create(root);
+    // What a move derives, against the move's own result. On a
+    // case-insensitive disk the old spelling still reached the renamed file,
+    // and the move verified as partial.
+    const moved = await verifier.verify(
+      [
+        { type: "file_absent", path: "Readme.md" },
+        { type: "file_exists", path: "README.md" },
+      ],
+      { moved: true, path: "Readme.md", destination: "README.md" },
+    );
+    expect(moved.verified).toBe(true);
+    // Anywhere else a path that reaches a file is that file: a guard asking
+    // whether settings.json is absent beside Settings.json is told no.
+    await writeFile(join(root, "Settings.json"), "{}");
+    const folds = await lstat(join(root, "settings.json")).then(() => true, () => false);
+    if (folds) {
+      for (const result of [{}, { moved: true, path: "x", destination: "README.md" }]) {
+        const guard = await verifier.verify([{ type: "file_absent", path: "settings.json" }], result);
+        expect(guard.verified, JSON.stringify(result)).toBe(false);
+      }
+    }
+    // A move rename(2) ignores, between two hard links to one file, leaves the
+    // source listed: the same file as the destination, but still there.
+    await writeFile(join(root, "a.txt"), "x");
+    await link(join(root, "a.txt"), join(root, "b.txt"));
+    const linked = await verifier.verify([{ type: "file_absent", path: "a.txt" }], {
+      moved: true,
+      path: "a.txt",
+      destination: "b.txt",
+    });
+    expect(linked.verified).toBe(false);
+  });
+
+  it("reads a path as absent for a move only when it is that move's own case-renamed source", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-verifier-"));
+    roots.push(root);
+    await writeFile(join(root, "config.json"), "{}");
+    const verifier = await Verifier.create(root);
+    // A move whose destination has since gone: failing to find it made every
+    // file_absent against that result pass, on any disk.
+    const gone = await verifier.verify([{ type: "file_absent", path: "config.json" }], {
+      moved: true,
+      path: "config.json",
+      destination: "gone/config.json",
+    });
+    expect(gone.verified).toBe(false);
+
+    // A link renamed by case is gone under its old spelling, though what it
+    // leads to is not the move's destination entry.
+    await writeFile(join(root, "target.txt"), "x");
+    if (await symlink("target.txt", join(root, "Link")).then(() => true, () => false)) {
+      await rename(join(root, "Link"), join(root, "LINK"));
+      const renamed = await verifier.verify([{ type: "file_absent", path: "Link" }], {
+        moved: true,
+        path: "Link",
+        destination: "LINK",
+      });
+      expect(renamed.verified).toBe(true);
+    }
+
+    await writeFile(join(root, "Draft.md"), "x");
+    await rename(join(root, "Draft.md"), join(root, "README.md"));
+    if (await lstat(join(root, "readme.md")).then(() => true, () => false)) {
+      // Another spelling of the destination is not the move's source.
+      const variant = await verifier.verify([{ type: "file_absent", path: "readme.md" }], {
+        moved: true,
+        path: "Draft.md",
+        destination: "README.md",
+      });
+      expect(variant.verified).toBe(false);
+      // Nor is a hard link the move left in place, spelled in another case.
+      await writeFile(join(root, "B.txt"), "x");
+      await link(join(root, "B.txt"), join(root, "a.txt"));
+      const linked = await verifier.verify([{ type: "file_absent", path: "b.txt" }], {
+        moved: true,
+        path: "b.txt",
+        destination: "A.txt",
+      });
+      expect(linked.verified).toBe(false);
+    }
   });
 
   it("stamps each item with how it was established", async () => {

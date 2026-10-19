@@ -1,7 +1,7 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -394,6 +394,35 @@ describe("TaskController", () => {
       attempt: 1,
     });
     expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("recovers an interrupted case-only rename against the move's own result", async () => {
+    const { controller, store } = await setup({ execute: vi.fn(async () => ({ success: true })) });
+    const root = roots.at(-1)!;
+    await writeFile(join(root, "Readme.md"), "x");
+    await rename(join(root, "Readme.md"), join(root, "README.md"));
+    // Only a disk that folds case reaches the renamed file by its old name.
+    if (!(await lstat(join(root, "Readme.md")).then(() => true, () => false))) return;
+    const planned = controller.plan(
+      TaskRequestSchema.parse({
+        goal: "Rename by case",
+        operation: { kind: "file", action: "move", path: "Readme.md", destination: "README.md" },
+      }),
+      { idempotencyKey: "c".repeat(64), attempt: 1 },
+    );
+    const interrupted = store.getTask(planned.id)!;
+    interrupted.status = "verifying";
+    store.saveTaskExecutionResult(
+      interrupted,
+      new PayloadCipher(Buffer.alloc(32, 7)).seal(
+        { moved: true, path: "Readme.md", destination: "README.md" },
+        `task:${planned.id}:result`,
+      ),
+    );
+    // Checked against no result, the old spelling read present and the
+    // rename was parked for reconciliation it does not declare.
+    const [recovered] = await controller.recoverInterrupted();
+    expect(recovered).toMatchObject({ id: planned.id, status: "verified_success" });
   });
 
   it("prevents an already committed idempotency key from executing again", async () => {

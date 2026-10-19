@@ -109,6 +109,16 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- A file `move` that only changes letter case (`Readme.md` to `README.md`)
+  verifies on a case-insensitive disk, such as macOS's default. The
+  `file_absent` evidence derived for the source found the renamed file under
+  the old spelling, so a correct rename ended `partial`. Against a move's own
+  result, the move's source now reads absent when what its spelling reaches is
+  the destination's own entry, with no other name, and the directory no longer
+  holds that spelling; a symlink renamed by case included, and one recovered
+  after a crash interrupted its verification. Anywhere else, a path that
+  reaches a file still reads present, however it is spelled. (#280)
+
 - Deleting a live memory that superseded another makes the one it replaced
   live again, and so does editing it to supersede something else or nothing;
   deleting one in the middle of a chain links the records on either side. The
