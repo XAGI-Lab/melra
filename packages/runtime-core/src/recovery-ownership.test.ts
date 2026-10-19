@@ -350,6 +350,44 @@ describe("starting and denying a task across processes", () => {
     expect(a.adapter).toHaveBeenCalledTimes(1);
     expect(b.adapter).toHaveBeenCalledTimes(1);
   });
+
+  it("does not ask a step's expired challenge again beside an execute that beat its cancel", async () => {
+    const at = await home();
+    const adapter = held();
+    const a = await side(at);
+    const b = await side(at, adapter.execute);
+    const run = a.workflows.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Expiring",
+        nodes: [{ id: "charge", type: "operation", request: put("charge") }],
+      }),
+    );
+    const waiting = (await a.workflows.advance(run.id)).run;
+    const first = waiting.nodes.charge!.taskIds[0]!;
+    const expiresAt = Date.parse(waiting.nodes.charge!.approval!.expiresAt);
+    // The agent's melra_execute in B starts the step's task with the phrase
+    // after A's advance read it waiting, and A then finds the challenge expired.
+    let started: ReturnType<TaskController["execute"]> | undefined;
+    const decision = a.tasks.approvalDecision.bind(a.tasks);
+    vi.spyOn(a.tasks, "approvalDecision").mockImplementationOnce((task) => {
+      started = b.tasks.execute(first, approvalsFor(waiting)[0]);
+      const now = Date.now.bind(Date);
+      vi.spyOn(Date, "now").mockImplementation(() => Math.max(now(), expiresAt + 1));
+      return decision(task);
+    });
+    const asked = (await a.workflows.advance(run.id)).run;
+    vi.mocked(Date.now).mockRestore();
+    // Asked again beside the running task, approving the second ran the charge twice.
+    expect(asked.nodes.charge).toMatchObject({ status: "recovery_required", taskIds: [first] });
+    adapter.release.open();
+    expect((await started!).task.status).toBe("verified_success");
+    const settled = (await a.workflows.advance(run.id)).run;
+    expect(settled.nodes.charge).toEqual({ status: "verified_complete", taskIds: [first] });
+    expect(a.adapter.mock.calls.length + b.adapter.mock.calls.length).toBe(1);
+  });
 });
 
 describe("reconciling one task in two processes", () => {

@@ -155,7 +155,10 @@ All notable changes are documented here. The format follows
   loses: an execute is refused with `task_not_executable:<status>`, a cancel
   returns the task as it now stands (exit 1 from `melra approve --deny`), and
   the console refuses the Deny with `task_not_cancellable:<status>` where it
-  showed the task as denied. (#244)
+  showed the task as denied. A workflow advance asking a step's expired
+  challenge again likewise reads the step as the running task when an execute
+  started it just first, where it asked again beside it and approving that
+  ran the effect twice. (#244)
 
 - Two reconciles of one parked task no longer both write. `melra_execute` on
   a `recovery_required` task asks the provider and records the answer; a
