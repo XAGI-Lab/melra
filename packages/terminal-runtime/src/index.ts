@@ -314,7 +314,12 @@ export class TerminalRuntime {
   }
 
   private async resolveCwd(cwd: string | undefined): Promise<string> {
-    const candidate = resolve(this.root, cwd ?? ".");
+    const spelled = cwd !== undefined && isAbsolute(cwd) ? resolve(cwd) : undefined;
+    const input =
+      spelled !== undefined && inside(this.lexicalRoot, spelled)
+        ? resolve(this.root, relative(this.lexicalRoot, spelled))
+        : cwd ?? ".";
+    const candidate = resolve(this.root, input);
     if (!inside(this.root, candidate)) throw new Error("cwd_outside_workspace");
     const actual = await realpath(candidate);
     if (!inside(this.root, actual)) throw new Error("cwd_outside_workspace");

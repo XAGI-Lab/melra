@@ -447,6 +447,7 @@ export class Verifier {
 
   private constructor(
     readonly root: string,
+    private readonly lexicalRoot: string,
     private readonly probe: EvidenceProbe | undefined,
     extra: ReadonlyArray<RegisteredVerifier>,
     private readonly reserved?: (path: string) => Promise<boolean>,
@@ -502,7 +503,15 @@ export class Verifier {
     root: string,
     options: VerifierOptions = {},
   ): Promise<Verifier> {
-    return new Verifier(await realpath(root), options.probe, options.verifiers ?? [], options.reserved);
+    return new Verifier(await realpath(root), resolve(root), options.probe, options.verifiers ?? [], options.reserved);
+  }
+
+  private inputPath(input: string): string {
+    if (!isAbsolute(input)) return input;
+    const candidate = resolve(input);
+    return inside(this.lexicalRoot, candidate)
+      ? resolve(this.root, relative(this.lexicalRoot, candidate))
+      : input;
   }
 
   /**
@@ -590,7 +599,13 @@ export class Verifier {
     };
     const evidence: EvidenceItem[] = [];
     for (const predicate of predicates) {
-      const { verifier, type, input } = this.resolve(predicate);
+      const path = "path" in predicate ? predicate.path : undefined;
+      const normalized =
+        ["file_exists", "file_absent", "file_hash"].includes(predicate.type) &&
+        typeof path === "string"
+          ? { ...predicate, path: this.inputPath(path) }
+          : predicate;
+      const { verifier, type, input } = this.resolve(normalized);
       try {
         // An unregistered type is a question nobody here can answer: it fails.
         if (verifier === undefined) throw new Refusal(`verification_unsupported:${type}`);

@@ -420,6 +420,47 @@ describe("FileRuntime", () => {
     ).rejects.toThrow("path_outside_workspace");
   });
 
+  it("accepts absolute paths spelled through the configured workspace link", async () => {
+    const base = await mkdtemp(join(tmpdir(), "melra-file-"));
+    roots.push(base);
+    const root = join(base, "workspace");
+    const linked = join(base, "workspace-link");
+    await mkdir(join(root, "sub"), { recursive: true });
+    await symlink(root, linked, process.platform === "win32" ? "junction" : "dir");
+    const runtime = await FileRuntime.create({ root: linked });
+    const source = join(linked, "source.txt");
+    const destination = join(linked, "sub", "moved.txt");
+
+    await expect(
+      runtime.execute(FileOperationSchema.parse({ kind: "file", action: "list", path: linked })),
+    ).resolves.toMatchObject({ path: ".", entries: [{ name: "sub", type: "directory" }] });
+    await runtime.execute(FileOperationSchema.parse({ kind: "file", action: "write", path: source, content: "linked" }));
+    await runtime.execute(FileOperationSchema.parse({ kind: "file", action: "move", path: source, destination }));
+
+    expect(await readFile(join(root, "sub", "moved.txt"), "utf8")).toBe("linked");
+
+    await mkdir(join(root, ".git"));
+    await writeFile(join(root, ".git", "config"), "protected");
+    await writeFile(join(root, "plain.txt"), "plain");
+    await symlink(join(linked, ".git", "config"), join(root, "swap"));
+    const resolvePath = runtime.resolvePath.bind(runtime);
+    let swapped = false;
+    runtime.resolvePath = async (...args: Parameters<typeof resolvePath>) => {
+      const resolved = await resolvePath(...args);
+      if (!swapped) {
+        swapped = true;
+        await rename(join(root, "swap"), join(root, "plain.txt"));
+      }
+      return resolved;
+    };
+    await expect(
+      runtime.execute(
+        FileOperationSchema.parse({ kind: "file", action: "write", path: join(linked, "plain.txt"), content: "x" }),
+      ),
+    ).rejects.toThrow("path_git_metadata");
+    expect(await readFile(join(root, ".git", "config"), "utf8")).toBe("protected");
+  });
+
   it("creates a missing root but accepts one it cannot create", async () => {
     // A workspace the user has not made yet is created for them.
     const parent = await mkdtemp(join(tmpdir(), "melra-file-"));
