@@ -103,7 +103,6 @@ export class WorkflowController {
   // Runs an advance in this process holds the lease for. Recovery leaves them
   // alone even once the lease has lapsed, say across a laptop's sleep.
   private readonly leased = new Set<string>();
-  private readonly leaseLost = new Set<string>();
 
   constructor(
     private readonly store: SqliteStore,
@@ -288,10 +287,8 @@ export class WorkflowController {
           this.owner,
           new Date(Date.now() + this.leaseDurationMs).toISOString(),
         );
-        if (!renewed) {
-          this.leaseLost.add(workflowId);
-          clearInterval(renewal);
-        }
+        // Taken over: the next step's own renewal finds that and stops.
+        if (!renewed) clearInterval(renewal);
       } catch (error) {
         if ((error as { code?: unknown }).code === "ERR_INVALID_STATE") clearInterval(renewal);
       }
@@ -302,7 +299,6 @@ export class WorkflowController {
       return await this.advanceOnce(workflowId, approvals, inputs);
     } finally {
       this.leased.delete(workflowId);
-      this.leaseLost.delete(workflowId);
       clearInterval(renewal);
       this.store.releaseWorkflowLease(workflowId, this.owner);
     }
@@ -1354,10 +1350,21 @@ export class WorkflowController {
     };
   }
 
+  // The renewal itself, not a read of the lease: a read passes a lapsed lease
+  // nobody has taken yet, and a takeover landing just after it runs the same
+  // step a second time. The update matches on owner and serializes with
+  // `takeWorkflowLease`, so a takeover either lands first (nothing renewed:
+  // stop) or after, and then finds a fresh lease and is refused. A renewal
+  // that throws (a busy database) fails the advance here too: a lease this
+  // advance cannot confirm is not one to start a step under.
   private assertAdvanceLease(workflowId: string): void {
-    const lease = this.store.getWorkflowLease(workflowId);
-    if (this.leaseLost.has(workflowId) || lease?.owner !== this.owner) {
-      this.leaseLost.add(workflowId);
+    if (
+      !this.store.renewWorkflowLease(
+        workflowId,
+        this.owner,
+        new Date(Date.now() + this.leaseDurationMs).toISOString(),
+      )
+    ) {
       throw new Error("workflow_lease_lost");
     }
   }

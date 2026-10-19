@@ -486,6 +486,58 @@ describe("workflow recovery across processes", () => {
     }
   });
 
+  it("keeps a lapsed lease nobody took when it starts a step, so a takeover after that is refused", async () => {
+    const at = await home();
+    const second = held();
+    let calls = 0;
+    const a = await side(at, async () => (++calls === 3 ? second.execute() : { success: true, stored: true }));
+    const b = await side(at);
+    const run = a.workflows.plan(twoStepBranch());
+    await a.workflows.advance(run.id);
+    const waiting = (await a.workflows.advance(run.id)).run;
+    // Step 1 finishes and the advance stalls past its lease (a laptop's
+    // sleep), with nobody having taken the lease yet.
+    const execute = a.tasks.execute.bind(a.tasks);
+    vi.spyOn(a.tasks, "execute").mockImplementationOnce(async (...args) => {
+      const result = await execute(...args);
+      expireLease(a.store, run.id);
+      return result;
+    });
+    // B's repair pass, one synchronous block in another process, lands after
+    // A's lease check for step 2 and before step 2's task is written.
+    const recovery = b.workflows as unknown as {
+      repairRuns(abandonedOnly: boolean, tasks: Map<string, unknown>, runs: Map<string, unknown>): WorkflowRun[];
+    };
+    let repaired: WorkflowRun[] | undefined;
+    const plan = a.tasks.plan.bind(a.tasks);
+    vi.spyOn(a.tasks, "plan").mockImplementation((request, options) => {
+      if (request.goal === "Inspect again") repaired ??= recovery.repairRuns(true, new Map(), new Map());
+      return plan(request, options);
+    });
+
+    try {
+      const advancing = a.workflows.advance(run.id, approvalsFor(waiting)).then(
+        ({ run }) => run.status,
+        (error: Error) => error.message,
+      );
+      await second.entered.opened;
+      const resumed = await b.workflows.advance(run.id).then(
+        ({ run }) => run.status,
+        (error: Error) => error.message,
+      );
+      second.release.open();
+
+      // Step 2 ran once, in A. B neither took the run over nor ran it again.
+      expect(b.adapter).not.toHaveBeenCalled();
+      expect(repaired).toEqual([]);
+      expect(resumed).toBe("workflow_lease_held");
+      expect(await advancing).toBe("verified_complete");
+      expect(a.adapter).toHaveBeenCalledTimes(3);
+    } finally {
+      second.release.open();
+    }
+  });
+
   it("refuses a halted run without disturbing the lease a dead advance left", async () => {
     const at = await home();
     const adapter = held();
