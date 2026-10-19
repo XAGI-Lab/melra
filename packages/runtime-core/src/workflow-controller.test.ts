@@ -1233,6 +1233,28 @@ describe("WorkflowController execution", () => {
     expect(result.run.nodes["api-integration-tests"]?.status).toBe("verified_complete");
   });
 
+  it("records a step whose adapter error is longer than a node's error holds", async () => {
+    const execute = vi.fn(async () => {
+      throw new Error("x".repeat(20_000));
+    });
+    const { controller } = await setup(execute);
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Remember",
+        nodes: [{ id: "remember", type: "operation", request: mutationRequest("Remember the project") }],
+      }),
+    );
+    // Copied whole, the error failed the node's own schema after the step ran,
+    // the run was never written, and the next advance ran the step again.
+    const result = await settle(controller, planned.id);
+    expect(result.run.nodes.remember?.status).toBe("failed");
+    expect(result.run.nodes.remember?.error).toHaveLength(10_000);
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
   it("halts rather than unwind past a step whose outcome is unknown when another is denied", async () => {
     const calls: string[] = [];
     const { controller, tasks } = await setup(async (operation) => {

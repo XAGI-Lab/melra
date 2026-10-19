@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createHash } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -80,6 +80,28 @@ describe("Verifier", () => {
     );
     expect(hashed.verified).toBe(false);
     expect(hashed.evidence[0]?.summary).toBe("verification_path_reserved");
+  });
+
+  it("answers a missing file as no, not as no answer", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-verifier-"));
+    roots.push(root);
+    await mkdir(join(root, "dir"));
+    const verifier = await Verifier.create(root);
+    const { evidence } = await verifier.verify(
+      [
+        { type: "file_exists", path: "missing.txt" },
+        { type: "file_hash", path: "missing.txt", sha256: "0".repeat(64) },
+        { type: "file_hash", path: "dir", sha256: "0".repeat(64) },
+      ],
+      {},
+    );
+    // Read as inconclusive, a reconciliation or a condition waiting on that
+    // file would never decide.
+    expect(evidence.map(({ passed, inconclusive }) => [passed, inconclusive ?? false])).toEqual([
+      [false, false],
+      [false, false],
+      [false, false],
+    ]);
   });
 
   it("stamps each item with how it was established", async () => {

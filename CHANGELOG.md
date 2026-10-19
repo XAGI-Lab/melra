@@ -109,6 +109,33 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- A parked mutation whose `reconciliation` predicate could not be asked stays
+  `recovery_required` (`reconciliation_inconclusive`): a URL token with
+  nothing to fill it (`{{json.id}}`, when there is no response on that path),
+  a custom verifier the runtime does not have, or one whose backend timed out.
+  It was settled as `failed`, `reconciliation_confirms_effect_not_applied`,
+  without the provider being asked, and the agent ran the effect again. A
+  predicate whose check throws is now `inconclusive` in the receipt, as an
+  unreachable provider already was; a missing file is still a plain no for
+  `file_exists` and `file_hash`. Planning refuses a `reconciliation`
+  verifier the runtime does not have (`evidence_verifier_unavailable`), as it
+  did for `requiredEvidence`.
+
+- A mutation whose adapter returned, but whose result, receipt or task could
+  not then be written (a locked or full database), parks as
+  `recovery_required` with inconclusive evidence. It was recorded as
+  `failed`, which reads as the effect not having happened, and counted against
+  the target's circuit breaker though the target had answered. A task already
+  recorded as `verified_success` keeps that outcome when only its certificate
+  fails to write; it was rewritten as `failed` beside its own verified
+  receipt.
+
+- A workflow step whose adapter error runs past 10,000 characters is
+  recorded. The task kept the whole message and a workflow node's `error`
+  holds 10,000, so writing the run failed after the step ran, and the next
+  `advance` ran the step again. The task, its receipt and the node now keep
+  the first 10,000 characters.
+
 - A file `write` with `encoding: "base64"` refuses content that is not base64
   (`file_content_invalid_base64`) before anything is written; line breaks,
   missing padding and the URL-safe alphabet are accepted. Node's lenient

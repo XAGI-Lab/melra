@@ -108,7 +108,7 @@ export interface VerificationContext {
  * One way to confirm an effect. Returns what it found; `type` and `strength`
  * are stamped by the kernel from the predicate type, so a verifier cannot
  * claim a stronger kind of knowing than its type is entitled to. Throwing
- * fails the predicate.
+ * fails the predicate as `inconclusive`: no answer, rather than a no.
  */
 export interface PredicateVerifier<P extends { type: string } = { type: string }> {
   type: P["type"];
@@ -192,12 +192,27 @@ const pageContains: Built<"page_contains"> = {
   },
 };
 
+/**
+ * A path that is not there: the workspace's answer, not a failure to ask.
+ * Thrown, it would read as no answer at all, and a reconciliation or a
+ * condition waiting on that file would never decide.
+ */
+const missing = (error: unknown): boolean =>
+  error instanceof Error && "code" in error && (error.code === "ENOENT" || error.code === "ENOTDIR");
+
 const fileExists: Built<"file_exists"> = {
   type: "file_exists",
   async check(predicate, _result, context) {
-    const path = await context.workspacePath(predicate.path);
-    const metadata = await stat(path);
-    const passed = metadata.isFile() || metadata.isDirectory();
+    let path: string;
+    let passed: boolean;
+    try {
+      path = await context.workspacePath(predicate.path);
+      const metadata = await stat(path);
+      passed = metadata.isFile() || metadata.isDirectory();
+    } catch (error) {
+      if (!missing(error)) throw error;
+      return { passed: false, summary: "workspace path does not exist", source: predicate.path };
+    }
     return {
       passed,
       summary: `workspace path ${passed ? "exists" : "does not exist"}`,
@@ -228,10 +243,18 @@ const fileAbsent: Built<"file_absent"> = {
 const fileHash: Built<"file_hash"> = {
   type: "file_hash",
   async check(predicate, _result, context) {
-    const path = await context.workspacePath(predicate.path);
-    // Streamed, so a large artifact is hashed in constant memory; a FIFO or a
-    // device would never end, so only a regular file is read at all.
-    if (!(await stat(path)).isFile()) throw new Error("verification_hash_requires_regular_file");
+    let path: string;
+    try {
+      path = await context.workspacePath(predicate.path);
+      // Streamed, so a large artifact is hashed in constant memory; a FIFO or
+      // a device would never end, so only a regular file is read at all.
+      if (!(await stat(path)).isFile()) {
+        return { passed: false, summary: "workspace path is not a regular file", source: context.relative(path) };
+      }
+    } catch (error) {
+      if (!missing(error)) throw error;
+      return { passed: false, summary: "workspace path does not exist", source: predicate.path };
+    }
     const hash = createHash("sha256");
     await pipeline(createReadStream(path), hash);
     const digest = hash.digest("hex");
@@ -255,12 +278,10 @@ const httpResourceMatches: Built<"http_resource_matches"> = {
       throw new Error("verification_probe_unavailable");
     }
     const url = interpolate(predicate.url, result);
-    // Caught here rather than by the caller so a transport failure is not
-    // filed as the provider saying no. Both are `passed: false`; only this one
-    // is `inconclusive`, and that is what lets an unreachable provider leave a
-    // mutation `recovery_required` instead of `failed`. The interpolate above
-    // stays outside: an unresolved token is a caller error, and the provider
-    // is not implicated in it.
+    // Caught here so the item names the URL it could not read. A transport
+    // failure is not the provider saying no: it is `inconclusive`, and that is
+    // what lets an unreachable provider leave a mutation `recovery_required`
+    // instead of `failed`.
     let observed: Record<string, unknown>;
     try {
       observed = withParsedBody(
@@ -484,9 +505,13 @@ export class Verifier {
         const found = await verifier.check(input as never, result, context);
         evidence.push({ ...found, type });
       } catch (error) {
+        // A throw is no answer — an unresolved token, a missing verifier, a
+        // backend that timed out — so it is not a provider's "no" either.
+        // Reconciliation reads that difference to keep the task parked.
         evidence.push({
           type,
           passed: false,
+          inconclusive: true,
           summary: error instanceof Error ? error.message : String(error),
         });
       }

@@ -309,8 +309,9 @@ export class TaskController {
       }
     }
     // Refused before anything is approved: a mutation run against evidence no
-    // registered verifier can check would end `partial` after the effect.
-    for (const predicate of parsed.requiredEvidence) {
+    // registered verifier can check would end `partial` after the effect, and
+    // one that could not be reconciled would stay parked for good.
+    for (const predicate of [...parsed.requiredEvidence, ...parsed.reconciliation]) {
       if (!this.verifier.supports(predicate)) {
         throw new Error(
           `evidence_verifier_unavailable:${predicate.type === "custom" ? predicate.verifier : predicate.type}`,
@@ -449,6 +450,8 @@ export class TaskController {
     let timeout: NodeJS.Timeout | undefined;
     let budgetExhausted = false;
     let shortCircuited = false;
+    let effectReturned = false;
+    let settled: ExecutionResult | undefined;
     if (rechecked.grantId !== undefined) {
       const held = this.reserved.get(rechecked.grantId) ?? new Map<string, number>();
       held.set(task.id, classified.spend?.amount ?? 0);
@@ -476,6 +479,7 @@ export class TaskController {
         classified.effect,
         controller.signal,
       );
+      effectReturned = true;
       const sanitizedResult = redactStructuredValue(result);
       task.status = "verifying";
       task.result = sanitizedResult.value as Record<string, unknown>;
@@ -560,25 +564,36 @@ export class TaskController {
       }
       task.updatedAt = now();
       this.store.saveTask(task);
+      settled = { task, output: result, receipt };
       const certificate = this.createAndSaveCertificate(task, evidence);
-      return { task, output: result, receipt, certificate };
+      return { ...settled, certificate };
     } catch (error) {
+      // The outcome is recorded, beside its receipt and idempotency commit,
+      // and only the certificate summarising it failed to write. Rewriting it
+      // would contradict them, and an error would read as the effect not
+      // having happened, so the caller gets what was recorded.
+      if (settled !== undefined) return settled;
       const rawMessage = error instanceof Error ? error.message : String(error);
-      const message = redactStructuredValue(rawMessage).value as string;
+      // Capped after redaction, which can lengthen it, at the 10,000 characters
+      // a workflow node's `error` holds: a longer one failed the node's write
+      // after the effect ran, and the next advance ran the step again.
+      const message = (redactStructuredValue(rawMessage).value as string).slice(0, 10_000);
       const aborted = controller.signal.aborted;
       // A refusal by the breaker is not fresh evidence about the target, and an
       // operator's cancellation is not evidence about it at all. A budget that
-      // ran out is: the target did not answer in time.
-      if (!shortCircuited && (!aborted || budgetExhausted)) {
+      // ran out is: the target did not answer in time. Nor is anything after
+      // the adapter returned, which the target already answered.
+      if (!shortCircuited && !effectReturned && (!aborted || budgetExhausted)) {
         this.breaker.recordFailure(classified.target);
       }
-      // Checked on the raw message and ahead of every other outcome, because it
-      // is the strongest thing known: the adapter says the effect may already
-      // have happened. `failed`, `cancelled` and `budget_exhausted` all assert
-      // more than that. Reads are exempt — a read that may or may not have run
-      // changed nothing either way, so there is nothing to reconcile.
+      // Ahead of every other outcome, because it is the strongest thing known:
+      // the effect may already have happened, either because the adapter says
+      // so or because it returned and a write after it failed. `failed`,
+      // `cancelled` and `budget_exhausted` all assert more than that. Reads
+      // are exempt — a read that may or may not have run changed nothing
+      // either way, so there is nothing to reconcile.
       const unknownOutcome =
-        classified.effect !== "read" && isOutcomeUnknown(rawMessage);
+        classified.effect !== "read" && (effectReturned || isOutcomeUnknown(rawMessage));
       task.status = unknownOutcome
         ? "recovery_required"
         : aborted
@@ -1167,9 +1182,9 @@ export class TaskController {
       ...(mode === undefined ? {} : { mode }),
       ...(approvalChannel === undefined ? {} : { approvalChannel }),
     });
+    this.store.saveCertificate(certificate);
     task.certificateId = certificate.certificateId;
     task.updatedAt = now();
-    this.store.saveCertificate(certificate);
     this.store.saveTask(task);
     return certificate;
   }
