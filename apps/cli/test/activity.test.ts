@@ -7,6 +7,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import type { TaskRecord, WorkflowRun } from "@melra/protocol";
@@ -309,6 +310,38 @@ describe("melra tasks, status, and watch", () => {
     // Pointed at the run, it was told the next advance asks again; none does.
     const status = await statusOf(options);
     expect([status.expiredApprovals, status.expiredWorkflowSteps]).toEqual([1, 0]);
+  });
+
+  it("counts a step's challenge as a step though the run never named it, since recovery takes it up", async () => {
+    const { root, options } = await workspace();
+    const workflow = async (...args: string[]) =>
+      JSON.parse(
+        (
+          await execute(process.execPath, [entry, "workflow", ...args], options).catch(
+            (error: { stdout: string }) => error,
+          )
+        ).stdout,
+      ) as { id: string; run: WorkflowRun };
+    const { id } = await workflow("plan", "--definition", restartSafe);
+    await workflow("advance", id);
+    const { run } = await workflow("advance", id);
+    const asked = run.nodes.write!.taskIds[0]!;
+    // What an advance whose commit a pause made fail leaves when nothing
+    // planned the step again: its challenge waiting, the run naming nothing.
+    const database = new DatabaseSync(join(root, ".melra", "melra.sqlite"));
+    try {
+      const row = database.prepare("SELECT data FROM workflow_runs WHERE id = ?").get(id) as { data: string };
+      const stored = JSON.parse(row.data) as WorkflowRun;
+      stored.nodes.write = { ...stored.nodes.write!, status: "pending", taskIds: [] };
+      database.prepare("UPDATE workflow_runs SET data = ? WHERE id = ?").run(JSON.stringify(stored), id);
+    } finally {
+      database.close();
+    }
+    lapse(root, asked);
+    // Told to deny it as a plain task: the deny's own start-up recovery gave
+    // the step that task, and the next advance read the cancel as a denial.
+    const status = await statusOf(options);
+    expect([status.expiredApprovals, status.expiredWorkflowSteps]).toEqual([0, 1]);
   });
 
   it("counts a step left waiting on a run that is over the plain way, since nothing advances it", async () => {

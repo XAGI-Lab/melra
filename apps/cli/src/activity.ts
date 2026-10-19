@@ -163,19 +163,25 @@ interface ApprovalCounts {
 }
 
 /**
- * The tasks the runs' next advance acts on, picked as the runtime picks them:
- * the task a node names, or for a cancelled one the attempt its key now prefers.
+ * Whether an expired task is a step its run's next advance asks again. Only a
+ * workflow plans under an idempotency key; a run that is over never advances,
+ * and of the attempts under one key the runtime, and the recovery every CLI
+ * process runs at start, take the one `preferredTask` picks.
  */
-function stepTasks(store: SqliteStore, runs: WorkflowRun[]): Set<string> {
+function stepJudge(store: SqliteStore, runs: () => WorkflowRun[]): (task: TaskRecord) => boolean {
+  let over: Set<string> | undefined;
   let every: TaskRecord[] | undefined;
-  const ids = new Set<string>();
-  for (const taskId of runs.flatMap((run) => Object.values(run.nodes).flatMap((node) => node.taskIds))) {
-    const named = store.getTask(taskId);
-    const key = named?.status === "cancelled" ? named.idempotencyKey : undefined;
-    const preferred = key === undefined ? undefined : preferredTask((every ??= store.listTasks(100_000)), key);
-    ids.add(preferred?.id ?? taskId);
-  }
-  return ids;
+  return (task) => {
+    const key = task.idempotencyKey;
+    if (key === undefined) return false;
+    over ??= new Set(
+      runs()
+        .filter((run) => run.status === "cancelled" || run.status === "verified_complete")
+        .flatMap((run) => Object.values(run.nodes).flatMap((node) => node.taskIds))
+        .flatMap((taskId) => store.getTask(taskId)?.idempotencyKey ?? []),
+    );
+    return !over.has(key) && preferredTask((every ??= store.listTasks(100_000)), key)?.id === task.id;
+  };
 }
 
 /**
@@ -193,7 +199,7 @@ function approvalCounts(
   runs: () => WorkflowRun[] = () => store.listWorkflowRuns(),
 ): ApprovalCounts {
   const now = Date.now();
-  let steps: Set<string> | undefined;
+  let step: ((task: TaskRecord) => boolean) | undefined;
   const counts = { waiting: 0, expired: 0, expiredSteps: 0 };
   for (const task of store.listTasks(100_000, "awaiting_approval")) {
     const expiresAt = task.approval === undefined ? Infinity : Date.parse(task.approval.expiresAt);
@@ -206,17 +212,11 @@ function approvalCounts(
       counts.waiting += 1;
       continue;
     }
-    // Read only once something has expired: a store keeps every run. A run
-    // that is over never advances again, so its leftover step is cleared the
-    // plain way, as advance's own first check would have it.
-    // An advance that asked a challenge again and then lost its commit leaves
-    // the run naming the cancelled attempt, not the one now waiting; a lost
-    // first plan leaves a duplicate no advance takes, cleared the plain way.
-    steps ??= stepTasks(
-      store,
-      runs().filter((run) => run.status !== "cancelled" && run.status !== "verified_complete"),
-    );
-    if (steps.has(task.id)) {
+    // Judged only once something has expired: a store keeps every run. A
+    // leftover step of a run that is over is cleared the plain way, as
+    // advance's own first check would have it; so is a duplicate challenge a
+    // lost commit left beside the attempt the run goes on with.
+    if ((step ??= stepJudge(store, runs))(task)) {
       counts.expiredSteps += 1;
     } else counts.expired += 1;
   }
