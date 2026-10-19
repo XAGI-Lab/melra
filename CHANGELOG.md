@@ -111,17 +111,19 @@ All notable changes are documented here. The format follows
 
 - `melra policy test` previews a mutation that declares no evidence with the
   evidence the server derives for it, as `melra_plan` does, and prints it as
-  `requiredEvidence`. It previewed every such file, memory, browser, computer
-  and http mutation as `deny mutation_requires_evidence`, where the server asks
-  for approval. (#283)
+  `requiredEvidence`. It previewed such a mutation as `deny
+  mutation_requires_evidence` even where the server derives evidence for it
+  and asks for approval, as for most file, memory, browser, computer and http
+  mutations. (#283)
 
 - `melra tasks` and `melra status` count a task whose approval has expired
   apart from those still waiting, and say to plan it again or clear it with
   `melra approve <task-id> --deny`. They counted it as waiting forever and
   pointed at `melra approve`, which refused it. An expired workflow step is
   counted on its own and pointed at its run with `melra workflow inspect`,
-  with no advice to deny: where the run can go on, its next advance asks
-  again, and a deny would fail the run or stall its unwind. Only a step that
+  with no advice to deny: where the run still waits on the step, its next
+  advance asks again, and a deny would fail the run, or for a compensation
+  stall its unwind. Only a step that
   a cancelled or verified_complete run names gets the plain hint, since that
   run never advances again. A task
   approved in time and not yet run counts as neither, since its agent can

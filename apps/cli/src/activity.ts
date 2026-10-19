@@ -141,13 +141,13 @@ function expiredHints({ expired, expiredSteps }: ApprovalCounts): string[] {
     ...(expired > 0
       ? [`${expired} whose approval expired — plan again, or clear with \`melra approve <task-id> --deny\``]
       : []),
-    // No deny: where the run can go on, its next advance asks again, and a
-    // deny would fail it or stall its unwind. Which run a task is from, and
+    // No deny: where the run still waits on the step, its next advance asks
+    // again, and a deny would fail it, or for a compensation stall its unwind. Which run a task is from, and
     // whether that run can go on, the task alone cannot say, so the hint
     // points at the run and states what each would do rather than advise.
     ...(expiredSteps > 0
       ? [
-          `${expiredSteps} workflow step(s) whose approval expired — see its run with \`melra workflow inspect <workflow-id>\`: where the run can go on, its next advance asks again, and a deny would fail the run or stall its unwind`,
+          `${expiredSteps} workflow step(s) whose approval expired — see its run with \`melra workflow inspect <workflow-id>\`: where the run still waits on the step, its next advance asks again, and a deny would fail the run, or for a compensation stall its unwind`,
         ]
       : []),
   ];
