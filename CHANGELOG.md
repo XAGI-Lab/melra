@@ -98,6 +98,13 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- `send` to an interactive terminal job whose program has closed its stdin is
+  refused as `terminal_job_stdin_closed`. Every send after the failed write
+  was refused as `terminal_job_not_interactive`, and the send whose write
+  failed on the spot was reported as sent. A send to a job whose program has
+  exited is refused as `terminal_job_not_running` even while something it
+  started still holds its output open. (#271)
+
 - The Python SDK's README says how to install it: the wheel attached to each
   GitHub release, checked against `SHA256SUMS` and its attestation, or
   `pip install ./sdk-py` from a checkout. No doc said so before, and the SDK
