@@ -143,9 +143,9 @@ export class WorkflowController {
       to: "planned",
     });
     const planned = applyWorkflowEvent(draft, plannedEvent);
-    const redacted = WorkflowDefinitionSchema.parse(
-      redactStructuredValue(parsed).value,
-    );
+    // Not parsed again: redaction may rewrite a node id or URL shaped like a
+    // key, and the stored copy is only for reading.
+    const redacted = redactStructuredValue(parsed).value;
     // A definition is stored once per id and version, and any number of runs
     // may use it: planning the same file twice is a second run, not an error.
     // The same id and version with different content is refused, because

@@ -161,6 +161,22 @@ describe("receipt and certificate primitives", () => {
     expect(redactSecrets("the secret ingredient is love").value).toBe("the secret ingredient is love");
   });
 
+  it("keeps an exit status, which carries no secret", () => {
+    const stored = redactStructuredValue({
+      requiredEvidence: [
+        { type: "exit_code", value: 0 },
+        { type: "result_equals", path: "pin", value: 4321 },
+        { type: "exit_code", value: "0" },
+      ],
+    }).value as { requiredEvidence: Array<{ value: unknown }> };
+    expect(stored.requiredEvidence.map(({ value }) => value)).toEqual([
+      0,
+      // Any other value may be the secret itself, number or not.
+      "[REDACTED_SENSITIVE_FIELD]",
+      "[REDACTED_SENSITIVE_FIELD]",
+    ]);
+  });
+
   it("redacts args in a stored request instead of blanking them", () => {
     const redacted = redactStructuredValue({
       operation: { command: "pnpm", args: ["check", "--token=abc"] },
