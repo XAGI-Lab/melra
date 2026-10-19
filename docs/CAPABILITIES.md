@@ -289,7 +289,8 @@ Actions: `capabilities`, `inspect`, `screenshot`, `click`, `move`, `drag`,
   screenshot through the adapter and runs `tesseract` over it, scaling each word
   from the captured image onto the display so a Retina capture does not double
   every coordinate. `capabilities.ocr` says whether the host has `tesseract` at
-  all, and the read only ever runs when the tree was empty — a tree states what
+  its usual install paths (or, for a library embedder, whether a program was
+  named with `ComputerRuntimeOptions.ocrProgram` and screenshots work), and the read only ever runs when the tree was empty — a tree states what
   a control *is*, a reading only what it looks like. The screenshot is deleted
   once it has been read. A read that fails (no screen-recording permission, a
   Wayland session) leaves `inspect` as it is without `tesseract`, with no

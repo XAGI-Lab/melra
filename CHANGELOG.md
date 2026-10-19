@@ -8,6 +8,11 @@ All notable changes are documented here. The format follows
 
 ### Added
 
+- `ComputerRuntimeOptions.ocrProgram` names the OCR program for a library
+  embedder whose `tesseract` is outside its usual install paths; naming it
+  makes reading the screen available wherever screenshots are. The server and
+  CLI do not set it. (#251)
+
 - Each GitHub release attaches the single executable (Node inside, no Node
   install needed) for linux-x64, linux-arm64, darwin-arm64 and win-x64, built
   and smoke-tested by the same workflow every pull request runs, and covered by
