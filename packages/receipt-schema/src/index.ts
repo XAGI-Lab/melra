@@ -295,6 +295,11 @@ export function redactStructuredValue(value: unknown): {
   };
   const visit = (current: unknown, key?: string, parent?: Record<string, unknown>): unknown => {
     if (key !== undefined && SENSITIVE_KEY.test(key)) {
+      // An exit status is a whole number no secret can hide in, so the stored
+      // copy of a predicate keeps saying which status it expects.
+      if (key === "value" && parent?.type === "exit_code" && Number.isInteger(current)) {
+        return current;
+      }
       return redactWholeValue(current);
     }
     if (key === "args") {

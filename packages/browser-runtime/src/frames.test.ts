@@ -6,6 +6,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BrowserOperationSchema } from "@melra/protocol";
+import type { Page } from "playwright-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { BrowserRuntime, captchaReport, detectBrowserExecutable } from "./index.js";
 
@@ -151,6 +152,13 @@ describe("frame-aware targeting", () => {
       await runtime.execute(
         BrowserOperationSchema.parse({ kind: "browser", action: "navigate", url }),
       );
+      // About frames, not the secret-field check, which see-act covers: on a
+      // slow renderer that check cannot answer in time and the wait refuses
+      // as it should, which is not what this test is asking (#295). The
+      // budget is also every call's limit, so it leaves the search room.
+      (runtime as unknown as { secretFieldFilled: (page: Page) => Promise<unknown> }).secretFieldFilled = async (
+        page,
+      ) => ({ state: "clear", read: new Set(page.frames()) });
       // The banner is visible in exactly one of three frames. A per-candidate
       // "some frame is missing it" test would call that hidden immediately.
       await expect(
@@ -160,7 +168,7 @@ describe("frame-aware targeting", () => {
             action: "wait",
             target: { text: "Accept all cookies" },
             state: "hidden",
-            timeoutMs: 700,
+            timeoutMs: 3_000,
           }),
         ),
       ).rejects.toThrow(/browser_wait_timeout:hidden/);
