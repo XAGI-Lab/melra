@@ -132,6 +132,21 @@ All notable changes are documented here. The format follows
   They were ignored, so `--status $S` with `S` unset listed every status as if
   filtered. (#285)
 
+- A file `write` with `encoding: "base64"` refuses content that is not base64
+  (`file_content_invalid_base64`) before anything is written; line breaks,
+  missing padding and the URL-safe alphabet are accepted. Node's lenient
+  decoder wrote two joined chunks as the first, plain text as noise and `!!!!`
+  as an empty file, each verifying as a success. (#279)
+
+- A file `write` to a symlink inside the workspace writes the file it points
+  to, as `read` reads it, and keeps that file's permissions. It replaced the
+  link with a plain file and left the target unchanged. A write to a dangling
+  link is refused (`file_write_dangling_symlink`). (#281)
+
+- A file `list` of the workspace root works however the root is spelled
+  relative to itself (`./`, `sub/..`) or by its resolved absolute path, not
+  only `.`. The others were refused as `path_outside_workspace`. (#282)
+
 - A workflow step parked as `recovery_required` moves at the run's next
   `advance` once its task is settled, for example by `melra_execute`
   reconciling it against the provider, and so does a compensation an unwind
