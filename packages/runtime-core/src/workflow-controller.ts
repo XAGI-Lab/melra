@@ -1496,18 +1496,13 @@ export class WorkflowController {
     } else {
       // A step the run names no task for may still have one: an advance that
       // lost its commit planned or ran it (#319). Planned afresh, a leftover
-      // challenge stayed approvable beside the new one, and a step that took
-      // effect but failed its evidence ran again. Planned only when there is
-      // none, or only tasks that did not happen, and above their attempts, so
-      // it is the one recovery prefers.
-      const under = this.tasksUnder(key);
+      // challenge stayed approvable beside the new one, a step that took
+      // effect but failed its evidence ran again, and one that failed or was
+      // denied ran after all, past a compensation already run for it.
+      // Planned only when its key holds no task at all.
       task =
-        this.takenUp(key, under) ??
-        this.tasks.plan(request, {
-          idempotencyKey: key,
-          attempt: 1 + Math.max(0, ...under.map((candidate) => candidate.attempt ?? 1)),
-          stored: true,
-        });
+        this.takenUp(key) ??
+        this.tasks.plan(request, { idempotencyKey: key, attempt: 1, stored: true });
     }
     // A challenge this run asked again after it expired leaves its first
     // attempt cancelled; when the advance that asked again did not commit, the
@@ -1581,23 +1576,16 @@ export class WorkflowController {
     }
   }
 
-  /** Every task planned under a step's key: its attempts, and any duplicates. */
-  // ponytail: lists every task per new step; query by key if a long history slows advances.
-  private tasksUnder(key: string): TaskRecord[] {
-    return this.store.listTasks(100_000).filter((task) => task.idempotencyKey === key);
-  }
-
   /**
-   * The task a step takes up rather than plan one, as recovery reads its key:
-   * the one committed, else the preferred of those that may have had an
-   * effect or still ask (planned, waiting, running, verified, partial or
-   * unknown). Undefined when there are none, or only tasks that did not happen.
+   * The task a step takes up rather than plan one: the one committed, else
+   * the one recovery prefers of every task under the key, one that did not
+   * happen (failed, denied, out of budget, refused) included, so the step
+   * reads as it would after a restart. Undefined only when there is none.
    */
-  private takenUp(key: string, under: TaskRecord[]): TaskRecord | undefined {
+  // ponytail: lists every task per new step; query by key if a long history slows advances.
+  private takenUp(key: string): TaskRecord | undefined {
     const committed = this.store.getIdempotencyCommit(key)?.taskId;
-    return committed === undefined
-      ? preferredTask(under.filter((task) => !hadNoEffect(task)), key)
-      : this.tasks.status(committed);
+    return committed === undefined ? preferredTask(this.store.listTasks(100_000), key) : this.tasks.status(committed);
   }
 
   private async runSequential(
@@ -1696,7 +1684,7 @@ export class WorkflowController {
         { workflowId, nodeId: node.id, iteration, branch: "loop:0" },
         node.body[0]!,
       );
-      return this.takenUp(key, this.tasksUnder(key)) !== undefined;
+      return this.takenUp(key) !== undefined;
     };
     // Resumed after recovery between iterations: the last one finished but its
     // `until` was never checked, and running another would be one too many.

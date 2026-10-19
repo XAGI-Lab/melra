@@ -1435,4 +1435,73 @@ describe("a step whose advance lost its commit (#319)", () => {
     expect(done.filter((key) => key === target)).toEqual([target]);
     expect(run.status).toBe(settled);
   });
+
+  const saga = () =>
+    workflow([
+      { id: "pay", type: "operation", request: put("pay") },
+      { id: "ship", type: "operation", dependsOn: ["pay"], request: put("ship") },
+      { id: "refund", type: "compensation", forNodeId: "pay", request: put("refund") },
+    ]);
+
+  it("reads a step it ran that failed as failed, and the compensation it ran as done", async () => {
+    const { controller, store, done, on } = await setup({ policy: { unhinged: true } });
+    const planned = controller.plan(saga());
+    await controller.advance(planned.id);
+    // ship did not happen, so the advance refunded pay; its commit is lost.
+    on.put = (key) => {
+      if (key !== "ship") return;
+      delete on.put;
+      throw new Error("ship_refused");
+    };
+    failNextCommit(store);
+    await expect(controller.advance(planned.id)).rejects.toThrow("database is locked");
+    let run = controller.status(planned.id);
+    for (let step = 0; step < 4 && !["verified_complete", "failed", "recovery_required"].includes(run.status); step += 1) {
+      run = (await controller.advance(planned.id)).run;
+    }
+    // Planned afresh, ship ran a second time, and the run completed with
+    // the refund it had issued recorded as skipped.
+    expect(run.status).toBe("failed");
+    expect(run.nodes.ship?.status).toBe("failed");
+    expect(run.nodes.refund?.status).toBe("compensated");
+    expect(done).toEqual(["pay", "refund"]);
+  });
+
+  it("reads an operator's deny of the challenge it left as a denial", async () => {
+    const { controller, store, tasks, done } = await setup();
+    const planned = controller.plan(saga());
+    let run = (await controller.advance(planned.id)).run;
+    run = (await controller.advance(planned.id, approvalsFor(run))).run;
+    failNextCommit(store);
+    await expect(controller.advance(planned.id)).rejects.toThrow("database is locked");
+    const [left] = store.listTasks(10, "awaiting_approval");
+    // `melra approve --deny`, or the console's Deny.
+    tasks.cancel(left!.id);
+    run = (await controller.advance(planned.id)).run;
+    // Planned afresh: ship's challenge offered again, the deny ignored.
+    expect(run.nodes.ship).toEqual({ status: "cancelled", taskIds: [left!.id] });
+    expect(run.nodes.refund?.status).toBe("awaiting_approval");
+    expect(done).toEqual(["pay"]);
+  });
+
+  it("asks again for the challenge it left once that expired, and offers what it asked again", async () => {
+    const { controller, store, done } = await setup({ policy: { approvalTtlMs: 50 } });
+    const planned = controller.plan(workflow([{ id: "step", type: "operation", request: put("step") }]));
+    failNextCommit(store);
+    await expect(controller.advance(planned.id)).rejects.toThrow("database is locked");
+    const [left] = store.listTasks(10, "awaiting_approval");
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    // Not a denial: the expired challenge is cancelled and asked again, and
+    // that advance's commit is lost too.
+    failNextCommit(store);
+    await expect(controller.advance(planned.id)).rejects.toThrow("database is locked");
+    const [again] = store.listTasks(10, "awaiting_approval");
+    expect(store.getTask(left!.id)?.status).toBe("cancelled");
+    expect(again?.attempt).toBe(2);
+    let run = (await controller.advance(planned.id)).run;
+    expect(run.nodes.step).toMatchObject({ status: "awaiting_approval", taskIds: [again!.id] });
+    run = (await controller.advance(planned.id, approvalsFor(run))).run;
+    expect(run.status).toBe("verified_complete");
+    expect(done).toEqual(["step"]);
+  });
 });

@@ -203,16 +203,18 @@ All notable changes are documented here. The format follows
   one without looking for the task the lost advance left under the same key:
   a leftover challenge stayed approvable beside the new one, a step that took
   effect but failed its evidence (`partial`) ran a second time, and one that
-  verified was cancelled as its own duplicate and halted the run. Now, as a
-  condition's branch already did, the step takes up the task committed under
-  its key, else the newest that may have had an effect or still waits
-  (planned, awaiting approval, running, verified, partial or unknown), and is
-  planned afresh only when there is none or only tasks that did not happen,
-  as a later attempt than those. A loop that such an advance carried into its
-  next iteration goes on there, rather than ask `until` again of the
-  iteration before and stop short of one that ran. A pause no longer loses an
-  advance's commit (above), but a failed write still can, and runs an earlier
-  version left this way heal on their next advance. (#319)
+  verified was cancelled as its own duplicate and halted the run; one that
+  failed or was denied was run after all, while a compensation the lost
+  advance had already run for it was recorded as skipped. Now every step,
+  a condition's branch included, takes up the task committed under its key,
+  else the one recovery prefers of every task there, one that failed, was
+  denied or cancelled, ran out of budget or was refused by policy included,
+  and is planned afresh only when its key holds no task at all. A loop that
+  such an advance carried into its next iteration goes on there, rather than
+  ask `until` again of the iteration before and stop short of one that ran.
+  A pause no longer loses an advance's commit (above), but a failed write
+  still can, and runs an earlier version left this way heal on their next
+  advance. (#319)
 
 - A condition step whose advance lost its commit (a pause landed while it ran)
   keeps to one branch. Recovery read both branches' tasks together and could
