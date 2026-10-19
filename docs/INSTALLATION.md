@@ -873,6 +873,14 @@ melra approve 3f2a… --yes  # no question, for a script that already decided
 melra approve 3f2a… --deny # cancel the task instead
 ```
 
+Denying a step of a durable workflow fails its run, as a failed step does: the
+next `melra workflow advance` offers the compensations declared for the steps
+already done, newest first, each for its own approval. If another step's
+outcome is unknown, the run is `recovery_required` instead and nothing is
+undone until an operator settles it. Deny a compensation to stop there (the
+run then reports `recovery_required` and names it), or end the run without
+unwinding with `melra workflow cancel`.
+
 Off a terminal and without `--yes` it prints the effect as JSON and exits 3
 without deciding. The receipt for the run records who approved it
 (`cli:` plus [`MELRA_APPROVER`](#local-configuration), `operator` by
