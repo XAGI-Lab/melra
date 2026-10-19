@@ -119,6 +119,17 @@ All notable changes are documented here. The format follows
   back deleting corrections reaches once compaction has run. Edits and
   deletes of one chain from two processes no longer interleave. (#250)
 
+- A terminal `run` stopped by its own `timeoutMs` is an unknown outcome
+  (`recovery_required` for a mutation), as it already was when the task's
+  budget or a cancel stopped it. It was recorded `failed`, though the program
+  may have done its work first, and a retry then ran it again. A computer
+  input action (click, move, drag, type, key, scroll) whose helper is stopped
+  by its timeout, or by a cancel while it runs, is an unknown outcome too.
+  Reads, screenshots and target resolution are unchanged, except that a
+  terminal read stopped by its timeout is now retried up to
+  `budget.maxRetries`, as other failed reads are. A timed-out `run` no longer
+  returns a result with `timedOut: true`. (#248)
+
 - `melra serve --http` and `--socket` no longer keep every MCP session for the
   life of the process. The TypeScript SDK's `close()` and `melra conformance
   --url` now end their session, which they never did, waiting at most two
