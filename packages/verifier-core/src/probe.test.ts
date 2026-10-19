@@ -157,7 +157,7 @@ describe("verification through a channel that did not act", () => {
     // 200, but the JSON stops partway: the state may be past the cut, and a
     // cut body is not parsed at all.
     const verifier = await Verifier.create(root, {
-      probe: async () => ({ success: true, status: 200, content: '{"padding":"xxxx', truncated: true }),
+      probe: async () => ({ success: true, status: 200, content: '{"padding":"xxxx', bytes: 16, truncated: true }),
     });
     const { verified, evidence } = await verifier.verify([predicate()], created);
     expect(verified).toBe(false);
@@ -165,6 +165,12 @@ describe("verification through a channel that did not act", () => {
     // The status arrived whole, so a miss on it is still the provider's word.
     const byStatus = await verifier.verify([predicate({ path: "status", value: 404 })], created);
     expect(byStatus.evidence[0]?.inconclusive).toBeUndefined();
+    // `bytes` counts only what arrived, so it cannot say how big the body is.
+    const bySize = await verifier.verify([predicate({ path: "bytes", value: 5_242_880 })], created);
+    expect(bySize.evidence[0]).toMatchObject({ passed: false, inconclusive: true });
+    // The body is longer than what arrived, so it is not this short text.
+    const byShortContent = await verifier.verify([predicate({ path: "content", value: "done" })], created);
+    expect(byShortContent.evidence[0]?.inconclusive).toBeUndefined();
   });
 
   it("does not call a value mismatch inconclusive", async () => {

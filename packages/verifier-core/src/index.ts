@@ -272,15 +272,23 @@ const httpResourceMatches: Built<"http_resource_matches"> = {
       };
     }
     // A body cut at the probe's size cap is not the provider saying no about
-    // what is in it: the value may be past the cut, and a cut JSON body is not
-    // parsed at all. Its status and headers arrived whole, and so did a 404.
+    // what is in it: the value may be past the cut, a cut JSON body is not
+    // parsed at all, and `bytes` counts only what arrived. Its status and
+    // headers arrived whole, and so did a 404. An exact `content` no longer
+    // than what arrived cannot be the whole, longer body, so that miss is
+    // still the answer.
+    const unknowable =
+      /^(json|content|bytes)(\.|$)/u.test(predicate.path) &&
+      (predicate.path !== "content" ||
+        (typeof predicate.value === "string" &&
+          Buffer.byteLength(predicate.value) > Number(observed.bytes ?? 0)));
     if (
       !passed &&
       observed.truncated === true &&
       typeof status === "number" &&
       status >= 200 &&
       status < 300 &&
-      /^(json|content)(\.|$)/u.test(predicate.path)
+      unknowable
     ) {
       return {
         passed: false,
