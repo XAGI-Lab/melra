@@ -116,9 +116,10 @@ All notable changes are documented here. The format follows
   shipment might be in transit, and skip the compensation of a step that went
   on to verify. This holds for sibling steps and for branches of one
   `parallel` node, live and after a restart. A run an earlier version left
-  `failed` beside such a step is halted the same way at its next advance, and
-  the unknown step's compensation, which that unwind skipped, is offered again.
-  (#270)
+  `failed` beside such a step, including a `parallel` node it recorded as
+  failed, is halted the same way at its next advance. The unknown step's
+  compensation, which that unwind skipped, is offered again, also when the step
+  ran under its `approval` node or when that unwind had stalled. (#270)
 
 - `docs/COMPATIBILITY.md` names MCP Python SDK `1.30.x`, the version `sdk-py`
   pins and tests, not `1.28.x`. `pnpm check` now fails when either SDK line

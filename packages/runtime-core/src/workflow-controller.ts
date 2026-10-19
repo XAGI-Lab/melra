@@ -302,6 +302,13 @@ export class WorkflowController {
             .map((node) => node.id)
             .reverse()
         : [];
+    // An earlier version failed a run beside a step whose outcome is unknown
+    // and would now undo what that step may depend on. Halt it as a run that
+    // gets there now halts, so recovery settles the step first.
+    const repaired = this.repairLegacy(definition, current);
+    if (repaired !== undefined) {
+      return { run: repaired, tasks: [], events: this.events(workflowId, since) };
+    }
     // An unwind that stopped half-done is not a base to build more effects on:
     // a forward effect happened, its declared inverse did not, and no node
     // describes that. Refused here rather than left to `readyNodeIds`, which
@@ -319,31 +326,6 @@ export class WorkflowController {
         draft.status = "recovery_required";
         draft.error = `workflow_compensation_incomplete:${stalled.id}`;
         emit("workflow.status_changed", { from, to: draft.status, error: draft.error });
-      });
-      return { run, tasks: [], events: this.events(workflowId, since) };
-    }
-    // An earlier version failed a run beside a step whose outcome is unknown
-    // and would now undo what that step may depend on. Halt it as a run that
-    // gets there now halts, so recovery settles the step first.
-    if (current.status === "failed" && hasUnknownOutcome(definition, (id) => current.nodes[id]?.status)) {
-      const run = this.transition(current, (draft, emit) => {
-        // Its unwind skipped the unknown step's own compensation, the target
-        // not being done; offered again, it runs if that step settles as done.
-        for (const node of definition.nodes) {
-          if (
-            node.type === "compensation" &&
-            draft.nodes[node.id]?.status === "skipped" &&
-            draft.nodes[node.forNodeId]?.status === "recovery_required"
-          ) {
-            const state = { status: "pending" as const, taskIds: [] };
-            emit("workflow.node_changed", { nodeId: node.id, from: "skipped", state });
-            draft.nodes[node.id] = state;
-          }
-        }
-        const from = draft.status;
-        draft.status = "recovery_required";
-        delete draft.error;
-        emit("workflow.status_changed", { from, to: draft.status });
       });
       return { run, tasks: [], events: this.events(workflowId, since) };
     }
@@ -1443,6 +1425,71 @@ export class WorkflowController {
    * unknown and one failed reads recovery_required, and its failure is in its
    * tasks.
    */
+  /**
+   * What an earlier version recorded beside a step whose outcome is unknown.
+   * It ranked a failure above an unknown outcome, so a parallel, condition or
+   * loop node holding both read `failed`, and the run failed and unwound. That
+   * unwind skipped the unknown step's own compensation, the step not being
+   * done; offered again, it runs if the step settles as done. Nothing records
+   * either now, so a current run is never changed here.
+   */
+  private repairLegacy(definition: WorkflowDefinition, current: WorkflowRun): WorkflowRun | undefined {
+    if (current.status !== "failed" && current.status !== "recovery_required") return undefined;
+    const reranked = definition.nodes.flatMap((node) => {
+      const state = current.nodes[node.id];
+      if (node.type === "compensation" || (state?.status !== "failed" && state?.status !== "cancelled")) return [];
+      const unknown = state.taskIds
+        .map((taskId) => this.store.getTask(taskId))
+        .find((task) => task?.status === "recovery_required");
+      return unknown === undefined ? [] : [{ node, state, unknown }];
+    });
+    const isUnknown = (nodeId: string) =>
+      current.nodes[nodeId]?.status === "recovery_required" || reranked.some(({ node }) => node.id === nodeId);
+    // An approval node runs its step's task itself, so the step may still
+    // read `pending` while the approval holds the unknown outcome.
+    const unskipped = definition.nodes.filter(
+      (node) =>
+        node.type === "compensation" &&
+        current.nodes[node.id]?.status === "skipped" &&
+        (isUnknown(node.forNodeId) ||
+          definition.nodes.some(
+            (other) => other.type === "approval" && other.forNodeId === node.forNodeId && isUnknown(other.id),
+          )),
+    );
+    const halt =
+      current.status === "failed" &&
+      (reranked.length > 0 || hasUnknownOutcome(definition, (id) => current.nodes[id]?.status));
+    if (reranked.length === 0 && unskipped.length === 0 && !halt) return undefined;
+    return this.transition(current, (draft, emit) => {
+      for (const { node, state: previous, unknown } of reranked) {
+        const state: WorkflowNodeState = {
+          status: "recovery_required",
+          taskIds: previous.taskIds,
+          ...(unknown!.error === undefined ? {} : { error: unknown!.error }),
+        };
+        emit("workflow.node_changed", { nodeId: node.id, from: previous.status, state });
+        draft.nodes[node.id] = state;
+      }
+      for (const node of unskipped) {
+        const state = { status: "pending" as const, taskIds: [] };
+        emit("workflow.node_changed", { nodeId: node.id, from: "skipped", state });
+        draft.nodes[node.id] = state;
+      }
+      if (draft.status === "failed") {
+        const from = draft.status;
+        draft.status = "recovery_required";
+        const stalled = stalledCompensation(definition, draft.nodes);
+        if (stalled === undefined) delete draft.error;
+        else draft.error = `workflow_compensation_incomplete:${stalled.id}`;
+        emit("workflow.status_changed", {
+          from,
+          to: draft.status,
+          ...(draft.error === undefined ? {} : { error: draft.error }),
+        });
+      }
+    });
+  }
+
   private hasFailure(definition: WorkflowDefinition, nodes: WorkflowRun["nodes"]): boolean {
     return definition.nodes.some((node) => {
       if (node.type === "compensation") return false;
