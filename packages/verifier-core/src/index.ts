@@ -137,7 +137,14 @@ type Built<T extends EvidencePredicate["type"]> = PredicateVerifier<Extract<Evid
  * equal: an exact match on either is no match at all.
  */
 function cutBody(result: Record<string, unknown>, path: string): boolean {
-  return result.truncated === true && (path === "content" || path === "bytes");
+  // An http body: other results carry `truncated` about something else, such
+  // as a terminal `send`, whose `bytes` are what it wrote and whose
+  // `truncated` is about the job's output.
+  return (
+    result.truncated === true &&
+    typeof result.content === "string" &&
+    (path === "content" || path === "bytes")
+  );
 }
 
 const resultEquals: Built<"result_equals"> = {

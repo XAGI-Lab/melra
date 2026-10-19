@@ -117,5 +117,13 @@ describe("Verifier", () => {
     // Text found in the part that arrived is in the whole body too.
     const contains = await verifier.verify([{ type: "result_contains", path: "content", value: "xxx" }], cut);
     expect(contains.verified).toBe(true);
+    // A terminal send: the bytes it wrote, beside a job whose output was cut.
+    const sent = await verifier.verify([{ type: "result_equals", path: "bytes", value: 6 }], {
+      success: true,
+      sent: true,
+      bytes: 6,
+      truncated: true,
+    });
+    expect(sent.verified).toBe(true);
   });
 });
