@@ -109,6 +109,25 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- An absolute path spelled through the workspace root as configured is
+  accepted when a symlink or junction lies in the root, as with macOS's
+  `/tmp` and `/var/folders`, a symlinked project directory or a Windows 8.3
+  short-name `TEMP`. A file operation's `path` and a move's `destination`,
+  file evidence (`file_exists`, `file_absent`, `file_hash`, and a registered
+  verifier's path through `workspacePath`) when planned and when checked, a
+  terminal `cwd` and a browser upload's `filePaths` were refused as outside
+  the workspace (`path_outside_workspace`, `evidence_path_outside_workspace`,
+  `verification_path_outside_workspace`, `cwd_outside_workspace`,
+  `browser_upload_outside_workspace`); only a relative path or the root's
+  resolved spelling worked. Such a path is read as the same path under the
+  root as resolved at startup, where the caller's input enters, and is then
+  checked like any other: the root itself (but for `list`), MELRA's own files
+  and `.git` are refused as before, a sibling whose name only starts like the
+  root's is still outside, and a link inside the workspace is still judged by
+  where it leads. The browser runtime now resolves the root once at startup,
+  as the others do, so a link in the root re-pointed while the server runs
+  takes effect after a restart. (#305)
+
 - A parked mutation whose `reconciliation` predicate could not be asked stays
   `recovery_required`: a URL token with nothing to fill it (`{{json.id}}`,
   when there is no response on that path), a custom verifier the runtime does
