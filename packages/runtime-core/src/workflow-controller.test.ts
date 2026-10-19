@@ -2036,6 +2036,85 @@ describe("WorkflowController execution", () => {
     everyTask.mockRestore();
   });
 
+  it("stops renewing its lease once the store is gone, rather than throw from a timer", async () => {
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => (entered = resolve));
+    let release!: () => void;
+    const holding = new Promise<void>((resolve) => (release = resolve));
+    const { store, tasks, cipher } = await setup(
+      async () => {
+        entered();
+        await holding;
+        return { success: true };
+      },
+      { unhinged: true },
+    );
+    // A two-second lease is renewed every second while the advance runs.
+    const controller = new WorkflowController(store, tasks, cipher, 2_000);
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "One long step",
+        nodes: [{ id: "ship", type: "operation", request: call("Ship", `${LOGISTICS}/shipments`) }],
+      }),
+    );
+    const advancing = controller.advance(planned.id).catch(() => undefined);
+    await started;
+    // What a closed store answers. Each renewal threw from its timer, where
+    // nothing could catch it, and took the process down.
+    const renew = vi.spyOn(store, "renewWorkflowLease").mockImplementation(() => {
+      throw Object.assign(new Error("database is not open"), { code: "ERR_INVALID_STATE" });
+    });
+    await new Promise((resolve) => setTimeout(resolve, 2_300));
+    expect(renew).toHaveBeenCalledTimes(1);
+    renew.mockRestore();
+    release();
+    await advancing;
+  }, 15_000);
+
+  it("keeps renewing its lease past a renewal the database was too busy for", async () => {
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => (entered = resolve));
+    let release!: () => void;
+    const holding = new Promise<void>((resolve) => (release = resolve));
+    const { store, tasks, cipher } = await setup(
+      async () => {
+        entered();
+        await holding;
+        return { success: true };
+      },
+      { unhinged: true },
+    );
+    const controller = new WorkflowController(store, tasks, cipher, 2_000);
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "One long step",
+        nodes: [{ id: "ship", type: "operation", request: call("Ship", `${LOGISTICS}/shipments`) }],
+      }),
+    );
+    const advancing = controller.advance(planned.id);
+    await started;
+    // What a write lock held past the busy timeout answers, once. Renewing
+    // stopped for good, the lease lapsed under the running step, and a
+    // second process took the run over and ran that step as well.
+    const renew = vi.spyOn(store, "renewWorkflowLease").mockImplementationOnce(() => {
+      throw Object.assign(new Error("database is locked"), { code: "ERR_SQLITE_ERROR", errcode: 5 });
+    });
+    await new Promise((resolve) => setTimeout(resolve, 3_500));
+    expect(Date.parse(store.getWorkflowLease(planned.id)!.expiresAt)).toBeGreaterThan(Date.now());
+    await expect(new WorkflowController(store, tasks, cipher, 2_000).advance(planned.id)).rejects.toThrow(
+      "workflow_lease_held",
+    );
+    renew.mockRestore();
+    release();
+    expect((await advancing).run.status).toBe("verified_complete");
+  }, 15_000);
+
   it("plans no compensation for a run cancelled while its advance was running", async () => {
     let shipping!: () => void;
     const started = new Promise<void>((resolve) => {
