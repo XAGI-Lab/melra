@@ -1041,13 +1041,43 @@ export class WorkflowController {
   cancel(workflowId: string): WorkflowRun {
     return this.underLease(workflowId, (current) => {
       if (current.status === "verified_complete") return current;
+      const stopped: string[] = [];
+      const run =
+        current.status === "cancelled"
+          ? current
+          : this.transition(current, (draft, emit) => {
+              for (const [nodeId, node] of Object.entries(draft.nodes)) {
+                if (
+                  !["pending", "ready", "awaiting_approval"].includes(node.status)
+                ) {
+                  continue;
+                }
+                stopped.push(...node.taskIds);
+                const from = node.status;
+                node.status = "cancelled";
+                emit("workflow.node_changed", {
+                  nodeId,
+                  from,
+                  state: node,
+                });
+              }
+              const from = draft.status;
+              draft.status = "cancelled";
+              delete draft.error;
+              emit("workflow.cancelled", { from, to: "cancelled" });
+            });
+      // Tasks are cancelled only once the run is: cancelled before a commit
+      // that then failed, a step's challenge read as a denial on a run that
+      // went on, and the run unwound.
+      for (const taskId of stopped) this.tasks.cancel(taskId);
       // A challenge a lost advance left is in no node's taskIds: a condition's
       // is never adopted (it would follow its branch without asking, #268), and
       // an operation's stays approvable beside the one the next advance plans
-      // afresh (#319). So the run cancels what is planned or waiting under every
-      // node's keys too, and cancelling a cancelled run sweeps again. A store
-      // failure stops the cancel, so a retry sweeps; only a definition that can
-      // no longer be opened goes unswept, and still lets the run end.
+      // afresh (#319). So the run cancels what is planned or waiting under
+      // every node's keys too, and cancelling a cancelled run sweeps again.
+      // A store failure is reported, so the operator cancels again and that
+      // sweeps; only a definition that can no longer be opened goes unswept,
+      // and still lets the run end.
       let definition: WorkflowDefinition | undefined;
       try {
         definition = this.loadDefinition(current);
@@ -1062,28 +1092,7 @@ export class WorkflowController {
           [...this.store.listTasks(100_000, "planned"), ...this.store.listTasks(100_000, "awaiting_approval")],
         );
       }
-      if (current.status === "cancelled") return current;
-      return this.transition(current, (draft, emit) => {
-        for (const [nodeId, node] of Object.entries(draft.nodes)) {
-          if (
-            !["pending", "ready", "awaiting_approval"].includes(node.status)
-          ) {
-            continue;
-          }
-          for (const taskId of node.taskIds) this.tasks.cancel(taskId);
-          const from = node.status;
-          node.status = "cancelled";
-          emit("workflow.node_changed", {
-            nodeId,
-            from,
-            state: node,
-          });
-        }
-        const from = draft.status;
-        draft.status = "cancelled";
-        delete draft.error;
-        emit("workflow.cancelled", { from, to: "cancelled" });
-      });
+      return run;
     });
   }
 

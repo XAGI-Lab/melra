@@ -287,8 +287,12 @@ condition cannot be decided on the next advance (its predicate inconclusive or
 unresolvable) while a sibling fails: the run then unwinds past the step
 (#318). `workflow cancel` cancels whatever a lost advance left planned or
 waiting for approval under any of the run's steps, not only the tasks the run
-names, and cancelling an already cancelled run sweeps again. A run whose
-definition can no longer be opened is still ended, but nothing is swept.
+names, and cancelling an already cancelled run sweeps again. Tasks are
+cancelled, the run's own and the leftovers, only once the run's cancel is
+recorded, so a cancel that fails leaves every challenge as it was rather than
+read as a denial by the next advance; one that fails after it is reported, and
+cancelling again finishes the sweep. A run whose definition can no longer be
+opened is still ended, but nothing is swept.
 
 ## Workflow state and events
 

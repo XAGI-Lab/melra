@@ -621,7 +621,7 @@ describe("a condition's branch not taken (#268)", () => {
     expect(done).toEqual([]);
   });
 
-  it("leaves the run uncancelled when its sweep fails, so cancelling again sweeps", async () => {
+  it("reports a sweep that fails once the run is cancelled, so cancelling again sweeps", async () => {
     const { controller, store, tasks, done } = await setup();
     const planned = controller.plan(workflow([{ id: "op", type: "operation", request: put("op") }]));
     const plan = tasks.plan.bind(tasks);
@@ -639,13 +639,44 @@ describe("a condition's branch not taken (#268)", () => {
       throw new Error("database is locked");
     });
     // Swallowed, the run read cancelled with the challenge still approvable,
-    // and a second cancel returned early without sweeping.
+    // and a second cancel returned early without sweeping. The sweep comes
+    // after the run's commit, which a step's own task waits for.
     expect(() => controller.cancel(planned.id)).toThrow("database is locked");
-    expect(controller.status(planned.id).status).not.toBe("cancelled");
+    expect(controller.status(planned.id).status).toBe("cancelled");
+    expect(tasks.status(leftover!.id).status).toBe("awaiting_approval");
     vi.mocked(tasks.cancel).mockImplementation(cancel);
     expect(controller.cancel(planned.id).status).toBe("cancelled");
     expect(tasks.status(leftover!.id).status).toBe("cancelled");
     expect(done).toEqual([]);
+  });
+
+  it("cancels no step's task when the run's cancel does not commit", async () => {
+    const { controller, store, tasks, done } = await setup();
+    const planned = controller.plan(
+      workflow([
+        { id: "pay", type: "operation", request: put("pay") },
+        { id: "next", type: "operation", dependsOn: ["pay"], request: put("next") },
+        { id: "refund", type: "compensation", forNodeId: "pay", request: put("refund") },
+      ]),
+    );
+    let run = (await controller.advance(planned.id)).run;
+    for (let step = 0; step < 4 && run.nodes.next?.status !== "awaiting_approval"; step += 1) {
+      run = (await controller.advance(planned.id, approvalsFor(run))).run;
+    }
+    const waiting = run.nodes.next!.taskIds[0]!;
+    vi.spyOn(store, "transitionWorkflow").mockImplementationOnce(() => {
+      throw new Error("database is locked");
+    });
+    expect(() => controller.cancel(planned.id)).toThrow("database is locked");
+    // Cancelled anyway, the challenge read as a denial on the run that went
+    // on: it failed and offered the refund.
+    expect(tasks.status(waiting).status).toBe("awaiting_approval");
+    run = (await controller.advance(planned.id)).run;
+    expect(run.status).toBe("awaiting_approval");
+    expect(run.nodes.next?.taskIds).toEqual([waiting]);
+    expect(controller.cancel(planned.id).status).toBe("cancelled");
+    expect(tasks.status(waiting).status).toBe("cancelled");
+    expect(done).toEqual(["pay"]);
   });
 
   it("ends a run whose definition can no longer be opened", async () => {

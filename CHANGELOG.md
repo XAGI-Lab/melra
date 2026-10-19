@@ -173,6 +173,15 @@ All notable changes are documented here. The format follows
   expired lease is left in place, so the run is recovered before it is next
   advanced. (#244)
 
+- `workflow cancel` (`melra_workflow_cancel`) cancels a run's tasks only once
+  the run's own cancel is recorded. It cancelled the challenges on the run's
+  steps, and whatever a lost advance left under them, first, so a cancel whose
+  write then failed (a locked database) left a step's challenge cancelled on a
+  run that went on: the next advance read it as a denial, failed the run and
+  offered its compensations. Now such a cancel changes no task; a failure
+  while cancelling the tasks after it is reported, and cancelling the
+  cancelled run again sweeps again. (#244)
+
 - A condition step whose advance lost its commit (a pause landed while it ran)
   keeps to one branch. Recovery read both branches' tasks together and could
   reopen the step on the branch it had abandoned, or, when the branch it took
