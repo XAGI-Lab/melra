@@ -1428,10 +1428,12 @@ export class WorkflowController {
       taskIds.length === iterations * node.body.length &&
       finished !== undefined &&
       node.until !== undefined &&
-      (await answered(node.id, this.tasks.verifyPersisted(finished, [node.until]), {
-        state: { status: "pending", taskIds, iterations },
-        tasks,
-      }))
+      (await answered(
+        node.id,
+        this.tasks.verifyPersisted(finished, [node.until]),
+        { state: { status: "pending", taskIds, iterations }, tasks },
+        "no",
+      ))
     ) {
       return { state: { status: "verified_complete", taskIds, iterations }, tasks };
     }
@@ -1471,10 +1473,12 @@ export class WorkflowController {
       if (
         node.until !== undefined &&
         iterations < node.maxIterations &&
-        (await answered(node.id, this.tasks.verifyPersisted(lastTaskId, [node.until]), {
-          state: { status: "pending", taskIds, iterations },
-          tasks,
-        }))
+        (await answered(
+          node.id,
+          this.tasks.verifyPersisted(lastTaskId, [node.until]),
+          { state: { status: "pending", taskIds, iterations }, tasks },
+          "no",
+        ))
       ) {
         break;
       }
@@ -1673,40 +1677,52 @@ function makeEvent(
 /**
  * A workflow check's answer. One the verifier could not ask (a provider that
  * answered 503, or not at all) is not a "no": nothing is decided on it. The
- * node is recorded as `waiting`, with the reason as its error, and the next
- * advance asks again; the same reason again writes nothing. Read as a no, a
+ * node is recorded as `waiting`, with the check as its error, and the next
+ * advance asks again; the same check again writes nothing. Read as a no, a
  * condition took its other branch for good, a loop ran another iteration, and
- * a delegation failed its run.
+ * a delegation failed its run. One the kernel refuses to ask (`unanswerable`)
+ * is refused again of the same result, so the node fails; `until` passes
+ * `refusedIs: "no"`, since the next iteration's result may answer it.
  */
 async function answered(
   nodeId: string,
   check: Promise<{ verified: boolean; evidence: EvidenceItem[] }>,
   waiting: NodeAdvance,
+  refusedIs: "failure" | "no" = "failure",
 ): Promise<boolean> {
   const failed = (await check).evidence.filter((item) => !item.passed);
   const refused = (code: string, items: EvidenceItem[], status: WorkflowNodeState["status"]) =>
     new NodeRefused(new Error(code), {
       ...waiting,
-      state: {
-        ...waiting.state,
-        status,
-        error: recordedInput(`${code}: ${items.map((item) => `${item.source ?? item.type}: ${item.summary}`).join("; ")}`),
-      },
+      state: { ...waiting.state, status, error: recordedInput(`${code}: ${items.map(asked).join("; ")}`) },
     });
-  // A URL whose token the recorded result cannot fill. Asked again it reads
-  // the same result, so the node fails rather than wait for good.
-  const unresolved = failed.filter((item) => item.summary.startsWith("verification_token_"));
-  if (unresolved.length > 0) throw refused(`workflow_check_unresolvable:${nodeId}`, unresolved, "failed");
+  const unanswerable = failed.filter((item) => item.unanswerable === true);
+  if (unanswerable.length > 0 && refusedIs === "failure") {
+    throw refused(`workflow_check_unresolvable:${nodeId}`, unanswerable, "failed");
+  }
   // Every item must pass, so a definite no decides, whatever an unanswered
   // item would have said.
-  if (failed.some((item) => item.inconclusive !== true)) return false;
+  if (failed.some((item) => item.inconclusive !== true || item.unanswerable === true)) return false;
   if (failed.length === 0) return true;
   throw refused(`workflow_check_inconclusive:${nodeId}`, failed, waiting.state.status);
 }
 
+/**
+ * A check's item as a node's error names it: its type, its source redacted as
+ * a receipt's URL is (a query can carry a token), and the kernel's own
+ * refusal. Not a provider's words, which can change between polls (a
+ * transport message listing addresses in resolver order) and would write a
+ * waiting run again on each.
+ */
+function asked(item: EvidenceItem): string {
+  const source =
+    item.source === undefined ? "" : ` ${(redactStructuredValue({ url: item.source }).value as { url: string }).url}`;
+  return `${item.type}${source}${item.unanswerable === true ? `: ${item.summary}` : ""}`;
+}
+
 // Human- and delegate-supplied text is untrusted like any other input, so it is
-// redacted before it reaches persisted state, as is what a check's provider
-// said. Redaction can lengthen a value (a short secret becomes a longer
+// redacted before it reaches persisted state, as is the check a node waits
+// on. Redaction can lengthen a value (a short secret becomes a longer
 // marker), hence the cap the state schema wants.
 function recordedInput(value: string): string {
   return String(redactStructuredValue(value).value).slice(0, 10_000);

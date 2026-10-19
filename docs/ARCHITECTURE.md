@@ -217,7 +217,8 @@ A definition is an immutable, versioned DAG with at most 500 nodes. Node IDs
 are unique; dependencies must exist; self-dependencies and cycles are rejected
 before persistence. Every nested task is capability- and policy-preflighted
 before the workflow is accepted, and a `condition`, `until` or `delegation`
-check no registered verifier can ask is refused (`evidence_verifier_unavailable`).
+check no registered verifier can ask (`evidence_verifier_unavailable`), or on a
+file path outside the workspace (`evidence_path_outside_workspace`), is refused.
 
 | Node | Implemented semantics and bounds |
 |---|---|
@@ -246,14 +247,19 @@ a body cut at the size cap, no connection), nothing is decided: `advance`
 records the other nodes and fails with `workflow_check_inconclusive:<node>`.
 The condition stays `pending` and runs neither branch, the loop stays `pending`
 with the iterations it ran, and the delegation stays `awaiting_input` and keeps
-the report it was sent; each carries the evidence's reasons as its `error`, so
-status shows what the run waits on. Every later `advance` asks again, and one
-that gets the same answer writes nothing. A definite no among several items
-decides even while another is unanswered. A provider that never answers holds
-the run there; `workflow cancel` ends it, and does not compensate, so effects
-already done stay done. A check whose URL `{{token}}` its source result cannot
-fill would read the same result however often it is asked, so its node fails
-(`workflow_check_unresolvable:<node>`) and the run unwinds.
+the report it was sent; each names the check it waits on as its `error`, by
+type and source (a URL without its query, which can carry a token), so status
+shows what the run waits on. Every later `advance` asks again, and one still
+unanswered writes nothing, however the provider words its failure. A definite
+no among several items decides even while another is unanswered. A provider
+that never answers holds the run there; `workflow cancel` ends it, and does not
+compensate, so effects already done stay done. A check the kernel refuses to
+ask (an `unanswerable` item: a URL `{{token}}` its source result cannot fill, a
+verifier gone since planning, a reserved path) is refused again of the same
+result, so a `condition` or `delegation` fails
+(`workflow_check_unresolvable:<node>`) and the run unwinds. A loop's `until`
+asks of each iteration's new result, so it reads such a check as a no and runs
+the next iteration, up to `maxIterations`.
 
 ## Workflow state and events
 
