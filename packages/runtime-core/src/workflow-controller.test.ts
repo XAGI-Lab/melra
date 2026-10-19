@@ -268,6 +268,34 @@ describe("WorkflowController planning", () => {
     ).toEqual({ count: 0 });
   });
 
+  it("refuses a condition, until or delegation check no registered verifier can ask", async () => {
+    const { controller, store } = await setup();
+    const unaskable = { type: "custom", verifier: "nobody.registered", params: {} };
+    // Planned, such a check was found out only once the steps before it ran.
+    for (const check of [
+      { type: "condition", sourceNodeId: "inspect", predicate: unaskable },
+      { type: "bounded_loop", body: [request("Poll")], maxIterations: 3, until: unaskable },
+      { type: "delegation", assignee: "outside-worker", goal: "issue the refund", requiredEvidence: [unaskable] },
+    ]) {
+      const unplannable = WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Unaskable check",
+        nodes: [
+          { id: "inspect", type: "operation", request: request("Inspect first") },
+          { id: "check", dependsOn: ["inspect"], ...check },
+        ],
+      });
+      expect(() => controller.plan(unplannable), check.type).toThrow(
+        "evidence_verifier_unavailable:nobody.registered",
+      );
+    }
+    expect(
+      store.database.prepare("SELECT count(*) AS count FROM workflow_runs").get(),
+    ).toEqual({ count: 0 });
+  });
+
   it("reads status and events and rejects unknown workflow IDs", async () => {
     const { controller } = await setup();
     const run = controller.plan(definition());
@@ -649,7 +677,7 @@ describe("WorkflowController execution", () => {
     };
   }
 
-  it("decides a condition only once its provider answers, not on a 503", async () => {
+  it("decides a condition only once its provider answers, and records what it waits on", async () => {
     const executed: string[] = [];
     const check = provider();
     const { controller } = await setup(
@@ -686,7 +714,17 @@ describe("WorkflowController execution", () => {
     // Read as a no, the run refunded a charge that went through, for good.
     await expect(controller.advance(planned.id)).rejects.toThrow("workflow_check_inconclusive:choose");
     expect(executed).toEqual(["inspect"]);
-    expect(controller.status(planned.id).nodes.choose?.status).toBe("pending");
+    const waiting = controller.status(planned.id);
+    // Recorded nowhere, the run read as busy while it waited on the provider.
+    expect(waiting.nodes.choose).toEqual({
+      status: "pending",
+      taskIds: [],
+      error:
+        "workflow_check_inconclusive:choose: https://payments.example.test/charges/1: independent read unavailable: the provider answered 503",
+    });
+    // Asked again with the same answer, nothing is written.
+    await expect(controller.advance(planned.id)).rejects.toThrow("workflow_check_inconclusive:choose");
+    expect(controller.status(planned.id)).toEqual(waiting);
 
     check.state.answer = check.applied;
     const result = await controller.advance(planned.id);
@@ -733,6 +771,101 @@ describe("WorkflowController execution", () => {
     expect(calls).toBe(1);
     expect(result.run.nodes.loop?.iterations).toBe(1);
     expect(result.run.status).toBe("verified_complete");
+  });
+
+  it("fails a condition whose URL names a value its source result does not hold, and unwinds", async () => {
+    const executed: string[] = [];
+    const check = provider();
+    const { controller } = await setup(
+      async (operation) => {
+        if (operation.kind !== "file") throw new Error("unexpected_operation");
+        executed.push(operation.path);
+        return { success: true };
+      },
+      {},
+      check.probe,
+    );
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Ship or hold",
+        nodes: [
+          { id: "charge", type: "operation", request: fileRequest("Charge", "charge") },
+          { id: "refund", type: "compensation", forNodeId: "charge", request: fileRequest("Refund", "refund") },
+          {
+            id: "choose",
+            type: "condition",
+            dependsOn: ["charge"],
+            sourceNodeId: "charge",
+            predicate: { ...check.predicate, url: "https://payments.example.test/charges/{{json.id}}" },
+            whenTrue: [fileRequest("Ship", "ship")],
+            whenFalse: [fileRequest("Hold", "hold")],
+          },
+        ],
+      }),
+    );
+    await controller.advance(planned.id);
+
+    // Read as a no, it took the other branch on a question it never asked.
+    await expect(controller.advance(planned.id)).rejects.toThrow("workflow_check_unresolvable:choose");
+    expect(executed).toEqual(["charge", "refund"]);
+    const run = controller.status(planned.id);
+    expect(run.status).toBe("failed");
+    expect(run.nodes.choose).toEqual({
+      status: "failed",
+      taskIds: [],
+      error: "workflow_check_unresolvable:choose: http_resource_matches: verification_token_unresolved:json.id",
+    });
+  });
+
+  it("fails a loop whose until names a value the iteration did not return, however the verifier files it", async () => {
+    let calls = 0;
+    const check = provider();
+    const { controller, tasks } = await setup(
+      async () => {
+        calls += 1;
+        return { success: true };
+      },
+      {},
+      check.probe,
+    );
+    // A verifier that reads every throw as no answer files the unresolved
+    // token as inconclusive, and the loop waited on it for good.
+    vi.spyOn(tasks, "verifyPersisted").mockResolvedValue({
+      verified: false,
+      evidence: [
+        {
+          type: "http_resource_matches",
+          passed: false,
+          inconclusive: true,
+          summary: "verification_token_unresolved:json.id",
+        },
+      ],
+    });
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Poll the charge",
+        nodes: [
+          {
+            id: "loop",
+            type: "bounded_loop",
+            body: [fileRequest("Loop body", "loop")],
+            maxIterations: 5,
+            until: { ...check.predicate, url: "https://payments.example.test/charges/{{json.id}}" },
+          },
+        ],
+      }),
+    );
+
+    await expect(controller.advance(planned.id)).rejects.toThrow("workflow_check_unresolvable:loop");
+    expect(calls).toBe(1);
+    expect(controller.status(planned.id).nodes.loop).toMatchObject({ status: "failed", iterations: 1 });
+    expect(controller.status(planned.id).status).toBe("failed");
   });
 
   it("compensates verified work once when a later operation fails", async () => {
@@ -2574,41 +2707,74 @@ describe("WorkflowController human input and delegation", () => {
     expect(reported.run.status).toBe("failed");
   });
 
-  it("keeps a delegation waiting while the provider its evidence asks does not answer", async () => {
-    const { controller } = await setup(undefined, {}, async () => ({ success: true, status: 503, content: "{}" }));
-    const planned = controller.plan(
-      WorkflowDefinitionSchema.parse({
-        schemaVersion: "1.0.0",
-        id: definitionId,
-        version: 1,
-        name: "Hand it off",
-        nodes: [
-          {
-            id: "handoff",
-            type: "delegation",
-            assignee: "outside-worker",
-            goal: "issue the refund",
-            requiredEvidence: [
-              {
-                type: "http_resource_matches",
-                url: "https://payments.example.test/refunds/1",
-                method: "GET",
-                path: "json.status",
-                value: "applied",
-              },
-            ],
-          },
-        ],
-      }),
-    );
+  /** A delegation whose evidence asks the provider about each URL in turn. */
+  function handoff(urls: string[]) {
+    return WorkflowDefinitionSchema.parse({
+      schemaVersion: "1.0.0",
+      id: definitionId,
+      version: 1,
+      name: "Hand it off",
+      nodes: [
+        {
+          id: "handoff",
+          type: "delegation",
+          assignee: "outside-worker",
+          goal: "issue the refund",
+          requiredEvidence: urls.map((url) => ({
+            type: "http_resource_matches",
+            url,
+            method: "GET",
+            path: "json.status",
+            value: "applied",
+          })),
+        },
+      ],
+    });
+  }
+
+  it("keeps a delegation's report while the provider its evidence asks does not answer", async () => {
+    let answer: Record<string, unknown> = { success: true, status: 503, content: "{}" };
+    const { controller } = await setup(undefined, {}, async () => answer);
+    const planned = controller.plan(handoff(["https://payments.example.test/refunds/1"]));
     await controller.advance(planned.id);
 
     // Read as a no, the delegation failed and its run unwound.
     await expect(
       controller.advance(planned.id, [], [{ nodeId: "handoff", value: "done" }]),
     ).rejects.toThrow("workflow_check_inconclusive:handoff");
-    expect(controller.status(planned.id).nodes.handoff?.status).toBe("awaiting_input");
+    expect(controller.status(planned.id).nodes.handoff).toEqual({
+      status: "awaiting_input",
+      taskIds: [],
+      prompt: "outside-worker: issue the refund",
+      input: "done",
+      error:
+        "workflow_check_inconclusive:handoff: https://payments.example.test/refunds/1: independent read unavailable: the provider answered 503",
+    });
     expect(controller.status(planned.id).status).toBe("awaiting_input");
+
+    // Dropped, the report left the run waiting on a worker who had sent it.
+    answer = { success: true, status: 200, content: JSON.stringify({ status: "applied" }) };
+    const settled = await controller.advance(planned.id);
+    expect(settled.run.nodes.handoff).toMatchObject({ status: "verified_complete", input: "done" });
+    expect(settled.run.status).toBe("verified_complete");
+  });
+
+  it("fails a delegation one of whose checks says no while another goes unanswered", async () => {
+    const { controller } = await setup(undefined, {}, async ({ url }) => ({
+      success: true,
+      status: url.endsWith("/refunds/1") ? 404 : 503,
+      content: "{}",
+    }));
+    const planned = controller.plan(
+      handoff(["https://payments.example.test/refunds/1", "https://tickets.example.test/tickets/9"]),
+    );
+    await controller.advance(planned.id);
+
+    // Every check must pass, so the 404 decides whatever the 503 would have said.
+    const reported = await controller.advance(planned.id, [], [{ nodeId: "handoff", value: "done" }]);
+    expect(reported.run.nodes.handoff?.status).toBe("failed");
+    expect(reported.run.nodes.handoff?.error).toBe("workflow_delegation_unverified:handoff");
+    expect(reported.run.status).toBe("failed");
   });
 
   it("refuses an answer longer than the node allows", async () => {

@@ -216,7 +216,8 @@ material and must not be committed or publicly synchronized.
 A definition is an immutable, versioned DAG with at most 500 nodes. Node IDs
 are unique; dependencies must exist; self-dependencies and cycles are rejected
 before persistence. Every nested task is capability- and policy-preflighted
-before the workflow is accepted.
+before the workflow is accepted, and a `condition`, `until` or `delegation`
+check no registered verifier can ask is refused (`evidence_verifier_unavailable`).
 
 | Node | Implemented semantics and bounds |
 |---|---|
@@ -237,6 +238,22 @@ retries. Mutations are never automatically retried.
 A delegate reporting "done" is not evidence. A `delegation` node that declared
 predicates and whose predicates fail is `failed`, exactly as an `operation`
 node would be.
+
+A check whose provider did not answer is not a "no". When a `condition`'s
+predicate, a `bounded_loop`'s `until` or a `delegation`'s evidence comes back
+`inconclusive` (a 503 or 429, a 401 or 403, a redirect, a refused destination,
+a body cut at the size cap, no connection), nothing is decided: `advance`
+records the other nodes and fails with `workflow_check_inconclusive:<node>`.
+The condition stays `pending` and runs neither branch, the loop stays `pending`
+with the iterations it ran, and the delegation stays `awaiting_input` and keeps
+the report it was sent; each carries the evidence's reasons as its `error`, so
+status shows what the run waits on. Every later `advance` asks again, and one
+that gets the same answer writes nothing. A definite no among several items
+decides even while another is unanswered. A provider that never answers holds
+the run there; `workflow cancel` ends it, and does not compensate, so effects
+already done stay done. A check whose URL `{{token}}` its source result cannot
+fill would read the same result however often it is asked, so its node fails
+(`workflow_check_unresolvable:<node>`) and the run unwinds.
 
 ## Workflow state and events
 

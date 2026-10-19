@@ -120,6 +120,17 @@ export class WorkflowController {
           throw new Error(`workflow_policy_blocked:${node.id}`);
         }
       }
+      // A check no registered verifier can ask is never answered. Refused
+      // here, as a step's evidence is, not found out mid-run with effects done.
+      this.tasks.assertVerifiable(
+        node.type === "condition"
+          ? [node.predicate]
+          : node.type === "bounded_loop"
+            ? (node.until === undefined ? [] : [node.until])
+            : node.type === "delegation"
+              ? node.requiredEvidence
+              : [],
+      );
     }
 
     const createdAt = new Date().toISOString();
@@ -1131,7 +1142,10 @@ export class WorkflowController {
               started === taskIdempotencyKey({ ...identity, branch: "true:0" }, node.whenTrue[0]!)
             : committed("true", node.whenTrue) ||
               (!committed("false", node.whenFalse) &&
-                (await answered(node.id, this.tasks.verifyPersisted(sourceTaskId, [node.predicate]))));
+                (await answered(node.id, this.tasks.verifyPersisted(sourceTaskId, [node.predicate]), {
+                  state,
+                  tasks: [],
+                })));
         return await this.runSequential(
           chosen ? node.whenTrue : node.whenFalse,
           state,
@@ -1208,11 +1222,13 @@ export class WorkflowController {
         };
       }
       case "delegation": {
-        const supplied = inputs.find((item) => item.nodeId === node.id);
+        // A report whose evidence went unanswered waits on the node, so the
+        // next advance asks again without the worker reporting twice.
+        const report = inputs.find((item) => item.nodeId === node.id)?.value ?? state.input;
         // Node state caps `prompt` at 2,000 chars; assignee + goal can exceed
         // that, and a truncated label is better than a schema rejection.
         const prompt = `${node.assignee}: ${node.goal}`.slice(0, 2_000);
-        if (supplied === undefined) {
+        if (report === undefined) {
           return {
             state: { status: "awaiting_input", taskIds: [], prompt },
             tasks: [],
@@ -1222,9 +1238,8 @@ export class WorkflowController {
         // predicates, they decide — a node whose evidence fails is `failed`,
         // never complete, exactly as for an operation node.
         if (node.requiredEvidence.length > 0) {
-          // Unanswered, the node waits for the report again rather than fail.
           const verified = await answered(node.id, this.tasks.verifyStandalone(node.requiredEvidence), {
-            state: { status: "awaiting_input", taskIds: [], prompt },
+            state: { status: "awaiting_input", taskIds: [], prompt, input: recordedInput(report) },
             tasks: [],
           });
           if (!verified) {
@@ -1244,7 +1259,7 @@ export class WorkflowController {
             status: "verified_complete",
             taskIds: [],
             prompt,
-            input: recordedInput(supplied.value),
+            input: recordedInput(report),
           },
           tasks: [],
         };
@@ -1413,7 +1428,10 @@ export class WorkflowController {
       taskIds.length === iterations * node.body.length &&
       finished !== undefined &&
       node.until !== undefined &&
-      (await answered(node.id, this.tasks.verifyPersisted(finished, [node.until])))
+      (await answered(node.id, this.tasks.verifyPersisted(finished, [node.until]), {
+        state: { status: "pending", taskIds, iterations },
+        tasks,
+      }))
     ) {
       return { state: { status: "verified_complete", taskIds, iterations }, tasks };
     }
@@ -1654,25 +1672,42 @@ function makeEvent(
 
 /**
  * A workflow check's answer. One the verifier could not ask (a provider that
- * answered 503, or not at all) is not a "no": nothing is decided on it, and
- * the node waits, as `undecided` records it, for the next advance to ask again.
- * Read as a no, a condition took its other branch for good, a loop ran another
- * iteration, and a delegation failed its run.
+ * answered 503, or not at all) is not a "no": nothing is decided on it. The
+ * node is recorded as `waiting`, with the reason as its error, and the next
+ * advance asks again; the same reason again writes nothing. Read as a no, a
+ * condition took its other branch for good, a loop ran another iteration, and
+ * a delegation failed its run.
  */
 async function answered(
   nodeId: string,
   check: Promise<{ verified: boolean; evidence: EvidenceItem[] }>,
-  undecided?: NodeAdvance,
+  waiting: NodeAdvance,
 ): Promise<boolean> {
-  const { verified, evidence } = await check;
-  if (!evidence.some((item) => item.inconclusive === true)) return verified;
-  const error = new Error(`workflow_check_inconclusive:${nodeId}`);
-  throw undecided === undefined ? error : new NodeRefused(error, undecided);
+  const failed = (await check).evidence.filter((item) => !item.passed);
+  const refused = (code: string, items: EvidenceItem[], status: WorkflowNodeState["status"]) =>
+    new NodeRefused(new Error(code), {
+      ...waiting,
+      state: {
+        ...waiting.state,
+        status,
+        error: recordedInput(`${code}: ${items.map((item) => `${item.source ?? item.type}: ${item.summary}`).join("; ")}`),
+      },
+    });
+  // A URL whose token the recorded result cannot fill. Asked again it reads
+  // the same result, so the node fails rather than wait for good.
+  const unresolved = failed.filter((item) => item.summary.startsWith("verification_token_"));
+  if (unresolved.length > 0) throw refused(`workflow_check_unresolvable:${nodeId}`, unresolved, "failed");
+  // Every item must pass, so a definite no decides, whatever an unanswered
+  // item would have said.
+  if (failed.some((item) => item.inconclusive !== true)) return false;
+  if (failed.length === 0) return true;
+  throw refused(`workflow_check_inconclusive:${nodeId}`, failed, waiting.state.status);
 }
 
 // Human- and delegate-supplied text is untrusted like any other input, so it is
-// redacted before it reaches persisted state. Redaction can lengthen a value
-// (a short secret becomes a longer marker), hence the cap the state schema wants.
+// redacted before it reaches persisted state, as is what a check's provider
+// said. Redaction can lengthen a value (a short secret becomes a longer
+// marker), hence the cap the state schema wants.
 function recordedInput(value: string): string {
   return String(redactStructuredValue(value).value).slice(0, 10_000);
 }

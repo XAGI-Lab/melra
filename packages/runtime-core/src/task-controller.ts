@@ -313,11 +313,23 @@ export class TaskController {
     // one that could not be reconciled would stay parked for good. A stored
     // step's reconciliation was never checked, and refusing it now would stop
     // a run whose earlier steps already ran.
-    const checked =
+    this.assertVerifiable(
       options.stored === true
         ? parsed.requiredEvidence
-        : [...parsed.requiredEvidence, ...parsed.reconciliation];
-    for (const predicate of checked) {
+        : [...parsed.requiredEvidence, ...parsed.reconciliation],
+      options,
+    );
+    return evaluatePolicy(
+      "00000000-0000-4000-8000-000000000000",
+      parsed,
+      this.policy,
+      this.capabilityUsage,
+    ).decision;
+  }
+
+  /** Refuses a predicate no registered verifier can check, or that it would refuse to. */
+  assertVerifiable(predicates: EvidencePredicate[], options: { stored?: boolean } = {}): void {
+    for (const predicate of predicates) {
       if (!this.verifier.supports(predicate)) {
         throw new Error(
           `evidence_verifier_unavailable:${predicate.type === "custom" ? predicate.verifier : predicate.type}`,
@@ -330,12 +342,6 @@ export class TaskController {
         throw new Error("evidence_path_outside_workspace");
       }
     }
-    return evaluatePolicy(
-      "00000000-0000-4000-8000-000000000000",
-      parsed,
-      this.policy,
-      this.capabilityUsage,
-    ).decision;
   }
 
   status(taskId: string): TaskRecord {

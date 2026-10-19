@@ -161,7 +161,15 @@ All notable changes are documented here. The format follows
   on such a check now: the advance records the other nodes and fails with
   `workflow_check_inconclusive:<node>`, the condition runs neither branch, the
   loop keeps the iteration it ran and starts no other, the delegation stays
-  `awaiting_input`, and the next advance asks again.
+  `awaiting_input` and keeps the report it was sent, and the next advance asks
+  again. The node's `error` names what it waits on, and asking again with the
+  same answer writes nothing. A definite no among a delegation's checks still
+  fails it while another goes unanswered. A provider that never answers holds
+  the run until `melra_workflow_cancel`, which does not compensate. Planning
+  refuses a check no registered verifier can ask
+  (`evidence_verifier_unavailable`), and a check whose URL `{{token}}` its
+  source result cannot fill fails its node (`workflow_check_unresolvable:<node>`)
+  rather than waiting on an answer that cannot change.
 
 - `melra_workflow_advance` on a run with nothing due, such as a step still
   waiting for approval or input, changes nothing, as its description says. Each
