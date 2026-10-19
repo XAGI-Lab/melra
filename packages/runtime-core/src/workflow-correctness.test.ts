@@ -585,6 +585,41 @@ describe("a condition's branch not taken (#268)", () => {
     },
   );
 
+  it("cancels with the run a challenge a lost advance left on an operation, and no other run's", async () => {
+    const { controller, tasks, done } = await setup();
+    const planned = controller.plan(workflow([{ id: "op", type: "operation", request: put("op") }]));
+    const other = controller.plan(workflow([{ id: "op", type: "operation", request: put("op") }]));
+    const waiting = (await controller.advance(other.id)).run.nodes.op!.taskIds[0]!;
+    const plan = tasks.plan.bind(tasks);
+    let leftover: TaskRecord | undefined;
+    vi.spyOn(tasks, "plan").mockImplementationOnce((request, options) => {
+      const task = plan(request, options);
+      leftover = task;
+      controller.pause(planned.id);
+      return task;
+    });
+    await expect(controller.advance(planned.id)).rejects.toThrow("workflow_state_conflict");
+    controller.resume(planned.id);
+    expect(controller.status(planned.id).nodes.op).toMatchObject({ status: "pending", taskIds: [] });
+    expect(controller.cancel(planned.id).status).toBe("cancelled");
+    // Left approvable, approving it ran the step on a cancelled run.
+    expect(tasks.status(leftover!.id).status).toBe("cancelled");
+    expect(tasks.status(waiting).status).toBe("awaiting_approval");
+    expect(done).toEqual([]);
+  });
+
+  it("ends a run whose definition can no longer be opened", async () => {
+    const { controller, store, root } = await setup();
+    await writeFile(join(root, "flag"), "on");
+    const planned = controller.plan(choice([put("ship")], [put("other")]));
+    await controller.advance(planned.id);
+    controller.pause(planned.id);
+    (store as unknown as { database: { prepare(sql: string): { run(): void } } }).database
+      .prepare("DELETE FROM workflow_payloads")
+      .run();
+    expect(controller.cancel(planned.id).status).toBe("cancelled");
+  });
+
   it("cancels with the run a challenge a lost advance left on a condition a restart left undecided", async () => {
     const { controller, root, store, tasks, cipher, done } = await setup();
     await writeFile(join(root, "flag"), "on");

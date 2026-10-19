@@ -135,7 +135,10 @@ All notable changes are documented here. The format follows
   outcome is unknown as the condition's, so it halts the run rather than let
   a failed sibling unwind past it; anything else such an advance left waits
   for the next advance, so the run halts or moves on the same with or without
-  a restart.
+  a restart, unless a sibling in that same advance failed too (#318).
+  `workflow cancel` cancels whatever a lost advance left planned or waiting
+  for approval under any of the run's steps, not only the tasks the run
+  names, and ends the run even when its definition can no longer be opened.
   A branch's step is found by its idempotency key, so an advance no longer
   asks again for a step whose effect already committed, nor reuses another
   branch's task by position. (#268)

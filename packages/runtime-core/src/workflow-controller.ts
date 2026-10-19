@@ -1038,14 +1038,19 @@ export class WorkflowController {
     ) {
       return current;
     }
-    // A challenge a lost advance left on a condition is in no node's taskIds:
-    // adopted, the condition would follow its branch without asking (#268).
-    const definition = this.loadDefinition(current);
-    let allTasks: TaskRecord[] | undefined;
-    for (const node of definition.nodes) {
-      if (node.type !== "condition") continue;
-      allTasks ??= this.store.listTasks(100_000);
-      this.cancelChallenges(expectedTaskKeys(current.id, node, definition), allTasks);
+    // A challenge a lost advance left is in no node's taskIds: a condition's
+    // is never adopted (it would follow its branch without asking, #268), an
+    // operation's waits for the next advance to take it up by key. So the run
+    // cancels what is planned or waiting under every node's keys too. Best
+    // effort: a definition that can no longer be opened still lets the run end.
+    try {
+      const definition = this.loadDefinition(current);
+      this.cancelChallenges(
+        definition.nodes.flatMap((node) => expectedTaskKeys(current.id, node, definition)),
+        this.store.listTasks(100_000),
+      );
+    } catch {
+      // Ended all the same; what it would have cancelled is still listed.
     }
     return this.transition(current, (draft, emit) => {
       for (const [nodeId, node] of Object.entries(draft.nodes)) {
