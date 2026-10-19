@@ -107,6 +107,61 @@ All notable changes are documented here. The format follows
   a restart, gets 404 with JSON-RPC error -32001, which tells an MCP client to
   start a new session. It used to get 400. (#253, #257)
 
+- `docs/COMPATIBILITY.md` names MCP Python SDK `1.30.x`, the version `sdk-py`
+  pins and tests, not `1.28.x`. `pnpm check` now fails when either SDK line
+  stops naming the pinned version. (#286)
+
+- The TypeScript SDK's `execute()` and `advanceWorkflow()` wait up to 36
+  minutes for the server, past a task's budget and its built-in evidence
+  reads, instead of the MCP client's 60 s default. A task that
+  ran longer than a minute was reported to the caller as `Request timed out`
+  while the server went on and verified it, and a caller that took that as a
+  failure could run it again. `MelraClient.connect({ runTimeoutMs })` sets the
+  limit, and refuses a value that is not a whole number of milliseconds from 1
+  to 2147483647. (#256)
+
+- `send` to an interactive terminal job whose program has closed its stdin is
+  refused as `terminal_job_stdin_closed`. Every send after the failed write
+  was refused as `terminal_job_not_interactive`, and the send whose write
+  failed on the spot was reported as sent. A send to a job whose program has
+  exited is refused as `terminal_job_not_running` even while something it
+  started still holds its output open. (#271)
+
+- The Python SDK's README says how to install it: the wheel attached to each
+  GitHub release, checked against `SHA256SUMS` and its attestation, or
+  `pip install ./sdk-py` from a checkout. No doc said so before, and the SDK
+  is not on PyPI, so `pip install melra` does not install it. (#259)
+
+- Denying a durable workflow's step (`melra approve <id> --deny`, the
+  console's Deny) or cancelling its task (`melra_task_cancel`) no longer leaves
+  the run `running` for good with nothing left to run. The step did not
+  happen, so the run is `failed`, as when a step fails, and the compensations
+  declared for the steps already done unwind newest first, each still a
+  governed task that waits for its own approval. `melra workflow cancel` still
+  ends a run without unwinding it. Denying or cancelling a compensation now
+  stops the unwind as a failed one does: the run is `recovery_required` with
+  `workflow_compensation_incomplete:<node>`. It used to read `failed`, and the
+  next advance went on to undo the step before it. A run where another step's
+  outcome is unknown (`recovery_required`) halts there instead of unwinding
+  past it. A parallel node with a denied branch now ends when an advance reads
+  the denial, live and after a restart, instead of keeping its other branches'
+  approvals on offer. A run an earlier version left `running` this way is
+  repaired the next time the runtime starts (`melra serve`, any `melra
+  workflow` command, `approve`, `run`, `console`, `inspect`, `export` or
+  `demo`), and one it left `failed`
+  past a denied compensation reports `recovery_required` at its next advance.
+  Only an operator's or agent's cancel counts as a denial. A step cancelled as
+  a duplicate (its effect committed under an attempt the run does not record,
+  after a pause cost an advance its commit), or a step still running or
+  verifying, leaves the run `recovery_required` for recovery to settle when
+  the runtime next starts, and is not read as denied or failed. A step an
+  approval node already ran counts as done when deciding what to undo, and
+  an unwind stops when a cancel or pause lands under it. A condition no
+  longer asks its predicate again once a branch's first step has committed, so
+  the other branch cannot run as well. A read that committed its key before a
+  crash recovers as verified instead of running again only to be cancelled as
+  a duplicate of itself. (#243)
+
 - `melra clients` lists a client whose tokens were revoked as `pending`, not
   `approved`: a revoke now clears the client's approval along with its tokens.
   `melra clients --revoke <id>` exits 1 with `no such client` for an id that is

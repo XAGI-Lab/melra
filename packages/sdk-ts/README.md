@@ -108,6 +108,20 @@ cleartext it is readable by anything on the path. Put TLS in front and use
 network, pass `allowInsecureHttp: true`. A wrong token fails `connect()` with
 `melra_unauthorized`.
 
+`execute()` and `advanceWorkflow()` wait up to 36 minutes for the server: a
+task's 15-minute budget cap, then up to 20 built-in evidence reads of a minute
+each. So the SDK does not give up on an effect the server is still running. Set
+`runTimeoutMs` in `connect()`, in whole milliseconds up to 2147483647, for what
+that does not cover:
+
+- custom verifiers and `file_hash` on a very large file, which have no time limit;
+- an `advanceWorkflow()` call that runs several tasks in turn: a loop's or a
+  branch's steps, or, when a step fails, every compensation.
+
+The wait is per call, not per task. After a timeout, read the task or the run
+(`status()`, `workflowStatus()`) before acting on it: the server may still be at
+work.
+
 ## Workflows
 
 `planWorkflow`, `advanceWorkflow`, `workflowStatus`, `cancelWorkflow`, and
