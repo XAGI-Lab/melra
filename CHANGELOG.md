@@ -144,6 +144,13 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- A tag release creates its GitHub release again. The asset list named the
+  Python sdist and wheel twice (they also match the single executables'
+  pattern), GitHub refuses a second copy of a name, and `gh release create`
+  then deleted the draft, after npm had already published. The executables'
+  pattern now names their platforms, and the release dry run fails on any
+  name listed twice.
+
 - A condition step whose advance lost its commit (a pause landed while it ran)
   keeps to one branch. Recovery read both branches' tasks together and could
   reopen the step on the branch it had abandoned, or, when the branch it took

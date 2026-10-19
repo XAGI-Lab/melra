@@ -153,7 +153,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          assets=(release/*.tar.gz release/*.whl release/*.json release/melra-[0-9]* release/SHA256SUMS)
+          assets=(release/*.tar.gz release/*.whl release/*.json release/melra-[0-9]*-{linux,darwin,win}-* release/SHA256SUMS)
           if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
             # Re-run after a later step failed: keep the release, refresh its assets.
             gh release upload "${GITHUB_REF_NAME}" "${assets[@]}" --clobber
