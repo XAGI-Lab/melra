@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createHash } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -80,6 +80,34 @@ describe("Verifier", () => {
     );
     expect(hashed.verified).toBe(false);
     expect(hashed.evidence[0]?.summary).toBe("verification_path_reserved");
+  });
+
+  it("reads a case-only rename's old spelling as absent, and a present file as present", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-verifier-"));
+    roots.push(root);
+    await writeFile(join(root, "Readme.md"), "x");
+    await rename(join(root, "Readme.md"), join(root, "README.md"));
+    const verifier = await Verifier.create(root);
+    // What a move derives. On a case-insensitive disk the old spelling still
+    // reached the renamed file, and the move verified as partial.
+    const moved = await verifier.verify(
+      [
+        { type: "file_absent", path: "Readme.md" },
+        { type: "file_exists", path: "README.md" },
+      ],
+      {},
+    );
+    expect(moved.verified).toBe(true);
+    expect((await verifier.verify([{ type: "file_absent", path: "README.md" }], {})).verified).toBe(false);
+    // Stored decomposed, asked for composed: the same name to a disk that
+    // folds normalization, so never absent there.
+    const decomposed = "cafe\u0301.txt";
+    await writeFile(join(root, decomposed), "x");
+    const composed = decomposed.normalize("NFC");
+    const folds = await lstat(join(root, composed)).then(() => true, () => false);
+    if (folds) {
+      expect((await verifier.verify([{ type: "file_absent", path: composed }], {})).verified).toBe(false);
+    }
   });
 
   it("stamps each item with how it was established", async () => {

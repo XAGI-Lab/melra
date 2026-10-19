@@ -98,6 +98,13 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- A file `move` that only changes letter case (`Readme.md` to `README.md`)
+  verifies on a case-insensitive disk, such as macOS's default. The
+  `file_absent` evidence derived for the source found the renamed file under
+  the old spelling, so a correct rename ended `partial`. `file_absent` now
+  counts a path as present only when its directory holds that name; a name
+  that differs only in Unicode normalization still counts as present. (#280)
+
 - `send` to an interactive terminal job whose program has closed its stdin is
   refused as `terminal_job_stdin_closed`. Every send after the failed write
   was refused as `terminal_job_not_interactive`, and the send whose write

@@ -3,9 +3,9 @@
 
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { lstat, realpath, stat } from "node:fs/promises";
+import { lstat, readdir, realpath, stat } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { EvidencePredicate } from "@melra/protocol";
 import { evidenceStrength, type EvidenceItem } from "@melra/receipt-schema";
 
@@ -195,6 +195,13 @@ const fileAbsent: Built<"file_absent"> = {
     let passed = false;
     try {
       await lstat(path);
+      // Found, but perhaps only because the disk ignores case: after a move
+      // from Readme.md to README.md, the old spelling still reaches the renamed
+      // file, and a correct rename verified as partial. It is there only if the
+      // directory holds this name, Unicode normalization aside, which such
+      // disks ignore too and which must never make a present file read absent.
+      const name = basename(path).normalize("NFC");
+      passed = !(await readdir(dirname(path))).some((entry) => entry.normalize("NFC") === name);
     } catch (error) {
       passed = error instanceof Error && "code" in error && error.code === "ENOENT";
       if (!passed) throw error;
