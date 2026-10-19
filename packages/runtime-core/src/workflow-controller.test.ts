@@ -1180,6 +1180,33 @@ describe("WorkflowController execution", () => {
     });
   }
 
+  it("plans and runs a workflow whose step declares exit_code evidence", async () => {
+    const { controller } = await setup(async () => ({ success: true, exitCode: 0 }));
+    // Its stored copy used to redact the exit status to a string, fail its
+    // own schema, and refuse the whole plan.
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Build",
+        nodes: [
+          {
+            id: "build",
+            type: "operation",
+            request: TaskRequestSchema.parse({
+              goal: "Build",
+              operation: { kind: "terminal", action: "run", command: "node", args: ["--version"] },
+              requiredEvidence: [{ type: "exit_code", value: 0 }],
+            }),
+          },
+        ],
+      }),
+    );
+    const result = await settle(controller, planned.id);
+    expect(result.run.status).toBe("verified_complete");
+  });
+
   it("halts rather than unwind past a step whose outcome is unknown when another is denied", async () => {
     const calls: string[] = [];
     const { controller, tasks } = await setup(async (operation) => {

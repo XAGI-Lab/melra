@@ -295,6 +295,12 @@ export function redactStructuredValue(value: unknown): {
   };
   const visit = (current: unknown, key?: string, parent?: Record<string, unknown>): unknown => {
     if (key !== undefined && SENSITIVE_KEY.test(key)) {
+      // An exit status is a whole number the schema requires and no secret can
+      // hide in. Redacted, a stored workflow no longer matched its own schema,
+      // so no workflow with `exit_code` evidence could be planned.
+      if (key === "value" && parent?.type === "exit_code" && Number.isInteger(current)) {
+        return current;
+      }
       return redactWholeValue(current);
     }
     if (key === "args") {

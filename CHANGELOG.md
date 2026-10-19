@@ -98,6 +98,13 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- A workflow with an `exit_code` evidence predicate can be planned. Storing
+  its definition redacted every `value` field, including the exit status the
+  schema requires to be a number, so the stored copy failed its own schema and
+  every interface refused the plan, blaming the caller's valid `"value": 0`. An
+  `exit_code` predicate's whole-number value is now kept: no secret can hide in
+  it. Any other `value` is still redacted. (#278)
+
 - `send` to an interactive terminal job whose program has closed its stdin is
   refused as `terminal_job_stdin_closed`. Every send after the failed write
   was refused as `terminal_job_not_interactive`, and the send whose write
