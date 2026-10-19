@@ -11,6 +11,12 @@ on:
 permissions:
   contents: read
 
+# One repair at a time: two runs for one tag would both see no assets and both
+# upload.
+concurrency:
+  group: repair-release-assets
+  cancel-in-progress: false
+
 jobs:
   validate:
     if: github.ref == 'refs/heads/main'
@@ -41,7 +47,7 @@ jobs:
             echo "::error::the release already has assets; refusing to replace them"
             exit 1
           }
-          tag_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${RELEASE_TAG}" --jq .sha)"
+          tag_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/refs/tags/${RELEASE_TAG}" --jq .sha)"
           echo "tag_sha=${tag_sha}" >> "${GITHUB_OUTPUT}"
 
   binaries:
@@ -137,7 +143,7 @@ jobs:
             echo "::error::the release gained assets; refusing to replace them"
             exit 1
           }
-          current_tag_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${RELEASE_TAG}" --jq .sha)"
+          current_tag_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/refs/tags/${RELEASE_TAG}" --jq .sha)"
           test "${current_tag_sha}" = "${EXPECTED_TAG_SHA}" || {
             echo "::error::the release tag moved after validation; refusing to attach mismatched files"
             exit 1
