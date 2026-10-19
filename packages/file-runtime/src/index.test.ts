@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { spawnSync } from "node:child_process";
-import { chmod, link, mkdir, mkdtemp, open, readdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, link, lstat, mkdir, mkdtemp, open, readdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, parse } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -338,6 +338,61 @@ describe("FileRuntime", () => {
           path: "escape/secret.txt",
         }),
       ),
+    ).rejects.toThrow("path_outside_workspace");
+  });
+
+  it("writes base64 only when it is base64, and nothing when it is not", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-file-"));
+    roots.push(root);
+    const runtime = await FileRuntime.create({ root });
+    const write = (path: string, content: string) =>
+      runtime.execute(FileOperationSchema.parse({ kind: "file", action: "write", path, content, encoding: "base64" }));
+    // Two chunks joined, text that is not base64, nothing decodable, and one
+    // whose last character carries bits a real encoder never sets.
+    for (const [index, content] of ["aGVsbG8=d29ybGQ=", "plain text, not encoded", "!!!!", "QR=="].entries()) {
+      await expect(write(`bad-${index}.bin`, content), content).rejects.toThrow("file_content_invalid_base64");
+    }
+    expect(await readdir(root)).toEqual([]);
+    // Wrapped as MIME wraps it, and unpadded, it is still base64.
+    await write("wrapped.txt", "aGVs\nbG8=");
+    await write("unpadded.txt", "aGk");
+    expect(await readFile(join(root, "wrapped.txt"), "utf8")).toBe("hello");
+    expect(await readFile(join(root, "unpadded.txt"), "utf8")).toBe("hi");
+  });
+
+  it.skipIf(process.platform === "win32")("writes through a symlink in the workspace, and refuses a dangling one", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-file-"));
+    roots.push(root);
+    await mkdir(join(root, "configs"));
+    await writeFile(join(root, "configs", "dev.json"), "orig");
+    await chmod(join(root, "configs", "dev.json"), 0o600);
+    await symlink(join("configs", "dev.json"), join(root, "config.json"));
+    const runtime = await FileRuntime.create({ root });
+    await runtime.execute(FileOperationSchema.parse({ kind: "file", action: "write", path: "config.json", content: "new" }));
+    // The link was replaced by a plain file, and its target kept "orig".
+    expect((await lstat(join(root, "config.json"))).isSymbolicLink()).toBe(true);
+    expect(await readFile(join(root, "configs", "dev.json"), "utf8")).toBe("new");
+    expect((await stat(join(root, "configs", "dev.json"))).mode & 0o777).toBe(0o600);
+    // A dangling link has no target to check, wherever it points.
+    await symlink(join(tmpdir(), "melra-nowhere", "x"), join(root, "dangling.json"));
+    await expect(
+      runtime.execute(FileOperationSchema.parse({ kind: "file", action: "write", path: "dangling.json", content: "x" })),
+    ).rejects.toThrow("file_write_dangling_symlink");
+  });
+
+  it("lists the root however it is spelled, and nothing else takes it", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-file-"));
+    roots.push(root);
+    await mkdir(join(root, "sub"));
+    const runtime = await FileRuntime.create({ root });
+    // The absolute spelling as the runtime resolved its root (macOS's tmpdir
+    // is behind a /var -> /private/var link).
+    for (const path of [".", "./", "sub/..", await realpath(root)]) {
+      const listed = await runtime.execute(FileOperationSchema.parse({ kind: "file", action: "list", path }));
+      expect(listed, path).toMatchObject({ path: ".", entries: [{ name: "sub", type: "directory" }] });
+    }
+    await expect(
+      runtime.execute(FileOperationSchema.parse({ kind: "file", action: "delete", path: "./", recursive: true })),
     ).rejects.toThrow("path_outside_workspace");
   });
 

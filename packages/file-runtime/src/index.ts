@@ -64,6 +64,24 @@ async function sameEntry(left: string, right: string): Promise<boolean> {
   }
 }
 
+/**
+ * The bytes a write's content stands for. Node's base64 decoder is lenient: it
+ * stops at the first padding, skips what is not base64, and decoded two joined
+ * chunks as the first, plain text as noise and "!!!!" as nothing, each written
+ * as a success. So base64 is checked to be canonical first; line breaks and
+ * spaces are allowed, as MIME wraps it.
+ */
+function decodeContent(content: string, encoding: "utf8" | "base64"): Buffer {
+  if (encoding !== "base64") return Buffer.from(content, encoding);
+  const compact = content.replace(/\s+/g, "");
+  const decoded = Buffer.from(compact, "base64");
+  const padded = compact.padEnd(Math.ceil(compact.length / 4) * 4, "=");
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(compact) || decoded.toString("base64") !== padded) {
+    throw new Error("file_content_invalid_base64");
+  }
+  return decoded;
+}
+
 export class FileRuntime {
   readonly root: string;
   readonly maxFileBytes: number;
@@ -206,7 +224,9 @@ export class FileRuntime {
   async execute(operation: FileOperation): Promise<Record<string, unknown>> {
     const path = await this.resolvePath(
       operation.path,
-      operation.action === "list" && operation.path === ".",
+      // The root however it is spelled ("./", its absolute path), not only
+      // ".": the others were refused as outside the workspace.
+      operation.action === "list",
       operation.action === "write" || operation.action === "mkdir",
     );
     switch (operation.action) {
@@ -275,17 +295,26 @@ export class FileRuntime {
       }
       case "write": {
         if (operation.content === undefined) throw new Error("file_write_requires_content");
-        const buffer = Buffer.from(operation.content, operation.encoding);
+        const buffer = decodeContent(operation.content, operation.encoding);
         if (buffer.byteLength > this.maxFileBytes) throw new Error("file_size_limit_exceeded");
-        await mkdir(dirname(path), { recursive: true });
+        // A link inside the workspace is written through, as `read` reads
+        // through it: renaming onto the link replaced it with a plain file and
+        // left its target as it was. resolvePath checked the target already.
+        // A dangling one has no target to check.
+        const target = (await lstat(path).catch(() => undefined))?.isSymbolicLink() === true
+          ? await realpath(path).catch(() => {
+              throw new Error("file_write_dangling_symlink");
+            })
+          : path;
+        await mkdir(dirname(target), { recursive: true });
         // A short name beside it, not one built from it: the target's own name
         // may already be as long as the file system allows.
-        const temporary = join(dirname(path), `.melra-${randomBytes(6).toString("hex")}.tmp`);
+        const temporary = join(dirname(target), `.melra-${randomBytes(6).toString("hex")}.tmp`);
         // The file it replaces keeps its permissions: a private one stays
         // private and a script stays executable. Written private, then set
         // exactly, past the umask; the setuid, setgid and sticky bits are not
         // carried over. A new file gets the default mode, as before.
-        const replaced = await stat(path).catch(() => undefined);
+        const replaced = await stat(target).catch(() => undefined);
         const kept = replaced?.isFile() === true ? replaced.mode & 0o777 : undefined;
         // Only the exclusive create is outside the cleanup: a name already
         // taken is not ours to remove.
@@ -299,7 +328,7 @@ export class FileRuntime {
           } finally {
             await handle.close();
           }
-          await rename(temporary, path);
+          await rename(temporary, target);
         } catch (error) {
           // A write that failed partway (a full disk), or a rename that failed
           // (the target is a directory, or held open on Windows), would

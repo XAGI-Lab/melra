@@ -98,6 +98,20 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- A file `write` with `encoding: "base64"` refuses content that is not base64
+  (`file_content_invalid_base64`) before anything is written. Node's lenient
+  decoder wrote two joined chunks as the first, plain text as noise and `!!!!`
+  as an empty file, each verifying as a success. (#279)
+
+- A file `write` to a symlink inside the workspace writes the file it points
+  to, as `read` reads it, and keeps that file's permissions. It replaced the
+  link with a plain file and left the target unchanged. A write to a dangling
+  link is refused (`file_write_dangling_symlink`). (#281)
+
+- A file `list` of the workspace root works however the root is spelled
+  (`./`, `sub/..`, its absolute path), not only `.`. The others were refused
+  as `path_outside_workspace`. (#282)
+
 - `send` to an interactive terminal job whose program has closed its stdin is
   refused as `terminal_job_stdin_closed`. Every send after the failed write
   was refused as `terminal_job_not_interactive`, and the send whose write
