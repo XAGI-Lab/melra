@@ -616,12 +616,18 @@ export class TerminalRuntime {
     if (operation.input === undefined) {
       throw new Error("terminal_send_requires_input");
     }
-    if (job.endedAt !== undefined) throw new Error("terminal_job_not_running");
+    // Exited counts, not only closed: Node destroys stdin on exit, and the
+    // close waits for anything the program started that holds its output.
+    if (job.endedAt !== undefined || job.child.exitCode !== null || job.child.signalCode !== null) {
+      throw new Error("terminal_job_not_running");
+    }
     const stdin = job.child.stdin;
-    // First: a failed write destroys the pipe before its error is heard, so
-    // checked after the test below this was never reached, and a job whose
-    // reader went away was reported as not interactive.
-    if (job.stdinError !== undefined) throw new Error("terminal_job_stdin_closed");
+    // Before the test below: a failed write marks the pipe errored at once and
+    // is heard a tick later, and either way a job whose reader went away was
+    // reported as not interactive.
+    if (job.stdinError !== undefined || (stdin?.errored ?? null) !== null) {
+      throw new Error("terminal_job_stdin_closed");
+    }
     // `start` without `interactive: true` gets an ignored stdin, and writing to
     // a closed one throws EPIPE asynchronously — which would surface as an
     // unhandled error rather than a failed task.
@@ -633,6 +639,9 @@ export class TerminalRuntime {
         ? `${operation.input}\n`
         : operation.input;
     stdin.write(payload);
+    // A write to a pipe whose reader closed fails on the spot (on POSIX), so
+    // it was not sent, whatever the error event later says.
+    if (stdin.errored !== null) throw new Error("terminal_job_stdin_closed");
     return {
       success: true,
       sent: true,

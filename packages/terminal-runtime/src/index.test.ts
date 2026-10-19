@@ -138,19 +138,55 @@ describe("TerminalRuntime", () => {
       await until(() => existsSync(join(root, "closed")));
       const send = () =>
         runtime.execute(TerminalOperationSchema.parse({ kind: "terminal", action: "send", jobId, input: "hello" }));
-      // The first write may be accepted; its EPIPE arrives afterwards. That used
-      // to be an unhandled error event, which killed this whole process. Asked
-      // again until refused, so the test waits for the EPIPE rather than a guess.
-      await send().catch(() => undefined);
-      let refused: unknown;
-      for (let waited = 0; waited < 5000 && refused === undefined; waited += 50) {
+      // Back to back, as a caller sending twice would. The write fails at once
+      // and its EPIPE event comes a tick later; that event used to be
+      // unhandled and kill this whole process, and the refusal in between
+      // read "not interactive".
+      const outcome = () => send().then(() => "sent", (error: unknown) => String(error));
+      const outcomes = [await outcome(), await outcome(), await outcome()];
+      for (let waited = 0; waited < 5000 && outcomes.at(-1) === "sent"; waited += 50) {
         await new Promise((resolve) => setTimeout(resolve, 50));
-        refused = await send().then(() => undefined, (error: unknown) => error);
+        outcomes.push(await outcome());
       }
       // Refused because its reader went away, not because it is not interactive.
-      expect(String(refused)).toMatch(/terminal_job_stdin_closed/);
+      expect(outcomes.at(-1)).toMatch(/terminal_job_stdin_closed/);
+      expect(outcomes.filter((result) => result !== "sent").every((result) => /terminal_job_stdin_closed/.test(result))).toBe(true);
     } finally {
       // Also after a failure: the job would otherwise outlive the test.
+      await runtime.close();
+    }
+  }, 15_000);
+
+  it.skipIf(process.platform === "win32")("refuses input to a job whose program exited as not running, before its pipes close", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-terminal-"));
+    roots.push(root);
+    const runtime = await TerminalRuntime.create({ root });
+    try {
+      // What it starts holds its output open, so the job's close (and so
+      // endedAt) waits; its own stdin is gone as soon as it exits.
+      const started = await runtime.execute(
+        op({
+          action: "start",
+          interactive: true,
+          args: [
+            "-e",
+            "require('child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 1500)'], { stdio: ['ignore', 'inherit', 'inherit'] }).unref(); require('fs').writeFileSync('spawned', '')",
+          ],
+        }),
+      );
+      await until(() => existsSync(join(root, "spawned")));
+      const send = () =>
+        runtime
+          .execute(TerminalOperationSchema.parse({ kind: "terminal", action: "send", jobId: started.jobId, input: "hi" }))
+          .then(() => "sent", (error: unknown) => String(error));
+      let refused = await send();
+      for (let waited = 0; waited < 3000 && refused === "sent"; waited += 10) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        refused = await send();
+      }
+      // In that window it read "not interactive" for a job started interactive.
+      expect(refused).toMatch(/terminal_job_not_running/);
+    } finally {
       await runtime.close();
     }
   }, 15_000);
