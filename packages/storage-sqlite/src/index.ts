@@ -1389,7 +1389,10 @@ export class SqliteStore {
         .prepare("DELETE FROM memories WHERE id = ? AND scope = ?")
         .run(id, scope);
       const replaced = row?.supersedesId;
-      if (row !== undefined && replaced != null) {
+      // An expired correction changes nothing, spliced or not, so deleting it
+      // does what compaction removing it does, whichever comes first.
+      const live = row !== undefined && (row.expiresAt === null || row.expiresAt > new Date().toISOString());
+      if (live && replaced != null) {
         if (row.supersededBy != null) {
           this.database
             .prepare("UPDATE memories SET superseded_by = ? WHERE id = ? AND scope = ? AND superseded_by = ?")
@@ -1397,7 +1400,7 @@ export class SqliteStore {
           this.database
             .prepare("UPDATE memories SET supersedes_id = ? WHERE id = ? AND scope = ? AND supersedes_id = ?")
             .run(replaced, row.supersededBy, scope, id);
-        } else if (row.expiresAt === null || row.expiresAt > new Date().toISOString()) {
+        } else {
           this.unsupersedeMemory(replaced, scope, id);
         }
       }
@@ -1424,9 +1427,8 @@ export class SqliteStore {
    * memories, which is data the caller stored and can still read. An operator
    * who wants a hard ceiling opts into one.
    *
-   * A superseded row is only dropped once nothing live points at it, so
-   * `supersedes_id` never dangles and a chain is removed from its tail
-   * inwards across successive compactions.
+   * A superseded row is only dropped once nothing live points at it, so a
+   * chain is removed from its tail inwards across successive compactions.
    */
   compactMemories(
     scope: MemoryScope,

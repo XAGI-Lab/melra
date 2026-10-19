@@ -394,6 +394,24 @@ describe("LocalMemory", () => {
     expect(store.getMemory(e.id)).toBeDefined();
     run({ action: "delete", id: e.id });
     expect(listed()).toEqual(["v1"]);
+
+    // The same for one in the middle of a chain: deleting it before
+    // compaction spliced the chain, and deleting its successor then revived
+    // the original, which compaction removing it first never did.
+    const f = put({ key: "third", value: "x1" });
+    const g = put({ key: "third", value: "x2", supersedesId: f.id, expiresAt: new Date(Date.now() + 200).toISOString() });
+    const h = put({ key: "third", value: "x3", supersedesId: g.id });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    run({ action: "delete", id: g.id });
+    run({ action: "delete", id: h.id });
+    expect(listed()).toEqual(["v1"]);
+
+    // And for an edit of an expired correction that drops what it superseded.
+    const k = put({ key: "fourth", value: "y1" });
+    const m = put({ key: "fourth", value: "y2", supersedesId: k.id, expiresAt: new Date(Date.now() + 200).toISOString() });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    put({ id: m.id, key: "fourth", value: "y3" });
+    expect(listed()).toEqual(["v1", "y3"]);
   });
 
   it("leaves what an expired correction replaced retired", () => {

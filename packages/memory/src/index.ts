@@ -408,9 +408,12 @@ export class LocalMemory {
         }
         // An edit that drops or changes what this record supersedes hands the
         // old one back, as deleting the record would.
+        // Not when that record has expired: a lapsed correction revives
+        // nothing, as when compaction has removed it already.
         if (
           existing?.supersedesId !== undefined &&
-          existing.supersedesId !== memory.supersedesId
+          existing.supersedesId !== memory.supersedesId &&
+          (existing.expiresAt === undefined || existing.expiresAt > now)
         ) {
           this.store.unsupersedeMemory(existing.supersedesId, memory.scope, memory.id);
         }

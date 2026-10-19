@@ -98,12 +98,13 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
-- Deleting a memory that superseded another makes the one it replaced live
-  again, and so does editing it to supersede something else or nothing. The
+- Deleting a live memory that superseded another makes the one it replaced
+  live again, and so does editing it to supersede something else or nothing;
+  deleting one in the middle of a chain links the records on either side. The
   replaced record used to stay hidden with nothing live pointing at it: it
   could not be read, edited or superseded, and compaction deleted it a
-  `maxAgeDays` later. A superseding record that expires still leaves the one
-  it replaced retired, and `docs/INSTALLATION.md` says why. (#250)
+  `maxAgeDays` later. A correction that expires, or that `maxPerScope`
+  evicts, revives nothing, and `docs/INSTALLATION.md` says why. (#250)
 
 - `docs/COMPATIBILITY.md` names MCP Python SDK `1.30.x`, the version `sdk-py`
   pins and tests, not `1.28.x`. `pnpm check` now fails when either SDK line
