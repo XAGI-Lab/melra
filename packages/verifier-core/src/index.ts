@@ -256,7 +256,12 @@ const httpResourceMatches: Built<"http_resource_matches"> = {
         source: url,
       };
     }
-    const passed = Object.is(readResultPath(observed, predicate.path), predicate.value);
+    // A cut body is longer than what arrived, so it is neither the `content`
+    // that arrived nor the `bytes` counted, whatever those happen to equal.
+    const cut = observed.truncated === true;
+    const passed =
+      !(cut && (predicate.path === "content" || predicate.path === "bytes")) &&
+      Object.is(readResultPath(observed, predicate.path), predicate.value);
     // A provider that answered 503 or 429 did not say no; it did not answer.
     // Only a success or "not found" is its word on the resource, so a miss on
     // any other status is as inconclusive as a dropped connection. Read as a
@@ -272,19 +277,20 @@ const httpResourceMatches: Built<"http_resource_matches"> = {
       };
     }
     // A body cut at the probe's size cap is not the provider saying no about
-    // what is in it: the value may be past the cut, a cut JSON body is not
-    // parsed at all, and `bytes` counts only what arrived. Its status and
-    // headers arrived whole, and so did a 404. An exact `content` no longer
-    // than what arrived cannot be the whole, longer body, so that miss is
-    // still the answer.
+    // what is in it: the value may be past the cut, and a cut JSON body is not
+    // parsed at all. Its status and headers arrived whole, and so did a 404.
+    // The whole body is longer than what arrived, so a `content` or `bytes`
+    // that fits within what arrived cannot be it, and that miss is the answer.
+    const arrived = Number(observed.bytes ?? 0);
     const unknowable =
-      /^(json|content|bytes)(\.|$)/u.test(predicate.path) &&
-      (predicate.path !== "content" ||
-        (typeof predicate.value === "string" &&
-          Buffer.byteLength(predicate.value) > Number(observed.bytes ?? 0)));
+      predicate.path === "content"
+        ? typeof predicate.value === "string" && Buffer.byteLength(predicate.value) > arrived
+        : predicate.path === "bytes"
+          ? typeof predicate.value === "number" && predicate.value > arrived
+          : /^(json|content|bytes)(\.|$)/u.test(predicate.path);
     if (
       !passed &&
-      observed.truncated === true &&
+      cut &&
       typeof status === "number" &&
       status >= 200 &&
       status < 300 &&

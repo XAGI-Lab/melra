@@ -165,12 +165,29 @@ describe("verification through a channel that did not act", () => {
     // The status arrived whole, so a miss on it is still the provider's word.
     const byStatus = await verifier.verify([predicate({ path: "status", value: 404 })], created);
     expect(byStatus.evidence[0]?.inconclusive).toBeUndefined();
-    // `bytes` counts only what arrived, so it cannot say how big the body is.
-    const bySize = await verifier.verify([predicate({ path: "bytes", value: 5_242_880 })], created);
-    expect(bySize.evidence[0]).toMatchObject({ passed: false, inconclusive: true });
-    // The body is longer than what arrived, so it is not this short text.
-    const byShortContent = await verifier.verify([predicate({ path: "content", value: "done" })], created);
-    expect(byShortContent.evidence[0]?.inconclusive).toBeUndefined();
+    const itemFor = async (path: string, value: unknown) =>
+      (await verifier.verify([predicate({ path, value })], created)).evidence[0];
+    // The body is longer than what arrived: it may be this size, or this text
+    // (20 bytes in 10 characters), past the cut.
+    expect(await itemFor("bytes", 5_242_880)).toMatchObject({ passed: false, inconclusive: true });
+    expect(await itemFor("content", "é".repeat(10))).toMatchObject({ passed: false, inconclusive: true });
+    // But it is not what arrived, nor anything that fits in it: those are
+    // answers, even where they equal the cut-off part exactly.
+    for (const [path, value] of [
+      ["bytes", 16],
+      ["bytes", 8],
+      ["content", '{"padding":"xxxx'],
+      ["content", "done"],
+    ] as const) {
+      const item = await itemFor(path, value);
+      expect(item, `${path} ${value}`).toMatchObject({ passed: false });
+      expect(item?.inconclusive, `${path} ${value}`).toBeUndefined();
+    }
+    // A cut 404 is still the provider saying it is not there.
+    const gone = await Verifier.create(root, {
+      probe: async () => ({ success: false, status: 404, content: '{"padding":"xxxx', bytes: 16, truncated: true }),
+    });
+    expect((await gone.verify([predicate()], created)).evidence[0]?.inconclusive).toBeUndefined();
   });
 
   it("does not call a value mismatch inconclusive", async () => {
