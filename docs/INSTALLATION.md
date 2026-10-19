@@ -181,9 +181,9 @@ build), and `-win-x64.exe`. They are covered by the release's `SHA256SUMS` and
 its signed provenance attestation, so check one before running it:
 
 ```bash
-sha256sum --check --ignore-missing SHA256SUMS
-gh attestation verify melra-<version>-linux-x64 --repo XAGI-Lab/melra
-chmod +x melra-<version>-linux-x64 && ./melra-<version>-linux-x64 doctor
+sha256sum --check --ignore-missing SHA256SUMS &&
+  gh attestation verify melra-<version>-linux-x64 --repo XAGI-Lab/melra &&
+  chmod +x melra-<version>-linux-x64 && ./melra-<version>-linux-x64 doctor
 ```
 
 They are not code-signed. macOS quarantines a downloaded copy until you clear
@@ -1325,6 +1325,10 @@ its own, it points to Docker or WSL2 instead (see
 warns when it finds no restriction at all, or when it cannot read any.
 
 ## Python SDK
+
+To install it, see [the SDK's install section](../sdk-py/README.md#install):
+the wheel attached to each GitHub release, or `pip install ./sdk-py` from a
+checkout. It is not on PyPI, so `pip install melra` does not install it.
 
 For repository development:
 
