@@ -131,10 +131,21 @@ export interface RegisteredVerifier {
 
 type Built<T extends EvidencePredicate["type"]> = PredicateVerifier<Extract<EvidencePredicate, { type: T }>>;
 
+/**
+ * A body cut at the size cap is longer than what arrived, so it is neither the
+ * `content` that arrived nor the `bytes` counted, whatever those happen to
+ * equal: an exact match on either is no match at all.
+ */
+function cutBody(result: Record<string, unknown>, path: string): boolean {
+  return result.truncated === true && (path === "content" || path === "bytes");
+}
+
 const resultEquals: Built<"result_equals"> = {
   type: "result_equals",
   async check(predicate, result) {
-    const passed = Object.is(readResultPath(result, predicate.path), predicate.value);
+    const passed =
+      !cutBody(result, predicate.path) &&
+      Object.is(readResultPath(result, predicate.path), predicate.value);
     return { passed, summary: `${predicate.path} ${passed ? "matched" : "did not match"} expected value` };
   },
 };
@@ -256,11 +267,9 @@ const httpResourceMatches: Built<"http_resource_matches"> = {
         source: url,
       };
     }
-    // A cut body is longer than what arrived, so it is neither the `content`
-    // that arrived nor the `bytes` counted, whatever those happen to equal.
     const cut = observed.truncated === true;
     const passed =
-      !(cut && (predicate.path === "content" || predicate.path === "bytes")) &&
+      !cutBody(observed, predicate.path) &&
       Object.is(readResultPath(observed, predicate.path), predicate.value);
     // A provider that answered 503 or 429 did not say no; it did not answer.
     // Only a success or "not found" is its word on the resource, so a miss on

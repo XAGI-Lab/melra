@@ -99,4 +99,23 @@ describe("Verifier", () => {
     expect(evidence[0]?.strength).toBe("state");
     expect(evidence[1]?.strength).toBe("execution");
   });
+
+  it("never matches an exact bytes or content on a body cut at the size cap", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-verifier-"));
+    roots.push(root);
+    const verifier = await Verifier.create(root);
+    // What the http adapter returns for a body larger than maxResponseBytes:
+    // the part up to the cap, counted. The whole body is longer than both.
+    const cut = { status: 200, truncated: true, bytes: 1000, content: "x".repeat(1000) };
+    for (const [path, value] of [["bytes", 1000], ["content", "x".repeat(1000)]] as const) {
+      const { verified } = await verifier.verify([{ type: "result_equals", path, value }], cut);
+      expect(verified, path).toBe(false);
+    }
+    // What arrived is all there is, so a body that was not cut still matches.
+    const whole = await verifier.verify([{ type: "result_equals", path: "bytes", value: 1000 }], { ...cut, truncated: false });
+    expect(whole.verified).toBe(true);
+    // Text found in the part that arrived is in the whole body too.
+    const contains = await verifier.verify([{ type: "result_contains", path: "content", value: "xxx" }], cut);
+    expect(contains.verified).toBe(true);
+  });
 });
