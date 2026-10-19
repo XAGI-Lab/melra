@@ -282,12 +282,13 @@ restart before the condition is decided reads a step such an advance ran
 whose outcome is unknown as the condition's own, so it halts the run there,
 as any other step's does, rather than let a failed sibling unwind past it.
 Anything else such an advance left waits for the next advance to decide, so
-the run halts or moves on the same with or without a restart, unless a
-sibling that same advance ran failed too: the failed run then unwinds without
-asking the condition again (#318). `workflow cancel` cancels whatever a lost
-advance left planned or waiting for approval under any of the run's steps,
-not only the tasks the run names, and ends the run even when its definition
-can no longer be opened.
+the run halts or moves on the same with or without a restart, unless the
+condition cannot be decided on the next advance (its predicate inconclusive or
+unresolvable) while a sibling fails: the run then unwinds past the step
+(#318). `workflow cancel` cancels whatever a lost advance left planned or
+waiting for approval under any of the run's steps, not only the tasks the run
+names, and cancelling an already cancelled run sweeps again. A run whose
+definition can no longer be opened is still ended, but nothing is swept.
 
 ## Workflow state and events
 

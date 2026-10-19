@@ -822,8 +822,9 @@ export class WorkflowController {
    * cancelled and the cancel read back, so nobody approves it later.
    */
   private cancelChallenges(keys: string[], allTasks: TaskRecord[]): TaskRecord[] {
+    const wanted = new Set(keys);
     return allTasks
-      .filter((task) => task.idempotencyKey !== undefined && keys.includes(task.idempotencyKey))
+      .filter((task) => task.idempotencyKey !== undefined && wanted.has(task.idempotencyKey))
       .map((listed) => {
         // Read again: the listing can predate an approver starting it.
         const task = this.tasks.status(listed.id);
@@ -1032,26 +1033,29 @@ export class WorkflowController {
 
   cancel(workflowId: string): WorkflowRun {
     const current = this.status(workflowId);
-    if (
-      current.status === "verified_complete" ||
-      current.status === "cancelled"
-    ) {
-      return current;
-    }
+    if (current.status === "verified_complete") return current;
     // A challenge a lost advance left is in no node's taskIds: a condition's
-    // is never adopted (it would follow its branch without asking, #268), an
-    // operation's waits for the next advance to take it up by key. So the run
-    // cancels what is planned or waiting under every node's keys too. Best
-    // effort: a definition that can no longer be opened still lets the run end.
+    // is never adopted (it would follow its branch without asking, #268), and
+    // an operation's stays approvable beside the one the next advance plans
+    // afresh (#319). So the run cancels what is planned or waiting under every
+    // node's keys too, and cancelling a cancelled run sweeps again. A store
+    // failure stops the cancel, so a retry sweeps; only a definition that can
+    // no longer be opened goes unswept, and still lets the run end.
+    let definition: WorkflowDefinition | undefined;
     try {
-      const definition = this.loadDefinition(current);
-      this.cancelChallenges(
-        definition.nodes.flatMap((node) => expectedTaskKeys(current.id, node, definition)),
-        this.store.listTasks(100_000),
-      );
+      definition = this.loadDefinition(current);
     } catch {
-      // Ended all the same; what it would have cancelled is still listed.
+      definition = undefined;
     }
+    if (definition !== undefined) {
+      const opened = definition;
+      this.cancelChallenges(
+        opened.nodes.flatMap((node) => expectedTaskKeys(current.id, node, opened)),
+        // Filtered in SQL, so the history is neither parsed nor cut short.
+        [...this.store.listTasks(100_000, "planned"), ...this.store.listTasks(100_000, "awaiting_approval")],
+      );
+    }
+    if (current.status === "cancelled") return current;
     return this.transition(current, (draft, emit) => {
       for (const [nodeId, node] of Object.entries(draft.nodes)) {
         if (

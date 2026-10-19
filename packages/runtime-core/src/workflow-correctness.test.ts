@@ -608,6 +608,33 @@ describe("a condition's branch not taken (#268)", () => {
     expect(done).toEqual([]);
   });
 
+  it("leaves the run uncancelled when its sweep fails, so cancelling again sweeps", async () => {
+    const { controller, tasks, done } = await setup();
+    const planned = controller.plan(workflow([{ id: "op", type: "operation", request: put("op") }]));
+    const plan = tasks.plan.bind(tasks);
+    let leftover: TaskRecord | undefined;
+    vi.spyOn(tasks, "plan").mockImplementationOnce((request, options) => {
+      const task = plan(request, options);
+      leftover = task;
+      controller.pause(planned.id);
+      return task;
+    });
+    await expect(controller.advance(planned.id)).rejects.toThrow("workflow_state_conflict");
+    controller.resume(planned.id);
+    const cancel = tasks.cancel.bind(tasks);
+    vi.spyOn(tasks, "cancel").mockImplementationOnce(() => {
+      throw new Error("database is locked");
+    });
+    // Swallowed, the run read cancelled with the challenge still approvable,
+    // and a second cancel returned early without sweeping.
+    expect(() => controller.cancel(planned.id)).toThrow("database is locked");
+    expect(controller.status(planned.id).status).not.toBe("cancelled");
+    vi.mocked(tasks.cancel).mockImplementation(cancel);
+    expect(controller.cancel(planned.id).status).toBe("cancelled");
+    expect(tasks.status(leftover!.id).status).toBe("cancelled");
+    expect(done).toEqual([]);
+  });
+
   it("ends a run whose definition can no longer be opened", async () => {
     const { controller, store, root } = await setup();
     await writeFile(join(root, "flag"), "on");
