@@ -721,10 +721,7 @@ export class WorkflowController {
         // a failed sibling unwinding past it (#270). Anything else it left (a
         // challenge, or a step that took effect but failed its evidence) waits
         // for the next advance, which decides as it would with no restart.
-        const unknown = all.filter(
-          (task): task is TaskRecord =>
-            task !== undefined && ["recovery_required", "running", "verifying"].includes(task.status),
-        );
+        const unknown = this.unsettledUnder(keys);
         if (unknown.length > 0) return { state: recoveredNodeState(node, unknown, recorded), found: all };
         return { state: cleared ? { status: "pending", taskIds: [] } : recorded, found: all };
       }
@@ -786,6 +783,16 @@ export class WorkflowController {
       state = { ...state, iterations: Math.floor((state.taskIds.length - 1) / node.body.length) };
     }
     return { state, found };
+  }
+
+  /** Tasks under these keys whose outcome is unknown or still unsettled. */
+  private unsettledUnder(keys: string[]): TaskRecord[] {
+    return keys
+      .map((key) => preferredTask(this.store.listTasksByKey(key), key))
+      .filter(
+        (task): task is TaskRecord =>
+          task !== undefined && ["recovery_required", "running", "verifying"].includes(task.status),
+      );
   }
 
   /**
@@ -1380,6 +1387,15 @@ export class WorkflowController {
               : await answered(node.id, this.tasks.verifyPersisted(sourceTaskId, [node.predicate]), {
                   state,
                   tasks: [],
+                }).catch((error: unknown) => {
+                  // Not asked, so nothing decided it, but an advance that lost
+                  // its commit may have run a step under it whose outcome is
+                  // unknown. The node halts on that step, as recovery reads it
+                  // (#270), rather than wait or fail naming nothing while a
+                  // failed sibling unwinds past it (#318).
+                  const unknown = this.unsettledUnder(keys);
+                  if (!(error instanceof NodeRefused) || unknown.length === 0) throw error;
+                  throw new NodeRefused(error.reason, { state: recoveredNodeState(node, unknown, state), tasks: [] });
                 });
         // The other branch is settled by the advance that decides, or one that
         // finds the run naming it: only then can an advance that lost its
