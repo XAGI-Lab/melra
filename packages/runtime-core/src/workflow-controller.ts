@@ -1089,12 +1089,14 @@ export class WorkflowController {
               // names none of the steps that advance planned or ran, and
               // nothing recovers a cancelled run: read again from the tasks
               // under its keys first, as the next advance would, so they are on
-              // its nodes (a run already whole reads the same, and records
-              // nothing more). A task still running there is stopped as the
-              // run's own, its step recorded as still in flight. One that
-              // cannot be recovered (its history no longer replays) is
-              // cancelled as it reads, as for a definition that no longer
-              // opens: refused, it could never end.
+              // its nodes. A run already whole reads the same and records
+              // nothing more, but for an operation whose approval node ran its
+              // task, which reads that task on the next wave: recorded done
+              // here. A task still running there is stopped as the run's own,
+              // its step recorded as still in flight. One that cannot be
+              // recovered (its history no longer replays) is cancelled as it
+              // reads, as for a definition that no longer opens: refused, it
+              // could never end.
               if (definition !== undefined) {
                 try {
                   stopped.push(...this.recoverNodes(current, definition, draft, emit));

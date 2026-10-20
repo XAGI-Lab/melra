@@ -1380,24 +1380,27 @@ describe("a halt or cancel while an advance runs a step (#244)", () => {
     },
   );
 
-  it("records nothing of its own recovery when it cancels a run whose record is whole", async () => {
+  it("records nothing of its own recovery but a step its approval ran when it cancels a run whose record is whole", async () => {
     const { controller, store, tasks } = await setup();
     const planned = controller.plan(
       workflow([
         { id: "pay", type: "operation", request: put("pay") },
         { id: "loop", type: "bounded_loop", dependsOn: ["pay"], maxIterations: 2, body: [put("l")] },
         { id: "par", type: "parallel", dependsOn: ["pay"], branches: [[put("p0")], [put("p1")]] },
+        { id: "ask", type: "approval", dependsOn: ["pay"], forNodeId: "gated" },
+        { id: "gated", type: "operation", dependsOn: ["ask"], request: put("gated") },
         { id: "refund", type: "compensation", forNodeId: "pay", request: put("refund") },
       ]),
     );
     let run = (await controller.advance(planned.id)).run;
     run = (await controller.advance(planned.id, approvalsFor(run))).run;
     run = (await controller.advance(planned.id)).run;
-    // The loop's first iteration and one parallel branch run; the rest wait.
+    // The loop's first iteration, one parallel branch and the approved step
+    // run; the rest wait.
     const p0 = tasks.status(run.nodes.par!.taskIds[0]!).approval!;
     run = (
       await controller.advance(planned.id, [
-        ...approvalsFor({ ...run, nodes: { loop: run.nodes.loop! } }),
+        ...approvalsFor({ ...run, nodes: { loop: run.nodes.loop!, ask: run.nodes.ask! } }),
         { approvalId: p0.approvalId, phrase: p0.phrase! },
       ])
     ).run;
@@ -1405,13 +1408,19 @@ describe("a halt or cancel while an advance runs a step (#244)", () => {
     expect(run.nodes.loop!.taskIds).toHaveLength(2);
     expect(run.nodes.par?.status).toBe("awaiting_approval");
     expect(tasks.status(run.nodes.par!.taskIds[0]!).status).toBe("verified_success");
+    // An approval runs its step's task; the step reads it on the next wave.
+    expect(run.nodes.ask?.status).toBe("verified_complete");
+    expect(run.nodes.gated).toEqual({ status: "pending", taskIds: [] });
     const cancelled = controller.cancel(planned.id);
     expect(store.listWorkflowEvents(planned.id, run.stateVersion).map(({ type, data }) => [type, data.nodeId])).toEqual([
+      ["workflow.node_changed", "gated"],
       ["workflow.node_changed", "loop"],
       ["workflow.node_changed", "par"],
       ["workflow.node_changed", "refund"],
       ["workflow.cancelled", undefined],
     ]);
+    // Done, as that wave would have recorded it; not cancelled, nor left pending.
+    expect(cancelled.nodes.gated).toEqual({ status: "verified_complete", taskIds: run.nodes.ask!.taskIds });
     expect(cancelled.nodes.pay).toEqual(run.nodes.pay);
     expect(cancelled.nodes.loop).toEqual({ ...run.nodes.loop, status: "cancelled" });
     expect(cancelled.nodes.par).toEqual({ ...run.nodes.par, status: "cancelled" });
