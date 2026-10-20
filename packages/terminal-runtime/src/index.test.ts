@@ -792,7 +792,8 @@ describe("arguments", () => {
     expect(await cost("chain0", 20)).toBeLessThan(2 * (await cost("chain0", 1)));
   });
 
-  it("bounds how many places one command may climb out of", async () => {
+  // Windows folds `..` before any lookup, so nothing is climbed out of there.
+  it.skipIf(process.platform === "win32")("bounds how many places one command may climb out of", async () => {
     const root = await realpath(await mkdtemp(join(tmpdir(), "melra-terminal-")));
     roots.push(root);
     let asked = 0;
