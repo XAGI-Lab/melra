@@ -1475,7 +1475,17 @@ describe("WorkflowController execution", () => {
               operation: { kind: "http", action: "request", method: "GET", url: `${LOGISTICS}/shipments` },
             }),
           },
-          { id: "notify", type: "operation", dependsOn: ["charge"], request: call("Notify", `${PAYMENTS}/notify`) },
+          {
+            id: "notify",
+            type: "operation",
+            dependsOn: ["charge"],
+            // A read too, so it fails in the wave the approval passes ship
+            // through, before ship is ever ready.
+            request: TaskRequestSchema.parse({
+              goal: "Check the notification",
+              operation: { kind: "http", action: "request", method: "GET", url: `${PAYMENTS}/notify` },
+            }),
+          },
           // In this order the refund is offered first and parks for approval,
           // so the shipment's compensation is decided by the next advance.
           { id: "undo-ship", type: "compensation", forNodeId: "ship", request: call("Cancel shipment", `${LOGISTICS}/cancellations`) },
@@ -2681,6 +2691,36 @@ describe("WorkflowController execution", () => {
     expect(controller.cancel(planned.id).status).toBe("cancelled");
     expect(calls).toContain("/refunds");
   });
+
+  it("offers a step that does not depend on one still awaiting approval", async () => {
+    const kinds: string[] = [];
+    const { controller } = await setup(async (operation) => {
+      kinds.push(operation.kind);
+      return { success: true, stored: true };
+    });
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Gate beside a chain",
+        nodes: [
+          { id: "gate", type: "operation", request: mutationRequest("gate") },
+          { id: "first", type: "operation", request: request("first") },
+          { id: "second", type: "operation", dependsOn: ["first"], request: mutationRequest("second") },
+        ],
+      }),
+    );
+    const parked = await controller.advance(planned.id);
+    expect(parked.run.nodes.gate?.status).toBe("awaiting_approval");
+    expect(parked.run.nodes.second?.status).toBe("pending");
+
+    // gate's challenge is unanswered; second is offered beside it, with its own.
+    const next = await controller.advance(planned.id);
+    expect(next.run.nodes.gate?.approval?.approvalId).toBe(parked.run.nodes.gate?.approval?.approvalId);
+    expect(next.run.nodes.second?.status).toBe("awaiting_approval");
+    expect(kinds).toEqual(["system"]);
+  });
 });
 
 describe("WorkflowController recovery", () => {
@@ -3050,6 +3090,31 @@ describe("WorkflowController human input and delegation", () => {
     await expect(
       controller.advance(planned.id, [], [{ nodeId: "ask", value: "far too long" }]),
     ).rejects.toThrow("workflow_input_too_long:ask");
+  });
+
+  it("runs a chain that does not depend on a node still waiting for input", async () => {
+    const { controller } = await setup();
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Ask beside a chain",
+        nodes: [
+          { id: "ask", type: "human_input", prompt: "Ship it?" },
+          { id: "first", type: "operation", request: request("first") },
+          { id: "second", type: "operation", dependsOn: ["first"], request: request("second") },
+        ],
+      }),
+    );
+    const waiting = await controller.advance(planned.id);
+    expect(waiting.run.nodes.ask?.status).toBe("awaiting_input");
+    expect(waiting.run.nodes.second?.status).toBe("pending");
+
+    // No answer yet. `second` waits on `first` only, so it runs all the same.
+    const next = await controller.advance(planned.id);
+    expect(next.run.nodes.ask?.status).toBe("awaiting_input");
+    expect(next.run.nodes.second?.status).toBe("verified_complete");
   });
 });
 

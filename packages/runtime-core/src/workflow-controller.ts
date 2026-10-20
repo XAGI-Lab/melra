@@ -382,7 +382,9 @@ export class WorkflowController {
     }
     // A node parked for a human — approval or supplied input — is no
     // longer `pending`, so `readyNodeIds` will not return it. Re-offer it here
-    // or the workflow would stall forever with the answer in hand.
+    // or the workflow would stall forever with the answer in hand. Beside the
+    // ready nodes, not instead of them: a branch that does not wait on it
+    // carries on (#247).
     const awaiting = [...graph.nodes.values()]
       .filter(
         (node) =>
@@ -393,12 +395,7 @@ export class WorkflowController {
       )
       .map((node) => node.id)
       .sort();
-    const nodeIds =
-      rollback.length > 0
-        ? rollback
-        : awaiting.length > 0
-        ? awaiting
-        : readyNodeIds(graph, current.nodes);
+    const nodeIds = rollback.length > 0 ? rollback : [...awaiting, ...readyNodeIds(graph, current.nodes)];
     if (nodeIds.length === 0) {
       // Nothing to run, but a step's certificate the last advance could not
       // write may be written now, and a run with nothing left is complete.

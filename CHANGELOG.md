@@ -144,6 +144,12 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- A workflow node waiting for input or approval no longer holds up nodes that
+  do not depend on it. While any node waited, `melra_workflow_advance`
+  offered only the waiting ones, so an independent branch stopped until the
+  person answered. Each advance now offers the waiting nodes and the newly
+  ready ones together. (#247)
+
 - A deny and an execute in different processes no longer both win. Starting a
   task, and cancelling one (`melra approve --deny`, the console's Deny,
   `melra_task_cancel`), now moves it out of `planned` or `awaiting_approval`
