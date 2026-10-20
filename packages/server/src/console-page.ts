@@ -551,7 +551,9 @@ async function renderTaskDetail(id, into) {
     const left = task.approval?.expiresAt ? until(task.approval.expiresAt) : undefined;
     const pending = await get("/api/tasks/" + encodeURIComponent(id) + (approvals ? "/approval" : "/approval-state")).catch(() => null);
     if (pending?.decision) parts.push(el("div", { class: "callout" }, "Approved by ", pending.decision.approver, " ", when(pending.decision.decidedAt), ".",
-      pending.step ? " This workflow step waits for its run to advance." : " Waiting for the agent to run it.", resumeHint(pending)));
+      !pending.step ? " Waiting for the agent to run it." : pending.named === false
+        ? [" Its run does not name this step, so no advance runs it. See the run with ", el("code", { text: "melra workflow inspect " + pending.workflowId }), "."]
+        : [" This workflow step waits for its run to advance.", ...(resumeHint(pending) ?? [])]));
     else if (left === "expired" || pending?.unusable) parts.push(el("div", { class: "callout" }, closedAdvice(task.id, left, pending)));
     else if (approvals) parts.push(await approvalPanel(task.id, pending));
     else parts.push(el("div", { class: "callout" }, ["Waiting for an approval" + (left ? " — expires in " + left : "") + ". Approve it with ",
@@ -613,10 +615,12 @@ function closedAdvice(id, left, pending) {
   if (pending.named && !spent && ["awaiting_approval", "running"].includes(pending.workflowStatus)) return [lead + " Advance it with ", code("melra workflow advance " + run), "."];
   const resume = pending.named ? resumeHint(pending) : null;
   if (resume) return [lead, ...resume];
-  // Spent, the run asks again only once the challenge expires.
+  // Spent, only an advance after the challenge expires asks again; nothing asks again for an older duplicate.
+  const again = pending.named === false ? "" : spent
+    ? " where the run still waits on the step, an advance after its challenge expires (in " + until(pending.expiresAt) + ") asks again,"
+    : " where the run still waits on the step, its next advance asks again,";
   return [lead + " See its run with ", code("melra workflow inspect " + (run ?? "<workflow-id>")),
-    ": where the run still waits on the step, " + (spent ? "it asks again once this challenge expires " : "its next advance asks again"),
-    spent ? when(pending.expiresAt) : null, ", and a deny would fail the run, or for a compensation stall its unwind."];
+    ":" + again + " and a deny would fail the run, or for a compensation stall its unwind."];
 }
 
 /** A halted run advances nothing, a step's decision included, until resumed. */

@@ -570,7 +570,7 @@ describe("approval console", () => {
     const text = await callouts(taskId);
     if (text === undefined) return;
     expect(text).toContain(`melra workflow inspect ${run.id}`);
-    expect(text).toMatch(/asks again once this challenge expires in \d+m/);
+    expect(text).toMatch(/an advance after its challenge expires \(in \d+m\) asks again/);
     expect(text).not.toMatch(/next advance asks again|melra workflow advance|--deny/);
   }, 60_000);
 
@@ -597,6 +597,33 @@ describe("approval console", () => {
     }
     const state = await call(agent, `/api/tasks/${orphan}/approval-state`, { token: "agent-token" });
     expect(state.body).toMatchObject({ step: true, workflowId: run.id, named: false });
+  }, 60_000);
+
+  it("tells an approved older duplicate on a paused run that no advance runs it, not to resume", async () => {
+    const run = oneStep("decided-duplicate");
+    await runtime.workflows.advance(run.id);
+    const named = runtime.controller.status(Object.values(runtime.workflows.status(run.id).nodes).flatMap((node) => node.taskIds)[0]!);
+    const orphan = randomUUID();
+    const approvalId = randomUUID();
+    runtime.store.saveTask({
+      ...named,
+      id: orphan,
+      createdAt: new Date(Date.parse(named.createdAt) - 1_000).toISOString(),
+      approval: { ...named.approval!, approvalId },
+    });
+    runtime.store.recordApprovalDecision({
+      approvalId,
+      taskId: orphan,
+      renderDigest: runtime.controller.approvalView(named.id).renderDigest,
+      channel: "out_of_band",
+      approver: "console:test",
+      decidedAt: new Date().toISOString(),
+    });
+    runtime.workflows.pause(run.id);
+    const text = await callouts(orphan);
+    if (text === undefined) return;
+    expect(text).toContain(`melra workflow inspect ${run.id}`);
+    expect(text).not.toMatch(/melra workflow resume|waits for its run to advance|Waiting for the agent/);
   }, 60_000);
 
   it("reads an in-band decision in enforced mode as no answer, as execute and the CLI do", async () => {
