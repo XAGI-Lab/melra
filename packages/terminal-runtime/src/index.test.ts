@@ -459,11 +459,14 @@ describe("TerminalRuntime", () => {
       expect(printed.stdout).toBe("/usr/bin");
       // None left is refused, a path-qualified program too: an empty PATH is
       // the working directory again, and a shell given none fills in a
-      // default that can end in it.
+      // default that can end in it. So is none at all, for the same reason.
       const none = await TerminalRuntime.create({ root: ws, pathOutside: ws, baseEnvironment: { PATH: "bin" } });
+      const absent = await TerminalRuntime.create({ root: ws, pathOutside: ws, baseEnvironment: {} });
       const node = TerminalOperationSchema.parse({ kind: "terminal", action: "run", command: process.execPath, args: ["-e", ""] });
-      for (const operation of [node, ls]) {
-        await expect(none.execute(operation), operation.command).rejects.toThrow("terminal_path_empty_after_filter");
+      for (const runtime of [none, absent]) {
+        for (const operation of [node, ls]) {
+          await expect(runtime.execute(operation), operation.command).rejects.toThrow("terminal_path_empty_after_filter");
+        }
       }
       // Nothing to keep it out of: PATH as given.
       const given = await TerminalRuntime.create({ root: ws, baseEnvironment: { PATH: `bin${delimiter}${system}` } });

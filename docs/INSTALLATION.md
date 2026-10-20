@@ -232,7 +232,7 @@ MELRA uses these environment variables:
 |---|---|---|
 | `MELRA_WORKSPACE` | Hard boundary for file and process operations; a policy file's `workspaceRoot` can only narrow it to a directory inside. `setup` and `init` write it into the client config, and ask before making home, a directory holding it, or a filesystem root the workspace unless it is set | the `workspaceRoot` of a `MELRA_POLICY` file, else the current directory |
 | `MELRA_HOME` | SQLite database and browser artifacts. It must not be the workspace or hold it: a workspace inside it, even through a link, is refused at startup with `workspace_inside_data_directory`. On a case-sensitive filesystem a sibling whose name differs from it only in case is reserved too | `~/.melra` |
-| `MELRA_POLICY` | Optional local policy JSON. Every start reads it again, so wherever it lies it is reserved like `MELRA_HOME`: no file effect, verification, browser upload or terminal argument may name it, and no file effect removes or moves a directory holding it. A workspace holding it is still an ordinary one | safe built-in policy |
+| `MELRA_POLICY` | Optional local policy JSON. Every start reads it again, so wherever it lies it is reserved like `MELRA_HOME`: no file effect, verification or browser upload may name it, nor a terminal argument as a path or a plain `@`/`<` reference, and no file effect removes or moves a directory holding it. A workspace holding it is still an ordinary one | safe built-in policy |
 | `MELRA_BROWSER` | Chrome, Chromium, or Edge executable | auto-detected |
 | `MELRA_PAYLOAD_KEY` | Optional canonical base64url 256-bit payload key | private `<MELRA_HOME>/payload.key` |
 | `MELRA_UNHINGED` | Set to `1` to remove every guardrail — see below | unset (all guardrails on) |
@@ -265,13 +265,13 @@ A browser profile is separate, and useful outside benchmarks:
 | `MELRA_BROWSER_PROFILE` | Absolute directory keeping cookies, storage, and profile state between runs, so a site logged into once stays logged in. Reserved like `MELRA_POLICY`; a workspace inside it is refused at startup with `workspace_inside_browser_profile` | unset (a fresh throwaway profile per run) |
 
 Treat that directory as a credential store: it holds live session cookies for
-every site the browser visited. So does MELRA: no file effect, verification,
-browser upload or terminal argument may name it or anything in it, in any
-mode, and enforced mode refuses to start in a workspace that holds it, or
-either HTTP archive (`enforced_mode_refuses_secret_inside_workspace`). It
-cannot be combined with `MELRA_BROWSER_CDP_ENDPOINT` — an attached browser
-already has the profile it was started with, so a second one would silently
-do nothing.
+every site the browser visited. So does MELRA: no file effect, verification
+or browser upload may name it or anything in it, nor a terminal argument as a
+path or a plain `@`/`<` reference, in any mode, and enforced mode refuses to
+start in a workspace that holds it, or either HTTP archive
+(`enforced_mode_refuses_secret_inside_workspace`). It cannot be combined with
+`MELRA_BROWSER_CDP_ENDPOINT` — an attached browser already has the profile it
+was started with, so a second one would silently do nothing.
 
 A window the page opens by itself is governed by policy, not by the caller:
 
@@ -380,10 +380,10 @@ project's `node_modules/.bin`, a `bin/` directory), or an empty or relative
 one, is skipped, and left out of the program's own `PATH` too. A tool
 installed only inside the workspace runs through `npx` or `pnpm exec`, or
 through a path-qualified entry in `allowedCommands` that names it. If no
-entry is left, as with a workspace at the filesystem root, every command is
-refused with `terminal_path_empty_after_filter`, a path-qualified one too,
-because a program given an empty `PATH`, or none, may search the working
-directory; narrow the workspace. With `--unsafe-local`, `PATH` is used as
+entry is left, as with a workspace at the filesystem root, or `PATH` is not
+set at all, every command is refused with `terminal_path_empty_after_filter`,
+a path-qualified one too, because a program given an empty `PATH`, or none,
+may search the working directory; narrow the workspace. With `--unsafe-local`, `PATH` is used as
 given.
 
 `allowedCommands` matches on the program's basename, so it cannot tell `npm
@@ -514,11 +514,12 @@ agent never receives it, and the effect still goes out.
 `source` is either `{ "env": "NAME" }` or `{ "file": "/path" }`. A file must be
 a regular file, not a symlink, and mode `0600` or tighter — a secret any other
 user can read is one the agent could have read for itself. Wherever it lies,
-the file is reserved like `MELRA_POLICY`: no file effect, verification,
-browser upload or terminal argument may name it, and enforced mode refuses
-to start in a workspace that holds it
-(`enforced_mode_refuses_secret_inside_workspace`). Keep it outside the
-workspace.
+the file is reserved like `MELRA_POLICY`: no file effect, verification or
+browser upload may name it, nor a terminal argument as a path or a plain
+`@`/`<` reference, and enforced mode refuses to start in a workspace that
+holds it (`enforced_mode_refuses_secret_inside_workspace`). A program that
+reads files by means of its own is not covered, which is what approving that
+program accepts. Keep it outside the workspace.
 
 The two lists are scoped differently on purpose, and the difference is the
 whole feature:

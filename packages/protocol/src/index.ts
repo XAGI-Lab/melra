@@ -80,7 +80,9 @@ export function terminalArgumentPaths(args: readonly string[]): string[] {
  * The file each of those names as a reference for some programs to read
  * (`@x`, `-d@x`, `name=<x`): one file, never a directory to walk. Kept apart,
  * because to most programs `@/` and `</` are text (`rg "@/" src`), so only the
- * terminal runtime judges these, and only as the file itself.
+ * terminal runtime judges these, and only as the file itself. Only this plain
+ * form: a program's own other ways of naming a file are not parsed here, and
+ * stay the accepted residual of approving that program.
  */
 export function terminalArgumentReferences(args: readonly string[]): string[] {
   return terminalArgumentPaths(args).flatMap((path) => (/^[@<]/.test(path) ? [path.slice(1)] : []));

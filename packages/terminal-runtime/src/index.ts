@@ -530,11 +530,13 @@ export class TerminalRuntime {
     if (this.pathOutside !== undefined) {
       // Before the lookup, and for the spawn, so the program's own lookups get
       // the same PATH, under every name Windows may spell it.
-      for (const name of Object.keys(environment).filter((key) => key.toUpperCase() === "PATH")) {
+      const names = Object.keys(environment).filter((key) => key.toUpperCase() === "PATH");
+      // An empty PATH searches the working directory again, and so can none
+      // at all: a shell fills in a default (macOS sh ends it in `.`). So a
+      // path-qualified program is refused too, by a cause the operator can see.
+      if (names.length === 0) throw new Error("terminal_path_empty_after_filter");
+      for (const name of names) {
         const kept = await searchPath(environment[name] ?? "", this.pathOutside);
-        // An empty PATH searches the working directory again, and so can none
-        // at all: a shell fills in a default (macOS sh ends it in `.`). So a
-        // path-qualified program is refused too, by a cause the operator can see.
         if (kept === "") throw new Error("terminal_path_empty_after_filter");
         environment[name] = kept;
       }
