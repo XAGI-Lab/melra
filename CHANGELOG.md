@@ -996,19 +996,24 @@ All notable changes are documented here. The format follows
 - More credential formats are redacted wherever MELRA redacts text (stored
   records, receipts, memory and terminal output): fine-grained GitHub tokens,
   npm tokens, Google API keys, Stripe restricted keys and webhook secrets,
-  more kinds of Slack token, PGP private key blocks, every scheme in an
-  `Authorization` or `Proxy-Authorization` header, token and API-key headers
-  and assignments (`x-api-key: ...`, `access_token=...`, `"apiKey": "..."`),
-  and URL userinfo with a password holding `/`, or with an http(s) user alone
-  of twenty or more URL-safe characters including a digit, the shape of an
-  issued token. A stored field whose name ends in a credential word
-  (`access_token`, `clientSecret`, `x-api-key`) is redacted whole. Counts and
-  kinds (`max_tokens`, `token_type`), the `credentials` list of names, values
-  without the shape of an issued token (`token: string`), and a plain user
-  name such as `https://alice@host` are kept. A URL whose port is followed by
-  an `@` later in its path or query is no longer read as carrying
-  credentials, and a match for a URL's userinfo stops at a quote, bracket or
-  brace, so compact JSON and IPv6 hosts stay as they were.
+  more kinds of Slack token, PGP private key blocks, an `Authorization` or
+  `Proxy-Authorization` header value under a known scheme (Basic, Bearer,
+  Digest, Negotiate, NTLM, token, AWS4-HMAC-SHA256) or bare with a digit,
+  token and API-key headers and assignments (`x-api-key: ...`,
+  `access_token=...`, `"apiKey": "..."`), and URL userinfo with a password
+  holding `/`, brackets or braces, or with an http(s) user alone of twenty or
+  more URL-safe characters including a digit, the shape of an issued token.
+  A stored field whose name ends in a credential word (`access_token`,
+  `clientSecret`, `x-api-key`) is redacted whole. Counts and kinds
+  (`max_tokens`, `token_type`), the `credentials` list of names, values
+  without the shape of an issued token (`token: string`,
+  `Authorization: required`), and a plain user name such as
+  `https://alice@host` are kept. A URL whose port is followed by an `@` later
+  in its path or query is no longer read as carrying credentials, so a
+  password of digits followed by a raw `?` is read as a port and kept. A
+  URL's user name stops at a comma, quote, bracket or brace and its password
+  at a quote, so compact JSON and IPv6 hosts stay as they were and a password
+  holding a quote is not recognised.
 
 - Evidence is redacted before it is stored in a receipt or certificate, as
   the rest of a receipt already was. An `http_resource_matches` item names the

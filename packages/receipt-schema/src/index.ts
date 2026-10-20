@@ -34,9 +34,11 @@ export const SECRET_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
   // npm, and Google API keys.
   [/\b(?:npm_[A-Za-z0-9]{36,}\b|AIza[A-Za-z0-9_-]{35})/g, "[REDACTED_API_KEY]"],
   [/\bBearer\s+[A-Za-z0-9._~+/-]+=*\b/gi, "Bearer [REDACTED_TOKEN]"],
-  // Any other scheme in an authorization header: `Basic`, `token`, `Negotiate`.
+  // An authorization header under a known scheme (`Basic`, `token`,
+  // `Negotiate`), or a bare value with a digit, the shape an issued token has,
+  // so `Authorization: required` and `{ authorization: task.approval }` stay.
   [
-    /\b((?:proxy-)?authorization["']?\s*:\s*["']?)(?:[A-Za-z][\w-]*[ \t]+)?[A-Za-z0-9._~+/=-]{8,}/gi,
+    /\b((?:proxy-)?authorization["']?\s*:\s*["']?)(?:(?:basic|bearer|digest|negotiate|ntlm|token|aws4-hmac-sha256)[ \t]+[A-Za-z0-9._~+/=-]{8,}|(?=[A-Za-z0-9._~+/=-]{0,63}\d)[A-Za-z0-9._~+/=-]{8,})/gi,
     "$1[REDACTED_TOKEN]",
   ],
   // `password=x`, and the spellings that hide the word inside a longer name or
@@ -55,11 +57,13 @@ export const SECRET_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
     "$1$2[REDACTED]",
   ],
   // Userinfo in a URL or connection string anywhere in text: `postgres://app:pw@db`,
-  // a password holding `/`, but not `host:8080/path@x`, which is a port. Neither
-  // part runs past a character a URL cannot hold unescaped, so a match ends with
-  // its JSON string, CSV cell or IPv6 host.
+  // a password holding `/`, brackets or braces, but not `host:8080/path@x` or
+  // `host:3000?next=a@b`, which are ports. The user stops at a comma, quote,
+  // bracket or brace, so a CSV row or JSON array of a URL and an address and an
+  // IPv6 host are kept; the password stops only at a quote or a `${` template,
+  // so it never runs on into the next JSON string.
   [
-    /\b([a-z][a-z0-9+.-]*:\/\/)[^\s/?#@:"'<>{}\[\],]*:(?!\d+(?:[/?#]|$))[^\s@"'<>{}\[\]]{1,256}@/gi,
+    /\b([a-z][a-z0-9+.-]*:\/\/)[^\s/?#@:"'<>{}\[\],]*:(?!\d+(?:[/?]|$))(?:(?!\$\{)[^\s@"']){1,256}@/gi,
     "$1[REDACTED_URL_CREDENTIALS]@",
   ],
   // A token standing alone as the user over http(s): `https://<token>@host`.
