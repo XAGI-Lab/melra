@@ -919,6 +919,9 @@ export class TaskController {
       );
     }
     this.drawGrant(task, request, classified);
+    // Evidence gathered after the fact answers no question about meaning: a
+    // semantic task, its effect done, settles closed as at expiry (#54).
+    if (asksSemantic(request)) return this.settleUnanswered(task);
     const receipt = this.createReceipt(
       task,
       request,
@@ -1099,11 +1102,15 @@ export class TaskController {
   private async recoverTask(task: TaskRecord): Promise<TaskRecord> {
     const request = this.loadRequest(task.id);
     const classified = classifyOperation(request.operation);
+    // A semantic question cannot be observed again, and resolveAsVerified
+    // settles it closed; the rest must hold as for any other task, so a
+    // change with no key to commit is charged here too.
+    const observable = request.requiredEvidence.filter((predicate) => predicate.type !== "semantic");
     if (
       task.status === "verifying" &&
       classified.effect !== "read" &&
-      request.requiredEvidence.length > 0 &&
-      request.requiredEvidence.every((predicate) =>
+      observable.length > 0 &&
+      observable.every((predicate) =>
         ["file_exists", "file_absent", "file_hash"].includes(
           predicate.type,
         ),
@@ -1121,7 +1128,7 @@ export class TaskController {
       // Against what the adapter reported, as the live path verifies: a
       // move's own result is what tells a case-only rename's source is gone.
       const verification = await this.verifier.verify(
-        request.requiredEvidence,
+        observable,
         reported ?? {},
       );
       if (actionSucceeded && verification.verified) {

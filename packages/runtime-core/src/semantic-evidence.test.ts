@@ -206,6 +206,21 @@ describe("semantic evidence (#54)", () => {
     expect(executor.execute).not.toHaveBeenCalled();
   });
 
+  it("re-observes a change with no key cut off before its draw, and settles it closed", async () => {
+    const { controller, store, executor } = await setup(once);
+    const planned = controller.plan(write([{ type: "file_exists", path: "out.txt" }, SEMANTIC]));
+    // Killed after the adapter returned, as any task planned over MCP or the CLI.
+    store.saveTask({ ...planned, status: "verifying" }, store.ownerId());
+    await controller.recoverInterrupted();
+    expect(controller.status(planned.id)).toMatchObject({
+      status: "recovery_required",
+      error: "semantic_judgement_expired",
+    });
+    expect(store.capabilityUsage("once", new Date(0).toISOString()).operations).toBe(1);
+    expect(controller.plan(write([{ type: "file_exists", path: "out.txt" }, SEMANTIC])).status).toBe("policy_blocked");
+    expect(executor.execute).not.toHaveBeenCalled();
+  });
+
   it("draws the grant of a change whose draw failed, once reconciled", async () => {
     const { controller, store, executor } = await setup(once);
     // The write after the commit: SQLITE_BUSY past the busy timeout, a full disk.
