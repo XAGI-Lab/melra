@@ -173,6 +173,14 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- A task settled after the fact, by recovery or by `melra_execute`
+  reconciling it, is no longer charged twice when its own draw had landed.
+  Settling asked policy for the paying grant as if nothing were drawn, which
+  names the first grant that matches, so a task execute charged to a later
+  grant, the first being spent, was charged to both: an operation more on the
+  first, or its amount twice in a `dailyMax` window. A late draw now happens
+  only when the task drew nothing.
+
 - A `browser` wait now ends within about its `timeoutMs` instead of running
   several times longer on a busy page or one with many frames: calls get the
   time left, with a 500 ms floor capped at the requested timeout, and retain

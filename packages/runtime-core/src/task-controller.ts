@@ -945,13 +945,16 @@ export class TaskController {
    * rather than permission, so a grant that has since run out still pays for
    * what it authorised. Asked as if nothing were drawn, because policy names
    * no grant at all for one that is now exhausted, and the effect then went
-   * uncharged.
+   * uncharged. A task that drew one already is left alone: policy read now
+   * names the first grant that matches, not the one execute drew once that
+   * was spent, and charging it too drew the task twice.
    */
   private drawGrant(
     task: TaskRecord,
     request: TaskRequest,
     classified: ReturnType<typeof classifyOperation>,
   ): void {
+    if (this.store.hasCapabilityUse(task.id)) return;
     const { grantId } = evaluatePolicy(task.id, request, this.policy, () => ({
       operations: 0,
       amountToday: 0,

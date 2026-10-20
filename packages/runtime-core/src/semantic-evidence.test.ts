@@ -227,6 +227,33 @@ describe("semantic evidence (#54)", () => {
     expect(executor.execute).toHaveBeenCalledTimes(1);
   });
 
+  it("draws nothing more when settling a change whose live draw landed", async () => {
+    const { controller, store } = await setup((root) => ({
+      ...createDefaultPolicy(root),
+      capabilities: [
+        { id: "a", capability: "file.write", effects: ["mutate"], target: "*", principal: "*", maxOperations: 1 },
+        { id: "b", capability: "file.write", effects: ["mutate"], target: "*", principal: "*", maxOperations: 5 },
+      ],
+    }));
+    expect((await run(controller, write([{ type: "file_exists", path: "out.txt" }, SEMANTIC]))).task.status).toBe(
+      "waiting_user",
+    );
+    // `a` is spent, so this one draws `b`, and then its wait fails to write.
+    vi.spyOn(store, "saveCertificate").mockImplementationOnce(() => {
+      throw new Error("database is locked");
+    });
+    const second = await run(controller, write([{ type: "file_exists", path: "out.txt" }, SEMANTIC]), {
+      idempotencyKey: "e".repeat(64),
+      attempt: 1,
+    });
+    expect(second.task.status).toBe("recovery_required");
+    expect((await controller.execute(second.task.id)).task.error).toBe("semantic_judgement_expired");
+    const since = new Date(0).toISOString();
+    expect([store.capabilityUsage("a", since).operations, store.capabilityUsage("b", since).operations]).toEqual([
+      1, 1,
+    ]);
+  });
+
   it("writes a wait with its certificate, so a peer's expiry cannot land between them", async () => {
     const dir = await mkdtemp(join(tmpdir(), "melra-semantic-db-"));
     roots.push(dir);

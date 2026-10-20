@@ -1162,6 +1162,20 @@ export class SqliteStore {
   }
 
   /**
+   * Whether a task has drawn any grant.
+   *
+   * ponytail: scans capability_usage, whose key leads with grant_id; asked
+   * only when settling a task after the fact. Index task_id if that changes.
+   */
+  hasCapabilityUse(taskId: string): boolean {
+    return (
+      this.database
+        .prepare("SELECT 1 FROM capability_usage WHERE task_id = ? LIMIT 1")
+        .get(taskId) !== undefined
+    );
+  }
+
+  /**
    * What a grant has spent: every operation ever, and the declared amounts
    * committed at or after `since`.
    */
