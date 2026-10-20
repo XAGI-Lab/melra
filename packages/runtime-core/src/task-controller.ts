@@ -159,6 +159,9 @@ export function capabilityUsageReader(store: SqliteStore): CapabilityUsageReader
   };
 }
 
+/** Statuses a task leaves only once: by starting, by a deny, or by a refusal. */
+const UNSTARTED: TaskRecord["status"][] = ["planned", "awaiting_approval"];
+
 /** The one browser action that reads each list. */
 const BROWSER_LIST_ACTIONS = [
   ["values", "select"],
@@ -168,6 +171,8 @@ const BROWSER_LIST_ACTIONS = [
 
 export class TaskController {
   private readonly active = new Map<string, AbortController>();
+  /** Each task running here, settled once it has ended (see `settled`). */
+  private readonly running = new Map<string, Promise<void>>();
 
   private readonly breaker: CircuitBreaker;
 
@@ -375,7 +380,7 @@ export class TaskController {
     if (task.status === "recovery_required") {
       return await this.reconcile(taskId);
     }
-    if (!["planned", "awaiting_approval"].includes(task.status)) {
+    if (!UNSTARTED.includes(task.status)) {
       throw new Error(`task_not_executable:${task.status}`);
     }
     if (
@@ -385,7 +390,7 @@ export class TaskController {
       task.status = "cancelled";
       task.error = "duplicate_attempt_prevented";
       task.updatedAt = now();
-      this.store.saveTask(task);
+      this.leaveUnstarted(task);
       return this.finishWithoutReceipt(task, [
         {
           type: "idempotency",
@@ -407,7 +412,7 @@ export class TaskController {
       task.status = "policy_blocked";
       task.policyDecision = rechecked.decision;
       task.updatedAt = now();
-      this.store.saveTask(task);
+      this.leaveUnstarted(task);
       return this.finishWithoutReceipt(task, []);
     }
 
@@ -466,14 +471,16 @@ export class TaskController {
     }
     task.policyDecision = rechecked.decision;
 
-    const controller = new AbortController();
-    this.active.set(task.id, controller);
-    this.store.inFlight.add(task.id);
     task.status = "running";
     task.mode = this.policy.mode;
     task.updatedAt = now();
     // Status and owner land in one write, so no running row is ever unowned.
-    this.store.saveTask(task, this.store.ownerId());
+    this.leaveUnstarted(task, this.store.ownerId());
+    const controller = new AbortController();
+    let ended!: () => void;
+    this.running.set(task.id, new Promise<void>((resolve) => (ended = resolve)));
+    this.active.set(task.id, controller);
+    this.store.inFlight.add(task.id);
     const startedAt = now();
     const classified = classifyOperation(request.operation);
     let timeout: NodeJS.Timeout | undefined;
@@ -672,7 +679,18 @@ export class TaskController {
       this.active.delete(task.id);
       this.store.inFlight.delete(task.id);
       if (rechecked.grantId !== undefined) this.reserved.get(rechecked.grantId)?.delete(task.id);
+      this.running.delete(task.id);
+      ended();
     }
+  }
+
+  /**
+   * Resolves once a task this controller is running has ended, its outcome
+   * recorded: a cancel only signals the adapter to stop. At once for one it
+   * is not running.
+   */
+  settled(taskId: string): Promise<void> {
+    return this.running.get(taskId) ?? Promise.resolve();
   }
 
   cancel(taskId: string): TaskRecord {
@@ -682,12 +700,25 @@ export class TaskController {
       controller.abort(new Error("task_cancelled"));
       return task;
     }
-    if (["planned", "awaiting_approval"].includes(task.status)) {
+    if (UNSTARTED.includes(task.status)) {
       task.status = "cancelled";
       task.updatedAt = now();
-      this.store.saveTask(task);
+      // Started meanwhile by another process: it runs, so the caller is told
+      // what the task is now rather than that it was cancelled.
+      if (!this.store.saveTaskIf(task, UNSTARTED)) return this.status(taskId);
     }
     return task;
+  }
+
+  /**
+   * Writes a task out of planned or awaiting_approval, unless a deny or an
+   * execute in another process got there after this one read it: that one
+   * stands, and this one is refused as it would have been had it read later.
+   */
+  private leaveUnstarted(task: TaskRecord, owner?: string): void {
+    if (!this.store.saveTaskIf(task, UNSTARTED, owner)) {
+      throw new Error(`task_not_executable:${this.status(task.id).status}`);
+    }
   }
 
   async verifyPersisted(
@@ -734,15 +765,16 @@ export class TaskController {
     }
     const request = this.loadRequest(taskId);
     const classified = classifyOperation(request.operation);
-    const park = (reason: string): ExecutionResult => {
-      task.error = reason;
-      task.updatedAt = now();
-      this.store.saveTask(task);
-      return { task };
-    };
+    const park = (reason: string): ExecutionResult =>
+      this.settleParked(taskId, () => {
+        task.error = reason;
+        task.updatedAt = now();
+        this.store.saveTask(task);
+        return { task };
+      });
     // Its own commit already answers: the effect verified, and only a write
     // after it failed. Parked for good otherwise, with nothing declared.
-    const committed = this.settleCommitted(task, request, classified);
+    const committed = this.settleParked(taskId, () => this.settleCommitted(task, request, classified));
     if (committed !== undefined) return committed;
     if (request.reconciliation.length === 0) {
       return park("reconciliation_not_declared");
@@ -765,39 +797,58 @@ export class TaskController {
       return park("reconciliation_inconclusive");
     }
     if (verification.verified) {
-      return this.resolveAsVerified(
-        task,
-        request,
-        classified,
-        verification.evidence,
-        { reconciliation: "provider_state_confirms_effect" },
+      return this.settleParked(taskId, () =>
+        this.resolveAsVerified(
+          task,
+          request,
+          classified,
+          verification.evidence,
+          { reconciliation: "provider_state_confirms_effect" },
+        ),
       );
     }
     // The provider answered, and the answer is that it never happened. Only now
     // is `failed` a claim MELRA is entitled to make.
-    task.status = "failed";
-    task.error = "reconciliation_confirms_effect_not_applied";
-    task.updatedAt = now();
-    this.store.saveTask(task);
-    const receipt = this.createReceipt(
-      task,
-      request,
-      classified.capability,
-      classified.target,
-      classified.effect,
-      task.updatedAt,
-      false,
-      { reconciliation: "provider_state_denies_effect" },
-      verification.evidence,
-      task.error,
+    return this.settleParked(taskId, () => {
+      task.status = "failed";
+      task.error = "reconciliation_confirms_effect_not_applied";
+      task.updatedAt = now();
+      this.store.saveTask(task);
+      const receipt = this.createReceipt(
+        task,
+        request,
+        classified.capability,
+        classified.target,
+        classified.effect,
+        task.updatedAt,
+        false,
+        { reconciliation: "provider_state_denies_effect" },
+        verification.evidence,
+        task.error,
+      );
+      this.store.saveReceipt(receipt);
+      task.receiptIds.push(receipt.receiptId);
+      const certificate = this.createAndSaveCertificate(
+        task,
+        verification.evidence,
+      );
+      return { task, receipt, certificate };
+    });
+  }
+
+  /**
+   * Writes a reconcile's answer in one transaction, and only while the task
+   * still waits for one. Two reconciles of one task (two melra_execute calls,
+   * or the sweep's recovery beside an agent's) each read it parked and ask
+   * the provider; written unconditionally, the slower answer, even one that
+   * could not reach the provider, overwrote a settle the other had recorded
+   * and dropped its receipt. Now the first stands, and the other writes
+   * nothing, not even a receipt, and returns the task as it now stands.
+   */
+  private settleParked<T>(taskId: string, write: () => T): T | ExecutionResult {
+    return this.store.transaction(() =>
+      this.store.getTask(taskId)?.status === "recovery_required" ? write() : { task: this.status(taskId) },
     );
-    this.store.saveReceipt(receipt);
-    task.receiptIds.push(receipt.receiptId);
-    const certificate = this.createAndSaveCertificate(
-      task,
-      verification.evidence,
-    );
-    return { task, receipt, certificate };
   }
 
   /**

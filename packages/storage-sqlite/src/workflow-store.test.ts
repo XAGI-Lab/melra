@@ -289,6 +289,24 @@ describe("durable workflow storage", () => {
     expect(store.getTask(taskId)).toBeUndefined();
   });
 
+  it("lists the tasks under one idempotency key, any status, from an index", () => {
+    const store = new SqliteStore(":memory:");
+    stores.push(store);
+    const key = "a".repeat(64);
+    const second = "55555555-5555-4555-8555-555555555555";
+    store.saveTask({ ...task("cancelled"), idempotencyKey: key });
+    store.saveTask({ ...task("awaiting_approval"), id: second, idempotencyKey: key, attempt: 2 });
+    store.saveTask({ ...task("planned"), id: "66666666-6666-4666-8666-666666666666", idempotencyKey: "b".repeat(64) });
+    store.saveTask({ ...task("planned"), id: "77777777-7777-4777-8777-777777777777" });
+    expect(store.listTasksByKey(key).map((found) => found.id).sort()).toEqual([taskId, second]);
+    expect(store.listTasksByKey("c".repeat(64))).toEqual([]);
+    const plan = store.database
+      .prepare("EXPLAIN QUERY PLAN SELECT data FROM tasks WHERE json_extract(data, '$.idempotencyKey') = ?")
+      .all(key) as Array<{ detail: string }>;
+    // A workflow step asks this for every task it plans; it must not scan every task.
+    expect(plan.map((row) => row.detail).join("\n")).toContain("USING INDEX tasks_idempotency_key");
+  });
+
   it("rejects mismatched definition and event identities", () => {
     const definitionMismatch = new SqliteStore(":memory:");
     stores.push(definitionMismatch);
