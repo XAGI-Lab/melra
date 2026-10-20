@@ -1193,6 +1193,49 @@ describe("workflow recovery across processes", () => {
     expect(cancelled.nodes.write).toEqual(parked);
   });
 
+  it("stops a step recorded in flight whose task runs in this process, and records how it ended", async () => {
+    const at = await home();
+    const entered = gate();
+    const release = gate();
+    let aborted = false;
+    const a = await side(at, async (_operation?: Operation, signal?: AbortSignal) => {
+      entered.open();
+      await new Promise<void>((resolve, reject) => {
+        signal?.addEventListener("abort", () => {
+          aborted = true;
+          reject(signal.reason);
+        });
+        void release.opened.then(resolve);
+      });
+      return { success: true, stored: true };
+    });
+    const run = a.workflows.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Ownership",
+        nodes: [{ id: "write", type: "operation", request: put("write") }],
+      }),
+    );
+    const waiting = (await a.workflows.advance(run.id)).run;
+    const taskId = waiting.nodes.write!.taskIds[0]!;
+    // Approved with melra_execute in this process; the next advance reads it in flight.
+    const executing = a.tasks.execute(taskId, approvalsFor(waiting)[0]);
+    await entered.opened;
+    const parked = (await a.workflows.advance(run.id)).run.nodes.write;
+    expect(parked).toEqual({ status: "recovery_required", taskIds: [taskId], error: "task_still_in_flight" });
+
+    a.workflows.cancel(run.id);
+    release.open();
+    // Stopped as melra_task_cancel would stop it, and recorded as it ended.
+    expect(aborted).toBe(true);
+    expect((await executing).task.status).toBe("cancelled");
+    await vi.waitFor(() =>
+      expect(a.workflows.status(run.id).nodes.write).toEqual({ status: "cancelled", taskIds: [taskId] }),
+    );
+  });
+
   it("cancels a run without calling a step cancelled whose process died mid-effect", async () => {
     const at = await home();
     const adapter = held();

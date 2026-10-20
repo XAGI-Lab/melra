@@ -1104,6 +1104,13 @@ export class WorkflowController {
                   // Cancelled as recorded.
                 }
               }
+              // A step an earlier advance already recorded in flight reads the
+              // same and is not among those, yet its task may run here (a
+              // direct melra_execute): stopped too. One in another process is
+              // left running by tasks.cancel.
+              for (const node of Object.values(draft.nodes)) {
+                if (node.error === "task_still_in_flight") stopped.push(...node.taskIds);
+              }
               for (const [nodeId, node] of Object.entries(draft.nodes)) {
                 if (
                   !["pending", "ready", "awaiting_approval"].includes(node.status)
