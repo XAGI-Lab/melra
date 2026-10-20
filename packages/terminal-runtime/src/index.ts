@@ -3,7 +3,7 @@
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { realpath } from "node:fs/promises";
+import { readlink, realpath } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { outcomeUnknown, terminalArgumentPaths, type TerminalOperation } from "@melra/protocol";
 import { redactSecrets } from "@melra/receipt-schema";
@@ -47,7 +47,7 @@ export function redactTerminalOutput(value: string): string {
  * through every link, then the rest as written, which `mkdir -p` would make
  * there, however many parts that is.
  */
-async function leadsTo(spelled: string): Promise<string> {
+async function leadsTo(spelled: string, hops = 0): Promise<string> {
   const whole = await realpath(spelled).catch(() => undefined);
   if (whole !== undefined) return whole;
   const chain: string[] = [];
@@ -58,14 +58,22 @@ async function leadsTo(spelled: string): Promise<string> {
   // A part resolves only if every part above it does, so the deepest one that
   // does is found by halving: about log2(depth) lookups, not one per part.
   let [resolves, fails, leads] = [-1, chain.length - 1, spelled];
+  let parent: string = sep;
   while (fails - resolves > 1) {
     const middle = (resolves + fails) >> 1;
     const at = chain[middle] as string;
     const real = await realpath(at).catch(() => undefined);
     if (real === undefined) fails = middle;
-    else [resolves, leads] = [middle, join(real, relative(at, spelled))];
+    else [resolves, leads, parent] = [middle, join(real, relative(at, spelled)), real];
   }
-  return leads;
+  // A link to a name not there yet: `touch link` makes its target, so it
+  // leads where the link points, as the file adapter follows one. Past the
+  // links one lookup follows, the lookup fails and makes nothing.
+  const link = chain[fails] as string;
+  const target = hops < 40 ? await readlink(join(parent, basename(link))).catch(() => undefined) : undefined;
+  if (target === undefined) return leads;
+  const next = `${isAbsolute(target) ? target : `${parent}${sep}${target}`}${spelled.slice(link.length)}`;
+  return await leadsTo((await climbedFrom(next)).end, hops + 1);
 }
 
 /**
@@ -75,12 +83,6 @@ async function leadsTo(spelled: string): Promise<string> {
  * target. Every part before a `..` is looked up, so whether it is there is an
  * answer, though folding the path drops it. Windows folds `..` away before
  * any lookup.
- *
- * ponytail: one judgement per distinct place, there or not, so arguments
- * climbing out of thousands of different directories cost minutes (100
- * arguments of 4 KB, each 800 missing parts deep and climbing back out:
- * about 140 s with the file adapter's judgement). Batch the judgements, or
- * cap the places one call may climb out of, if that ever shows up.
  */
 async function climbedFrom(spelled: string): Promise<{ places: string[]; end: string }> {
   if (process.platform === "win32") return { places: [], end: resolve(spelled) };
@@ -99,6 +101,13 @@ async function climbedFrom(spelled: string): Promise<{ places: string[]; end: st
   }
   return { places, end: at };
 }
+
+/**
+ * Distinct places one command may climb out of. Each is judged on its own,
+ * which for a 4 KB argument costs milliseconds, so arguments built to climb
+ * out of thousands would cost minutes; ordinary ones climb out of a few.
+ */
+const MAX_CLIMBED_PLACES = 128;
 
 /** The null device, so git's system/global config files resolve to nothing. */
 const GIT_NULL_CONFIG = process.platform === "win32" ? "NUL" : "/dev/null";
@@ -390,6 +399,8 @@ export class TerminalRuntime {
       !/[\\/]/.test(command) &&
       NAME_LISTERS.has(command.toLowerCase().replace(/\.(exe|cmd|bat|com|ps1)$/, ""));
     const climbed = new Set<string>();
+    const confined = new Set<string>();
+    // ponytail: a program's own path syntax (git's `:/x`, `:(top)x`) is judged as a plain path.
     for (const path of [".", ...terminalArgumentPaths(operation.args)]) {
       // Unnormalised: the program resolves `link/..` through the link.
       const spelled = isAbsolute(path) ? path : `${cwd}${sep}${path}`;
@@ -397,19 +408,29 @@ export class TerminalRuntime {
       for (const place of places) {
         if (climbed.has(place)) continue;
         climbed.add(place);
+        if (climbed.size > MAX_CLIMBED_PLACES) throw new Error("terminal_path_too_complex");
         if (await this.reserved(place)) throw new Error("terminal_path_reserved");
       }
       const real = await leadsTo(end);
-      // findstr and where expand their own wildcards, reading the directory.
-      for (const probe of /[*?]/.test(path) ? [real, dirname(real)] : [real]) {
-        if ((await this.reserved(probe)) || (!listsNames && (await this.holdsReserved(probe)))) {
-          throw new Error("terminal_path_reserved");
+      // Some programs fold `..` as text first (git pathspecs, path.resolve),
+      // so the argument is judged where that leads too.
+      for (const at of new Set([real, resolve(cwd, path)])) {
+        // findstr and where expand their own wildcards, reading the directory.
+        for (const probe of /[*?]/.test(path) ? [at, dirname(at)] : [at]) {
+          if ((await this.reserved(probe)) || (!listsNames && (await this.holdsReserved(probe)))) {
+            throw new Error("terminal_path_reserved");
+          }
         }
       }
-      const spelledInside = inside(this.lexicalRoot, resolve(lexicalCwd, path));
-      if (this.confineArguments && spelledInside && !inside(this.root, real)) {
-        throw new Error("terminal_path_outside_workspace");
+      // After the reserved checks, so a reserved path gets that refusal.
+      if (!this.confineArguments || !inside(this.lexicalRoot, resolve(lexicalCwd, path))) continue;
+      // `mkdir -p` makes each place it climbs out of, not only where it ends.
+      for (const place of places) {
+        if (confined.has(place)) continue;
+        confined.add(place);
+        if (!inside(this.root, await leadsTo(place))) throw new Error("terminal_path_outside_workspace");
       }
+      if (!inside(this.root, real)) throw new Error("terminal_path_outside_workspace");
     }
   }
 

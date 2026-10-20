@@ -675,10 +675,12 @@ All notable changes are documented here. The format follows
   and the files there are no longer read through the file adapter or named in
   a terminal command. A path is judged as written and with its links
   resolved, a link whose target does not exist included, and a terminal
-  argument also at each directory it climbs back out of; a chain of more
-  links than the system follows is refused. These checks narrow what a
-  refusal can reveal about the data directory; they do not yet promise the
-  same answer for every spelling of a path. Artifacts
+  argument also at each directory it climbs back out of (at most 128 per
+  command, `terminal_path_too_complex`) and as a program that folds `..` as
+  text reads it; a chain of more links than the system follows is refused.
+  These checks narrow what a refusal can reveal about the data directory;
+  they do not yet promise the same answer for every spelling of a path.
+  Artifacts
   (screenshots and downloads) are the exception for reading: the file
   adapter's `list`, `read`, `stat` and `hash`, file
   verification, and the browser's upload and `file:` loads still reach them
@@ -698,8 +700,10 @@ All notable changes are documented here. The format follows
   start reads it again; a workspace holding it is still an ordinary one.
 
 - In enforced mode, a terminal argument spelled inside the workspace is
-  judged where it ends with its links followed, also past a `..` or parts not
-  there yet, so one that leads out is refused (`terminal_path_outside_workspace`).
+  judged at each directory it climbs out of and where it ends, with its links
+  followed (a link to a name not there yet included), also past a `..` or
+  parts not there yet, so one that leads out, even on its way back in, is
+  refused (`terminal_path_outside_workspace`).
 
 - A workspace that is the data directory, or sits inside it, including through
   a link, is refused at startup in every mode with
