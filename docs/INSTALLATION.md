@@ -519,7 +519,10 @@ browser upload may name it, nor a terminal argument as a path or a plain
 `@`/`<` reference, and enforced mode refuses to start in a workspace that
 holds it (`enforced_mode_refuses_secret_inside_workspace`). A program that
 reads files by means of its own is not covered, which is what approving that
-program accepts. Keep it outside the workspace.
+program accepts. Keep it outside the workspace. The value (a file's with
+surrounding whitespace trimmed) must be printable ASCII; one holding any other
+character is refused with `credential_source_invalid:<name>`, so a copy echoed
+back is matched byte for byte.
 
 The two lists are scoped differently on purpose, and the difference is the
 whole feature:
@@ -536,7 +539,10 @@ whole feature:
 Nothing else changes: the call is still classified, still policy-checked, still
 approval-gated, still verified. The caller's receipt records which credential
 authorised the effect by name; the value reaches the socket and nowhere else —
-not the plan, not the result, not the receipt, not the database. `melra_capabilities`
+not the plan, not the result, not the receipt, not the database. A provider
+that echoes the value back, in its reason phrase, a header or the body, has it
+replaced with `[REDACTED_CREDENTIAL]` before the result reaches anyone; only a
+copy as sent is recognised, not one the provider encoded or altered. `melra_capabilities`
 publishes the names so a caller knows not to go looking for a key it will never
 be given.
 

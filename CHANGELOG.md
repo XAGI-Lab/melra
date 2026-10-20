@@ -1047,6 +1047,66 @@ All notable changes are documented here. The format follows
   sites included, is a `tab_switch` away from the agent; its next step says to
   point that endpoint at a browser you do not use yourself, or unset it.
 
+- More credential formats are redacted wherever MELRA redacts text (stored
+  records, receipts, memory and terminal output): fine-grained GitHub tokens,
+  npm tokens, Google API keys, Stripe restricted keys and webhook secrets,
+  more kinds of Slack token, and PGP private key blocks. So is an
+  `Authorization` or `Proxy-Authorization` header value: a `Digest` or
+  `AWS4-HMAC-SHA256` parameter list to the end of its line, a value under
+  another known scheme (Basic, Bearer, Negotiate, NTLM, token) that holds a
+  digit or `=` or is sixteen characters long, and a bare value of sixteen
+  characters with a digit that is not a dotted name. So are token and API-key
+  headers and assignments (`x-api-key: ...`, `access_token=...`,
+  `"apiKey": "..."`) whose value is eight or more token characters with a
+  digit, and URL userinfo: a password of any length (an RDS IAM token is
+  hundreds of characters) holding `/`, brackets or braces, a literal password
+  after a `{user}`, `{{ user }}` or `${USER}` template, and an http(s) user
+  alone of twenty or more URL-safe characters with a digit, the shape of an
+  issued token. A stored field whose name ends in a credential word (`access_token`,
+  `clientSecret`, `x-api-key`) is redacted whole unless it holds a boolean or
+  null, so `isSecret: false` keeps its type; a number or any string there
+  still goes, a tokenizer's `eos_token` and a `nextPageToken` included.
+  Kept as they were: counts and kinds (`max_tokens`, `token_type`), the
+  `credentials` list of names, code and prose that name a credential without
+  holding one (`token: string`, `tokens[0]`, `z.string().min(1)`,
+  `process.env.API_TOKEN_V2`, a CSS `#00ff00ab`, `Authorization: required`,
+  `Basic credentials`), a plain user name such as `https://alice@host`, the
+  host after `x-access-token:<token>@`, and a `{password}` or `${DB_PASS}`
+  template. Limits: a URL whose port is followed by an `@` later in its path
+  or query is not read as carrying credentials, so a password of digits
+  followed by a raw `?` is read as a port and kept; a URL's user name stops at
+  a comma, quote, bracket or brace and its password at a quote, a space, `${`
+  or `://`, so a password holding one of those is not recognised; a scheme value
+  under sixteen characters with no digit or `=` is kept; an assigned token is
+  redacted only up to the first character outside the token set; and the rest
+  of a line after a `Digest` or `AWS4-HMAC-SHA256` header goes with it. A
+  dotted expression with a digit assigned to a key name
+  (`apiKey: settings.keyV2`) and a page token in text are redacted too.
+
+- Redacting text built to make a secret pattern backtrack, such as a long run
+  of a repeated name fragment or of URL scheme characters, takes one pass
+  instead of seconds to a minute.
+
+- Evidence is redacted before it is stored in a receipt or certificate, as
+  the rest of a receipt already was. An `http_resource_matches` item names the
+  URL it read without its query or userinfo, while the request itself goes out
+  as declared, and every item's summary and source pass the shared secret
+  patterns, so a token in a verification URL or in a provider's error text no
+  longer reaches either record. Records written earlier keep what they stored.
+
+- A credential the kernel brokered into an `http` request no longer comes back
+  in the result when the far end echoes it. Each copy of the value in the
+  reason phrase, a response header or the body is replaced with
+  `[REDACTED_CREDENTIAL]` before the caller, the verifier or any stored record
+  sees it, and the result lists that marker under `redactions`. A body cut at
+  the size cap on such a call always ends in the marker in place of as many
+  of its last characters as the longest brokered value has, whatever they
+  held, so neither a value cut partway nor the cut itself says anything about
+  it. A brokered value must be printable ASCII, so each character is one byte
+  and an echo is matched byte for byte; one holding anything else is refused
+  with `credential_source_invalid:<name>`. `bytes` still counts what arrived.
+  Only a copy as sent is recognised, not one the provider encoded or altered.
+
 ## [0.3.0-alpha.14] - 2026-10-16
 
 ### Fixed
