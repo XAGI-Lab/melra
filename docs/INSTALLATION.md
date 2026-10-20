@@ -255,19 +255,23 @@ unset for normal use, which keeps the default isolated browser behavior:
 |---|---|---|
 | `MELRA_BROWSER_CDP_ENDPOINT` | Attach to an already-running browser over CDP instead of launching one. Must be an `http`/`https` URL with no credentials, query, or fragment. | unset (MELRA launches its own browser) |
 | `MELRA_BROWSER_CDP_CONTEXT_INDEX` | Which existing browser context to use, or `-1` for the default context. Requires `MELRA_BROWSER_CDP_ENDPOINT`. | unset |
-| `MELRA_BROWSER_HAR_PATH` | Absolute path for an HTTP archive recording of the session, response bodies included so the recording can later be replayed. Treat the file as the session itself, not a log about it. | unset (no recording) |
-| `MELRA_BROWSER_HAR_REPLAY` | Absolute path to a recorded archive to serve every request from. Nothing reaches the network, and a request the archive does not contain is aborted rather than fetched. Cannot be combined with recording or CDP. | unset (live network) |
+| `MELRA_BROWSER_HAR_PATH` | Absolute path for an HTTP archive recording of the session, response bodies included so the recording can later be replayed. Treat the file as the session itself, not a log about it: it is reserved like `MELRA_POLICY`, and its directory is made at startup | unset (no recording) |
+| `MELRA_BROWSER_HAR_REPLAY` | Absolute path to a recorded archive to serve every request from. Nothing reaches the network, and a request the archive does not contain is aborted rather than fetched. Cannot be combined with recording or CDP. Reserved like `MELRA_POLICY` | unset (live network) |
 
 A browser profile is separate, and useful outside benchmarks:
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `MELRA_BROWSER_PROFILE` | Absolute directory keeping cookies, storage, and profile state between runs, so a site logged into once stays logged in. | unset (a fresh throwaway profile per run) |
+| `MELRA_BROWSER_PROFILE` | Absolute directory keeping cookies, storage, and profile state between runs, so a site logged into once stays logged in. Reserved like `MELRA_POLICY`; a workspace inside it is refused at startup with `workspace_inside_browser_profile` | unset (a fresh throwaway profile per run) |
 
 Treat that directory as a credential store: it holds live session cookies for
-every site the browser visited. It cannot be combined with
-`MELRA_BROWSER_CDP_ENDPOINT` — an attached browser already has the profile it
-was started with, so a second one would silently do nothing.
+every site the browser visited. So does MELRA: no file effect, verification,
+browser upload or terminal argument may name it or anything in it, in any
+mode, and enforced mode refuses to start in a workspace that holds it, or
+either HTTP archive (`enforced_mode_refuses_secret_inside_workspace`). It
+cannot be combined with `MELRA_BROWSER_CDP_ENDPOINT` — an attached browser
+already has the profile it was started with, so a second one would silently
+do nothing.
 
 A window the page opens by itself is governed by policy, not by the caller:
 
@@ -505,7 +509,12 @@ agent never receives it, and the effect still goes out.
 
 `source` is either `{ "env": "NAME" }` or `{ "file": "/path" }`. A file must be
 a regular file, not a symlink, and mode `0600` or tighter — a secret any other
-user can read is one the agent could have read for itself.
+user can read is one the agent could have read for itself. Wherever it lies,
+the file is reserved like `MELRA_POLICY`: no file effect, verification,
+browser upload or terminal argument may name it, and enforced mode refuses
+to start in a workspace that holds it
+(`enforced_mode_refuses_secret_inside_workspace`). Keep it outside the
+workspace.
 
 The two lists are scoped differently on purpose, and the difference is the
 whole feature:
@@ -894,6 +903,11 @@ closing every door it owns:
   and approvals in the old one are orphaned. Only a `MELRA_HOME` you put
   inside the project itself moves: out of the workspace, with everything in
   it, and `MELRA_HOME` set to its new place.
+- **Secrets sit outside `MELRA_WORKSPACE` too.** A workspace holding the
+  browser profile, an HTTP archive (`MELRA_BROWSER_HAR_PATH`,
+  `MELRA_BROWSER_HAR_REPLAY`) or a credential's `source.file` is refused at
+  startup with `enforced_mode_refuses_secret_inside_workspace`, naming which
+  one, for the same reason. Move it out of the workspace.
 - **Only an operator approves.** A challenge carries no phrase, so the agent
   is handed nothing to echo, and `melra_execute` refuses any approval it is
   sent with `approval_in_band_refused`. A mutation runs only on a decision an

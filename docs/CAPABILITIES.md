@@ -246,7 +246,8 @@ Actions: `navigate`, `back`, `forward`, `reload`, `inspect`, `wait`, `click`,
 - Blocks private, link-local, multicast, unspecified, and cloud-metadata
   addresses. Localhost is opt-in.
 - Confines uploaded files to the workspace, never MELRA's own data directory
-  except its artifacts, and downloaded files to the artifact directory.
+  except its artifacts, nor the browser profile, an HTTP archive or a
+  credential's file, and downloaded files to the artifact directory.
 
 - `MELRA_BROWSER_PROFILE` names a directory to keep, so a site logged into once
   stays logged in across runs. Unset, every run gets a throwaway profile.

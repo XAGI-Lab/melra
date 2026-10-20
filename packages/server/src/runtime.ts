@@ -1,7 +1,7 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
-import { realpath, stat } from "node:fs/promises";
+import { mkdir, realpath, stat } from "node:fs/promises";
 import {
   arch,
   cpus,
@@ -153,8 +153,47 @@ export async function workspaceHoldsData(workspaceRoot: string, dataDirectory: s
 }
 
 /**
+ * The files the browser and the credential broker read secrets from, wherever
+ * the operator put them, each by the setting that names it: the profile, the
+ * HTTP archives, and every credential's `source.file`. `createMelraRuntime`
+ * reserves them as it does the policy file.
+ */
+export function secretFiles(
+  options: Pick<MelraRuntimeOptions, "browserProfileDir" | "browserHarPath" | "browserHarReplayPath">,
+  credentials: LocalPolicy["credentials"],
+): Map<string, string> {
+  const secrets = new Map<string, string>();
+  if (options.browserProfileDir !== undefined) secrets.set("MELRA_BROWSER_PROFILE", resolve(options.browserProfileDir));
+  if (options.browserHarPath !== undefined) secrets.set("MELRA_BROWSER_HAR_PATH", resolve(options.browserHarPath));
+  if (options.browserHarReplayPath !== undefined) {
+    secrets.set("MELRA_BROWSER_HAR_REPLAY", resolve(options.browserHarReplayPath));
+  }
+  for (const [name, definition] of Object.entries(credentials)) {
+    // Resolved as the broker reads it.
+    if ("file" in definition.source) secrets.set(`credentials.${name}`, resolve(definition.source.file));
+  }
+  return secrets;
+}
+
+/**
+ * The first of `secrets` a workspace holds, decided as `workspaceHoldsData`
+ * decides it, or undefined: enforced mode refuses to start there.
+ */
+export async function secretInsideWorkspace(
+  workspaceRoot: string,
+  secrets: Map<string, string>,
+): Promise<string | undefined> {
+  for (const [name, path] of secrets) {
+    const files = await FileRuntime.create({ root: workspaceRoot, reserved: [path] });
+    if (await files.holdsReserved(files.root)) return name;
+  }
+  return undefined;
+}
+
+/**
  * Whether a workspace is the data directory or inside it, which
  * `createMelraRuntime` refuses in every mode: every path there is MELRA's own.
+ * Asked of the browser profile the same way.
  */
 export async function workspaceInsideData(workspaceRoot: string, dataDirectory: string): Promise<boolean> {
   const files = await FileRuntime.create({ root: unconfinedRoot(dataDirectory), reserved: [dataDirectory] });
@@ -374,23 +413,36 @@ export async function createMelraRuntime(
     join(dataDirectory, "payload.key"),
   ];
   const artifacts = join(dataDirectory, "artifacts");
+  const secrets = secretFiles(options, policy.credentials);
   const files = await FileRuntime.create({
     root: runtimeRoot,
     maxFileBytes: policy.maxFileBytes,
-    // And the policy file, wherever it lies: every start reads it again.
-    reserved: options.policyPath === undefined ? reserved : [...reserved, resolve(options.policyPath)],
+    // And, wherever they lie, the policy file, which every start reads again,
+    // and the files secrets are read from.
+    reserved: [
+      ...reserved,
+      ...(options.policyPath === undefined ? [] : [resolve(options.policyPath)]),
+      ...secrets.values(),
+    ],
     readable: [artifacts],
   });
   // The data alone, for the layout checks and the terminal's directory check:
-  // a workspace holding only the policy file is an ordinary one, whose
-  // commands still run. ponytail: so a terminal command given a directory
-  // holding the policy file still reaches it unnamed.
+  // a workspace holding only the policy file, or in developer mode a secret
+  // file, is an ordinary one, whose commands still run. ponytail: so a
+  // terminal command given a directory holding one still reaches it unnamed.
   const data = await FileRuntime.create({ root: runtimeRoot, reserved });
   // Every path in such a workspace would be refused, without saying why.
   if (await data.isReserved(policy.workspaceRoot)) {
     store.close();
     throw new Error(
       "workspace_inside_data_directory: point MELRA_WORKSPACE at the project, outside MELRA_HOME.",
+    );
+  }
+  const profile = secrets.get("MELRA_BROWSER_PROFILE");
+  if (profile !== undefined && (await workspaceInsideData(policy.workspaceRoot, profile))) {
+    store.close();
+    throw new Error(
+      "workspace_inside_browser_profile: point MELRA_WORKSPACE at the project, outside MELRA_BROWSER_PROFILE.",
     );
   }
   // A workspace holding the data directory reaches it with a recursive read of
@@ -401,6 +453,21 @@ export async function createMelraRuntime(
     store.close();
     const advice = await dataLocationAdvice(files.root, dataDirectory, options.policyPath);
     throw new Error(`enforced_mode_refuses_data_inside_workspace: ${advice}.`);
+  }
+  // The same unnamed read reaches a secret file there. Its own refusal: the
+  // data directory's advice about MELRA_HOME does not fit it.
+  const held = mode === "enforced" ? await secretInsideWorkspace(files.root, secrets) : undefined;
+  if (held !== undefined) {
+    store.close();
+    throw new Error(
+      `enforced_mode_refuses_secret_inside_workspace: ${held} names ${secrets.get(held)}, inside the workspace, ` +
+        "where a recursive read reaches it without naming it; move it out of the workspace.",
+    );
+  }
+  // The directories the browser writes into, made now rather than at its first
+  // start, so the names it will write are recognised before it does.
+  for (const path of [options.browserProfileDir, options.browserHarPath]) {
+    if (path !== undefined) await mkdir(dirname(resolve(path)), { recursive: true }).catch(() => undefined);
   }
   const terminal = await TerminalRuntime.create({
     root: runtimeRoot,

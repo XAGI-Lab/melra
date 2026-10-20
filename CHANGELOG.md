@@ -791,6 +791,22 @@ All notable changes are documented here. The format follows
 
 ### Security
 
+- **Breaking:** the files the browser keeps its session in and credentials
+  are read from are reserved like the `MELRA_POLICY` file, wherever they lie
+  and in every mode: the browser profile (`MELRA_BROWSER_PROFILE`), both HTTP
+  archives (`MELRA_BROWSER_HAR_PATH`, `MELRA_BROWSER_HAR_REPLAY`) and every
+  credential's `source.file`. No file effect, verification, browser upload or
+  terminal argument may name them (`path_reserved`,
+  `terminal_path_reserved`), approved or not. Enforced mode now refuses to
+  start in a workspace that holds one, with
+  `enforced_mode_refuses_secret_inside_workspace` naming which; move it out
+  of the workspace. A workspace inside the browser profile is refused at
+  startup in every mode (`workspace_inside_browser_profile`). The recording's
+  directory is made at startup rather than at the browser's first start.
+  `melra doctor` reports the layout on a new `secret-location` line, which
+  fails where the server would refuse to start and warns where a developer
+  mode workspace holds one.
+
 - **Breaking:** a bare program name in a terminal command is looked up only
   in `PATH` entries outside the workspace, as written and through links.
   Entries inside it, and empty or relative ones, which name the working
