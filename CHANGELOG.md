@@ -24,8 +24,8 @@ All notable changes are documented here. The format follows
   on any pull request that touches the release files, it builds the binaries
   and every release file through the same steps a `v*` tag runs (now one
   shared `release-artifacts` action), checks the versions, `npm publish
-  --dry-run`s every package and checks the GitHub release's asset list and
-  checksums, with read-only permissions throughout. (#204)
+  --dry-run`s every package and checks the GitHub release's asset list (each
+  name once) and checksums, with read-only permissions throughout. (#204)
 
 - `melra console` approves in a browser, with the same authority as
   `melra approve`. Run in a terminal, it starts a loopback server of its own,
@@ -143,13 +143,6 @@ All notable changes are documented here. The format follows
   release only once its tag was cut.
 
 ### Fixed
-
-- A tag release creates its GitHub release again. The asset list named the
-  Python sdist and wheel twice (they also match the single executables'
-  pattern), GitHub refuses a second copy of a name, and `gh release create`
-  then deleted the draft, after npm had already published. The executables'
-  pattern now names their platforms, and the release dry run fails on any
-  name listed twice.
 
 - A condition step whose advance lost its commit (a pause landed while it ran)
   keeps to one branch. Recovery read both branches' tasks together and could
