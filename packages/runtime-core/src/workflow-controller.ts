@@ -382,7 +382,9 @@ export class WorkflowController {
     }
     // A node parked for a human — approval or supplied input — is no
     // longer `pending`, so `readyNodeIds` will not return it. Re-offer it here
-    // or the workflow would stall forever with the answer in hand.
+    // or the workflow would stall forever with the answer in hand. Beside the
+    // ready nodes, not instead of them: a branch that does not wait on it
+    // carries on (#247).
     const awaiting = [...graph.nodes.values()]
       .filter(
         (node) =>
@@ -393,12 +395,24 @@ export class WorkflowController {
       )
       .map((node) => node.id)
       .sort();
+    // Unless a parked task has settled since (an operator's Deny, a peer's
+    // execute): the run still reads it as waiting, so hasFailure cannot see a
+    // denial yet. Those nodes alone, then, so this wave records it before any
+    // newly ready step is challenged or run on a run it fails.
+    const parkedSettled = awaiting.some((nodeId) =>
+      current.nodes[nodeId]!.taskIds.some(
+        (taskId) =>
+          !["planned", "awaiting_approval", "verified_success"].includes(
+            this.store.getTask(taskId)?.status ?? "",
+          ),
+      ),
+    );
     const nodeIds =
       rollback.length > 0
         ? rollback
-        : awaiting.length > 0
-        ? awaiting
-        : readyNodeIds(graph, current.nodes);
+        : parkedSettled
+          ? awaiting
+          : [...awaiting, ...readyNodeIds(graph, current.nodes)];
     if (nodeIds.length === 0) {
       // Nothing to run, but a step's certificate the last advance could not
       // write may be written now, and a run with nothing left is complete.
@@ -721,10 +735,7 @@ export class WorkflowController {
         // a failed sibling unwinding past it (#270). Anything else it left (a
         // challenge, or a step that took effect but failed its evidence) waits
         // for the next advance, which decides as it would with no restart.
-        const unknown = all.filter(
-          (task): task is TaskRecord =>
-            task !== undefined && ["recovery_required", "running", "verifying"].includes(task.status),
-        );
+        const unknown = this.unsettledUnder(keys);
         if (unknown.length > 0) return { state: recoveredNodeState(node, unknown, recorded), found: all };
         return { state: cleared ? { status: "pending", taskIds: [] } : recorded, found: all };
       }
@@ -788,6 +799,16 @@ export class WorkflowController {
     return { state, found };
   }
 
+  /** Tasks under these keys whose outcome is unknown or still unsettled. */
+  private unsettledUnder(keys: string[]): TaskRecord[] {
+    return keys
+      .map((key) => preferredTask(this.store.listTasksByKey(key), key))
+      .filter(
+        (task): task is TaskRecord =>
+          task !== undefined && ["recovery_required", "running", "verifying"].includes(task.status),
+      );
+  }
+
   /**
    * The branch a condition did not take. An advance that lost its commit (a
    * pause landed) can have left tasks there. A challenge is cancelled, and
@@ -834,27 +855,43 @@ export class WorkflowController {
   }
 
   /**
+   * settleInFlight once a cancel's stopped tasks have ended. Another holder
+   * of the run's lease is brief on a cancelled run (an advance returning
+   * early, a cancel's sweep, a halt refused), or lapses and is taken over, so
+   * it is tried again for about as long as a lease lasts. Any other failure
+   * (the store closed) leaves the steps in flight, as the cancel recorded
+   * them; cancelling again settles them (#325).
+   */
+  private settleStopped(workflowId: string, definition: WorkflowDefinition, waited = 0): void {
+    try {
+      this.underLease(workflowId, (run) => this.settleInFlight(run, definition));
+    } catch (error) {
+      if ((error as Error).message !== "workflow_lease_held" || waited > this.leaseDurationMs) return;
+      const delay = Math.min(1_000, Math.max(10, waited));
+      setTimeout(() => this.settleStopped(workflowId, definition, waited + delay), delay).unref();
+    }
+  }
+
+  /**
    * A cancelled run's steps recorded still in flight, read again from their
    * tasks once these have ended, as its cancel reads a step. One whose task
    * runs on is left as it is.
    */
-  private settleStopped(workflowId: string, definition: WorkflowDefinition): void {
-    this.underLease(workflowId, (run) => {
-      if (run.status !== "cancelled") return run;
-      return this.transition(run, (draft, emit) => {
-        for (const node of definition.nodes) {
-          const recorded = draft.nodes[node.id]!;
-          if (recorded.error !== "task_still_in_flight") continue;
-          const { state, found } = this.recoveredNode(run.id, node, definition, recorded);
-          if (found.some((task) => task !== undefined && ["running", "verifying"].includes(task.status))) continue;
-          const settled: WorkflowNodeState = ["pending", "ready", "awaiting_approval"].includes(state.status)
-            ? { ...state, status: "cancelled" }
-            : state;
-          if (canonicalJson(settled) === canonicalJson(recorded)) continue;
-          draft.nodes[node.id] = settled;
-          emit("workflow.node_changed", { nodeId: node.id, from: recorded.status, state: settled });
-        }
-      });
+  private settleInFlight(run: WorkflowRun, definition: WorkflowDefinition): WorkflowRun {
+    if (run.status !== "cancelled") return run;
+    return this.transition(run, (draft, emit) => {
+      for (const node of definition.nodes) {
+        const recorded = draft.nodes[node.id]!;
+        if (recorded.error !== "task_still_in_flight") continue;
+        const { state, found } = this.recoveredNode(run.id, node, definition, recorded);
+        if (found.some((task) => task !== undefined && ["running", "verifying"].includes(task.status))) continue;
+        const settled: WorkflowNodeState = ["pending", "ready", "awaiting_approval"].includes(state.status)
+          ? { ...state, status: "cancelled" }
+          : state;
+        if (canonicalJson(settled) === canonicalJson(recorded)) continue;
+        draft.nodes[node.id] = settled;
+        emit("workflow.node_changed", { nodeId: node.id, from: recorded.status, state: settled });
+      }
     });
   }
 
@@ -1081,9 +1118,14 @@ export class WorkflowController {
         definition = undefined;
       }
       const stopped: string[] = [];
+      // Cancelled again: a step recorded in flight whose task has since ended
+      // (here, after its settle gave up, or in another process) is recorded
+      // as it ended.
       const run =
         current.status === "cancelled"
-          ? current
+          ? definition === undefined
+            ? current
+            : this.settleInFlight(current, definition)
           : this.transition(current, (draft, emit) => {
               // After an advance that stalled, died or lost its commit, the run
               // names none of the steps that advance planned or ran, and
@@ -1139,13 +1181,12 @@ export class WorkflowController {
       // One running in this process is only told to stop. Its step is read
       // again once it has ended, as recorded: cancelled, or done all the same.
       // One running in another process, or whose process died, stays in
-      // flight: nothing here learns how it ends.
+      // flight: nothing here learns how it ends until the run is cancelled
+      // again.
       if (here.length > 0 && definition !== undefined) {
         const opened = definition;
         void Promise.all(here.map((taskId) => this.tasks.settled(taskId)))
           .then(() => this.settleStopped(workflowId, opened))
-          // Left in flight, as the cancel recorded it (an advance holds the
-          // run, or the store closed).
           .catch(() => undefined);
       }
       // A challenge a lost advance left is in no node's taskIds: a condition's
@@ -1380,6 +1421,15 @@ export class WorkflowController {
               : await answered(node.id, this.tasks.verifyPersisted(sourceTaskId, [node.predicate]), {
                   state,
                   tasks: [],
+                }).catch((error: unknown) => {
+                  // Not asked, so nothing decided it, but an advance that lost
+                  // its commit may have run a step under it whose outcome is
+                  // unknown. The node halts on that step, as recovery reads it
+                  // (#270), rather than wait or fail naming nothing while a
+                  // failed sibling unwinds past it (#318).
+                  const unknown = this.unsettledUnder(keys);
+                  if (!(error instanceof NodeRefused) || unknown.length === 0) throw error;
+                  throw new NodeRefused(error.reason, { state: recoveredNodeState(node, unknown, state), tasks: [] });
                 });
         // The other branch is settled by the advance that decides, or one that
         // finds the run naming it: only then can an advance that lost its
@@ -1669,36 +1719,46 @@ export class WorkflowController {
     workflowId: string,
     nodeId: string,
   ): Promise<NodeAdvance> {
-    const requests = branches.flatMap((branch, branchIndex) =>
-      branch.map((request, requestIndex) => ({
-        request,
-        identity: { workflowId, nodeId, iteration: 0, branch: `${branchIndex}:${requestIndex}` },
-      })),
-    );
+    // Branches side by side, each one's steps in order (#245). A branch's
+    // slice of the node's tasks is only a hint: runSequential checks each
+    // against its step's key, so one shifted by a branch that stopped short
+    // is taken up by key instead.
+    let offset = 0;
     // Every branch finishes before one's refusal is reported. Rejecting at
     // the first throw left a sibling's adapter running and the node recorded
     // as it was, so a failure beside it unwound past whatever that sibling did.
     const settled = await Promise.allSettled(
-      requests.map((item, index) =>
-        this.runTask(item.request, state.taskIds[index], approvals, true, item.identity),
-      ),
+      branches.map((branch, index) => {
+        const taskIds = state.taskIds.slice(offset, offset + branch.length);
+        offset += branch.length;
+        return this.runSequential(branch, { ...state, taskIds }, approvals, {
+          workflowId,
+          nodeId,
+          iteration: 0,
+          branch: String(index),
+        });
+      }),
     );
     const refused = settled.find((outcome) => outcome.status === "rejected");
-    // A refused branch stays as the attempt it acted on stands, found by its
-    // key as runTask finds it: one planned in this call is not recorded yet,
+    // A refused branch stays as the attempts it acted on stand, found by key
+    // as runTask finds them: one planned in this call is not recorded yet,
     // and the run may still name a cancelled attempt that was asked again.
-    // One with no task at all cannot be placed among the others, so the
-    // refusal goes up alone.
-    const states = settled.map((outcome, index) => {
-      if (outcome.status === "fulfilled") return outcome.value.state;
-      const { request, identity } = requests[index]!;
-      const key = taskIdempotencyKey(identity, request);
-      const task = preferredTask(this.store.listTasksByKey(key), key);
-      return task === undefined ? undefined : nodeStateForTask(task, false);
+    // Read as runSequential reads it, up to the first step not complete; one
+    // it never reached leaves it pending, not complete.
+    const states = settled.flatMap((outcome, branchIndex) => {
+      if (outcome.status === "fulfilled") return [outcome.value.state];
+      const steps: WorkflowNodeState[] = [];
+      for (const [index, request] of branches[branchIndex]!.entries()) {
+        const key = taskIdempotencyKey({ workflowId, nodeId, iteration: 0, branch: `${branchIndex}:${index}` }, request);
+        const task = preferredTask(this.store.listTasksByKey(key), key);
+        const step: WorkflowNodeState = task === undefined ? { status: "pending", taskIds: [] } : nodeStateForTask(task, false);
+        steps.push(step);
+        if (step.status !== "verified_complete") break;
+      }
+      return steps;
     });
-    if (states.some((entry) => entry === undefined)) throw refused!.reason;
     const advance = {
-      state: aggregateNodeState(states as WorkflowNodeState[]),
+      state: aggregateNodeState(states),
       tasks: settled.flatMap((outcome) => (outcome.status === "fulfilled" ? outcome.value.tasks : [])),
     };
     if (refused !== undefined) throw new NodeRefused(refused.reason, advance);
@@ -2291,6 +2351,8 @@ function sequenceFinished(node: WorkflowNode, found: Array<TaskRecord | undefine
     // left for the loop itself to decide.
     return found.every(Boolean);
   }
+  // Every branch runs to its end, each step only after the one before it.
+  if (node.type === "parallel") return found.every(Boolean);
   return true;
 }
 

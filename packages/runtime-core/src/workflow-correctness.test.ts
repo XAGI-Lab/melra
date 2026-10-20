@@ -1,7 +1,7 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
-import { mkdtemp, rm, unlink, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -17,7 +17,7 @@ import {
 import { createDefaultPolicy, type LocalPolicy } from "@melra/policy-core";
 import { sha256 } from "@melra/receipt-schema";
 import { SqliteStore } from "@melra/storage-sqlite";
-import { Verifier } from "@melra/verifier-core";
+import { Verifier, type EvidenceProbe } from "@melra/verifier-core";
 import { PayloadCipher } from "./payload-cipher.js";
 import { TaskController } from "./task-controller.js";
 import { WorkflowController } from "./workflow-controller.js";
@@ -39,7 +39,7 @@ afterEach(async () => {
 });
 
 /** Every memory `put` the adapter performed, by key, in order. */
-async function setup(options: { delayMs?: number; policy?: Partial<LocalPolicy> } = {}) {
+async function setup(options: { delayMs?: number; policy?: Partial<LocalPolicy>; probe?: EvidenceProbe } = {}) {
   const root = await mkdtemp(join(tmpdir(), "melra-workflow-correctness-"));
   roots.push(root);
   const store = new SqliteStore(":memory:");
@@ -60,7 +60,7 @@ async function setup(options: { delayMs?: number; policy?: Partial<LocalPolicy> 
     store,
     { ...createDefaultPolicy(root), ...options.policy },
     { execute },
-    await Verifier.create(root),
+    await Verifier.create(root, options.probe === undefined ? {} : { probe: options.probe }),
     cipher,
   );
   return { root, store, cipher, tasks, done, on, controller: new WorkflowController(store, tasks, cipher) };
@@ -153,6 +153,79 @@ describe("workflow ordering", () => {
     const retried = (await controller.advance(planned.id, [], [{ nodeId: "ask", value: "ok" }])).run;
     expect(retried.nodes.write?.status).toBe("verified_complete");
     expect(retried.status).not.toBe("failed");
+  });
+});
+
+describe("a parallel branch's steps, in order (#245)", () => {
+  it("does not start a branch's next step when the one before it fails", async () => {
+    const { controller, done } = await setup({ policy: { unhinged: true } });
+    // Its evidence cannot hold: a1 runs, and fails.
+    const a1 = TaskRequestSchema.parse({ ...put("a1"), requiredEvidence: [{ type: "result_equals", path: "stored", value: false }] });
+    const planned = controller.plan(workflow([{ id: "fan", type: "parallel", branches: [[a1, put("a2")], [put("b1")]] }]));
+    const run = (await controller.advance(planned.id)).run;
+    expect(run.nodes.fan?.status).toBe("failed");
+    // The other branch runs to its end.
+    expect([...done].sort()).toEqual(["a1", "b1"]);
+  });
+
+  it("does not run a branch's read-back while the write before it awaits approval", async () => {
+    const { controller, store, done } = await setup();
+    const planned = controller.plan(workflow([{ id: "fan", type: "parallel", branches: [[put("w"), read()], [read()]] }]));
+    const first = await controller.advance(planned.id);
+    expect(first.run.nodes.fan?.status).toBe("awaiting_approval");
+    // Only the other branch's read ran.
+    expect(first.tasks.filter((task) => task.request.operation.kind === "system")).toHaveLength(1);
+    let run = first.run;
+    for (let step = 0; step < 4 && run.status !== "verified_complete"; step += 1) {
+      run = (await controller.advance(planned.id, approvalsFor(run))).run;
+    }
+    expect(run.status).toBe("verified_complete");
+    expect(done).toEqual(["w"]);
+    // Each read once: the other branch's is not run again beside the read-back.
+    expect(store.listTasks(10).filter((task) => task.request.operation.kind === "system")).toHaveLength(2);
+  });
+
+  it("carries a branch on after an advance lost its commit between its steps", async () => {
+    const { controller, store, done, on } = await setup({ policy: { unhinged: true } });
+    const planned = controller.plan(workflow([{ id: "fan", type: "parallel", branches: [[put("a1"), put("a2")], [put("b1")]] }]));
+    // The pause lands as a1 runs, so the advance stops before a2.
+    on.put = (key) => {
+      if (key !== "a1") return;
+      delete on.put;
+      lapseAndPause(controller, store, planned.id);
+    };
+    await expect(controller.advance(planned.id)).rejects.toThrow("workflow_lease_lost");
+    controller.resume(planned.id);
+    let run = controller.status(planned.id);
+    for (let step = 0; step < 4 && run.status !== "verified_complete"; step += 1) {
+      run = (await controller.advance(planned.id)).run;
+    }
+    // Recovered as complete, a2 never ran.
+    expect(run.status).toBe("verified_complete");
+    expect([...done].sort()).toEqual(["a1", "a2", "b1"]);
+  });
+
+  it("leaves a node pending, not complete, when a branch's next step fails to plan", async () => {
+    const { controller, tasks, done } = await setup({ policy: { unhinged: true } });
+    const planned = controller.plan(workflow([{ id: "fan", type: "parallel", branches: [[put("a1"), put("a2")], [put("b1")]] }]));
+    // A transient store error planning a2, once: a1 and b1 have run.
+    const plan = tasks.plan.bind(tasks);
+    let thrown = false;
+    vi.spyOn(tasks, "plan").mockImplementation((request, options) => {
+      if (!thrown && request.goal === "Put a2") {
+        thrown = true;
+        throw new Error("database is locked");
+      }
+      return plan(request, options);
+    });
+    await expect(controller.advance(planned.id)).rejects.toThrow("database is locked");
+    expect(controller.status(planned.id).nodes.fan?.status).toBe("pending");
+    expect([...done].sort()).toEqual(["a1", "b1"]);
+
+    const run = (await controller.advance(planned.id)).run;
+    expect(run.status).toBe("verified_complete");
+    // a2 runs once, the others not again.
+    expect([...done].sort()).toEqual(["a1", "a2", "b1"]);
   });
 });
 
@@ -735,7 +808,7 @@ describe("a condition's branch not taken (#268)", () => {
 
 describe("a condition step a lost advance left unknown (#270)", () => {
   // Pay, then a branch beside a step that fails; refunding pays back.
-  const definition = () =>
+  const definition = (predicate: unknown = { type: "file_exists", path: "flag" }) =>
     workflow([
       { id: "pay", type: "operation", request: put("pay") },
       {
@@ -743,7 +816,7 @@ describe("a condition step a lost advance left unknown (#270)", () => {
         type: "condition",
         dependsOn: ["pay"],
         sourceNodeId: "pay",
-        predicate: { type: "file_exists", path: "flag" },
+        predicate,
         whenTrue: [put("ship")],
         whenFalse: [put("other")],
       },
@@ -779,6 +852,66 @@ describe("a condition step a lost advance left unknown (#270)", () => {
     expect(run.status).toBe("recovery_required");
     expect(done).toEqual(["pay", "x"]);
   });
+
+  // A commit lost without a takeover (a locked database) leaves no lease, so
+  // the next advance decides the condition live, not recovery (#318).
+  it.each(["inconclusive", "unresolvable"] as const)(
+    "halts rather than unwind past it when its commit was lost and the condition's check is %s",
+    async (how) => {
+      // The payments provider answers the first check, then is down (503).
+      let answer = { success: true, status: 200, content: JSON.stringify({ status: "applied" }) };
+      const { controller, root, store, done, on } = await setup({
+        policy: { unhinged: true },
+        probe: async () => answer,
+      });
+      await writeFile(join(root, "flag"), "on");
+      const planned = controller.plan(
+        definition(
+          how === "inconclusive"
+            ? {
+                type: "http_resource_matches",
+                url: "https://payments.example.test/charges/1",
+                method: "GET",
+                path: "json.status",
+                value: "applied",
+              }
+            : undefined,
+        ),
+      );
+      await controller.advance(planned.id);
+      on.put = (key) => {
+        if (key === "ship") throw outcomeUnknown("socket hang up");
+      };
+      vi.spyOn(store, "transitionWorkflow").mockImplementationOnce(() => {
+        throw new Error("database is locked");
+      });
+      await expect(controller.advance(planned.id)).rejects.toThrow("database is locked");
+      delete on.put;
+      const [ship] = store.listTasks(10, "recovery_required");
+      expect(controller.status(planned.id).nodes.choose).toMatchObject({ status: "pending", taskIds: [] });
+      if (how === "inconclusive") answer = { success: true, status: 503, content: "{}" };
+      else {
+        // The kernel refuses to ask: the flag now leads outside the workspace.
+        const outside = await mkdtemp(join(tmpdir(), "melra-workflow-correctness-"));
+        roots.push(outside);
+        await writeFile(join(outside, "flag"), "on");
+        await unlink(join(root, "flag"));
+        await symlink(join(outside, "flag"), join(root, "flag"));
+      }
+
+      // The condition waited (or failed) naming nothing, x's failure was read
+      // as the run's, and refund ran while ship may have shipped.
+      await expect(controller.advance(planned.id)).rejects.toThrow(`workflow_check_${how}:choose`);
+      expect(done).toEqual(["pay", "x"]);
+      expect(controller.status(planned.id).nodes.choose).toMatchObject({
+        status: "recovery_required",
+        taskIds: [ship!.id],
+      });
+      const run = (await controller.advance(planned.id)).run;
+      expect(run.status).toBe("recovery_required");
+      expect(done).toEqual(["pay", "x"]);
+    },
+  );
 
   it("halts after a crash rather than unwind past it", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-workflow-correctness-"));
