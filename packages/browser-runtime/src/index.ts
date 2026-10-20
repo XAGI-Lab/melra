@@ -544,6 +544,8 @@ export class BrowserRuntime {
    */
   private signal: AbortSignal | undefined;
   private callMs = 30_000;
+  /** A wait's absolute deadline, applied to every bounded call it makes. */
+  private waitDeadline: number | undefined;
   /**
    * Set once the running action's effect call has returned. From then on the
    * page may have acted on it, so a failure is no longer evidence that nothing
@@ -577,7 +579,11 @@ export class BrowserRuntime {
    * instead spends the budget on something that can still answer.
    */
   private call<T>(promise: Promise<T>, what: string, ms = this.callMs): Promise<T> {
-    return bounded(promise, ms, what, this.signal);
+    const timeout =
+      this.waitDeadline === undefined
+        ? ms
+        : Math.min(ms, Math.max(Math.min(500, this.callMs), this.waitDeadline - Date.now()));
+    return bounded(promise, timeout, what, this.signal);
   }
 
   private async uploadPaths(paths: string[]): Promise<string[]> {
@@ -1486,73 +1492,93 @@ export class BrowserRuntime {
     timeoutMs: number,
   ): Promise<void> {
     const negated = state === "hidden" || state === "detached";
+    const floor = Math.min(500, timeoutMs);
     const deadline = Date.now() + timeoutMs;
-    for (;;) {
-      // Asked on every poll: someone can fill a secret field while this waits.
-      // A poll that finds one filled, or cannot tell, looks for nothing and
-      // waits for the next one: a login form stays filled while it signs in.
-      // The question gets what is left of the wait, but at least a second, so
-      // the last poll is not starved into "unknown".
-      this.signal?.throwIfAborted();
-      const secret = await this.secretFieldFilled(page, Math.max(1_000, deadline - Date.now()));
-      let reached = negated && secret.state === "clear";
-      for (const candidate of secret.state === "clear" ? this.candidates(page, target, secret.read) : []) {
-        // Absence is an answer here: it satisfies `hidden` and `detached`. A
-        // document that went away mid-poll is not: the poll decides nothing.
-        let present: boolean | undefined;
-        try {
-          const element = await this.readFirst(candidate, secret.read);
-          try {
-            if (element === undefined) present = false;
-            else if (state === "attached" || state === "detached") present = true;
-            else if (await this.call(element.isVisible(), "is_visible")) present = true;
-            // isVisible() also answers false for an element whose document went
-            // away, so a false counts only for one still in its document.
-            else present = (await this.call(element.evaluate((node) => node.isConnected), "is_visible")) ? false : undefined;
-          } finally {
-            await element?.dispose().catch(() => undefined);
-          }
-        } catch (error) {
-          if (!navigatedAway(error)) {
-            // A search that failed outright is answered like any other: the
-            // check after it wins over what it met.
-            const after = (await this.secretFieldFilled(page, Math.max(1_000, deadline - Date.now()))).state;
-            if (after === "filled") throw new Error("browser_secret_field_filled");
-            if (after === "unknown") throw new Error("browser_secret_check_unavailable");
-            throw error;
-          }
-        }
-        if (present === undefined) {
-          reached = false;
-          break;
-        }
-        if (negated) {
-          if (present) {
+    const previousDeadline = this.waitDeadline;
+    this.waitDeadline = deadline;
+    try {
+      for (;;) {
+        // Asked on every poll: someone can fill a secret field while this waits.
+        // A poll that finds one filled, or cannot tell, looks for nothing and
+        // waits for the next one: a login form stays filled while it signs in.
+        this.signal?.throwIfAborted();
+        const secret = await this.secretFieldFilled(page, Math.max(floor, deadline - Date.now()));
+        let reached = negated && secret.state === "clear";
+        let looked = false;
+        for (const candidate of secret.state === "clear" ? this.candidates(page, target, secret.read) : []) {
+          // Let even a short wait look once, but do not spend a whole poll
+          // walking the remaining frames after its deadline.
+          if (looked && Date.now() >= deadline) {
             reached = false;
             break;
           }
-        } else if (present) {
-          reached = true;
-          break;
+          looked = true;
+          // Absence is an answer here: it satisfies `hidden` and `detached`. A
+          // document that went away mid-poll is not: the poll decides nothing.
+          let present: boolean | undefined;
+          try {
+            const element = await this.readFirst(candidate, secret.read);
+            try {
+              if (element === undefined) present = false;
+              else if (state === "attached" || state === "detached") present = true;
+              else if (await this.call(element.isVisible(), "is_visible")) present = true;
+              // isVisible() also answers false for an element whose document went
+              // away, so a false counts only for one still in its document.
+              else present = (await this.call(element.evaluate((node) => node.isConnected), "is_visible")) ? false : undefined;
+            } finally {
+              await element?.dispose().catch(() => undefined);
+            }
+          } catch (error) {
+            if (!navigatedAway(error)) {
+              // A search that failed outright is answered like any other: the
+              // check after it wins over what it met. An incomplete check must
+              // refuse the wait rather than trust the result it could not verify.
+              const after = (await this.secretFieldFilled(page, Math.max(floor, deadline - Date.now()))).state;
+              if (after === "filled") throw new Error("browser_secret_field_filled");
+              if (after === "unknown") throw new Error("browser_secret_check_unavailable");
+              if (
+                error instanceof BrowserCallTimeoutError &&
+                deadline - Date.now() <= WAIT_POLL_MS
+              ) {
+                throw new Error(`browser_wait_timeout:${state}:${JSON.stringify(target)}`);
+              }
+              throw error;
+            }
+          }
+          if (present === undefined) {
+            reached = false;
+            break;
+          }
+          if (negated) {
+            if (present) {
+              reached = false;
+              break;
+            }
+          } else if (present) {
+            reached = true;
+            break;
+          }
         }
+        // What a poll found, or did not, counts only if no field was filled
+        // while it looked: every poll that searched is checked again after.
+        let last = secret.state;
+        if (secret.state === "clear") {
+          last = (await this.secretFieldFilled(page, Math.max(floor, deadline - Date.now()))).state;
+          if (reached && last === "clear") return;
+        }
+        if (Date.now() >= deadline) {
+          // Not the target's fault when the last poll could not look for it,
+          // or could not vouch for what it saw.
+          if (last === "filled") throw new Error("browser_secret_field_filled");
+          if (last === "unknown") throw new Error("browser_secret_check_unavailable");
+          throw new Error(
+            `browser_wait_timeout:${state}:${JSON.stringify(target)}`,
+          );
+        }
+        await page.waitForTimeout(Math.min(WAIT_POLL_MS, Math.max(1, deadline - Date.now())));
       }
-      // What a poll found, or did not, counts only if no field was filled
-      // while it looked: every poll that searched is checked again after.
-      let last = secret.state;
-      if (secret.state === "clear") {
-        last = (await this.secretFieldFilled(page, Math.max(1_000, deadline - Date.now()))).state;
-        if (reached && last === "clear") return;
-      }
-      if (Date.now() >= deadline) {
-        // Not the target's fault when the last poll could not look for it,
-        // or could not vouch for what it saw.
-        if (last === "filled") throw new Error("browser_secret_field_filled");
-        if (last === "unknown") throw new Error("browser_secret_check_unavailable");
-        throw new Error(
-          `browser_wait_timeout:${state}:${JSON.stringify(target)}`,
-        );
-      }
-      await page.waitForTimeout(WAIT_POLL_MS);
+    } finally {
+      this.waitDeadline = previousDeadline;
     }
   }
 

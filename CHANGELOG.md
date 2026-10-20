@@ -144,6 +144,15 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- A `browser` wait now ends within about its `timeoutMs` instead of running
+  several times longer on a busy page or one with many frames: calls get the
+  time left, with a 500 ms floor capped at the requested timeout, and retain
+  any shorter explicit bound. A poll stops walking candidates at the deadline
+  after looking at least once, then checks the page again before deciding;
+  its delay uses only the remaining time. A wait that times out ends with
+  `browser_wait_timeout`, or `browser_secret_field_filled` /
+  `browser_secret_check_unavailable` when its last poll could not vouch for
+  the page. (#297)
 - A `parallel` node runs each branch's steps in order, as documented. Every
   step of every branch started at once, so a branch's read-back ran before
   its write, a step ran after the one before it had failed, and challenges
