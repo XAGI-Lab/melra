@@ -103,6 +103,8 @@ export class WorkflowController {
   // Distinct from `owner`, so this process's own advance in flight also keeps
   // its recovery away from the run.
   private readonly recoveryOwner = `${this.owner}:recovery`;
+  // An operator's halt or cancel, likewise refused by this process's own advance.
+  private readonly controlOwner = `${this.owner}:control`;
   // Runs an advance in this process holds the lease for. Recovery leaves them
   // alone even once the lease has lapsed, say across a laptop's sleep.
   private readonly leased = new Set<string>();
@@ -612,7 +614,6 @@ export class WorkflowController {
       : this.store.listWorkflowRuns(RECOVERABLE);
     if (runs.length === 0) return [];
     const recovered: WorkflowRun[] = [];
-    const allTasks = this.store.listTasks(100_000);
     for (const stored of runs) {
       if (this.leased.has(stored.id)) continue;
       let definition: WorkflowDefinition;
@@ -627,12 +628,9 @@ export class WorkflowController {
       );
       // Skipped runs keep any abandoned lease, which is how the sweep finds
       // them again once that task settles.
-      const unsettled = allTasks.filter(
-        (task) =>
-          task.idempotencyKey !== undefined &&
-          keys.has(task.idempotencyKey) &&
-          (task.status === "running" || task.status === "verifying"),
-      );
+      const unsettled = [...keys]
+        .flatMap((key) => this.store.listTasksByKey(key))
+        .filter((task) => task.status === "running" || task.status === "verifying");
       if (unsettled.length > 0) {
         const failed = unsettled.find((task) => taskFailures.has(task.id));
         if (failed !== undefined) runFailures.set(stored.id, taskFailures.get(failed.id));
@@ -651,7 +649,7 @@ export class WorkflowController {
         // Changed since the listing, by an advance or by an operator's pause,
         // so the tasks read above may be stale.
         if (this.store.getWorkflowRun(stored.id)?.stateVersion === stored.stateVersion) {
-          recovered.push(this.recoverRun(stored, definition, allTasks));
+          recovered.push(this.recoverRun(stored, definition));
           repaired = true;
         }
       } catch (error) {
@@ -682,7 +680,6 @@ export class WorkflowController {
     runId: string,
     node: WorkflowNode,
     definition: WorkflowDefinition,
-    allTasks: TaskRecord[],
     recorded: WorkflowNodeState,
   ): { state: WorkflowNodeState; found: Array<TaskRecord | undefined> } {
     const keys = expectedTaskKeys(runId, node, definition);
@@ -708,7 +705,7 @@ export class WorkflowController {
             : first === undefined || !keys.includes(first)
               ? undefined
               : trueKeys.includes(first);
-      const all = keys.map((key) => preferredTask(allTasks, key));
+      const all = keys.map((key) => preferredTask(this.store.listTasksByKey(key), key));
       if (chosen === undefined) {
         // Nothing decided it. A conflict stands while a task in it may have
         // had an effect.
@@ -731,12 +728,12 @@ export class WorkflowController {
         if (unknown.length > 0) return { state: recoveredNodeState(node, unknown, recorded), found: all };
         return { state: cleared ? { status: "pending", taskIds: [] } : recorded, found: all };
       }
-      const halted = this.abandonBranch(node, keys, chosen, allTasks);
+      const halted = this.abandonBranch(node, keys, chosen);
       if (halted !== undefined) return { state: halted, found: all };
       for (const key of chosen ? keys.slice(node.whenTrue.length) : trueKeys) ignored.add(key);
     }
     const found = keys.map((key) =>
-      ignored.has(key) ? undefined : preferredTask(allTasks, key),
+      ignored.has(key) ? undefined : preferredTask(this.store.listTasksByKey(key), key),
     );
     let state = recoveredNodeState(
       node,
@@ -803,7 +800,6 @@ export class WorkflowController {
     node: Extract<WorkflowNode, { type: "condition" }>,
     keys: string[],
     chosen: boolean,
-    allTasks: TaskRecord[],
   ): WorkflowNodeState | undefined {
     const other = chosen ? keys.slice(node.whenTrue.length) : keys.slice(0, node.whenTrue.length);
     const conflicting = new Set<string>();
@@ -811,7 +807,7 @@ export class WorkflowController {
       const commit = this.store.getIdempotencyCommit(key);
       if (commit !== undefined) conflicting.add(commit.taskId);
     }
-    for (const task of this.cancelChallenges(other, allTasks)) {
+    for (const task of this.cancelChallenges(other)) {
       if (!hadNoEffect(task)) conflicting.add(task.id);
     }
     return conflicting.size === 0
@@ -824,10 +820,10 @@ export class WorkflowController {
    * Every task under these keys, read again, with each challenge among them
    * cancelled and the cancel read back, so nobody approves it later.
    */
-  private cancelChallenges(keys: string[], allTasks: TaskRecord[]): TaskRecord[] {
-    const wanted = new Set(keys);
-    return allTasks
-      .filter((task) => task.idempotencyKey !== undefined && wanted.has(task.idempotencyKey))
+  private cancelChallenges(keys: string[]): TaskRecord[] {
+    // Each key once: an approval node's is its operation's.
+    return [...new Set(keys)]
+      .flatMap((key) => this.store.listTasksByKey(key))
       .map((listed) => {
         // Read again: the listing can predate an approver starting it.
         const task = this.tasks.status(listed.id);
@@ -835,6 +831,31 @@ export class WorkflowController {
         this.tasks.cancel(task.id);
         return this.tasks.status(task.id);
       });
+  }
+
+  /**
+   * A cancelled run's steps recorded still in flight, read again from their
+   * tasks once these have ended, as its cancel reads a step. One whose task
+   * runs on is left as it is.
+   */
+  private settleStopped(workflowId: string, definition: WorkflowDefinition): void {
+    this.underLease(workflowId, (run) => {
+      if (run.status !== "cancelled") return run;
+      return this.transition(run, (draft, emit) => {
+        for (const node of definition.nodes) {
+          const recorded = draft.nodes[node.id]!;
+          if (recorded.error !== "task_still_in_flight") continue;
+          const { state, found } = this.recoveredNode(run.id, node, definition, recorded);
+          if (found.some((task) => task !== undefined && ["running", "verifying"].includes(task.status))) continue;
+          const settled: WorkflowNodeState = ["pending", "ready", "awaiting_approval"].includes(state.status)
+            ? { ...state, status: "cancelled" }
+            : state;
+          if (canonicalJson(settled) === canonicalJson(recorded)) continue;
+          draft.nodes[node.id] = settled;
+          emit("workflow.node_changed", { nodeId: node.id, from: recorded.status, state: settled });
+        }
+      });
+    });
   }
 
   /**
@@ -856,9 +877,8 @@ export class WorkflowController {
       return recoveredNodeState(node, recorded as TaskRecord[], state).status !== "recovery_required";
     });
     if (parked.length === 0) return run;
-    const allTasks = this.store.listTasks(100_000);
     const changed = parked.flatMap((node) => {
-      const { state, found } = this.recoveredNode(run.id, node, definition, allTasks, run.nodes[node.id]!);
+      const { state, found } = this.recoveredNode(run.id, node, definition, run.nodes[node.id]!);
       if (found.some((task) => task !== undefined && ["running", "verifying"].includes(task.status))) return [];
       return canonicalJson(state) === canonicalJson(run.nodes[node.id]) ? [] : [{ nodeId: node.id, state }];
     });
@@ -912,34 +932,49 @@ export class WorkflowController {
     }
   }
 
-  private recoverRun(
+  /**
+   * Each node of `stored` read again from the tasks under its keys, as
+   * recovery reads it, into `draft`. Returns the ids of the tasks now on the
+   * nodes it changed.
+   */
+  private recoverNodes(
     stored: WorkflowRun,
     definition: WorkflowDefinition,
-    allTasks: TaskRecord[],
-  ): WorkflowRun {
+    draft: WorkflowRun,
+    emit: EmitEvent,
+  ): string[] {
     const replayed = this.replay(stored);
     if (replayed.stateVersion !== stored.stateVersion) {
       throw new Error("workflow_event_history_invalid");
     }
-    return this.transition(stored, (draft, emit) => {
-      for (const node of definition.nodes) {
-        // An advance on a failed run only ever runs compensations, so only
-        // they can be stale. Re-deriving the forward nodes would rank their
-        // tasks differently from the live path and could take the run out of
-        // failed: a branch awaiting approval beside a failed one reopened.
-        if (stored.status === "failed" && node.type !== "compensation") continue;
-        const { state } = this.recoveredNode(stored.id, node, definition, allTasks, replayed.nodes[node.id]!);
-        if (canonicalJson(draft.nodes[node.id]) === canonicalJson(state)) {
-          continue;
-        }
-        const from = draft.nodes[node.id]!.status;
-        draft.nodes[node.id] = state;
-        emit("workflow.node_changed", {
-          nodeId: node.id,
-          from,
-          state,
-        });
+    const found: string[] = [];
+    for (const node of definition.nodes) {
+      // An advance on a failed run only ever runs compensations, so only
+      // they can be stale. Re-deriving the forward nodes would rank their
+      // tasks differently from the live path and could take the run out of
+      // failed: a branch awaiting approval beside a failed one reopened.
+      if (stored.status === "failed" && node.type !== "compensation") continue;
+      const { state } = this.recoveredNode(stored.id, node, definition, replayed.nodes[node.id]!);
+      if (canonicalJson(draft.nodes[node.id]) === canonicalJson(state)) {
+        continue;
       }
+      const from = draft.nodes[node.id]!.status;
+      // A copy: the caller goes on to change the node in the draft (cancels
+      // it, or skips a compensation), which must not rewrite this event.
+      draft.nodes[node.id] = structuredClone(state);
+      emit("workflow.node_changed", {
+        nodeId: node.id,
+        from,
+        state,
+      });
+      found.push(...state.taskIds);
+    }
+    return found;
+  }
+
+  private recoverRun(stored: WorkflowRun, definition: WorkflowDefinition): WorkflowRun {
+    return this.transition(stored, (draft, emit) => {
+      this.recoverNodes(stored, definition, draft, emit);
       let status = this.deriveStatus(draft, definition);
       if (status === "verified_complete") {
         for (const node of definition.nodes) {
@@ -992,23 +1027,24 @@ export class WorkflowController {
   }
 
   resume(workflowId: string): WorkflowRun {
-    const current = this.status(workflowId);
-    if (!["paused", "suspended"].includes(current.status)) {
-      throw new Error("workflow_not_paused");
-    }
-    const definition = this.loadDefinition(current);
-    return this.transition(current, (draft, emit) => {
-      const from = draft.status;
-      // Restore whatever the graph was actually blocked on before the halt,
-      // so resuming a run parked on a human, or on an effect whose outcome is
-      // unknown, does not claim it is running.
-      draft.status = this.deriveStatus(draft, definition);
-      if (draft.status !== "recovery_required") delete draft.error;
-      else draft.error ??= "workflow_contains_unreconciled_mutation";
-      emit("workflow.resumed", {
-        from,
-        to: draft.status,
-        ...(draft.error === undefined ? {} : { error: draft.error }),
+    return this.underLease(workflowId, (current) => {
+      if (!["paused", "suspended"].includes(current.status)) {
+        throw new Error("workflow_not_paused");
+      }
+      const definition = this.loadDefinition(current);
+      return this.transition(current, (draft, emit) => {
+        const from = draft.status;
+        // Restore whatever the graph was actually blocked on before the halt,
+        // so resuming a run parked on a human, or on an effect whose outcome is
+        // unknown, does not claim it is running.
+        draft.status = this.deriveStatus(draft, definition);
+        if (draft.status !== "recovery_required") delete draft.error;
+        else draft.error ??= "workflow_contains_unreconciled_mutation";
+        emit("workflow.resumed", {
+          from,
+          to: draft.status,
+          ...(draft.error === undefined ? {} : { error: draft.error }),
+        });
       });
     });
   }
@@ -1018,68 +1054,142 @@ export class WorkflowController {
     to: "paused" | "suspended",
     eventType: string,
   ): WorkflowRun {
-    const current = this.status(workflowId);
-    if (current.status === to) return current;
-    if (
-      ["verified_complete", "cancelled", "failed"].includes(current.status)
-    ) {
-      throw new Error("workflow_not_haltable");
-    }
-    return this.transition(current, (draft, emit) => {
-      const from = draft.status;
-      draft.status = to;
-      // Kept: a run halted while it needed recovery still needs it, and the
-      // reducer drops an error the event does not carry.
-      emit(eventType, { from, to, ...(draft.error === undefined ? {} : { error: draft.error }) });
+    return this.underLease(workflowId, (current) => {
+      if (current.status === to) return current;
+      if (
+        ["verified_complete", "cancelled", "failed"].includes(current.status)
+      ) {
+        throw new Error("workflow_not_haltable");
+      }
+      return this.transition(current, (draft, emit) => {
+        const from = draft.status;
+        draft.status = to;
+        // Kept: a run halted while it needed recovery still needs it, and the
+        // reducer drops an error the event does not carry.
+        emit(eventType, { from, to, ...(draft.error === undefined ? {} : { error: draft.error }) });
+      });
     });
   }
 
   cancel(workflowId: string): WorkflowRun {
-    const current = this.status(workflowId);
-    if (current.status === "verified_complete") return current;
-    // A challenge a lost advance left is in no node's taskIds: a condition's
-    // is never adopted (it would follow its branch without asking, #268), and
-    // an operation's stays approvable beside the one the next advance plans
-    // afresh (#319). So the run cancels what is planned or waiting under every
-    // node's keys too, and cancelling a cancelled run sweeps again. A store
-    // failure stops the cancel, so a retry sweeps; only a definition that can
-    // no longer be opened goes unswept, and still lets the run end.
-    let definition: WorkflowDefinition | undefined;
-    try {
-      definition = this.loadDefinition(current);
-    } catch {
-      definition = undefined;
-    }
-    if (definition !== undefined) {
-      const opened = definition;
-      this.cancelChallenges(
-        opened.nodes.flatMap((node) => expectedTaskKeys(current.id, node, opened)),
-        // Filtered in SQL, so the history is neither parsed nor cut short.
-        [...this.store.listTasks(100_000, "planned"), ...this.store.listTasks(100_000, "awaiting_approval")],
-      );
-    }
-    if (current.status === "cancelled") return current;
-    return this.transition(current, (draft, emit) => {
-      for (const [nodeId, node] of Object.entries(draft.nodes)) {
-        if (
-          !["pending", "ready", "awaiting_approval"].includes(node.status)
-        ) {
-          continue;
-        }
-        for (const taskId of node.taskIds) this.tasks.cancel(taskId);
-        const from = node.status;
-        node.status = "cancelled";
-        emit("workflow.node_changed", {
-          nodeId,
-          from,
-          state: node,
-        });
+    return this.underLease(workflowId, (current) => {
+      if (current.status === "verified_complete") return current;
+      let definition: WorkflowDefinition | undefined;
+      try {
+        definition = this.loadDefinition(current);
+      } catch {
+        definition = undefined;
       }
-      const from = draft.status;
-      draft.status = "cancelled";
-      delete draft.error;
-      emit("workflow.cancelled", { from, to: "cancelled" });
+      const stopped: string[] = [];
+      const run =
+        current.status === "cancelled"
+          ? current
+          : this.transition(current, (draft, emit) => {
+              // After an advance that stalled, died or lost its commit, the run
+              // names none of the steps that advance planned or ran, and
+              // nothing recovers a cancelled run: read again from the tasks
+              // under its keys first, as the next advance would, so they are on
+              // its nodes. A run already whole reads the same and records
+              // nothing more, but for an operation whose approval node ran its
+              // task, which reads that task on the next wave: recorded done
+              // here. A task still running there is stopped as the run's own,
+              // its step recorded as still in flight. One that cannot be
+              // recovered (its history no longer replays) is cancelled as it
+              // reads, as for a definition that no longer opens: refused, it
+              // could never end.
+              if (definition !== undefined) {
+                try {
+                  stopped.push(...this.recoverNodes(current, definition, draft, emit));
+                } catch {
+                  // Cancelled as recorded.
+                }
+              }
+              // A step an earlier advance already recorded in flight reads the
+              // same and is not among those, yet its task may run here (a
+              // direct melra_execute): stopped too. One in another process is
+              // left running by tasks.cancel.
+              for (const node of Object.values(draft.nodes)) {
+                if (node.error === "task_still_in_flight") stopped.push(...node.taskIds);
+              }
+              for (const [nodeId, node] of Object.entries(draft.nodes)) {
+                if (
+                  !["pending", "ready", "awaiting_approval"].includes(node.status)
+                ) {
+                  continue;
+                }
+                stopped.push(...node.taskIds);
+                const from = node.status;
+                node.status = "cancelled";
+                emit("workflow.node_changed", {
+                  nodeId,
+                  from,
+                  state: node,
+                });
+              }
+              const from = draft.status;
+              draft.status = "cancelled";
+              delete draft.error;
+              emit("workflow.cancelled", { from, to: "cancelled" });
+            });
+      // Tasks are cancelled only once the run is: cancelled before a commit
+      // that then failed, a step's challenge read as a denial on a run that
+      // went on, and the run unwound.
+      const here = stopped.filter((taskId) => this.store.inFlight.has(taskId));
+      for (const taskId of stopped) this.tasks.cancel(taskId);
+      // One running in this process is only told to stop. Its step is read
+      // again once it has ended, as recorded: cancelled, or done all the same.
+      // One running in another process, or whose process died, stays in
+      // flight: nothing here learns how it ends.
+      if (here.length > 0 && definition !== undefined) {
+        const opened = definition;
+        void Promise.all(here.map((taskId) => this.tasks.settled(taskId)))
+          .then(() => this.settleStopped(workflowId, opened))
+          // Left in flight, as the cancel recorded it (an advance holds the
+          // run, or the store closed).
+          .catch(() => undefined);
+      }
+      // A challenge a lost advance left is in no node's taskIds: a condition's
+      // is never adopted (it would follow its branch without asking, #268),
+      // and another step's is taken up only when the run advances again
+      // (#319). So the run cancels what is planned or waiting under every
+      // node's keys too, and cancelling a cancelled run sweeps again.
+      // A store failure is reported, so the operator cancels again and that
+      // sweeps; only a definition that can no longer be opened goes unswept,
+      // and still lets the run end.
+      if (definition !== undefined) {
+        const opened = definition;
+        this.cancelChallenges(opened.nodes.flatMap((node) => expectedTaskKeys(current.id, node, opened)));
+      }
+      return run;
     });
+  }
+
+  /**
+   * An operator's change to a run, made under its lease as recovery repairs
+   * one, so it never lands under an advance: the advance's commit would fail
+   * and the effects it ran drop out of the run (#244). Refused with
+   * workflow_lease_held while an advance in any process holds the lease. A
+   * lapsed lease is taken over, so the advance that held it stops with
+   * workflow_lease_lost before its next step, and is left expired, as it was:
+   * whoever advances the run next recovers it first.
+   */
+  private underLease(workflowId: string, change: (current: WorkflowRun) => WorkflowRun): WorkflowRun {
+    this.status(workflowId);
+    const at = Date.now();
+    const taken = this.store.takeWorkflowLease(
+      workflowId,
+      this.controlOwner,
+      new Date(at).toISOString(),
+      new Date(at + this.leaseDurationMs).toISOString(),
+    );
+    if (taken === "refused") throw new Error("workflow_lease_held");
+    try {
+      // Read under the lease: an advance may have committed since.
+      return change(this.status(workflowId));
+    } finally {
+      if (taken === "created") this.store.releaseWorkflowLease(workflowId, this.controlOwner);
+      else this.store.renewWorkflowLease(workflowId, this.controlOwner, new Date(0).toISOString());
+    }
   }
 
   private transition(
@@ -1280,7 +1390,7 @@ export class WorkflowController {
           recorded.length === 0 ||
           recorded.some((key) => !own.includes(key))
         ) {
-          const halted = this.abandonBranch(node, keys, chosen, this.store.listTasks(100_000));
+          const halted = this.abandonBranch(node, keys, chosen);
           if (halted !== undefined) return { state: halted, tasks: [] };
         }
         return await this.runSequential(
@@ -1414,26 +1524,35 @@ export class WorkflowController {
     identity: TaskIdentity,
   ): Promise<NodeAdvance> {
     this.assertAdvanceLease(identity.workflowId);
-    let task =
-      existingTaskId === undefined
-        ? this.tasks.plan(request, {
-            idempotencyKey: taskIdempotencyKey(identity, request),
-            attempt: 1,
-            stored: true,
-          })
-        : this.tasks.status(existingTaskId);
+    const key = taskIdempotencyKey(identity, request);
+    let task: TaskRecord;
+    if (existingTaskId !== undefined) {
+      task = this.tasks.status(existingTaskId);
+    } else {
+      // A step the run names no task for may still have one: an advance that
+      // lost its commit planned or ran it (#319). Planned afresh, a leftover
+      // challenge stayed approvable beside the new one, a step that took
+      // effect but failed its evidence ran again, and one that failed or was
+      // denied ran after all, past a compensation already run for it.
+      // Planned only when its key holds no task at all.
+      task =
+        this.takenUp(key) ??
+        this.tasks.plan(request, { idempotencyKey: key, attempt: 1, stored: true });
+    }
     // A challenge this run asked again after it expired leaves its first
     // attempt cancelled; when the advance that asked again did not commit, the
     // run still names that attempt. Take the newest attempt for the key, as
     // recovery does, so only a cancel nobody followed reads as a denial.
     if (task.status === "cancelled" && task.idempotencyKey !== undefined) {
-      task = preferredTask(this.store.listTasks(100_000), task.idempotencyKey) ?? task;
+      task = preferredTask(this.store.listTasksByKey(task.idempotencyKey), task.idempotencyKey) ?? task;
     }
     // A challenge that expired before anyone answered it can never be
     // answered, and reusing it left the node unapprovable for good. Ask again:
     // the expired task is cancelled and the same request planned afresh.
     // A challenge an approver answered in time is not asked again, however
-    // long the answer took to act on.
+    // long the answer took to act on. One started meanwhile by another
+    // process (an execute right at expiry) keeps its cancel from landing: it
+    // is the step's task, read as it now stands, not one to ask beside.
     const decided =
       task.status === "awaiting_approval" && this.tasks.approvalDecision(task) !== undefined;
     if (
@@ -1442,12 +1561,15 @@ export class WorkflowController {
       Date.parse(task.approval.expiresAt) <= Date.now() &&
       !decided
     ) {
-      this.tasks.cancel(task.id);
-      task = this.tasks.plan(request, {
-        idempotencyKey: taskIdempotencyKey(identity, request),
-        attempt: (task.attempt ?? 1) + 1,
-        stored: true,
-      });
+      const expired = this.tasks.cancel(task.id);
+      task =
+        expired.status !== "cancelled"
+          ? expired
+          : this.tasks.plan(request, {
+              idempotencyKey: key,
+              attempt: (task.attempt ?? 1) + 1,
+              stored: true,
+            });
     }
     if (task.status === "awaiting_approval") {
       const approval = approvals.find(
@@ -1494,6 +1616,17 @@ export class WorkflowController {
     }
   }
 
+  /**
+   * The task a step takes up rather than plan one: the one committed, else
+   * the one recovery prefers of every task under the key, one that did not
+   * happen (failed, denied, out of budget, refused) included, so the step
+   * reads as it would after a restart. Undefined only when there is none.
+   */
+  private takenUp(key: string): TaskRecord | undefined {
+    const committed = this.store.getIdempotencyCommit(key)?.taskId;
+    return committed === undefined ? preferredTask(this.store.listTasksByKey(key), key) : this.tasks.status(committed);
+  }
+
   private async runSequential(
     requests: TaskRequest[],
     state: WorkflowNodeState,
@@ -1502,23 +1635,17 @@ export class WorkflowController {
   ): Promise<NodeAdvance> {
     const taskIds: string[] = [];
     const tasks: TaskRecord[] = [];
-    let every: TaskRecord[] | undefined;
     for (const [index, request] of requests.entries()) {
       const taskIdentity = { ...identity, branch: `${identity.branch}:${index}` };
-      const key = taskIdempotencyKey(taskIdentity, request);
       // The step's task is the one under its key. The run may name another
       // branch's or step's (an earlier version merged both branches), or none
-      // (the advance that planned it lost its commit): one committed, or one
-      // that may have run or is still asking, is taken up, not planned again.
+      // (the advance that planned it lost its commit): runTask then takes up
+      // the one under its key.
       const named = state.taskIds[index];
-      let existing =
-        named !== undefined && this.tasks.status(named).idempotencyKey === key
+      const existing =
+        named !== undefined && this.tasks.status(named).idempotencyKey === taskIdempotencyKey(taskIdentity, request)
           ? named
-          : this.store.getIdempotencyCommit(key)?.taskId;
-      if (existing === undefined) {
-        const found = preferredTask((every ??= this.store.listTasks(100_000)), key);
-        if (found !== undefined && !hadNoEffect(found)) existing = found.id;
-      }
+          : undefined;
       const result = await this.runTask(request, existing, approvals, true, taskIdentity);
       tasks.push(...result.tasks);
       taskIds.push(result.state.taskIds[0]!);
@@ -1562,11 +1689,11 @@ export class WorkflowController {
     // and the run may still name a cancelled attempt that was asked again.
     // One with no task at all cannot be placed among the others, so the
     // refusal goes up alone.
-    let every: TaskRecord[] | undefined;
     const states = settled.map((outcome, index) => {
       if (outcome.status === "fulfilled") return outcome.value.state;
       const { request, identity } = requests[index]!;
-      const task = preferredTask((every ??= this.store.listTasks(100_000)), taskIdempotencyKey(identity, request));
+      const key = taskIdempotencyKey(identity, request);
+      const task = preferredTask(this.store.listTasksByKey(key), key);
       return task === undefined ? undefined : nodeStateForTask(task, false);
     });
     if (states.some((entry) => entry === undefined)) throw refused!.reason;
@@ -1587,6 +1714,17 @@ export class WorkflowController {
     const taskIds = [...state.taskIds];
     const tasks: TaskRecord[] = [];
     let iterations = state.iterations ?? 0;
+    // An advance that lost its commit may have gone on to this iteration, so
+    // `until` said no before it: asked again, of a workspace that iteration
+    // changed, it could stop the loop short of an iteration that ran.
+    const wentOn = (iteration: number) => {
+      if (iteration >= node.maxIterations) return false;
+      const key = taskIdempotencyKey(
+        { workflowId, nodeId: node.id, iteration, branch: "loop:0" },
+        node.body[0]!,
+      );
+      return this.takenUp(key) !== undefined;
+    };
     // Resumed after recovery between iterations: the last one finished but its
     // `until` was never checked, and running another would be one too many.
     const finished = taskIds[iterations * node.body.length - 1];
@@ -1595,6 +1733,7 @@ export class WorkflowController {
       taskIds.length === iterations * node.body.length &&
       finished !== undefined &&
       node.until !== undefined &&
+      !wentOn(iterations) &&
       (await answered(
         node.id,
         this.tasks.verifyPersisted(finished, [node.until]),
@@ -1640,6 +1779,7 @@ export class WorkflowController {
       if (
         node.until !== undefined &&
         iterations < node.maxIterations &&
+        !wentOn(iterations) &&
         (await answered(
           node.id,
           this.tasks.verifyPersisted(lastTaskId, [node.until]),
@@ -2191,6 +2331,12 @@ function recoveredNodeState(
       taskIds,
       ...(recovery.error === undefined ? {} : { error: recovery.error }),
     };
+  }
+  // Still running, in a live process or one that died mid-effect: unknown, as
+  // nodeStateForTask reads it. Read as cancelled, a cancel (which reads every
+  // step again) recorded the effect as cancelled on its run for good.
+  if (tasks.some((task) => task.status === "running" || task.status === "verifying")) {
+    return { status: "recovery_required", taskIds, error: "task_still_in_flight" };
   }
   const failed = tasks.find((task) =>
     [

@@ -144,6 +144,99 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- A deny and an execute in different processes no longer both win. Starting a
+  task, and cancelling one (`melra approve --deny`, the console's Deny,
+  `melra_task_cancel`), now moves it out of `planned` or `awaiting_approval`
+  only if it is still there when written. Before, an execute that read the
+  task just before a deny landed went on to run the effect the deny had
+  reported cancelled; a deny that read it just before an execute started it
+  rewrote the running task as `cancelled` while its effect ran; and two
+  processes executing one task could both run it. Now the second writer
+  loses: an execute is refused with `task_not_executable:<status>`, a cancel
+  returns the task as it now stands (exit 1 from `melra approve --deny`), and
+  the console refuses the Deny with `task_not_cancellable:<status>` where it
+  showed the task as denied. A workflow advance asking a step's expired
+  challenge again likewise reads the step as the running task when an execute
+  started it just first, where it asked again beside it and approving that
+  ran the effect twice. (#244)
+
+- Two reconciles of one parked task no longer both write. `melra_execute` on
+  a `recovery_required` task asks the provider and records the answer; a
+  second call meanwhile, or the sweep's recovery beside an agent's call, asked
+  too, and the slower answer was written over the first: one that could not
+  reach the provider, or that said the effect never happened, rewrote a task
+  already settled `verified_success` as parked or `failed` and dropped its
+  receipt. Now an answer is recorded, with its receipt and certificate, only
+  while the task is still `recovery_required`, and the later call writes
+  nothing and returns the task as it now stands. (#244)
+
+- `workflow pause`, `suspend`, `resume` and `cancel` (`melra_workflow_control`,
+  `melra_workflow_cancel`) no longer land under an advance that is running a
+  step. They wrote the run at once, so the advance's commit then failed with
+  `workflow_state_conflict`: a step whose effect ran and verified was left
+  `pending` with no task, a resumed run planned it again and wedged on the
+  duplicate, and a cancelled run left the effect out of its record for good.
+  Each now takes the run's lease for the moment it writes, as recovery does:
+  while an advance in any process holds it, each is refused with
+  `workflow_lease_held` and changes nothing, so retry once the advance
+  returns. Cancelling a running step's task with `melra_task_cancel` instead
+  fails that step, and the advance still running it starts the run's unwind
+  before the cancel can land.
+  An advance whose lease lapsed (it stalled, as across a laptop's sleep) is
+  taken over instead: it stops with `workflow_lease_lost` before its next
+  step, where before it ran that step on a paused or cancelled run. A pause,
+  suspend or resume leaves its expired lease in place, so the run is
+  recovered before it is next advanced. A cancel recovers the run itself
+  first, as it does for one whose advance died holding the lease or lost its
+  commit: each step is read again from the tasks under its keys, so the steps
+  that advance ran are recorded on the cancelled run rather than left off it
+  for good, and a task still running there is cancelled as the run's own.
+  That step is recorded as still in flight (`recovery_required`,
+  `task_still_in_flight`) rather than as cancelled, since in another process,
+  or one that died mid-effect, its effect may still land; one running in the
+  cancelling process is recorded as it ended once it stops, unless something
+  else holds the run's lease just then, when it keeps reading in flight. (#244)
+
+- `workflow cancel` (`melra_workflow_cancel`) cancels a run's tasks only once
+  the run's own cancel is recorded. It cancelled the challenges on the run's
+  steps, and whatever a lost advance left under them, first, so a cancel whose
+  write then failed (a locked database) left a step's challenge cancelled on a
+  run that went on: the next advance read it as a denial, failed the run and
+  offered its compensations. Now such a cancel changes no task; a failure
+  while cancelling the tasks after it is reported, and cancelling the
+  cancelled run again sweeps again. (#244)
+
+- A workflow step whose advance lost its commit is taken up by its
+  idempotency key on the next advance instead of planned afresh. An
+  `operation` or `approval` node, a `parallel` branch, a `bounded_loop`
+  iteration or a `compensation` that the run named no task for planned a new
+  one without looking for the task the lost advance left under the same key:
+  a leftover challenge stayed approvable beside the new one, a step that took
+  effect but failed its evidence (`partial`) ran a second time, and one that
+  verified was cancelled as its own duplicate and halted the run; one that
+  failed or was denied was run after all, while a compensation the lost
+  advance had already run for it was recorded as skipped. Now every step,
+  a condition's branch included, takes up the task committed under its key,
+  else the one recovery prefers of every task there, one that failed, was
+  denied or cancelled, ran out of budget or was refused by policy included,
+  and is planned afresh only when its key holds no task at all. A loop that
+  such an advance carried into its next iteration goes on there, rather than
+  ask `until` again of the iteration before and stop short of one that ran.
+  A pause no longer loses an advance's commit (above), but a failed write
+  still can, and runs an earlier version left this way heal on their next
+  advance. Each step finds the tasks under its key in SQL, on an index
+  (migration 6), so a long task history does not slow it. (#319)
+
+- Workflow recovery, at startup, in the sweep and when a parked step
+  settles, reads each step's tasks by its idempotency key, on the migration 6
+  index, instead of the newest 100,000 tasks in the home. Past that many, a
+  step's task could be missed: a `parallel` step with one branch run and
+  another still waiting for approval was recorded as complete. And each read
+  scanned the whole listing once per step key: recovering a 100-iteration
+  loop of 50 steps in a home of 100,000 tasks took 15-20 s per run, and
+  now takes about 0.1 s. `workflow cancel`, which now recovers the run first
+  (above), reads its steps the same way and never the whole history.
+
 - A condition step whose advance lost its commit (a pause landed while it ran)
   keeps to one branch. Recovery read both branches' tasks together and could
   reopen the step on the branch it had abandoned, or, when the branch it took

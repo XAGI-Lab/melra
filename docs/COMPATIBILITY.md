@@ -182,9 +182,11 @@ One server process may host multiple workflows. Within one process, advances
 for the same workflow are serialized while declared parallel branches execute
 concurrently. Across processes the same job is done by an expiring SQLite
 lease taken before any adapter runs, so a second holder is refused with
-`workflow_lease_held` rather than duplicating an effect. An advance whose lease
-another process took over while it stalled fails with `workflow_lease_lost`
-before its next step and commits nothing; advance the run again later.
+`workflow_lease_held` rather than duplicating an effect, and so are an
+operator's pause, suspend, resume and cancel, so none lands under an advance.
+An advance whose lease another process or an operator's halt took over while it
+stalled fails with `workflow_lease_lost` before its next step and commits
+nothing; advance the run again later.
 
 Recovery leaves a task alone while the process that started it is alive, which
 it learns from a lock the process holds on a file in `melra.sqlite-owners/`.

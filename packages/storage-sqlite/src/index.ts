@@ -373,6 +373,16 @@ export class SqliteStore {
       );
     `,
     );
+    // Migration 6 indexes tasks by idempotency key, so a workflow step finds
+    // the tasks under its key without reading every task. As for migration 4,
+    // the expression must match listTasksByKey's text exactly.
+    this.applyMigration(
+      6,
+      `
+      CREATE INDEX IF NOT EXISTS tasks_idempotency_key
+        ON tasks(json_extract(data, '$.idempotencyKey'));
+    `,
+    );
   }
 
   private applyMigration(version: number, statements: string): void {
@@ -433,6 +443,21 @@ export class SqliteStore {
           owner = COALESCE(excluded.owner, tasks.owner)
       `)
       .run(task.id, JSON.stringify(task), task.createdAt, task.updatedAt, owner ?? null);
+  }
+
+  /**
+   * `saveTask` only while the stored status is one of `expected`, saying
+   * whether it wrote: a compare-and-set, so of two processes moving one task
+   * out of a status (an execute and a deny, or two executes) exactly one does.
+   */
+  saveTaskIf(task: TaskRecord, expected: readonly TaskRecord["status"][], owner?: string): boolean {
+    const result = this.database
+      .prepare(`
+        UPDATE tasks SET data = ?, updated_at = ?, owner = COALESCE(?, owner)
+        WHERE id = ? AND json_extract(data, '$.status') IN (SELECT value FROM json_each(?))
+      `)
+      .run(JSON.stringify(task), task.updatedAt, owner ?? null, task.id, JSON.stringify(expected));
+    return Number(result.changes) === 1;
   }
 
   /**
@@ -548,6 +573,14 @@ export class SqliteStore {
             )
             .all(status, limit)
     ) as unknown as JsonRow[];
+    return rows.map((row) => JSON.parse(row.data) as TaskRecord);
+  }
+
+  /** Every task planned under one idempotency key, any status, found by its index. */
+  listTasksByKey(idempotencyKey: string): TaskRecord[] {
+    const rows = this.database
+      .prepare("SELECT data FROM tasks WHERE json_extract(data, '$.idempotencyKey') = ?")
+      .all(idempotencyKey) as unknown as JsonRow[];
     return rows.map((row) => JSON.parse(row.data) as TaskRecord);
   }
 
