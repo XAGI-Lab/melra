@@ -20,7 +20,7 @@ import { approvalTtl, classifyOperation, loadPolicy, type LocalPolicy } from "@m
 import { SqliteStore } from "@melra/storage-sqlite";
 import type { CliEnvironment } from "./environment.js";
 import { isHuman, paint, table } from "./output.js";
-import { DEFAULT_HTTP_PORT, configuredHttpPort, printable } from "@melra/server";
+import { DEFAULT_HTTP_PORT, configuredHttpPort, printable, workflowStepJudge } from "@melra/server";
 
 const POLL_MS = 1_000;
 const APPROVAL_HINT = "approve with `melra approve <task-id>`";
@@ -163,26 +163,6 @@ interface ApprovalCounts {
 }
 
 /**
- * Whether an expired task is a workflow's. Only a workflow plans under an
- * idempotency key, so a keyed task is one, unless a run that is over (it never
- * advances again) names a task under that key: only a deny clears that one,
- * and harmlessly.
- */
-function stepJudge(store: SqliteStore, runs: () => WorkflowRun[]): (task: TaskRecord) => boolean {
-  let over: Set<string> | undefined;
-  return (task) => {
-    if (task.idempotencyKey === undefined) return false;
-    over ??= new Set(
-      runs()
-        .filter((run) => run.status === "cancelled" || run.status === "verified_complete")
-        .flatMap((run) => Object.values(run.nodes).flatMap((node) => node.taskIds))
-        .flatMap((taskId) => store.getTask(taskId)?.idempotencyKey ?? []),
-    );
-    return !over.has(task.idempotencyKey);
-  };
-}
-
-/**
  * Tasks waiting for an operator's approval, and those whose challenge expired
  * unanswered, workflow steps apart. An expired one stays
  * awaiting_approval, and counted as waiting it was reported forever and
@@ -211,7 +191,7 @@ function approvalCounts(
       continue;
     }
     // Judged only once something has expired: a store keeps every run.
-    if ((step ??= stepJudge(store, runs))(task)) {
+    if ((step ??= workflowStepJudge(store, runs))(task)) {
       counts.expiredSteps += 1;
     } else counts.expired += 1;
   }
@@ -237,8 +217,9 @@ export function tasksCommand(env: CliEnvironment, options: TasksOptions): number
     }),
   );
   if (!humanOutput(options.json)) {
-    // The shape `/api/tasks` answers with, minus approvals, plus `policyError`
-    // as `status` gives it.
+    // The shape `/api/tasks` answers with, minus approvals and the console's
+    // attention fields (`approvalPendingIds`, `attentionCount`), plus
+    // `policyError` as `status` gives it.
     const { policyError } = options;
     write(
       printable(

@@ -144,6 +144,24 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- The web console advises on a task waiting for approval by the rule
+  `melra tasks` and `melra status` use (#284), where it went by the
+  challenge's expiry alone. A task approved in time and not yet run shows as
+  approved, waiting for its agent, not as closed. An expired workflow step is
+  never told to deny, which would fail its run: in a run waiting on approval
+  it points at `melra workflow advance <workflow-id>`, in a paused or
+  suspended run at `melra workflow resume` first, and otherwise, a step its run
+  does not name yet after a lost commit included, at `melra workflow inspect`.
+  Only a task outside a workflow, or one whose run is cancelled or
+  verified_complete, is told to plan again or clear it with
+  `melra approve <task-id> --deny`, and in enforced mode that includes one
+  answered in band, which can no longer be approved. "Need attention" counts
+  what its filter lists, the newest 500 tasks, says how many more are older,
+  and redraws when a decision is recorded or lapses. `/api/tasks` adds
+  `approvalPendingIds` and `attentionCount`, `/api/tasks/<id>/approval-state`
+  is new, and `@melra/server` exports `workflowStepJudge`, the step rule the
+  CLI and the console share. (#303)
+
 - A `browser` wait now ends within about its `timeoutMs` instead of running
   several times longer on a busy page or one with many frames: calls get the
   time left, with a 500 ms floor capped at the requested timeout, and retain

@@ -6,7 +6,7 @@ import { createServer, request as httpRequest } from "node:http";
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { chromium } from "playwright-core";
+import { chromium, type Page } from "playwright-core";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { BrowserOperationSchema, TaskRequestSchema, WorkflowDefinitionSchema } from "@melra/protocol";
 import { BrowserRuntime, detectBrowserExecutable } from "@melra/browser-runtime";
@@ -461,6 +461,154 @@ describe("approval console", () => {
     const after = await call(agent, "/api/tasks?limit=500", { token: "agent-token" });
     expect(after.body.attentionCount).toBe(before.body.attentionCount);
   });
+
+  const write = (name: string) =>
+    TaskRequestSchema.parse({
+      goal: `Write ${name}`,
+      operation: { kind: "file", action: "write", path: name, content: "x" },
+      requiredEvidence: [{ type: "file_exists", path: name }],
+    });
+  const oneStep = (name: string) =>
+    runtime.workflows.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: randomUUID(),
+        version: 1,
+        name,
+        nodes: [{ id: "write", type: "operation", request: write(`${name}.txt`) }],
+      }),
+    );
+  const expire = (taskId: string) => {
+    const task = runtime.controller.status(taskId);
+    runtime.store.saveTask({ ...task, approval: { ...task.approval!, expiresAt: new Date(Date.now() - 1_000).toISOString() } });
+  };
+  /** What the agent's read-only console says of a task, or nothing where no browser is installed. */
+  const callouts = async (taskId: string) => {
+    const executablePath = await detectBrowserExecutable();
+    if (executablePath === undefined) return undefined;
+    const browser = await chromium.launch({ executablePath, headless: true });
+    try {
+      const page = await browser.newPage();
+      await page.goto(`http://127.0.0.1:${agent.port}/?token=agent-token#/tasks/${taskId}`);
+      await page.locator(".callout").first().waitFor();
+      return (await page.locator(".callout").allInnerTexts()).join("\n");
+    } finally {
+      await browser.close();
+    }
+  };
+
+  it("never tells an operator to deny a step its run does not name yet (#319)", async () => {
+    const run = oneStep("lost-commit");
+    // The commit that names the step's task is lost, as workflow-correctness
+    // loses it for #319: the task waits under the run's key, the run names none.
+    const lost = vi.spyOn(runtime.store, "transitionWorkflow").mockImplementationOnce(() => {
+      throw new Error("database is locked");
+    });
+    await expect(runtime.workflows.advance(run.id)).rejects.toThrow("database is locked");
+    lost.mockRestore();
+    expect(Object.values(runtime.workflows.status(run.id).nodes).every((node) => node.taskIds.length === 0)).toBe(true);
+    const task = runtime.store
+      .listTasks(100, "awaiting_approval")
+      .find((item) => JSON.stringify(item.request.operation).includes("lost-commit.txt"))!;
+    expect(task.idempotencyKey).toBeDefined();
+    expire(task.id);
+    // A deny would fail the run; its next advance asks again.
+    const text = await callouts(task.id);
+    if (text !== undefined) {
+      expect(text).toContain("melra workflow inspect <workflow-id>");
+      expect(text).not.toMatch(/--deny|Plan it again/);
+    }
+    const state = await call(agent, `/api/tasks/${task.id}/approval-state`, { token: "agent-token" });
+    expect(state.body).toMatchObject({ step: true, decision: null });
+    expect(state.body.workflowId).toBeUndefined();
+  }, 60_000);
+
+  it("tells an expired step of a paused run to resume it, since advance refuses a halted run", async () => {
+    const run = oneStep("paused-step");
+    await runtime.workflows.advance(run.id);
+    const taskId = Object.values(runtime.workflows.status(run.id).nodes).flatMap((node) => node.taskIds)[0]!;
+    runtime.workflows.pause(run.id);
+    expire(taskId);
+    await expect(runtime.workflows.advance(run.id)).rejects.toThrow("workflow_halted:paused");
+    const text = await callouts(taskId);
+    if (text === undefined) return;
+    expect(text).toContain(`melra workflow resume ${run.id}`);
+    expect(text).not.toMatch(/melra workflow advance|--deny/);
+  }, 60_000);
+
+  it("reads an in-band decision in enforced mode as no answer, as execute and the CLI do", async () => {
+    const task = pending("Write in-band.txt");
+    const view = runtime.controller.approvalView(task.id);
+    // What a developer-mode `melra approve` writes into this data directory.
+    runtime.store.recordApprovalDecision({
+      approvalId: task.approval!.approvalId,
+      taskId: task.id,
+      renderDigest: view.renderDigest,
+      channel: "in_band",
+      approver: "cli:developer",
+      decidedAt: new Date().toISOString(),
+    });
+    expect(decisionFor(task.id)).toBeUndefined();
+    expect(() => runtime.controller.decide(task.id, view.renderDigest, "console:test")).toThrow("approval_already_decided");
+    const text = await callouts(task.id);
+    if (text !== undefined) {
+      expect(text).toContain(`melra approve ${task.id} --deny`);
+      expect(text).not.toContain("Approve it with");
+    }
+    const state = await call(agent, `/api/tasks/${task.id}/approval-state`, { token: "agent-token" });
+    expect(state.body).toMatchObject({ decision: null, unusable: true, step: false });
+    const { server, code, origin } = await open();
+    const token = await pair(server, code, origin);
+    expect((await call(server, `/api/tasks/${task.id}/approval`, { token })).body).toMatchObject({ unusable: true });
+  }, 60_000);
+
+  it("redraws the attention tile when a decision is recorded, which leaves the task row as it was", async () => {
+    const executablePath = await detectBrowserExecutable();
+    if (executablePath === undefined) return;
+    const task = pending("Write decided-later.txt");
+    const attention = async () => (await call(agent, "/api/tasks?limit=500", { token: "agent-token" })).body.attentionCount;
+    const tileReads = (page: Page, n: unknown) =>
+      page.locator(".tile", { hasText: "Need attention" }).locator(".n", { hasText: new RegExp(`^${String(n)}$`) }).waitFor({ timeout: 15_000 });
+    const browser = await chromium.launch({ executablePath, headless: true });
+    try {
+      const page = await browser.newPage();
+      await page.goto(`http://127.0.0.1:${agent.port}/?token=agent-token`);
+      await tileReads(page, await attention());
+      runtime.controller.decide(task.id, runtime.controller.approvalView(task.id).renderDigest, "console:test");
+      await tileReads(page, await attention());
+    } finally {
+      await browser.close();
+    }
+  }, 60_000);
+
+  it("counts on the attention tile what its filter lists, and says how many more are older", async () => {
+    const executablePath = await detectBrowserExecutable();
+    if (executablePath === undefined) return;
+    const dirs = [mkdtempSync(join(tmpdir(), "melra-window-ws-")), mkdtempSync(join(tmpdir(), "melra-window-home-"))];
+    const own = await createMelraRuntime({ workspaceRoot: dirs[0]!, dataDirectory: dirs[1]!, environment: { MELRA_MODE: "enforced" } });
+    const server = await serveHttp({ runtime: own, port: 0, token: "window-token", environment: {} });
+    const browser = await chromium.launch({ executablePath, headless: true });
+    try {
+      const old = own.controller.plan(write("old.txt"));
+      own.store.saveTask({ ...old, approval: { ...old.approval!, expiresAt: new Date(Date.now() - 1_000).toISOString() } });
+      // The console loads the newest 500, so this pushes the expired one past them.
+      for (let index = 0; index < 500; index += 1) {
+        own.controller.plan(TaskRequestSchema.parse({ goal: "Read r.txt", operation: { kind: "file", action: "read", path: "r.txt" }, requiredEvidence: [] }));
+      }
+      const page = await browser.newPage();
+      await page.goto(`http://127.0.0.1:${server.port}/?token=window-token`);
+      const tile = page.locator(".tile", { hasText: "Need attention" });
+      await tile.waitFor();
+      expect((await tile.innerText()).replace(/\s+/g, " ").trim()).toBe("0 Need attention 1 more older than the newest 500");
+      await tile.click();
+      await page.getByRole("button", { name: "Needs attention 0" }).waitFor();
+    } finally {
+      await browser.close();
+      await server.close();
+      await own.close();
+      for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
+    }
+  }, 120_000);
 
   it("draws MELRA's summary right above the buttons, and the agent's text as text", async () => {
     const executablePath = await detectBrowserExecutable();

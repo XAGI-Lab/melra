@@ -460,13 +460,18 @@ function renderOverview() {
   const t = state.tasks;
   const count = (f) => t.filter(f).length;
   const p = state.caps.policy;
-  const tile = (n, label, filter, tone) => el("button", { class: "card tile", type: "button",
+  const tile = (n, label, filter, tone, note) => el("button", { class: "card tile", type: "button",
     onclick: () => { state.filter = filter; go("tasks"); } },
-    el("span", { class: "n " + (tone ?? ""), text: String(n) }), el("span", { class: "muted", text: label }));
+    el("span", { class: "n " + (tone ?? ""), text: String(n) }), el("span", { class: "muted", text: label }),
+    note ? el("span", { class: "muted", text: note }) : null);
+  // Each tile counts what its filter lists, the newest 500; the server counts
+  // the tasks needing attention past those.
+  const attention = count(FILTERS[1][2]);
+  const older = state.attentionCount - attention;
   const tiles = el("div", { class: "grid tiles" },
     tile(t.length, "Tasks recorded", "all"),
     tile(count((x) => x.status === "verified_success"), "Verified by evidence", "verified", "ok"),
-    tile(state.attentionCount, "Need attention", "attention", "warn"),
+    tile(attention, "Need attention", "attention", "warn", older > 0 ? older + " more older than the newest 500" : undefined),
     tile(count(FILTERS[3][2]), "Blocked or failed", "blocked", "bad"),
   );
   const posture = el("div", { class: "card" }, el("h2", { text: "Posture" }), kv([
@@ -546,12 +551,8 @@ async function renderTaskDetail(id, into) {
     const left = task.approval?.expiresAt ? until(task.approval.expiresAt) : undefined;
     const pending = await get("/api/tasks/" + encodeURIComponent(id) + (approvals ? "/approval" : "/approval-state")).catch(() => null);
     if (pending?.decision) parts.push(el("div", { class: "callout" }, "Approved by ", pending.decision.approver, " ", when(pending.decision.decidedAt), ". Waiting for the agent to run it."));
-    else if (left === "expired") {
-      parts.push(el("div", { class: "callout" }, pending?.workflowId
-        ? ["This workflow step's approval has expired. Advance it with ", el("code", { text: "melra workflow advance " + pending.workflowId }), "."]
-        : ["The approval window for this task has closed. Plan it again or clear it with ",
-          el("code", { text: "melra approve " + task.id + " --deny" }), "."]));
-    } else if (approvals) parts.push(await approvalPanel(task.id, pending));
+    else if (left === "expired" || pending?.unusable) parts.push(el("div", { class: "callout" }, closedAdvice(task.id, left, pending)));
+    else if (approvals) parts.push(await approvalPanel(task.id, pending));
     else parts.push(el("div", { class: "callout" }, ["Waiting for an approval" + (left ? " — expires in " + left : "") + ". Approve it with ",
         el("code", { text: "melra approve " + task.id }), " or in ", el("code", { text: "melra console" }),
         ", in a terminal. This console is read-only and never shows the phrase."]));
@@ -591,6 +592,27 @@ async function renderTaskDetail(id, into) {
   const { approval: _approval, ...stored } = task;
   parts.push(el("details", {}, el("summary", { text: "Stored record (redacted)" }), el("pre", { text: JSON.stringify(stored, null, 2) })));
   if (route().id === id) into.replaceChildren(...parts);
+}
+
+/**
+ * What to do with a challenge no one can answer now: expired, or holding a
+ * decision that cannot be used (in enforced mode, one made in band). The rule
+ * melra tasks gives (#299): a workflow's step is never told to deny, which
+ * would fail its run, and only a run that can advance is told to.
+ */
+function closedAdvice(id, left, pending) {
+  const code = (text) => el("code", { text });
+  if (!pending) return "The approval window for this task has closed.";
+  const spent = left === "expired" ? "" : " can no longer be approved: its challenge already holds a decision that cannot be used.";
+  if (!pending.step) return [(spent ? "This task" + spent : "The approval window for this task has closed.") + " Plan it again or clear it with ",
+    code("melra approve " + id + " --deny"), "."];
+  const lead = spent ? "This workflow step" + spent : "This workflow step's approval has expired.";
+  const run = pending.workflowId;
+  if (!spent && ["awaiting_approval", "running"].includes(pending.workflowStatus)) return [lead + " Advance it with ", code("melra workflow advance " + run), "."];
+  if (["paused", "suspended"].includes(pending.workflowStatus)) return [lead + " Its run is " + pending.workflowStatus + ", and advances only once resumed with ",
+    code("melra workflow resume " + run), "."];
+  return [lead + " See its run with ", code("melra workflow inspect " + (run ?? "<workflow-id>")),
+    ": where the run still waits on the step, its next advance asks again, and a deny would fail the run, or for a compensation stall its unwind."];
 }
 
 /**
@@ -722,7 +744,9 @@ document.querySelector(".skip").addEventListener("click", (e) => { e.preventDefa
 
 if (!token) { renderUnauthorized(); setLive(false, approvals ? "Not paired" : "No token"); }
 else if (await refresh()) render();
-const signature = () => JSON.stringify([state.tasks.map((t) => [t.id, t.status, t.updatedAt]), state.workflows.map((w) => [w.id, w.status, w.updatedAt])]);
+// The attention fields too: a decision recorded or lapsing leaves the task row as it was.
+const signature = () => JSON.stringify([state.tasks.map((t) => [t.id, t.status, t.updatedAt]), state.workflows.map((w) => [w.id, w.status, w.updatedAt]),
+  state.attentionCount, [...state.approvalPendingIds]]);
 state.sig = signature();
 // Poll, but re-render only when something actually changed, and put focus back
 // on the same row, so keyboard users and a hovering pointer are never yanked.
