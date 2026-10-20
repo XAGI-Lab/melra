@@ -41,6 +41,14 @@ async function setup(policy: (root: string) => LocalPolicy = createDefaultPolicy
 
 const SEMANTIC = { type: "semantic" as const, question: "Does out.txt read as the summary asked for?", artifacts: ["path"] };
 
+/** A grant for one write. */
+const once = (root: string): LocalPolicy => ({
+  ...createDefaultPolicy(root),
+  capabilities: [
+    { id: "once", capability: "file.write", effects: ["mutate"], target: "*", principal: "*", maxOperations: 1 },
+  ],
+});
+
 function write(requiredEvidence: TaskRequestInput["requiredEvidence"], extra: Partial<TaskRequestInput> = {}) {
   return TaskRequestSchema.parse({
     goal: "Write a summary someone has to judge",
@@ -170,18 +178,57 @@ describe("semantic evidence (#54)", () => {
     store.saveTask({ ...planned, status: "verifying" }, store.ownerId());
     store.commitIdempotency(key, planned.id, 1, new Date().toISOString());
     await controller.recoverInterrupted();
-    expect(controller.status(planned.id).status).not.toBe("verified_success");
-    expect(controller.receipts({ taskId: planned.id }).certificate?.result).not.toBe("VERIFIED_SUCCESS");
+    // Nor left to a retry, which its own commit cancels as a duplicate: it
+    // settles closed, as at expiry.
+    expect(controller.status(planned.id)).toMatchObject({ status: "partial", error: "semantic_judgement_expired" });
+    expect(controller.receipts({ taskId: planned.id }).certificate?.result).toBe("PARTIAL");
     expect(executor.execute).not.toHaveBeenCalled();
   });
 
+  it("draws the grant of a change cut off after its commit, and settles it closed", async () => {
+    const { controller, store, executor } = await setup(once);
+    const key = "c".repeat(64);
+    const planned = controller.plan(write([{ type: "file_exists", path: "out.txt" }, SEMANTIC]), {
+      idempotencyKey: key,
+      attempt: 1,
+    });
+    // Killed between the commit and the grant's draw.
+    store.saveTask({ ...planned, status: "verifying" }, store.ownerId());
+    store.commitIdempotency(key, planned.id, 1, new Date().toISOString());
+    await controller.recoverInterrupted();
+    expect(store.capabilityUsage("once", new Date(0).toISOString()).operations).toBe(1);
+    expect(controller.status(planned.id)).toMatchObject({
+      status: "recovery_required",
+      error: "semantic_judgement_expired",
+    });
+    expect(controller.receipts({ taskId: planned.id }).certificate?.result).toBe("RECOVERY_REQUIRED");
+    expect(controller.plan(write([{ type: "file_exists", path: "out.txt" }, SEMANTIC])).status).toBe("policy_blocked");
+    expect(executor.execute).not.toHaveBeenCalled();
+  });
+
+  it("draws the grant of a change whose draw failed, once reconciled", async () => {
+    const { controller, store, executor } = await setup(once);
+    // The write after the commit: SQLITE_BUSY past the busy timeout, a full disk.
+    vi.spyOn(store, "recordCapabilityUse").mockImplementationOnce(() => {
+      throw new Error("database is locked");
+    });
+    const first = await run(controller, write([{ type: "file_exists", path: "out.txt" }, SEMANTIC]), {
+      idempotencyKey: "d".repeat(64),
+      attempt: 1,
+    });
+    expect(first.task.status).toBe("recovery_required");
+    // What the status asks for: execute reconciles, and asked again says the same.
+    const settled = [await controller.execute(first.task.id), await controller.execute(first.task.id)];
+    expect(store.capabilityUsage("once", new Date(0).toISOString()).operations).toBe(1);
+    for (const { task } of settled) {
+      expect(task).toMatchObject({ status: "recovery_required", error: "semantic_judgement_expired" });
+    }
+    expect(controller.plan(write([{ type: "file_exists", path: "out.txt" }, SEMANTIC])).status).toBe("policy_blocked");
+    expect(executor.execute).toHaveBeenCalledTimes(1);
+  });
+
   it("meters a waiting effect, so a grant for one operation is spent by it", async () => {
-    const { controller, store, executor } = await setup((root) => ({
-      ...createDefaultPolicy(root),
-      capabilities: [
-        { id: "once", capability: "file.write", effects: ["mutate"], target: "*", principal: "*", maxOperations: 1 },
-      ],
-    }));
+    const { controller, store, executor } = await setup(once);
     const first = await run(controller, write([{ type: "file_exists", path: "out.txt" }, SEMANTIC]));
     expect(first.task.status).toBe("waiting_user");
     expect(store.capabilityUsage("once", new Date(0).toISOString()).operations).toBe(1);

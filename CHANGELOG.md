@@ -17,7 +17,8 @@ All notable changes are documented here. The format follows
   release, so at expiry the task settles closed: `recovery_required` for a
   change, whose effect did happen, `partial` for a read, error
   `semantic_judgement_expired`, settled by the startup pass and the 30 s
-  recovery sweep. A destructive effect whose evidence has a `semantic`
+  recovery sweep, or as soon as one cut off after committing its idempotency
+  key is recovered. A destructive effect whose evidence has a `semantic`
   predicate but nothing at the state or independent level is refused at
   planning (`semantic_only_destructive`). `semantic` is refused beside
   `reconciliation` (`semantic_evidence_not_reconcilable`), which cannot settle

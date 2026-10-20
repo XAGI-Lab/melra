@@ -162,6 +162,11 @@ export function capabilityUsageReader(store: SqliteStore): CapabilityUsageReader
 /** Statuses a task leaves only once: by starting, by a deny, or by a refusal. */
 const UNSTARTED: TaskRecord["status"][] = ["planned", "awaiting_approval"];
 
+/** Whether a task waits on a question only someone outside MELRA answers (#54). */
+function asksSemantic(request: TaskRequest): boolean {
+  return request.requiredEvidence.some((predicate) => predicate.type === "semantic");
+}
+
 /** The one browser action that reads each list. */
 const BROWSER_LIST_ACTIONS = [
   ["values", "select"],
@@ -786,10 +791,6 @@ export class TaskController {
       throw new Error(`task_not_reconcilable:${task.status}`);
     }
     const request = this.loadRequest(taskId);
-    // A provider can say whether an effect happened, never whether it is
-    // right: a task that declared a semantic predicate stays parked with its
-    // cause unchanged (#54).
-    if (request.requiredEvidence.some((predicate) => predicate.type === "semantic")) return { task };
     const classified = classifyOperation(request.operation);
     const park = (reason: string): ExecutionResult =>
       this.settleParked(taskId, () => {
@@ -798,10 +799,14 @@ export class TaskController {
         this.store.saveTask(task);
         return { task };
       });
-    // Its own commit already answers: the effect verified, and only a write
-    // after it failed. Parked for good otherwise, with nothing declared.
+    // Its own commit already answers: every kernel check held, and only a
+    // write after it failed. Parked for good otherwise, with nothing declared.
     const committed = this.settleParked(taskId, () => this.settleCommitted(task, request, classified));
     if (committed !== undefined) return committed;
+    // A provider can say whether an effect happened, never whether it is
+    // right: a task that declared a semantic predicate stays parked with its
+    // cause unchanged (#54).
+    if (asksSemantic(request)) return { task };
     if (request.reconciliation.length === 0) {
       return park("reconciliation_not_declared");
     }
@@ -903,23 +908,7 @@ export class TaskController {
         now(),
       );
     }
-    // Read for the grant id only. The work is already done, so this is
-    // accounting rather than permission: a grant that has since run out still
-    // pays for what it authorised. Asked as if nothing were drawn, because
-    // policy names no grant at all for one that is now exhausted, and the
-    // effect then went uncharged.
-    const { grantId } = evaluatePolicy(task.id, request, this.policy, () => ({
-      operations: 0,
-      amountToday: 0,
-    }));
-    if (grantId !== undefined) {
-      this.store.recordCapabilityUse(
-        grantId,
-        task.id,
-        classified.spend?.amount ?? 0,
-        now(),
-      );
-    }
+    this.drawGrant(task, request, classified);
     const receipt = this.createReceipt(
       task,
       request,
@@ -941,12 +930,39 @@ export class TaskController {
   }
 
   /**
+   * Draws the grant behind an effect already done, once per task however
+   * often asked. Policy is read for the grant id only: this is accounting
+   * rather than permission, so a grant that has since run out still pays for
+   * what it authorised. Asked as if nothing were drawn, because policy names
+   * no grant at all for one that is now exhausted, and the effect then went
+   * uncharged.
+   */
+  private drawGrant(
+    task: TaskRecord,
+    request: TaskRequest,
+    classified: ReturnType<typeof classifyOperation>,
+  ): void {
+    const { grantId } = evaluatePolicy(task.id, request, this.policy, () => ({
+      operations: 0,
+      amountToday: 0,
+    }));
+    if (grantId !== undefined) {
+      this.store.recordCapabilityUse(
+        grantId,
+        task.id,
+        classified.spend?.amount ?? 0,
+        now(),
+      );
+    }
+  }
+
+  /**
    * Settle a task whose idempotency key is committed to it. A key is
-   * committed only once its effect verified, so whatever stopped the task
-   * came after the effect: an interruption, or a write that failed. Not one
-   * with a semantic question: its key commits on entering `waiting_user`,
-   * so the commit says every kernel check held, never that it was answered
-   * (#54).
+   * committed only once every kernel check held, so whatever stopped the
+   * task came after the effect: an interruption, or a write that failed. One
+   * with a semantic question commits on entering `waiting_user`, so its
+   * commit never says the question was answered: it settles closed, as at
+   * expiry (#54).
    */
   private settleCommitted(
     task: TaskRecord,
@@ -954,11 +970,17 @@ export class TaskController {
     classified: ReturnType<typeof classifyOperation>,
   ): ExecutionResult | undefined {
     if (
-      request.requiredEvidence.some((predicate) => predicate.type === "semantic") ||
       task.idempotencyKey === undefined ||
       this.store.getIdempotencyCommit(task.idempotencyKey)?.taskId !== task.id
     ) {
       return undefined;
+    }
+    if (asksSemantic(request)) {
+      // Settled already, it is left as it stands rather than certified again.
+      if (task.error === "semantic_judgement_expired") return { task };
+      // Cut off before it reached `waiting_user`, maybe before its draw too.
+      this.drawGrant(task, request, classified);
+      return this.settleUnanswered(task);
     }
     return this.resolveAsVerified(
       task,
@@ -1016,11 +1038,9 @@ export class TaskController {
   }
 
   /**
-   * No answer is not a yes (#54). A waiting task whose judgements are past
-   * their `expiresAt` settles closed: its effect ran, so a change is
-   * `recovery_required` (never `failed`) and a read is `partial`. Nothing ran
-   * here, so no receipt is written; the certificate is replaced. Re-read and
-   * written in one transaction, so a peer settling the same task wins once.
+   * A waiting task whose judgements are past their `expiresAt` settles
+   * closed. Re-read and written in one transaction, so a peer settling the
+   * same task wins once.
    *
    * ponytail: runs on the startup pass and the 30 s recovery sweep, so a wait
    * can outlive its `expiresAt` by one interval, or until a runtime next opens
@@ -1031,23 +1051,33 @@ export class TaskController {
       try {
         this.store.transaction(() => {
           const task = this.store.getTask(listed.id);
-          if (task?.status !== "waiting_user") return;
-          const last = task.receiptIds[task.receiptIds.length - 1];
-          const receipt = last === undefined ? undefined : this.store.getReceipt(last);
-          const evidence = (receipt?.evidence ?? []).map((item) =>
-            item.type === "semantic"
-              ? { ...item, passed: false, inconclusive: true, summary: "semantic_judgement_expired" }
-              : item,
-          );
-          task.status = task.policyDecision.effect === "read" ? "partial" : "recovery_required";
-          task.error = "semantic_judgement_expired";
-          task.updatedAt = now();
-          this.createAndSaveCertificate(task, evidence);
+          if (task?.status === "waiting_user") this.settleUnanswered(task);
         });
       } catch (error) {
         failures.set(listed.id, error);
       }
     }
+  }
+
+  /**
+   * No answer is not a yes (#54). A task whose semantic question went
+   * unanswered, at expiry or cut off after its commit, settles closed: its
+   * effect ran, so a change is `recovery_required` (never `failed`) and a
+   * read is `partial`. Nothing ran here, so no receipt is written; the
+   * certificate is replaced.
+   */
+  private settleUnanswered(task: TaskRecord): ExecutionResult {
+    const last = task.receiptIds[task.receiptIds.length - 1];
+    const receipt = last === undefined ? undefined : this.store.getReceipt(last);
+    const evidence = (receipt?.evidence ?? []).map((item) =>
+      item.type === "semantic"
+        ? { ...item, passed: false, inconclusive: true, summary: "semantic_judgement_expired" }
+        : item,
+    );
+    task.status = task.policyDecision.effect === "read" ? "partial" : "recovery_required";
+    task.error = "semantic_judgement_expired";
+    task.updatedAt = now();
+    return { task, certificate: this.createAndSaveCertificate(task, evidence) };
   }
 
   private async recoverTask(task: TaskRecord): Promise<TaskRecord> {
@@ -1087,8 +1117,9 @@ export class TaskController {
     }
     // A read that verified and committed its key before the interruption is
     // done. Run again, it would only be cancelled as a duplicate of itself,
-    // and a workflow reads a cancelled step as a denial.
-    if (classified.effect === "read") {
+    // and a workflow reads a cancelled step as a denial. A task with a
+    // semantic question that committed settles closed, change or read.
+    if (classified.effect === "read" || asksSemantic(request)) {
       const committed = this.settleCommitted(task, request, classified);
       if (committed !== undefined) return committed.task;
     }
