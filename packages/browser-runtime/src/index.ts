@@ -2491,14 +2491,24 @@ export class BrowserRuntime {
       }
       case "tab_new": {
         const context = await this.ensureContext();
+        // Checked before the tab opens, and the tab closed again when its page
+        // fails to load: `tab_new` is a read, so it is retried, and every run
+        // that failed with its tab open left one more tab.
+        if (operation.url !== undefined) await this.assertAllowed(operation.url);
+        const previous = this.activePage;
         const opened = await this.openPage(context);
         this.activate(opened);
         if (operation.url !== undefined) {
-          await this.assertAllowed(operation.url);
-          await opened.goto(operation.url, {
-            waitUntil: "domcontentloaded",
-            timeout: operation.timeoutMs,
-          });
+          try {
+            await opened.goto(operation.url, {
+              waitUntil: "domcontentloaded",
+              timeout: operation.timeoutMs,
+            });
+          } catch (error) {
+            await this.call(opened.close(), "close").catch(() => undefined);
+            this.activate(previous?.isClosed() === false ? previous : context.pages().at(-1));
+            throw error;
+          }
         }
         const { pages, tabs } = await this.describeTabs(context);
         return { opened: true, index: pages.indexOf(opened), tabs };

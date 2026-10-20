@@ -153,6 +153,12 @@ All notable changes are documented here. The format follows
   most a second, less when the action's `timeoutMs` is shorter, and none once
   the action is cancelled, and is `null` when it does not come; a tab closed
   during the listing is left out. `tabs` lists the same way.
+- A `tab_new` that fails no longer leaves a tab behind. It is a read, so it is
+  retried, and each run that failed with its tab open left one more: one whose
+  destination the browser runtime refused, and one whose page then failed to
+  load (a refused connection, a timeout, a redirect the runtime refuses). The
+  destination is now checked before the tab opens, and a tab whose page fails
+  to load is closed before the action fails.
 - A `browser` wait now ends within about its `timeoutMs` instead of running
   several times longer on a busy page or one with many frames: calls get the
   time left, with a 500 ms floor capped at the requested timeout, and retain

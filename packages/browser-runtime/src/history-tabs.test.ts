@@ -295,6 +295,32 @@ describe("browser tabs", () => {
       await expect(
         runtime.execute(op({ action: "tab_new", url: "http://169.254.169.254/latest" })),
       ).rejects.toThrow();
+      // Refused before a tab is opened: a failed `tab_new` leaves none behind.
+      expect((await runtime.execute(op({ action: "tabs" }))).tabs).toMatchObject([{ index: 0, title: "one", active: true }]);
+    } finally {
+      await runtime.close();
+    }
+  }, 120_000);
+
+  it("closes the tab tab_new opened when its page fails to load, so a retry leaves no more", async () => {
+    const context = await fixture();
+    if (context === undefined) return;
+    const { runtime, url } = context;
+    // A port nothing listens on any more: the connection is refused.
+    const gone = createServer();
+    await new Promise<void>((done) => gone.listen(0, "127.0.0.1", done));
+    const { port } = gone.address() as { port: number };
+    await new Promise<void>((done) => gone.close(() => done()));
+    try {
+      await runtime.execute(op({ action: "navigate", url: `${url}/one` }));
+      // `tab_new` is a read, so the controller retries it, and each run that
+      // opened its tab and then failed left that tab open.
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        await expect(
+          runtime.execute(op({ action: "tab_new", url: `http://127.0.0.1:${port}/`, timeoutMs: 5_000 })),
+        ).rejects.toThrow();
+      }
+      expect((await runtime.execute(op({ action: "tabs" }))).tabs).toMatchObject([{ index: 0, title: "one", active: true }]);
     } finally {
       await runtime.close();
     }
