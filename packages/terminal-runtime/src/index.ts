@@ -42,24 +42,48 @@ export function redactTerminalOutput(value: string): string {
   return redactSecrets(value).value;
 }
 
-/** Where a path leads: through every link, or for one not there yet, through its directory's. */
+/**
+ * Where a path with no `..` in it leads: its deepest part that is there,
+ * through every link, then the rest as written, which `mkdir -p` would make
+ * there, however many parts that is.
+ */
 async function leadsTo(spelled: string): Promise<string> {
-  return await realpath(spelled).catch(async () =>
-    join(await realpath(dirname(spelled)).catch(() => resolve(dirname(spelled))), basename(spelled)));
+  const whole = await realpath(spelled).catch(() => undefined);
+  if (whole !== undefined) return whole;
+  const chain: string[] = [];
+  for (let at = spelled; ; at = dirname(at)) {
+    chain.unshift(at);
+    if (dirname(at) === at) break;
+  }
+  // A part resolves only if every part above it does, so the deepest one that
+  // does is found by halving: about log2(depth) lookups, not one per part.
+  let [resolves, fails, leads] = [-1, chain.length - 1, spelled];
+  while (fails - resolves > 1) {
+    const middle = (resolves + fails) >> 1;
+    const at = chain[middle] as string;
+    const real = await realpath(at).catch(() => undefined);
+    if (real === undefined) fails = middle;
+    else [resolves, leads] = [middle, join(real, relative(at, spelled))];
+  }
+  return leads;
 }
 
 /**
- * Where a lookup of `spelled` stands at each `..` in it, its links followed as
- * the kernel follows them. Every part before a `..` is looked up, so whether
- * it is there is an answer, though folding the path drops it. Windows folds
- * `..` away before any lookup.
+ * Where a lookup of `spelled` stands at each `..` in it (`places`), and where
+ * it ends (`end`, with no `..` left), its links followed as the kernel follows
+ * them: folding `link/..` as text would land beside the link, not beside its
+ * target. Every part before a `..` is looked up, so whether it is there is an
+ * answer, though folding the path drops it. Windows folds `..` away before
+ * any lookup.
  *
- * ponytail: one judgement per distinct place, so arguments climbing out of
- * thousands of different existing directories cost seconds. Batch the
- * judgements if that ever shows up.
+ * ponytail: one judgement per distinct place, there or not, so arguments
+ * climbing out of thousands of different directories cost minutes (100
+ * arguments of 4 KB, each 800 missing parts deep and climbing back out:
+ * about 140 s with the file adapter's judgement). Batch the judgements, or
+ * cap the places one call may climb out of, if that ever shows up.
  */
-async function climbedFrom(spelled: string): Promise<string[]> {
-  if (process.platform === "win32") return [];
+async function climbedFrom(spelled: string): Promise<{ places: string[]; end: string }> {
+  if (process.platform === "win32") return { places: [], end: resolve(spelled) };
   const places: string[] = [];
   let at: string = sep;
   for (const part of spelled.split(sep)) {
@@ -68,12 +92,12 @@ async function climbedFrom(spelled: string): Promise<string[]> {
       continue;
     }
     places.push(at);
-    // A part that is not there ends the lookup.
-    const real = await realpath(at).catch(() => undefined);
-    if (real === undefined) break;
-    at = dirname(real);
+    // A part that is not there does not end the walk: `mkdir -p` makes it,
+    // then climbs back out, to its directory as that directory leads.
+    const from = at;
+    at = await realpath(from).then(dirname, () => realpath(dirname(from)).catch(() => dirname(from)));
   }
-  return places;
+  return { places, end: at };
 }
 
 /** The null device, so git's system/global config files resolve to nothing. */
@@ -369,12 +393,13 @@ export class TerminalRuntime {
     for (const path of [".", ...terminalArgumentPaths(operation.args)]) {
       // Unnormalised: the program resolves `link/..` through the link.
       const spelled = isAbsolute(path) ? path : `${cwd}${sep}${path}`;
-      for (const place of await climbedFrom(spelled)) {
+      const { places, end } = await climbedFrom(spelled);
+      for (const place of places) {
         if (climbed.has(place)) continue;
         climbed.add(place);
         if (await this.reserved(place)) throw new Error("terminal_path_reserved");
       }
-      const real = await leadsTo(spelled);
+      const real = await leadsTo(end);
       // findstr and where expand their own wildcards, reading the directory.
       for (const probe of /[*?]/.test(path) ? [real, dirname(real)] : [real]) {
         if ((await this.reserved(probe)) || (!listsNames && (await this.holdsReserved(probe)))) {

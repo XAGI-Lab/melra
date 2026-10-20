@@ -660,6 +660,10 @@ All notable changes are documented here. The format follows
   `MELRA_POLICY` names is reserved the same way wherever it lies, since every
   start reads it again; a workspace holding it is still an ordinary one.
 
+- In enforced mode, a terminal argument spelled inside the workspace is
+  judged where it ends with its links followed, also past a `..` or parts not
+  there yet, so one that leads out is refused (`terminal_path_outside_workspace`).
+
 - A workspace that is the data directory, or sits inside it, including through
   a link, is refused at startup in every mode with
   `workspace_inside_data_directory`, and `melra doctor` fails its

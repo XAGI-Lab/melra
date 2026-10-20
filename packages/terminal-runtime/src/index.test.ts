@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -604,6 +604,56 @@ describe("arguments", () => {
     }
   });
 
+  /** A workspace dependency linked as pnpm links one, with MELRA's data beside the workspace. */
+  async function pnpmLayout() {
+    const base = await realpath(await mkdtemp(join(tmpdir(), "melra-terminal-")));
+    roots.push(base);
+    const ws = join(base, "ws");
+    const data = join(base, ".melra");
+    await mkdir(data);
+    await mkdir(join(ws, "packages", "protocol"), { recursive: true });
+    await mkdir(join(ws, "apps", "cli", "node_modules", "@melra"), { recursive: true });
+    const link = "apps/cli/node_modules/@melra/protocol";
+    await symlink(join("..", "..", "..", "..", "packages", "protocol"), join(ws, link));
+    const reserved = async (path: string) => path === data || path.startsWith(`${data}${sep}`);
+    return { base, ws, data, link, reserved };
+  }
+  const mkdirP = (runtime: TerminalRuntime, spelling: string) =>
+    runtime.execute(TerminalOperationSchema.parse({ kind: "terminal", action: "run", command: "mkdir", args: ["-p", spelling] }));
+
+  it.skipIf(process.platform === "win32")("answers the same for a path climbing out of a link, present or absent", async () => {
+    // Folded as text, `link/../../..` lands in apps/cli; the program climbs
+    // from where the link leads and lands beside the workspace.
+    const { ws, data, link, reserved } = await pnpmLayout();
+    const runtime = await TerminalRuntime.create({ root: ws, reserved });
+    for (const name of ["payload.key", "melra.sqlite-journal"]) {
+      const spelling = `${link}/../../../.melra/${name}/x`;
+      await expect(run(runtime, spelling), `${spelling} absent`).rejects.toThrow(/terminal_path_reserved/);
+      await writeFile(join(data, name), "x");
+      await expect(run(runtime, spelling), `${spelling} present`).rejects.toThrow(/terminal_path_reserved/);
+    }
+    await expect(run(runtime, `${link}/../../../ws/packages`)).resolves.toMatchObject({ success: true });
+  });
+
+  it.skipIf(process.platform === "win32")("makes nothing in MELRA's data through a link and `..`", async () => {
+    const { ws, data, link, reserved } = await pnpmLayout();
+    const runtime = await TerminalRuntime.create({ root: ws, reserved });
+    // The second makes `new` on the way, then climbs back out of it.
+    for (const spelling of [`${link}/../../../.melra/made/x`, `${link}/new/../../../../.melra/made`]) {
+      await expect(mkdirP(runtime, spelling), spelling).rejects.toThrow(/terminal_path_reserved/);
+    }
+    expect(await readdir(data)).toEqual([]);
+  });
+
+  it.skipIf(process.platform === "win32")("in enforced mode, refuses a creating argument that climbs out of a link and leaves", async () => {
+    const { base, ws, link } = await pnpmLayout();
+    const confined = await TerminalRuntime.create({ root: ws, confineArguments: true });
+    await expect(mkdirP(confined, `${link}/../../../outside/made/x`)).rejects.toThrow(/terminal_path_outside_workspace/);
+    expect(existsSync(join(base, "outside"))).toBe(false);
+    await expect(mkdirP(confined, `${link}/../../made/x`)).resolves.toMatchObject({ success: true });
+    expect(existsSync(join(ws, "made", "x"))).toBe(true);
+  });
+
   it("answers the same for a reserved working directory, present or absent", async () => {
     const root = await realpath(await mkdtemp(join(tmpdir(), "melra-terminal-")));
     roots.push(root);
@@ -632,7 +682,10 @@ describe("arguments", () => {
     await symlink(join(base, "outside"), join(ws, "out"), "junction");
     // Spelled outside, policy already asked a person; spelled inside, it did not.
     const confined = await TerminalRuntime.create({ root: ws, confineArguments: true });
-    await expect(run(confined, join("out", "f"))).rejects.toThrow(/terminal_path_outside_workspace/);
+    // However many parts past the link are not there yet: `mkdir -p` makes them all.
+    for (const spelling of [join("out", "f"), join("out", "new", "f")]) {
+      await expect(run(confined, spelling), spelling).rejects.toThrow(/terminal_path_outside_workspace/);
+    }
     await expect(run(confined, join(base, "outside", "f"))).resolves.toMatchObject({ success: true });
     const developer = await TerminalRuntime.create({ root: ws });
     for (const spelling of [join("out", "f"), join(base, "outside", "f")]) {
