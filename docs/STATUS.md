@@ -15,7 +15,7 @@ to `0.3.0-alpha.12`. Use `@melra/cli@alpha` for the current alpha release.
 - ✅ **Conformance L3 verified effects**: `melra conformance` reports 14/14 checks against this build's own stdio server, and L1 under `MELRA_UNHINGED=1` — both asserted in CI. Levels and their limits: [CONFORMANCE.md](CONFORMANCE.md)
 - ✅ **Install paths documented**: npm, container, release tarball, source
 - ✅ **Registry install verified end to end**: the `installed` job on ubuntu, macOS and Windows installs the just-published `@melra/cli` from npm, passes `melra doctor`, and drives a real stdio session to `verified_success`; `npx -y @melra/cli@alpha conformance` in an empty directory earns level 3 (14/14)
-- ✅ **Latest release published**: GitHub release [v0.3.0-alpha.14](https://github.com/XAGI-Lab/melra/releases/tag/v0.3.0-alpha.14) has 12 assets; the `@melra/cli` npm `alpha` tag resolves to this version. The npm `latest` tag remains at `0.3.0-alpha.12`, so untagged `npx @melra/cli` commands install the older release.
+- ✅ **Latest release published**: GitHub release [v0.3.0-alpha.14](https://github.com/XAGI-Lab/melra/releases/tag/v0.3.0-alpha.14) has 10 assets (restored by the repair-release-assets workflow); the `@melra/cli` npm `alpha` tag resolves to this version. The npm `latest` tag remains at `0.3.0-alpha.12`, so untagged `npx @melra/cli` commands install the older release.
 
 `0.3.0-alpha.7` is the one gap in that history: its container image built, but
 the `artifacts` job failed on a stale `uv.lock` before reaching the registry, so
