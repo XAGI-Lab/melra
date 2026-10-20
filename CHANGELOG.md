@@ -993,6 +993,20 @@ All notable changes are documented here. The format follows
   sites included, is a `tab_switch` away from the agent; its next step says to
   point that endpoint at a browser you do not use yourself, or unset it.
 
+- More credential formats are redacted wherever MELRA redacts text (stored
+  records, receipts, memory and terminal output): fine-grained GitHub tokens,
+  npm tokens, Google API keys, Stripe restricted keys and webhook secrets,
+  more kinds of Slack token, PGP private key blocks, every scheme in an
+  `Authorization` or `Proxy-Authorization` header, token and API-key headers
+  and assignments (`x-api-key: ...`, `access_token=...`, `"apiKey": "..."`),
+  and URL userinfo that is a token alone or a password holding `/`. A stored
+  field whose name ends in a credential word (`access_token`, `clientSecret`,
+  `x-api-key`) is redacted whole. Counts and kinds (`max_tokens`,
+  `token_type`), the `credentials` list of names, and values without the
+  shape of an issued token (`token: string`) are kept, and a URL whose port is
+  followed by an `@` later in its path or query is no longer read as carrying
+  credentials.
+
 ## [0.3.0-alpha.14] - 2026-10-16
 
 ### Fixed

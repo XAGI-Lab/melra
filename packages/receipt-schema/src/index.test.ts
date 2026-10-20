@@ -161,6 +161,84 @@ describe("receipt and certificate primitives", () => {
     expect(redactSecrets("the secret ingredient is love").value).toBe("the secret ingredient is love");
   });
 
+  it("redacts the credential formats issuers hand out, and leaves ordinary text alone", () => {
+    // Synthetic, and assembled at run time so no literal in this file reads as
+    // a leaked credential to a secret scanner.
+    const fill = (n: number) => "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0".repeat(3).slice(0, n);
+    const basic = Buffer.from(`user:${fill(12)}`).toString("base64");
+    const pem = (label: string) => `-----BEGIN ${label}-----\n${fill(40)}\n-----END ${label}-----`;
+    const secrets: Array<[string, string]> = [
+      // [text, the part that must not survive]
+      [`${"github"}_pat_${fill(22)}_${fill(59)}`, fill(22)],
+      [`${"xoxe"}-1-${fill(30)}`, fill(30)],
+      [`${"xapp"}-1-A0123-${fill(30)}`, fill(30)],
+      [pem("PGP PRIVATE KEY BLOCK"), fill(40)],
+      [`Authorization: Basic ${basic}`, basic],
+      [`authorization: token ${fill(32)}`, fill(32)],
+      [`Proxy-Authorization: Negotiate ${fill(32)}`, fill(32)],
+      [`x-api-key: ${fill(32)}`, fill(32)],
+      [`X-Auth-Token: ${fill(32)}`, fill(32)],
+      [`${"npm"}_${fill(36)}`, fill(36)],
+      [`//registry.npmjs.org/:_authToken=${fill(32)}`, fill(32)],
+      [`${"rk"}_live_${fill(24)}`, fill(24)],
+      [`${"whsec"}_${fill(32)}`, fill(32)],
+      [`${"AIza"}${fill(35)}`, fill(35)],
+      [`https://${fill(32)}@git.example.com/org/repo.git`, fill(32)],
+      [`https://user:ab/${fill(16)}@host.example.com/`, fill(16)],
+      [`api_key=${fill(32)}`, fill(32)],
+      [`GET /callback?access_token=${fill(32)}&state=1`, fill(32)],
+      [`{"access_token":"${fill(32)}","token_type":"bearer"}`, fill(32)],
+      [`GITHUB_TOKEN: ${fill(32)}`, fill(32)],
+    ];
+    for (const [text, secret] of secrets) {
+      const once = redactSecrets(text).value;
+      expect(once, text).not.toContain(secret);
+      // Stored copies are redacted again on their way into a certificate.
+      expect(redactSecrets(once).value, text).toBe(once);
+    }
+    // What is not a credential stays readable.
+    for (const text of [
+      '{"max_tokens": 4096, "input_tokens": 5}',
+      "max_tokens: 4096",
+      "input_tokens=5 token_count=12",
+      "the token expired; ask for a new token: see the docs",
+      "token: string;",
+      "const token = getToken();",
+      "authorization: string",
+      pem("PGP PUBLIC KEY BLOCK"),
+      "npm_config_registry=https://registry.npmjs.org/",
+      "https://example.com/users?email=a@b.example",
+      "https://example.com:8443/files/a@b.png",
+      "http://localhost:3000?next=a@b",
+      "ssh://git@github.com/org/repo.git",
+      "git@github.com:org/repo.git",
+    ]) {
+      expect(redactSecrets(text).value, text).toBe(text);
+    }
+  });
+
+  it("redacts a field whose name ends in a credential word", () => {
+    const secret = "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6";
+    const stored = redactStructuredValue({
+      access_token: secret,
+      refresh_token: secret,
+      clientSecret: secret,
+      private_key: secret,
+      "x-api-key": secret,
+      db_password: secret,
+    }).value;
+    expect(JSON.stringify(stored)).not.toContain(secret);
+    // Counts, kinds, and names are not credentials.
+    const plain = {
+      max_tokens: 4096,
+      input_tokens: 5,
+      token_type: "bearer",
+      credentials: ["billing"],
+      idempotencyKey: "order-42",
+    };
+    expect(redactStructuredValue(plain).value).toEqual(plain);
+  });
+
   it("keeps an exit status, which carries no secret", () => {
     const stored = redactStructuredValue({
       requiredEvidence: [
