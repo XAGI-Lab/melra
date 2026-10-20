@@ -24,8 +24,8 @@ All notable changes are documented here. The format follows
   on any pull request that touches the release files, it builds the binaries
   and every release file through the same steps a `v*` tag runs (now one
   shared `release-artifacts` action), checks the versions, `npm publish
-  --dry-run`s every package and checks the GitHub release's asset list and
-  checksums, with read-only permissions throughout. (#204)
+  --dry-run`s every package and checks the GitHub release's asset list (each
+  name once) and checksums, with read-only permissions throughout. (#204)
 
 - `melra console` approves in a browser, with the same authority as
   `melra approve`. Run in a terminal, it starts a loopback server of its own,
