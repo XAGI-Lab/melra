@@ -3,7 +3,7 @@
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { realpath } from "node:fs/promises";
+import { readlink, realpath } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { outcomeUnknown, terminalArgumentPaths, type TerminalOperation } from "@melra/protocol";
 import { redactSecrets } from "@melra/receipt-schema";
@@ -42,11 +42,88 @@ export function redactTerminalOutput(value: string): string {
   return redactSecrets(value).value;
 }
 
-/** Where a path leads: through every link, or for one not there yet, through its directory's. */
-async function leadsTo(spelled: string): Promise<string> {
-  return await realpath(spelled).catch(async () =>
-    join(await realpath(dirname(spelled)).catch(() => resolve(dirname(spelled))), basename(spelled)));
+/**
+ * Where a path with no `..` in it leads: its deepest part that is there,
+ * through every link, then the rest as written, which `mkdir -p` would make
+ * there, however many parts that is. `links` keeps where each link to a name
+ * not there yet leads, so one check follows it once, however many arguments
+ * and places go through it.
+ */
+async function leadsTo(spelled: string, links: Map<string, { to: string; there: boolean }>, hops = 0): Promise<string> {
+  let code: unknown;
+  const failed = (error: NodeJS.ErrnoException) => {
+    code = error.code;
+    return undefined;
+  };
+  const whole = await realpath(spelled).catch(failed);
+  if (whole !== undefined) return whole;
+  const chain: string[] = [];
+  for (let at = spelled; ; at = dirname(at)) {
+    chain.unshift(at);
+    if (dirname(at) === at) break;
+  }
+  // A part resolves only if every part above it does, so the deepest one that
+  // does is found by halving: about log2(depth) lookups, not one per part.
+  let [resolves, fails, leads] = [-1, chain.length - 1, spelled];
+  let parent: string = sep;
+  while (fails - resolves > 1) {
+    const middle = (resolves + fails) >> 1;
+    const at = chain[middle] as string;
+    const real = await realpath(at).catch(failed);
+    if (real === undefined) fails = middle;
+    else [resolves, leads, parent] = [middle, join(real, relative(at, spelled)), real];
+  }
+  // A link to a name not there yet: `touch link` makes its target, so it
+  // leads where the link points, as the file adapter follows one. A loop, or
+  // more links than one lookup follows, fails the lookup and makes nothing.
+  if (code === "ELOOP" || hops >= 40) return leads;
+  const link = join(parent, basename(chain[fails] as string));
+  let known = links.get(link);
+  if (known === undefined) {
+    const target = await readlink(link).catch(() => undefined);
+    if (target === undefined) return leads;
+    const to = await leadsTo((await climbedFrom(isAbsolute(target) ? target : `${parent}${sep}${target}`)).end, links, hops + 1);
+    known = { to, there: await realpath(to).then(() => true, () => false) };
+    links.set(link, known);
+  }
+  // Nothing is below a name that is not there, so the rest is as written;
+  // below one that is, it is looked up.
+  const rest = spelled.slice((chain[fails] as string).length);
+  return known.there && rest !== "" ? await leadsTo(`${known.to}${rest}`, links, hops + 1) : `${known.to}${rest}`;
 }
+
+/**
+ * Where a lookup of `spelled` stands at each `..` in it (`places`), and where
+ * it ends (`end`, with no `..` left), its links followed as the kernel follows
+ * them: folding `link/..` as text would land beside the link, not beside its
+ * target. Every part before a `..` is looked up, so whether it is there is an
+ * answer, though folding the path drops it. Windows folds `..` away before
+ * any lookup.
+ */
+async function climbedFrom(spelled: string): Promise<{ places: string[]; end: string }> {
+  if (process.platform === "win32") return { places: [], end: resolve(spelled) };
+  const places: string[] = [];
+  let at: string = sep;
+  for (const part of spelled.split(sep)) {
+    if (part !== "..") {
+      at = join(at, part);
+      continue;
+    }
+    places.push(at);
+    // A part that is not there does not end the walk: `mkdir -p` makes it,
+    // then climbs back out, to its directory as that directory leads.
+    const from = at;
+    at = await realpath(from).then(dirname, () => realpath(dirname(from)).catch(() => dirname(from)));
+  }
+  return { places, end: at };
+}
+
+/**
+ * Distinct places one command may climb out of. Each is judged on its own,
+ * which for a 4 KB argument costs milliseconds, so arguments built to climb
+ * out of thousands would cost minutes; ordinary ones climb out of a few.
+ */
+const MAX_CLIMBED_PLACES = 128;
 
 /** The null device, so git's system/global config files resolve to nothing. */
 const GIT_NULL_CONFIG = process.platform === "win32" ? "NUL" : "/dev/null";
@@ -321,6 +398,9 @@ export class TerminalRuntime {
         : cwd ?? ".";
     const candidate = resolve(this.root, input);
     if (!inside(this.root, candidate)) throw new Error("cwd_outside_workspace");
+    // Before the lookup, so a reserved name gets the same answer whether it
+    // exists or not.
+    if (await this.reserved(candidate)) throw new Error("terminal_path_reserved");
     const actual = await realpath(candidate);
     if (!inside(this.root, actual)) throw new Error("cwd_outside_workspace");
     return actual;
@@ -334,17 +414,44 @@ export class TerminalRuntime {
     const listsNames =
       !/[\\/]/.test(command) &&
       NAME_LISTERS.has(command.toLowerCase().replace(/\.(exe|cmd|bat|com|ps1)$/, ""));
+    const climbed = new Set<string>();
+    const confined = new Set<string>();
+    const links = new Map<string, { to: string; there: boolean }>();
+    // ponytail: a program's own path syntax (git's `:/x`, `:(top)x`) is judged as a plain path.
     for (const path of [".", ...terminalArgumentPaths(operation.args)]) {
       // Unnormalised: the program resolves `link/..` through the link.
-      const real = await leadsTo(isAbsolute(path) ? path : `${cwd}${sep}${path}`);
-      // findstr and where expand their own wildcards, reading the directory.
-      for (const probe of /[*?]/.test(path) ? [real, dirname(real)] : [real]) {
-        if ((await this.reserved(probe)) || (!listsNames && (await this.holdsReserved(probe)))) {
-          throw new Error("terminal_path_reserved");
+      const spelled = isAbsolute(path) ? path : `${cwd}${sep}${path}`;
+      const { places, end } = await climbedFrom(spelled);
+      for (const place of places) {
+        if (climbed.has(place)) continue;
+        climbed.add(place);
+        if (climbed.size > MAX_CLIMBED_PLACES) throw new Error("terminal_path_too_complex");
+        if (await this.reserved(place)) throw new Error("terminal_path_reserved");
+      }
+      const real = await leadsTo(end, links);
+      // Some programs fold `..` as text first (git pathspecs, path.resolve),
+      // so the argument is judged where that leads too.
+      const folded = resolve(cwd, path);
+      for (const at of new Set([real, folded])) {
+        // findstr and where expand their own wildcards, reading the directory.
+        for (const probe of /[*?]/.test(path) ? [at, dirname(at)] : [at]) {
+          if ((await this.reserved(probe)) || (!listsNames && (await this.holdsReserved(probe)))) {
+            throw new Error("terminal_path_reserved");
+          }
         }
       }
-      const spelledInside = inside(this.lexicalRoot, resolve(lexicalCwd, path));
-      if (this.confineArguments && spelledInside && !inside(this.root, real)) {
+      // After the reserved checks, so a reserved path gets that refusal.
+      if (!this.confineArguments || !inside(this.lexicalRoot, resolve(lexicalCwd, path))) continue;
+      // `mkdir -p` makes each place it climbs out of, not only where it ends.
+      for (const place of places) {
+        if (confined.has(place)) continue;
+        confined.add(place);
+        if (!inside(this.root, await leadsTo(place, links))) throw new Error("terminal_path_outside_workspace");
+      }
+      if (!inside(this.root, real)) throw new Error("terminal_path_outside_workspace");
+      // Folded as text from where it runs, too: a cwd through a link can stand
+      // at another depth than the one it is spelled at.
+      if (folded !== end && !inside(this.root, await leadsTo(folded, links))) {
         throw new Error("terminal_path_outside_workspace");
       }
     }

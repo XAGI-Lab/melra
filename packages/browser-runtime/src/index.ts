@@ -5,6 +5,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { access, mkdir, readFile, realpath, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import type {
   Browser,
   BrowserContext,
@@ -66,6 +67,12 @@ export interface BrowserRuntimeOptions extends NetworkPolicy {
    * caller looks at next. `"allow"` keeps it as an addressable tab.
    */
   popups?: "allow" | "block";
+  /**
+   * Whether a path is one the browser may not upload or load, in any mode:
+   * the data MELRA itself holds. The runtime passes the file runtime's
+   * reading check, so its artifacts may be uploaded and loaded again.
+   */
+  reserved?: (path: string) => Promise<boolean>;
 }
 
 /**
@@ -543,6 +550,8 @@ export class BrowserRuntime {
    * happened — see `execute`.
    */
   private dispatched = false;
+  /** Set when the route refused reserved data during the running action. */
+  private refusedReserved = false;
 
   /**
    * The workspace root with its links resolved, once, as the file runtime
@@ -589,16 +598,37 @@ export class BrowserRuntime {
       if (outside(root, candidate)) {
         throw new Error("browser_upload_outside_workspace");
       }
+      // Before anything looks the name up, so a reserved name gets the same
+      // answer whether it exists or not.
+      if ((await this.options.reserved?.(candidate)) === true) throw new Error("browser_path_reserved");
       const actual = await realpath(candidate);
       if (outside(root, actual)) {
         throw new Error("browser_upload_outside_workspace");
       }
+      if ((await this.options.reserved?.(actual)) === true) throw new Error("browser_path_reserved");
       if (!(await stat(actual)).isFile()) {
         throw new Error("browser_upload_requires_regular_file");
       }
       resolved.push(actual);
     }
     return resolved;
+  }
+
+  /**
+   * `assertSafeUrl`, and a file: URL naming reserved data is refused too. Only
+   * unhinged mode lets a file: URL through the first, and the reserved data
+   * stays out of reach there as it does for the file and terminal adapters.
+   */
+  private async assertAllowed(url: string): Promise<void> {
+    await assertSafeUrl(url, this.options);
+    if (this.options.reserved === undefined || !/^file:/i.test(url)) return;
+    let path: string;
+    try {
+      path = fileURLToPath(url);
+    } catch {
+      throw new Error("browser_path_reserved");
+    }
+    if (await this.options.reserved(path)) throw new Error("browser_path_reserved");
   }
 
   private async ensureContext(): Promise<BrowserContext> {
@@ -675,9 +705,12 @@ export class BrowserRuntime {
         return;
       }
       try {
-        await assertSafeUrl(requestUrl, this.options);
+        await this.assertAllowed(requestUrl);
         await route.continue();
-      } catch {
+      } catch (error) {
+        if (this.acting && error instanceof Error && error.message === "browser_path_reserved") {
+          this.refusedReserved = true;
+        }
         await route.abort("blockedbyclient");
       }
     };
@@ -1920,6 +1953,7 @@ export class BrowserRuntime {
     this.signal = signal;
     this.callMs = operation.timeoutMs;
     this.dispatched = false;
+    this.refusedReserved = false;
     this.actingOn = undefined;
     this.actingTarget = undefined;
     this.action = operation.action;
@@ -1990,6 +2024,9 @@ export class BrowserRuntime {
   }
 
   private async run(operation: BrowserOperation): Promise<Record<string, unknown>> {
+    // Before a browser is started, so a refused upload never starts one.
+    const files =
+      operation.action === "upload" && operation.filePaths !== undefined ? await this.uploadPaths(operation.filePaths) : [];
     const page = await this.page();
     this.actingOn = page;
     // What it opens while this action navigates it or sends it input is the
@@ -2008,13 +2045,18 @@ export class BrowserRuntime {
         }
       : undefined;
     try {
-      return await this.act(operation, page, pin);
+      return await this.act(operation, page, pin, files);
     } finally {
       void pin?.document.dispose().catch(() => undefined);
     }
   }
 
-  private async act(operation: BrowserOperation, page: Page, pin: Pin | undefined): Promise<Record<string, unknown>> {
+  private async act(
+    operation: BrowserOperation,
+    page: Page,
+    pin: Pin | undefined,
+    files: string[],
+  ): Promise<Record<string, unknown>> {
     // Anywhere but on the way to it, a url names the page the action acts on:
     // the active page, or for `close` and `tab_switch` the tab they name.
     // Policy shows it to the approver as the target and matches grants against
@@ -2094,7 +2136,7 @@ export class BrowserRuntime {
     switch (operation.action) {
       case "navigate": {
         if (operation.url === undefined) throw new Error("browser_navigate_requires_url");
-        await assertSafeUrl(operation.url, this.options);
+        await this.assertAllowed(operation.url);
         await this.drive(page);
         const response = await page.goto(operation.url, {
           waitUntil: "domcontentloaded",
@@ -2346,7 +2388,6 @@ export class BrowserRuntime {
         if (operation.filePaths === undefined) {
           throw new Error("browser_upload_requires_file_paths");
         }
-        const files = await this.uploadPaths(operation.filePaths);
         await this.actOn(pin!, await this.locator(page, operation.target), operation.timeoutMs, (element, timeout) =>
           element.setInputFiles(files, { timeout }),
         );
@@ -2372,7 +2413,11 @@ export class BrowserRuntime {
           CLICKABLE,
         );
         this.dispatched = true;
-        const download = await downloadPromise;
+        // The click went out, so this stays an unknown outcome, but one that
+        // names the refusal when the route turned the file away.
+        const download = await downloadPromise.catch((error: unknown) => {
+          throw this.refusedReserved ? new Error("browser_path_reserved") : error;
+        });
         const suggested = download.suggestedFilename().replaceAll(/[^A-Za-z0-9._-]/g, "_");
         const path = join(
           this.options.artifactDirectory,
@@ -2409,7 +2454,7 @@ export class BrowserRuntime {
         const opened = await this.openPage(context);
         this.activate(opened);
         if (operation.url !== undefined) {
-          await assertSafeUrl(operation.url, this.options);
+          await this.assertAllowed(operation.url);
           await opened.goto(operation.url, {
             waitUntil: "domcontentloaded",
             timeout: operation.timeoutMs,

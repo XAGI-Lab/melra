@@ -775,6 +775,49 @@ All notable changes are documented here. The format follows
 
 ### Security
 
+- MELRA's data directory is reserved as a whole, by every adapter and by
+  verification, in every mode. A file effect can no longer write into it,
+  replace it, or move or remove it or any directory that holds it (`path_reserved`),
+  and the files there are no longer read through the file adapter or named in
+  a terminal command. A path is judged as written and with its links
+  resolved, a link whose target does not exist included, and a terminal
+  argument also at each directory it climbs back out of (at most 128 per
+  command, `terminal_path_too_complex`) and as a program that folds `..` as
+  text reads it; a chain of more links than the system follows is refused.
+  These checks narrow what a refusal can reveal about the data directory;
+  they do not yet promise the same answer for every spelling of a path.
+  Artifacts
+  (screenshots and downloads) are the exception for reading: the file
+  adapter's `list`, `read`, `stat` and `hash`, file
+  verification, and the browser's upload and `file:` loads still reach them
+  where they did before, but nothing may change them. The browser no longer
+  uploads other reserved files or loads them through a `file:` URL, which only
+  `--unsafe-local` allows (`browser_path_reserved`), whether or not the file
+  exists, and refuses such an upload before it starts a browser; a download
+  refused that way is still an unknown outcome, since the click went out, and
+  now names `browser_path_reserved`. `file_exists`,
+  `file_absent` and registered verifiers get no answer about a reserved path,
+  whether or not it exists (`verification_path_reserved`), and a path a link
+  leads out of the workspace gets the same refusal present or absent. On
+  macOS, enforced mode now also recognises a workspace that holds the data
+  directory through the data volume, and refuses to start there, and a path
+  that names a file by its inode number alone is refused. The policy file
+  `MELRA_POLICY` names is reserved the same way wherever it lies, since every
+  start reads it again; a workspace holding it is still an ordinary one.
+
+- In enforced mode, a terminal argument spelled inside the workspace is
+  judged at each directory it climbs out of and where it ends, with its links
+  followed (a link to a name not there yet included), also past a `..` or
+  parts not there yet, and where a program that folds `..` as text would
+  land from its working directory, so one that leads out, even on its way
+  back in, is refused (`terminal_path_outside_workspace`).
+
+- A workspace that is the data directory, or sits inside it, including through
+  a link, is refused at startup in every mode with
+  `workspace_inside_data_directory`, and `melra doctor` fails its
+  `data-location` check for it, rather than starting with every path refused.
+  Point `MELRA_WORKSPACE` at the project instead.
+
 - **Breaking:** the policy file is read strictly, against `PolicyFileSchema`
   in `@melra/protocol`. A key MELRA does not know, at any depth
   (`"allowedComands"`, `memoryRetention.maxAge`), or a value of the wrong type
