@@ -841,27 +841,43 @@ export class WorkflowController {
   }
 
   /**
+   * settleInFlight once a cancel's stopped tasks have ended. Another holder
+   * of the run's lease is brief on a cancelled run (an advance returning
+   * early, a cancel's sweep, a halt refused), or lapses and is taken over, so
+   * it is tried again for about as long as a lease lasts. Any other failure
+   * (the store closed) leaves the steps in flight, as the cancel recorded
+   * them; cancelling again settles them (#325).
+   */
+  private settleStopped(workflowId: string, definition: WorkflowDefinition, waited = 0): void {
+    try {
+      this.underLease(workflowId, (run) => this.settleInFlight(run, definition));
+    } catch (error) {
+      if ((error as Error).message !== "workflow_lease_held" || waited > this.leaseDurationMs) return;
+      const delay = Math.min(1_000, Math.max(10, waited));
+      setTimeout(() => this.settleStopped(workflowId, definition, waited + delay), delay).unref();
+    }
+  }
+
+  /**
    * A cancelled run's steps recorded still in flight, read again from their
    * tasks once these have ended, as its cancel reads a step. One whose task
    * runs on is left as it is.
    */
-  private settleStopped(workflowId: string, definition: WorkflowDefinition): void {
-    this.underLease(workflowId, (run) => {
-      if (run.status !== "cancelled") return run;
-      return this.transition(run, (draft, emit) => {
-        for (const node of definition.nodes) {
-          const recorded = draft.nodes[node.id]!;
-          if (recorded.error !== "task_still_in_flight") continue;
-          const { state, found } = this.recoveredNode(run.id, node, definition, recorded);
-          if (found.some((task) => task !== undefined && ["running", "verifying"].includes(task.status))) continue;
-          const settled: WorkflowNodeState = ["pending", "ready", "awaiting_approval"].includes(state.status)
-            ? { ...state, status: "cancelled" }
-            : state;
-          if (canonicalJson(settled) === canonicalJson(recorded)) continue;
-          draft.nodes[node.id] = settled;
-          emit("workflow.node_changed", { nodeId: node.id, from: recorded.status, state: settled });
-        }
-      });
+  private settleInFlight(run: WorkflowRun, definition: WorkflowDefinition): WorkflowRun {
+    if (run.status !== "cancelled") return run;
+    return this.transition(run, (draft, emit) => {
+      for (const node of definition.nodes) {
+        const recorded = draft.nodes[node.id]!;
+        if (recorded.error !== "task_still_in_flight") continue;
+        const { state, found } = this.recoveredNode(run.id, node, definition, recorded);
+        if (found.some((task) => task !== undefined && ["running", "verifying"].includes(task.status))) continue;
+        const settled: WorkflowNodeState = ["pending", "ready", "awaiting_approval"].includes(state.status)
+          ? { ...state, status: "cancelled" }
+          : state;
+        if (canonicalJson(settled) === canonicalJson(recorded)) continue;
+        draft.nodes[node.id] = settled;
+        emit("workflow.node_changed", { nodeId: node.id, from: recorded.status, state: settled });
+      }
     });
   }
 
@@ -1088,9 +1104,14 @@ export class WorkflowController {
         definition = undefined;
       }
       const stopped: string[] = [];
+      // Cancelled again: a step recorded in flight whose task has since ended
+      // (here, after its settle gave up, or in another process) is recorded
+      // as it ended.
       const run =
         current.status === "cancelled"
-          ? current
+          ? definition === undefined
+            ? current
+            : this.settleInFlight(current, definition)
           : this.transition(current, (draft, emit) => {
               // After an advance that stalled, died or lost its commit, the run
               // names none of the steps that advance planned or ran, and
@@ -1146,13 +1167,12 @@ export class WorkflowController {
       // One running in this process is only told to stop. Its step is read
       // again once it has ended, as recorded: cancelled, or done all the same.
       // One running in another process, or whose process died, stays in
-      // flight: nothing here learns how it ends.
+      // flight: nothing here learns how it ends until the run is cancelled
+      // again.
       if (here.length > 0 && definition !== undefined) {
         const opened = definition;
         void Promise.all(here.map((taskId) => this.tasks.settled(taskId)))
           .then(() => this.settleStopped(workflowId, opened))
-          // Left in flight, as the cancel recorded it (an advance holds the
-          // run, or the store closed).
           .catch(() => undefined);
       }
       // A challenge a lost advance left is in no node's taskIds: a condition's
