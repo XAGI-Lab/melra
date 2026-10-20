@@ -154,6 +154,27 @@ describe("semantic evidence (#54)", () => {
     expect(executor.execute).toHaveBeenCalledTimes(1);
   });
 
+  it("does not recover a wait cut off after its commit as verified", async () => {
+    const { controller, store, executor } = await setup();
+    const key = "b".repeat(64);
+    const planned = controller.plan(
+      TaskRequestSchema.parse({
+        goal: "Read a summary someone has to judge",
+        operation: { kind: "file", action: "read", path: "out.txt", encoding: "utf8" },
+        requiredEvidence: [SEMANTIC],
+      }),
+      { idempotencyKey: key, attempt: 1 },
+    );
+    // Killed between the commit and the write that would have made it wait:
+    // the commit says every kernel check held, not that the question did.
+    store.saveTask({ ...planned, status: "verifying" }, store.ownerId());
+    store.commitIdempotency(key, planned.id, 1, new Date().toISOString());
+    await controller.recoverInterrupted();
+    expect(controller.status(planned.id).status).not.toBe("verified_success");
+    expect(controller.receipts({ taskId: planned.id }).certificate?.result).not.toBe("VERIFIED_SUCCESS");
+    expect(executor.execute).not.toHaveBeenCalled();
+  });
+
   it("meters a waiting effect, so a grant for one operation is spent by it", async () => {
     const { controller, store, executor } = await setup((root) => ({
       ...createDefaultPolicy(root),

@@ -943,7 +943,10 @@ export class TaskController {
   /**
    * Settle a task whose idempotency key is committed to it. A key is
    * committed only once its effect verified, so whatever stopped the task
-   * came after the effect: an interruption, or a write that failed.
+   * came after the effect: an interruption, or a write that failed. Not one
+   * with a semantic question: its key commits on entering `waiting_user`,
+   * so the commit says every kernel check held, never that it was answered
+   * (#54).
    */
   private settleCommitted(
     task: TaskRecord,
@@ -951,6 +954,7 @@ export class TaskController {
     classified: ReturnType<typeof classifyOperation>,
   ): ExecutionResult | undefined {
     if (
+      request.requiredEvidence.some((predicate) => predicate.type === "semantic") ||
       task.idempotencyKey === undefined ||
       this.store.getIdempotencyCommit(task.idempotencyKey)?.taskId !== task.id
     ) {
