@@ -5,6 +5,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { access, mkdir, readFile, realpath, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import type {
   Browser,
   BrowserContext,
@@ -66,6 +67,12 @@ export interface BrowserRuntimeOptions extends NetworkPolicy {
    * caller looks at next. `"allow"` keeps it as an addressable tab.
    */
   popups?: "allow" | "block";
+  /**
+   * Whether a path is one the browser may not upload or load, in any mode:
+   * the data MELRA itself holds. The runtime passes the file runtime's
+   * reading check, so its artifacts may be uploaded and loaded again.
+   */
+  reserved?: (path: string) => Promise<boolean>;
 }
 
 /**
@@ -537,14 +544,29 @@ export class BrowserRuntime {
    */
   private signal: AbortSignal | undefined;
   private callMs = 30_000;
+  /** A wait's absolute deadline, applied to every bounded call it makes. */
+  private waitDeadline: number | undefined;
   /**
    * Set once the running action's effect call has returned. From then on the
    * page may have acted on it, so a failure is no longer evidence that nothing
    * happened — see `execute`.
    */
   private dispatched = false;
+  /** Set when the route refused reserved data during the running action. */
+  private refusedReserved = false;
 
-  constructor(private readonly options: BrowserRuntimeOptions) {}
+  /**
+   * The workspace root with its links resolved, once, as the file runtime
+   * resolves it: a root link re-pointed later does not move uploads to a
+   * different directory than file operations. An upload awaits it and fails
+   * if it did.
+   */
+  private readonly root: Promise<string>;
+
+  constructor(private readonly options: BrowserRuntimeOptions) {
+    this.root = realpath(options.workspaceRoot);
+    this.root.catch(() => undefined);
+  }
 
   /**
    * Bound a Playwright call that takes no timeout of its own by the running
@@ -557,37 +579,62 @@ export class BrowserRuntime {
    * instead spends the budget on something that can still answer.
    */
   private call<T>(promise: Promise<T>, what: string, ms = this.callMs): Promise<T> {
-    return bounded(promise, ms, what, this.signal);
+    const timeout =
+      this.waitDeadline === undefined
+        ? ms
+        : Math.min(ms, Math.max(Math.min(500, this.callMs), this.waitDeadline - Date.now()));
+    return bounded(promise, timeout, what, this.signal);
   }
 
   private async uploadPaths(paths: string[]): Promise<string[]> {
-    const root = await realpath(this.options.workspaceRoot);
+    const root = await this.root;
+    const configured = resolve(this.options.workspaceRoot);
+    const outside = (from: string, to: string) => {
+      const rel = relative(from, to);
+      return rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel);
+    };
     const resolved: string[] = [];
     for (const input of paths) {
-      const candidate = resolve(root, input);
-      const rel = relative(root, candidate);
-      if (
-        rel === ".." ||
-        rel.startsWith(`..${sep}`) ||
-        isAbsolute(rel)
-      ) {
+      // An absolute path spelled through the root as configured is the same
+      // path under the resolved root; both checks below still apply to it.
+      const candidate =
+        isAbsolute(input) && !outside(configured, resolve(input))
+          ? resolve(root, relative(configured, resolve(input)))
+          : resolve(root, input);
+      if (outside(root, candidate)) {
         throw new Error("browser_upload_outside_workspace");
       }
+      // Before anything looks the name up, so a reserved name gets the same
+      // answer whether it exists or not.
+      if ((await this.options.reserved?.(candidate)) === true) throw new Error("browser_path_reserved");
       const actual = await realpath(candidate);
-      const actualRelative = relative(root, actual);
-      if (
-        actualRelative === ".." ||
-        actualRelative.startsWith(`..${sep}`) ||
-        isAbsolute(actualRelative)
-      ) {
+      if (outside(root, actual)) {
         throw new Error("browser_upload_outside_workspace");
       }
+      if ((await this.options.reserved?.(actual)) === true) throw new Error("browser_path_reserved");
       if (!(await stat(actual)).isFile()) {
         throw new Error("browser_upload_requires_regular_file");
       }
       resolved.push(actual);
     }
     return resolved;
+  }
+
+  /**
+   * `assertSafeUrl`, and a file: URL naming reserved data is refused too. Only
+   * unhinged mode lets a file: URL through the first, and the reserved data
+   * stays out of reach there as it does for the file and terminal adapters.
+   */
+  private async assertAllowed(url: string): Promise<void> {
+    await assertSafeUrl(url, this.options);
+    if (this.options.reserved === undefined || !/^file:/i.test(url)) return;
+    let path: string;
+    try {
+      path = fileURLToPath(url);
+    } catch {
+      throw new Error("browser_path_reserved");
+    }
+    if (await this.options.reserved(path)) throw new Error("browser_path_reserved");
   }
 
   private async ensureContext(): Promise<BrowserContext> {
@@ -664,9 +711,12 @@ export class BrowserRuntime {
         return;
       }
       try {
-        await assertSafeUrl(requestUrl, this.options);
+        await this.assertAllowed(requestUrl);
         await route.continue();
-      } catch {
+      } catch (error) {
+        if (this.acting && error instanceof Error && error.message === "browser_path_reserved") {
+          this.refusedReserved = true;
+        }
         await route.abort("blockedbyclient");
       }
     };
@@ -1442,73 +1492,93 @@ export class BrowserRuntime {
     timeoutMs: number,
   ): Promise<void> {
     const negated = state === "hidden" || state === "detached";
+    const floor = Math.min(500, timeoutMs);
     const deadline = Date.now() + timeoutMs;
-    for (;;) {
-      // Asked on every poll: someone can fill a secret field while this waits.
-      // A poll that finds one filled, or cannot tell, looks for nothing and
-      // waits for the next one: a login form stays filled while it signs in.
-      // The question gets what is left of the wait, but at least a second, so
-      // the last poll is not starved into "unknown".
-      this.signal?.throwIfAborted();
-      const secret = await this.secretFieldFilled(page, Math.max(1_000, deadline - Date.now()));
-      let reached = negated && secret.state === "clear";
-      for (const candidate of secret.state === "clear" ? this.candidates(page, target, secret.read) : []) {
-        // Absence is an answer here: it satisfies `hidden` and `detached`. A
-        // document that went away mid-poll is not: the poll decides nothing.
-        let present: boolean | undefined;
-        try {
-          const element = await this.readFirst(candidate, secret.read);
-          try {
-            if (element === undefined) present = false;
-            else if (state === "attached" || state === "detached") present = true;
-            else if (await this.call(element.isVisible(), "is_visible")) present = true;
-            // isVisible() also answers false for an element whose document went
-            // away, so a false counts only for one still in its document.
-            else present = (await this.call(element.evaluate((node) => node.isConnected), "is_visible")) ? false : undefined;
-          } finally {
-            await element?.dispose().catch(() => undefined);
-          }
-        } catch (error) {
-          if (!navigatedAway(error)) {
-            // A search that failed outright is answered like any other: the
-            // check after it wins over what it met.
-            const after = (await this.secretFieldFilled(page, Math.max(1_000, deadline - Date.now()))).state;
-            if (after === "filled") throw new Error("browser_secret_field_filled");
-            if (after === "unknown") throw new Error("browser_secret_check_unavailable");
-            throw error;
-          }
-        }
-        if (present === undefined) {
-          reached = false;
-          break;
-        }
-        if (negated) {
-          if (present) {
+    const previousDeadline = this.waitDeadline;
+    this.waitDeadline = deadline;
+    try {
+      for (;;) {
+        // Asked on every poll: someone can fill a secret field while this waits.
+        // A poll that finds one filled, or cannot tell, looks for nothing and
+        // waits for the next one: a login form stays filled while it signs in.
+        this.signal?.throwIfAborted();
+        const secret = await this.secretFieldFilled(page, Math.max(floor, deadline - Date.now()));
+        let reached = negated && secret.state === "clear";
+        let looked = false;
+        for (const candidate of secret.state === "clear" ? this.candidates(page, target, secret.read) : []) {
+          // Let even a short wait look once, but do not spend a whole poll
+          // walking the remaining frames after its deadline.
+          if (looked && Date.now() >= deadline) {
             reached = false;
             break;
           }
-        } else if (present) {
-          reached = true;
-          break;
+          looked = true;
+          // Absence is an answer here: it satisfies `hidden` and `detached`. A
+          // document that went away mid-poll is not: the poll decides nothing.
+          let present: boolean | undefined;
+          try {
+            const element = await this.readFirst(candidate, secret.read);
+            try {
+              if (element === undefined) present = false;
+              else if (state === "attached" || state === "detached") present = true;
+              else if (await this.call(element.isVisible(), "is_visible")) present = true;
+              // isVisible() also answers false for an element whose document went
+              // away, so a false counts only for one still in its document.
+              else present = (await this.call(element.evaluate((node) => node.isConnected), "is_visible")) ? false : undefined;
+            } finally {
+              await element?.dispose().catch(() => undefined);
+            }
+          } catch (error) {
+            if (!navigatedAway(error)) {
+              // A search that failed outright is answered like any other: the
+              // check after it wins over what it met. An incomplete check must
+              // refuse the wait rather than trust the result it could not verify.
+              const after = (await this.secretFieldFilled(page, Math.max(floor, deadline - Date.now()))).state;
+              if (after === "filled") throw new Error("browser_secret_field_filled");
+              if (after === "unknown") throw new Error("browser_secret_check_unavailable");
+              if (
+                error instanceof BrowserCallTimeoutError &&
+                deadline - Date.now() <= WAIT_POLL_MS
+              ) {
+                throw new Error(`browser_wait_timeout:${state}:${JSON.stringify(target)}`);
+              }
+              throw error;
+            }
+          }
+          if (present === undefined) {
+            reached = false;
+            break;
+          }
+          if (negated) {
+            if (present) {
+              reached = false;
+              break;
+            }
+          } else if (present) {
+            reached = true;
+            break;
+          }
         }
+        // What a poll found, or did not, counts only if no field was filled
+        // while it looked: every poll that searched is checked again after.
+        let last = secret.state;
+        if (secret.state === "clear") {
+          last = (await this.secretFieldFilled(page, Math.max(floor, deadline - Date.now()))).state;
+          if (reached && last === "clear") return;
+        }
+        if (Date.now() >= deadline) {
+          // Not the target's fault when the last poll could not look for it,
+          // or could not vouch for what it saw.
+          if (last === "filled") throw new Error("browser_secret_field_filled");
+          if (last === "unknown") throw new Error("browser_secret_check_unavailable");
+          throw new Error(
+            `browser_wait_timeout:${state}:${JSON.stringify(target)}`,
+          );
+        }
+        await page.waitForTimeout(Math.min(WAIT_POLL_MS, Math.max(1, deadline - Date.now())));
       }
-      // What a poll found, or did not, counts only if no field was filled
-      // while it looked: every poll that searched is checked again after.
-      let last = secret.state;
-      if (secret.state === "clear") {
-        last = (await this.secretFieldFilled(page, Math.max(1_000, deadline - Date.now()))).state;
-        if (reached && last === "clear") return;
-      }
-      if (Date.now() >= deadline) {
-        // Not the target's fault when the last poll could not look for it,
-        // or could not vouch for what it saw.
-        if (last === "filled") throw new Error("browser_secret_field_filled");
-        if (last === "unknown") throw new Error("browser_secret_check_unavailable");
-        throw new Error(
-          `browser_wait_timeout:${state}:${JSON.stringify(target)}`,
-        );
-      }
-      await page.waitForTimeout(WAIT_POLL_MS);
+    } finally {
+      this.waitDeadline = previousDeadline;
     }
   }
 
@@ -1909,6 +1979,7 @@ export class BrowserRuntime {
     this.signal = signal;
     this.callMs = operation.timeoutMs;
     this.dispatched = false;
+    this.refusedReserved = false;
     this.actingOn = undefined;
     this.actingTarget = undefined;
     this.action = operation.action;
@@ -1979,6 +2050,9 @@ export class BrowserRuntime {
   }
 
   private async run(operation: BrowserOperation): Promise<Record<string, unknown>> {
+    // Before a browser is started, so a refused upload never starts one.
+    const files =
+      operation.action === "upload" && operation.filePaths !== undefined ? await this.uploadPaths(operation.filePaths) : [];
     const page = await this.page();
     this.actingOn = page;
     // What it opens while this action navigates it or sends it input is the
@@ -1997,13 +2071,18 @@ export class BrowserRuntime {
         }
       : undefined;
     try {
-      return await this.act(operation, page, pin);
+      return await this.act(operation, page, pin, files);
     } finally {
       void pin?.document.dispose().catch(() => undefined);
     }
   }
 
-  private async act(operation: BrowserOperation, page: Page, pin: Pin | undefined): Promise<Record<string, unknown>> {
+  private async act(
+    operation: BrowserOperation,
+    page: Page,
+    pin: Pin | undefined,
+    files: string[],
+  ): Promise<Record<string, unknown>> {
     // Anywhere but on the way to it, a url names the page the action acts on:
     // the active page, or for `close` and `tab_switch` the tab they name.
     // Policy shows it to the approver as the target and matches grants against
@@ -2083,7 +2162,7 @@ export class BrowserRuntime {
     switch (operation.action) {
       case "navigate": {
         if (operation.url === undefined) throw new Error("browser_navigate_requires_url");
-        await assertSafeUrl(operation.url, this.options);
+        await this.assertAllowed(operation.url);
         await this.drive(page);
         const response = await page.goto(operation.url, {
           waitUntil: "domcontentloaded",
@@ -2335,7 +2414,6 @@ export class BrowserRuntime {
         if (operation.filePaths === undefined) {
           throw new Error("browser_upload_requires_file_paths");
         }
-        const files = await this.uploadPaths(operation.filePaths);
         await this.actOn(pin!, await this.locator(page, operation.target), operation.timeoutMs, (element, timeout) =>
           element.setInputFiles(files, { timeout }),
         );
@@ -2361,7 +2439,11 @@ export class BrowserRuntime {
           CLICKABLE,
         );
         this.dispatched = true;
-        const download = await downloadPromise;
+        // The click went out, so this stays an unknown outcome, but one that
+        // names the refusal when the route turned the file away.
+        const download = await downloadPromise.catch((error: unknown) => {
+          throw this.refusedReserved ? new Error("browser_path_reserved") : error;
+        });
         const suggested = download.suggestedFilename().replaceAll(/[^A-Za-z0-9._-]/g, "_");
         const path = join(
           this.options.artifactDirectory,
@@ -2398,7 +2480,7 @@ export class BrowserRuntime {
         const opened = await this.openPage(context);
         this.activate(opened);
         if (operation.url !== undefined) {
-          await assertSafeUrl(operation.url, this.options);
+          await this.assertAllowed(operation.url);
           await opened.goto(operation.url, {
             waitUntil: "domcontentloaded",
             timeout: operation.timeoutMs,

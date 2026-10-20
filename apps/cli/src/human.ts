@@ -15,6 +15,8 @@ export interface DoctorCheck {
   name: string;
   status: Status;
   detail: string;
+  /** What to do about it, where that depends on more than the check's name. */
+  next?: string;
 }
 
 export interface DoctorReport {
@@ -30,6 +32,8 @@ export interface DoctorReport {
 export interface InitResult {
   initialized: true;
   client: string;
+  /** The directory the generated config gives the agent, as MELRA_WORKSPACE. */
+  workspace: string;
   policyPath: string;
   configPath?: string;
   written?: true;
@@ -62,6 +66,7 @@ function clientLine(status: ClientStatus): string[] {
 export function nextStep(report: DoctorReport): string | undefined {
   const broken = report.clients.find((client) => client.problems.length > 0);
   const hint = (check: DoctorCheck): string | undefined => {
+    if (check.next !== undefined) return check.next;
     switch (check.name) {
       case "node":
         return "install Node.js 22 or newer";
@@ -74,11 +79,10 @@ export function nextStep(report: DoctorReport): string | undefined {
           ? "make MELRA_HOME private with chmod 700 (see the data-directory line above)"
           : "point MELRA_HOME at a directory you can write";
       case "data-location":
-        return check.detail.startsWith("could not resolve the workspace")
-          ? "point MELRA_WORKSPACE at a directory you can read and write"
-          : "move MELRA_HOME outside MELRA_WORKSPACE";
+        // Inside the workspace carries its own `next`, which depends on the layout.
+        return "point MELRA_WORKSPACE at a directory you can read and write";
       case "policy":
-        return "fix the policy file's JSON, or unset MELRA_POLICY to use the defaults";
+        return "fix the policy file as the policy line above says, or unset MELRA_POLICY to use the defaults";
       case "socket":
         return "fix or unset MELRA_SOCKET (see the socket line above)";
       case "isolation":
@@ -175,7 +179,10 @@ function snippet(config: Record<string, unknown> | string): string {
 
 export function renderInit(result: InitResult): string {
   const label = CLIENTS[result.client]?.label ?? result.client;
-  const rows = [[mark("pass"), "Policy", result.policyPath]];
+  const rows = [
+    [mark("pass"), "Workspace", result.workspace],
+    [mark("pass"), "Policy", result.policyPath],
+  ];
   if (result.written === true && result.configPath !== undefined) {
     rows.push([mark("pass"), label, result.configPath]);
     if (result.unchanged === true) {
@@ -216,16 +223,88 @@ export interface WizardIo {
 }
 
 /**
+ * Why `setup` and `init` will not quietly make home, a directory holding it,
+ * or `/` the workspace, and `advice` on choosing another.
+ */
+export function broadWorkspaceWarning(
+  workspace: string,
+  broad: "root" | "home" | "holds-home",
+  advice: string,
+): string {
+  const what = {
+    root: "is the root of the file system",
+    home: "is your home directory",
+    "holds-home": "holds your home directory",
+  }[broad];
+  return (
+    `${workspace} ${what}, and the agent could read every file under it. ` +
+    `${advice.charAt(0).toUpperCase()}${advice.slice(1)}`
+  );
+}
+
+/**
+ * Every question one command asks, read through one interface. Lines are read
+ * through its async iterator rather than `question()`, because the iterator
+ * buffers: input that arrives all at once (a paste, typing ahead, or a test)
+ * is not lost between prompts, nor between the workspace question and the
+ * wizard. The interface opens at the first question, so a command that asks
+ * none leaves the terminal alone. Undefined once input ends or on Ctrl-C.
+ */
+export interface Prompter {
+  ask(prompt: string): Promise<string | undefined>;
+  output: NodeJS.WritableStream;
+  close(): void;
+}
+
+export function prompter(io: WizardIo): Prompter {
+  let rl: ReturnType<typeof createInterface> | undefined;
+  let lines: AsyncIterator<string> | undefined;
+  // Input can end with answers still buffered (a paste ending in EOF). Those
+  // are still read, but a closed interface refuses to prompt, so the prompt is
+  // then written directly.
+  let closed = false;
+  return {
+    output: io.output,
+    async ask(prompt) {
+      if (rl === undefined) {
+        const opened = createInterface({ input: io.input, output: io.output });
+        opened.on("close", () => (closed = true));
+        opened.on("SIGINT", () => opened.close());
+        rl = opened;
+        lines = opened[Symbol.asyncIterator]();
+      }
+      if (closed) {
+        io.output.write(prompt);
+      } else {
+        // Through readline while it is live, so line editing redraws the prompt.
+        rl.setPrompt(prompt);
+        rl.prompt();
+      }
+      const line = await lines!.next();
+      return line.done === true ? undefined : String(line.value).trim().toLowerCase();
+    },
+    close: () => rl?.close(),
+  };
+}
+
+/**
+ * Asked before `setup` or `init` writes a config whose workspace is broad:
+ * what `npx @melra/cli@alpha setup` in a fresh terminal did without a word.
+ * No unless the person types y; input that ends is a no.
+ */
+export async function confirmBroadWorkspace(reader: Prompter, workspace: string, warning: string): Promise<boolean> {
+  reader.output.write(`${mark("warn")} ${printable(warning)}.\n`);
+  const answer = await reader.ask(`Use ${printable(workspace)} as the workspace anyway? [y/N] `);
+  return answer === "y" || answer === "yes";
+}
+
+/**
  * Ask which client to set up and whether to write its config. Resolves to the
  * answer, or undefined if the person pressed Ctrl-C or closed input — in which
  * case the caller writes nothing.
- *
- * Lines are read through the interface's async iterator rather than
- * `question()`, because the iterator buffers: input that arrives all at once
- * (a paste, or a test) is not lost between prompts.
  */
 export async function setupWizard(
-  io: WizardIo,
+  reader: Prompter,
   clients: ClientChoice[],
 ): Promise<{ client: string; write: boolean } | undefined> {
   const choices: ClientChoice[] = [
@@ -233,59 +312,36 @@ export async function setupWizard(
     ...clients.filter((client) => client.detected === undefined),
     { client: "generic", label: "generic (just print the config)" },
   ];
-  const rl = createInterface({ input: io.input, output: io.output });
-  // Input can end with answers still buffered (a paste ending in EOF). Those
-  // are still read, but a closed interface refuses to prompt, so the prompt is
-  // then written directly.
-  let closed = false;
-  rl.on("close", () => (closed = true));
-  rl.on("SIGINT", () => rl.close());
-  const lines = rl[Symbol.asyncIterator]();
-  const ask = async (prompt: string): Promise<string | undefined> => {
-    if (closed) {
-      io.output.write(prompt);
-    } else {
-      // Through readline while it is live, so line editing redraws the prompt.
-      rl.setPrompt(prompt);
-      rl.prompt();
+  reader.output.write(
+    `Which MCP client should use MELRA?\n\n${table(
+      choices.map(({ label, detected }, index) => [
+        `${index + 1})`,
+        label,
+        detected === undefined ? "" : paint.ok(`detected: ${detected}`),
+      ]),
+      { indent: 2 },
+    )}\n\n`,
+  );
+  const fallback = choices[0]?.detected === undefined ? undefined : choices[0];
+  let chosen: ClientChoice | undefined;
+  while (chosen === undefined) {
+    const answer = await reader.ask(`Choose 1-${choices.length}${fallback === undefined ? "" : " [1]"}: `);
+    if (answer === undefined) return undefined;
+    chosen =
+      answer === ""
+        ? fallback
+        : (choices[Number(answer) - 1] ?? choices.find(({ client }) => client === answer));
+    if (chosen === undefined) {
+      reader.output.write(`Enter a number from 1 to ${choices.length}.\n`);
     }
-    const line = await lines.next();
-    return line.done === true ? undefined : String(line.value).trim().toLowerCase();
-  };
-  try {
-    io.output.write(
-      `Which MCP client should use MELRA?\n\n${table(
-        choices.map(({ label, detected }, index) => [
-          `${index + 1})`,
-          label,
-          detected === undefined ? "" : paint.ok(`detected: ${detected}`),
-        ]),
-        { indent: 2 },
-      )}\n\n`,
-    );
-    const fallback = choices[0]?.detected === undefined ? undefined : choices[0];
-    let chosen: ClientChoice | undefined;
-    while (chosen === undefined) {
-      const answer = await ask(`Choose 1-${choices.length}${fallback === undefined ? "" : " [1]"}: `);
-      if (answer === undefined) return undefined;
-      chosen =
-        answer === ""
-          ? fallback
-          : (choices[Number(answer) - 1] ?? choices.find(({ client }) => client === answer));
-      if (chosen === undefined) {
-        io.output.write(`Enter a number from 1 to ${choices.length}.\n`);
-      }
-    }
-    if (chosen.path === undefined) return { client: chosen.client, write: false };
-    for (;;) {
-      const answer = await ask(`Write it into ${chosen.path}? [Y/n] `);
-      if (answer === undefined) return undefined;
-      if (["", "y", "yes"].includes(answer)) return { client: chosen.client, write: true };
-      if (["n", "no"].includes(answer)) return { client: chosen.client, write: false };
-      io.output.write("Answer y or n.\n");
-    }
-  } finally {
-    rl.close();
+  }
+  if (chosen.path === undefined) return { client: chosen.client, write: false };
+  for (;;) {
+    const answer = await reader.ask(`Write it into ${chosen.path}? [Y/n] `);
+    if (answer === undefined) return undefined;
+    if (["", "y", "yes"].includes(answer)) return { client: chosen.client, write: true };
+    if (["n", "no"].includes(answer)) return { client: chosen.client, write: false };
+    reader.output.write("Answer y or n.\n");
   }
 }
 

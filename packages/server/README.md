@@ -7,9 +7,11 @@ browser, computer, and HTTP runtimes and operational memory.
 
 Most people should not install this directly — use
 [`@melra/cli`](https://www.npmjs.com/package/@melra/cli), which wraps this
-package with setup, readiness checks, and a generated client configuration:
+package with setup, readiness checks, and a generated client configuration.
+Run it from the project the agent should work in, which becomes its workspace:
 
 ```bash
+cd ~/project
 npx @melra/cli@alpha setup
 ```
 

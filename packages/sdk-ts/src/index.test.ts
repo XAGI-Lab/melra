@@ -203,12 +203,52 @@ describe("TypeScript workflow SDK", () => {
 });
 
 describe("TypeScript SDK stdio connect", () => {
+  it("waits for execute as long as runTimeoutMs, not the MCP client's 60 s default", async () => {
+    // A stand-in server whose execute takes 1.5 s, as a long build would take minutes.
+    const mcp = import.meta.resolve("@modelcontextprotocol/sdk/server/mcp.js");
+    const stdio = import.meta.resolve("@modelcontextprotocol/sdk/server/stdio.js");
+    const slow = [
+      `const { McpServer } = await import(${JSON.stringify(mcp)});`,
+      `const { StdioServerTransport } = await import(${JSON.stringify(stdio)});`,
+      `const server = new McpServer({ name: "slow", version: "1" });`,
+      `server.tool("melra_execute", async () => { await new Promise((done) => setTimeout(done, 1500)); return { content: [{ type: "text", text: "{\\"done\\":true}" }] }; });`,
+      `await server.connect(new StdioServerTransport());`,
+    ].join("\n");
+    const connect = (runTimeoutMs: number) =>
+      MelraClient.connect({ command: process.execPath, args: ["--input-type=module", "-e", slow], runTimeoutMs });
+
+    const impatient = await connect(500);
+    try {
+      // Honoured: a short limit really does cut the call off.
+      await expect(impatient.execute("task")).rejects.toThrow(/timed out/i);
+    } finally {
+      await impatient.close();
+    }
+    const patient = await connect(5_000);
+    try {
+      await expect(patient.execute("task")).resolves.toEqual({ done: true });
+    } finally {
+      await patient.close();
+    }
+  }, 20_000);
+
+  it("refuses a runTimeoutMs that would fire at once, before starting anything", async () => {
+    // Each of these becomes a 1 ms timer: every execute() would time out while
+    // the server went on and ran the effect.
+    for (const runTimeoutMs of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 2 ** 31]) {
+      await expect(
+        MelraClient.connect({ command: "/nonexistent/melra", runTimeoutMs }),
+        String(runTimeoutMs),
+      ).rejects.toThrow("melra_run_timeout_invalid");
+    }
+  });
+
   it("says why the server it started refused to start", async () => {
     // What `melra serve` prints for a bad policy, then exits 1.
     const refuse =
-      'process.stderr.write("melra: policy_approval_ttl_invalid: approvalTtlMs must be a whole number\\n"); process.exit(1)';
+      'process.stderr.write("melra: policy_invalid: /p/policy.json: approvalTtlMs: policy_approval_ttl_invalid: must be a whole number\\n"); process.exit(1)';
     await expect(MelraClient.connect({ command: process.execPath, args: ["-e", refuse] })).rejects.toThrow(
-      /the server said: melra: policy_approval_ttl_invalid/,
+      /the server said: melra: policy_invalid: \/p\/policy\.json: approvalTtlMs: policy_approval_ttl_invalid/,
     );
   });
 

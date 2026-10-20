@@ -235,10 +235,11 @@ describe("browser see/act loop", () => {
   }, 120_000);
 
   it("switches to the tab it checked, even if a tab before it closes meanwhile", async () => {
-    // ?busy stops answering for a while, so its check is slow; ?console is marked.
+    // ?console is marked; ?busy is made to stop answering just before the
+    // switch, so its check is slow. Timed from its own load it raced how fast
+    // the tab opened, and an early check answered before tab 0 closed (#295).
     const context = await fixture(`<!doctype html><html><head><script>
       if (location.search === "?console") document.head.insertAdjacentHTML("beforeend", '<meta name="${APPROVAL_SURFACE}" content="operator-only">');
-      if (location.search === "?busy") setTimeout(() => { const until = Date.now() + 3_000; while (Date.now() < until); }, 1_500);
     </script></head><body>tab</body></html>`);
     if (context === undefined) return;
     const { runtime, url } = context;
@@ -246,12 +247,16 @@ describe("browser see/act loop", () => {
       runtime.execute(BrowserOperationSchema.parse({ kind: "browser", ...operation }));
     try {
       await run({ action: "navigate", url });
-      const opened = Date.now();
       await run({ action: "tab_new", url: `${url}/?busy` });
       await run({ action: "tab_new", url: `${url}/?console` });
-      await new Promise((done) => setTimeout(done, Math.max(0, opened + 1_800 - Date.now())));
       // Tab 1's check waits on its page; tab 0 goes away while it does.
       const pages = (runtime as unknown as { context: { pages: () => Page[] } }).context.pages();
+      void pages[1]!
+        .evaluate(() => {
+          const until = Date.now() + 3_000;
+          while (Date.now() < until);
+        })
+        .catch(() => undefined);
       setTimeout(() => void pages[0]!.close(), 300);
       const switched = await run({ action: "tab_switch", tabIndex: 1 });
       expect(switched.url).toContain("?busy");
@@ -798,6 +803,91 @@ describe("browser see/act loop", () => {
         }),
       );
       expect(waited.success).toBe(true);
+    } finally {
+      await runtime.close();
+    }
+  }, 120_000);
+
+  it.each([100, 5_000])("ends a %i ms wait near its deadline while the renderer never frees up, and names how it ended", async (timeoutMs) => {
+    const context = await fixture(`<!doctype html><html><body><p id="here">here</p></body></html>`);
+    if (context === undefined) return;
+    const { runtime, url } = context;
+    try {
+      await runtime.execute(BrowserOperationSchema.parse({ kind: "browser", action: "navigate", url }));
+      // Back-to-back busy stretches from just before the wait: the body of
+      // each stretch hands back the next one over a `MessageChannel`, whose
+      // messages land without the clamped minimum a `setTimeout` chain leaves
+      // between stretches. The renderer never frees up while this waits, so
+      // the wait is not held past the deadline it was given, and the message
+      // it ends with names the refusal.
+      const page = (runtime as unknown as { activePage?: Page }).activePage;
+      await page!.evaluate(() => {
+        const channel = new MessageChannel();
+        const busy = () => {
+          const until = performance.now() + 900;
+          while (performance.now() < until) {}
+          channel.port2.postMessage(0);
+        };
+        channel.port1.onmessage = busy;
+        channel.port2.postMessage(0);
+      });
+      const started = Date.now();
+      // A hidden wait facing its own present target cannot be met: it is
+      // expected to end on its own deadline. On main, with setTimeout
+      // stretches, this same wait took 10.8 s.
+      await expect(
+        runtime.execute(
+          BrowserOperationSchema.parse({
+            kind: "browser",
+            action: "wait",
+            target: { selector: "#here" },
+            state: "hidden",
+            timeoutMs,
+          }),
+        ),
+      ).rejects.toThrow(/^browser_(wait_timeout|call_timeout|secret_check_unavailable)/);
+      expect(Date.now() - started).toBeLessThan(timeoutMs + Math.max(150, timeoutMs * 0.5));
+    } finally {
+      await runtime.close();
+    }
+  }, 120_000);
+
+  it("ends a wait across many frames near its deadline once the poll it was running runs over", async () => {
+    // Every frame here answers, so the branch it ends on is the last poll's
+    // own check, not a check that could not look: a page whose polls cost
+    // real time across 20 same-origin frames covered the poll that is under
+    // way when the deadline arrives. On main this wait ran 3.6 to 12.4 s for
+    // a `timeoutMs` several times smaller.
+    const frames = Array.from({ length: 20 }, () => '<iframe srcdoc="<p>frame</p>"></iframe>').join("");
+    const context = await fixture(`<!doctype html><html><body>${frames}</body></html>`);
+    if (context === undefined) return;
+    const { runtime, url } = context;
+    try {
+      await runtime.execute(BrowserOperationSchema.parse({ kind: "browser", action: "navigate", url }));
+      const page = (runtime as unknown as { activePage?: Page }).activePage;
+      await page!.evaluate(() => {
+        const channel = new MessageChannel();
+        channel.port1.onmessage = () => {
+          const until = performance.now() + 150;
+          while (performance.now() < until) {}
+          channel.port2.postMessage(0);
+        };
+        channel.port2.postMessage(0);
+      });
+      const timeoutMs = 3_000;
+      const started = Date.now();
+      await expect(
+        runtime.execute(
+          BrowserOperationSchema.parse({
+            kind: "browser",
+            action: "wait",
+            target: { text: "nowhere" },
+            state: "visible",
+            timeoutMs,
+          }),
+        ),
+      ).rejects.toThrow(/browser_wait_timeout:visible/);
+      expect(Date.now() - started).toBeLessThan(timeoutMs * 1.5);
     } finally {
       await runtime.close();
     }

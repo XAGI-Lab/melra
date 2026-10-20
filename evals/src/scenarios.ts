@@ -631,7 +631,7 @@ export const scenarios: EvaluationScenario[] = [
     expectedPlan: "policy_blocked",
   },
   {
-    id: "terminal-timeout-fails",
+    id: "terminal-timeout-unknown",
     category: "terminal",
     request: {
       goal: "Bound a long command",
@@ -650,7 +650,8 @@ export const scenarios: EvaluationScenario[] = [
     },
     expectedPlan: "awaiting_approval",
     approve: true,
-    expectedFinal: "failed",
+    // Stopped by its own timeout, it may have done its work first (#248).
+    expectedFinal: "recovery_required",
   },
   {
     id: "memory-put-approved",

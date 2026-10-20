@@ -216,7 +216,9 @@ material and must not be committed or publicly synchronized.
 A definition is an immutable, versioned DAG with at most 500 nodes. Node IDs
 are unique; dependencies must exist; self-dependencies and cycles are rejected
 before persistence. Every nested task is capability- and policy-preflighted
-before the workflow is accepted.
+before the workflow is accepted, and a `condition`, `until` or `delegation`
+check no registered verifier can ask (`evidence_verifier_unavailable`), or on a
+file path outside the workspace (`evidence_path_outside_workspace`), is refused.
 
 | Node | Implemented semantics and bounds |
 |---|---|
@@ -238,6 +240,61 @@ A delegate reporting "done" is not evidence. A `delegation` node that declared
 predicates and whose predicates fail is `failed`, exactly as an `operation`
 node would be.
 
+A check whose provider did not answer is not a "no". When a `condition`'s
+predicate, a `bounded_loop`'s `until` or a `delegation`'s evidence comes back
+`inconclusive` (a 503 or 429, a 401 or 403, a redirect, a refused destination,
+a body cut at the size cap, no connection), nothing is decided: `advance`
+records the other nodes and fails with `workflow_check_inconclusive:<node>`.
+The condition stays `pending` and runs neither branch, the loop stays `pending`
+with the iterations it ran, and the delegation stays `awaiting_input` and keeps
+the report it was sent; each names the check it waits on as its `error`, by
+type and source (a URL without its query, which can carry a token), so status
+shows what the run waits on. Every later `advance` asks again, and one still
+unanswered writes nothing, however the provider words its failure. A definite
+no among several items decides even while another is unanswered. A provider
+that never answers holds the run there; `workflow cancel` ends it, and does not
+compensate, so effects already done stay done. A check the kernel refuses to
+ask (an `unanswerable` item: a URL `{{token}}` its source result cannot fill, a
+verifier gone since planning, a reserved path) is refused again of the same
+result, so a `condition` or `delegation` fails
+(`workflow_check_unresolvable:<node>`) and the run unwinds. A loop's `until`
+asks of each iteration's new result, so it reads such a check as a no and runs
+the next iteration, up to `maxIterations`. Either way the call fails, but a
+`condition` under which an advance that lost its commit already ran a step
+whose outcome is unknown neither waits nor fails: it halts on that step
+(`recovery_required`, as after a restart), so nothing unwinds past it.
+
+A `condition` takes one branch, once. A branch with a committed step is the
+one taken, even when the advance that took it lost its commit (a pause landed
+while it ran); then the branch the run recorded; only then the predicate. An
+advance that lost its commit can have left tasks on the branch not taken:
+its challenges are cancelled when the branch is decided, or by `workflow
+cancel` before then, so none is approved later. One there that may have had
+an effect (it verified, its evidence did not hold, or its outcome is unknown)
+halts the run as `recovery_required` with
+`workflow_condition_branch_conflict:<node>`, rather than run the other branch
+beside it. One that did not happen counts for nothing: its adapter reported it
+failed, it ran out of budget, or it was cancelled or refused by policy. So a
+halted run moves on once the tasks it names are reconciled as never applied.
+Only a step whose outcome is unknown can be reconciled. One that took effect,
+whether it verified or its evidence did not hold (`partial`), stands, and the
+run stays halted: the operator inspects what that branch did, undoes it by
+hand, then ends the run with `workflow cancel`, which compensates nothing, so
+what earlier steps did is undone by hand too where it should not stand. A
+restart before the condition is decided reads a step such an advance ran
+whose outcome is unknown as the condition's own, so it halts the run there,
+as any other step's does, rather than let a failed sibling unwind past it.
+Anything else such an advance left waits for the next advance to decide, so
+the run halts or moves on the same with or without a restart. `workflow
+cancel` cancels whatever a lost advance left planned or
+waiting for approval under any of the run's steps, not only the tasks the run
+names, and cancelling an already cancelled run sweeps again. Tasks are
+cancelled, the run's own and the leftovers, only once the run's cancel is
+recorded, so a cancel that fails leaves every challenge as it was rather than
+read as a denial by the next advance; one that fails after it is reported, and
+cancelling again finishes the sweep. A run whose definition can no longer be
+opened is still ended, but nothing is swept.
+
 ## Workflow state and events
 
 Workflow statuses are:
@@ -255,8 +312,26 @@ draft → planned → running → verified_complete
 
 `paused` and `suspended` are entered by the operator commands `workflow pause`
 and `workflow suspend`, and left by `workflow resume`; an `advance` against
-either is refused rather than queued. The public schema also reserves
-`partially_complete`, which no command enters today.
+either is refused rather than queued. These three and `workflow cancel` take
+the run's lease for the moment they write, as recovery does, so none lands
+under an advance, whose commit would then fail and leave the effects it ran
+out of the run: while an advance holds the lease, in any process, each is
+refused with `workflow_lease_held` and changes nothing, so retry once it
+returns. An advance whose lease lapsed (it stalled, as across a laptop's
+sleep) is taken over: it stops with `workflow_lease_lost` before its next step.
+A halt or resume leaves its expired lease in place, so whoever advances the run
+next recovers it first; a cancel, which ends the run for good, recovers it
+itself before cancelling it, reading each step's tasks under its keys, so what
+that advance (or one that died holding the lease, or lost its commit) ran is
+recorded on the cancelled run, and a task still running there is cancelled as
+the run's own. Its step is recorded as still in flight (`recovery_required`,
+`task_still_in_flight`), not as cancelled: in another process, or one that
+died mid-effect, the effect may still land. One running in this process is
+recorded as it ended (cancelled, or done all the same) once it stops, tried
+again while another holder has the run's lease, and cancelling the run again
+records any such step whose task has since ended, in any process. The
+public schema also reserves `partially_complete`, which no command enters
+today.
 
 `cancelled` is entered only by `workflow cancel`. A step whose task is denied
 before it runs (`melra approve --deny`, the console's Deny, or
@@ -306,14 +381,44 @@ interface is served.
   them automatically.
 - A verified task committed before its workflow projection is repaired from
   persisted task evidence and recorded as `workflow.recovered`.
+- An advance whose commit failed leaves the run naming none of the tasks it
+  planned or ran. The next advance takes each step's task up by its
+  idempotency key, as recovery does: the one committed, else the one
+  recovery prefers of every task under the key (a verified one, then the
+  newest attempt). So an `operation`, `approval`, `parallel` branch,
+  `bounded_loop` iteration or `compensation` offers the challenge such an
+  advance left again rather than a second one beside it, a step that
+  verified, took effect but failed its evidence (`partial`), has an unknown
+  outcome or is still running is never run again, and one that failed, ran
+  out of budget, was refused by policy or was denied stays so, and the run
+  unwinds as it would have. A step is planned afresh only when its key holds
+  no task at all; a challenge that expired is still asked again, as a later
+  attempt that the next advance prefers. A loop such an advance carried into
+  its next iteration goes on there without asking `until` again of the
+  iteration before. The tasks under a key are found by an index on
+  `idempotencyKey` (migration 6), not by reading every task, and recovery
+  (at startup, in the sweep, for a parked step and in a cancel) finds each
+  step's tasks the same way.
 - Idempotency keys bind workflow, node, iteration, branch, and canonical
   request. SQLite rejects a second committed attempt.
 - Competing advances for one workflow are serialized inside a server process.
   Concurrent independent branches remain parallel.
 
+A task leaves `planned` or `awaiting_approval` by a compare-and-set on its
+status, so of an execute and a deny (`melra approve --deny`, the console,
+`melra_task_cancel`) in different processes, or of two executes, exactly one
+moves it. The execute that loses is refused with `task_not_executable:<status>`
+before its adapter runs; the cancel that loses returns the task as it now
+stands, which `melra approve --deny` reports with exit 1 and the console as
+`task_not_cancellable:<status>`.
+
 Multiple MELRA server processes may share one `MELRA_HOME`. Advancing a workflow
 takes an expiring SQLite lease before any adapter runs, so a second process is
 refused with `workflow_lease_held` rather than starting duplicate side effects.
+The advance renews that lease before each step it starts and before it commits.
+One that stalled long enough for another process, or an operator's halt or
+cancel, to take the run over fails with `workflow_lease_lost` instead, starting no further step and committing
+nothing; advancing again carries on from wherever the other process left it.
 
 Recovery touches only work whose process is gone. The process that starts a
 task records itself as the task's owner and holds an exclusive lock on a file
@@ -515,6 +620,24 @@ receipt's evidence carries `inconclusive: true`, and the certificate says
 `RECOVERY_REQUIRED` rather than `FAILED`. Reads are exempt: a read that may or
 may not have run changed nothing either way.
 
+The same holds for a program stopped mid-run. A terminal `run` stopped by its
+own `timeoutMs`, as by the task's budget or a cancel, may have written its file
+or pushed its branch first, and a computer input helper (click, move, drag,
+type, key, scroll) stopped by its timeout or a cancel may already have landed.
+Each is `effect_outcome_unknown:`, not `failed`.
+
+A mutation whose adapter returned, but whose result, receipt or task could not
+then be written, parks the same way: the target answered, and nothing recorded
+says what. One that had already verified and committed its idempotency key is
+settled by that commit, which is written only once the effect verified:
+reconciling it asks nobody and it becomes `verified_success`
+(`committed_before_interruption`), declared `reconciliation` or not. A workflow
+step whose outcome was recorded but whose certificate was not gets it at the
+run's next advance, so the run still finishes. Only what writes the run (an
+advance, recovery, a resume) writes it, and only if none is stored yet, as
+`execute` writes its own: reading receipts writes nothing, and no two
+processes hand out different certificates for one task.
+
 Settling a parked task is what `reconciliation` predicates are for. They are
 read against the facts that were true *before* the call — the task id, the URL,
 the method, the `idempotencyKey` MELRA sent — because a lost reply left no
@@ -527,12 +650,33 @@ safe thing:
 | the effect is applied | `verified_success`, receipted as `recovered` |
 | no such effect | `failed`, `reconciliation_confirms_effect_not_applied` |
 | nothing — unreachable | stays `recovery_required`, `reconciliation_inconclusive` |
+| nothing — the kernel refuses to ask | stays `recovery_required`, `reconciliation_unanswerable:<refusal>` |
 | *(none declared)* | stays `recovery_required`, `reconciliation_not_declared` |
 | *(a `semantic` predicate declared)* | stays `recovery_required`, its cause unchanged: a provider can say whether an effect happened, not whether it is right |
 
 An unreachable provider did not say no, so nothing is concluded from silence.
+A predicate the kernel itself refuses to ask — a path outside the workspace or
+one the filesystem will not take whole, a URL token with nothing to fill it, a
+verifier this runtime lacks — is
+inconclusive too, and its item also carries `unanswerable: true`, because
+asking again is refused again; a caller deciding whether to wait reads that
+flag, never the summary, and the task's `error` names it
+(`reconciliation_unanswerable:` and the refusal) so the declaration gets fixed
+rather than waited on. Planning refuses a file path that could only be
+refused (`evidence_path_outside_workspace`), and a URL token those four facts
+cannot fill (`reconciliation_unanswerable:verification_token_unresolved:<token>`).
 The same path runs on restart: `recoverInterrupted` reconciles a crashed
-mutation that declared how to settle one, and parks the rest.
+mutation that declared how to settle one, and parks the rest. An answer is
+recorded, with its receipt and certificate, in one transaction and only while
+the task is still `recovery_required`: of two reconciles of one task (two
+`melra_execute` calls, or the sweep beside one) the first to answer stands, and
+the other writes nothing and returns the task as it now stands.
+
+A forward workflow step parked this way moves at the run's next `advance`, in
+the same process: the advance reads the step's tasks again, as recovery does.
+Settled as applied, the step is done and what waits on it runs; settled as not
+applied, it failed, and the run fails and unwinds. A parked compensation is
+covered under [Sagas](#sagas-across-providers).
 
 ## Sagas across providers
 
@@ -547,16 +691,30 @@ at a time, newest effect first, and the unwind stops at the first that does not
 reach `compensated` — refunding while the goods are still in transit is worse
 than stopping. A stalled unwind makes the run `recovery_required` with
 `workflow_compensation_incomplete:<node>` naming the missing inverse, and
-`advance` refuses to start new work on top of it.
+`advance` refuses to start new work on top of it. Once `melra_execute` settles
+that compensation as applied, the next `advance` marks it `compensated` and the
+unwind carries on; settled as not applied, the unwind stays stalled.
 
-A step denied before it runs starts the same unwind as a failed one, unless
-another step's outcome is unknown: then the run is `recovery_required` and
-waits for an operator, rather than undo what that effect may depend on. Each
+A step denied before it runs starts the same unwind as a failed one. Neither
+starts while another step's outcome is unknown or unsettled (an effect that may
+have happened, or a task still running): the run is `recovery_required` and
+waits, starting no further step, rather than undo what that effect may depend
+on. That step is settled by its `reconciliation`: `melra_execute` on its task,
+or recovery when a process starts, asks the provider whether the effect
+happened. Once settled, the next `advance` fails the run and unwinds, the
+settled step's own compensation included if its effect happened. A step that
+declares no `reconciliation` cannot be settled by MELRA; `workflow cancel` ends
+such a run, without unwinding it. Each
 compensation is still its own governed task, so one that is a mutation waits for
 its own approval, and denying it stops the unwind as a failed compensation does.
 To end a run without unwinding it, cancel the run (`workflow cancel`,
 `melra_workflow_cancel`); that also stops an unwind already under way, before
-its next compensation.
+its next compensation, once the advance running one returns (until then the
+cancel is refused with `workflow_lease_held`). Cancelling a running step's
+task (`melra_task_cancel`) does not end the run: it fails that step, and the
+advance running it starts the unwind before a `workflow cancel` can land. A
+step's task that another process starts just as the run is cancelled still
+runs; its own record says how it ended.
 
 An interrupted mutation becomes `recovery_required` rather than being repeated,
 because the durable record can say what was in flight but not what the provider

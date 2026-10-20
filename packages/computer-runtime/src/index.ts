@@ -4,10 +4,10 @@
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { access, mkdir, readFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { access, mkdir, readFile, rm } from "node:fs/promises";
+import { basename, dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
-import type { ComputerOperation } from "@melra/protocol";
+import { outcomeUnknown, type ComputerOperation } from "@melra/protocol";
 
 const execFileAsync = promisify(execFile);
 
@@ -342,6 +342,11 @@ export interface ComputerAdapter {
 export interface ComputerRuntimeOptions {
   artifactDirectory: string;
   adapter?: ComputerAdapter;
+  /**
+   * The OCR program, for one outside tesseract's usual install paths. Setting
+   * it makes reading the screen available wherever screenshots are.
+   */
+  ocrProgram?: string;
 }
 
 const ALLOWED_KEYS: Record<string, number> = {
@@ -370,6 +375,19 @@ async function executable(path: string): Promise<boolean> {
   }
 }
 
+/**
+ * A helper that never started because a cancel had already landed, so nothing
+ * it would have sent was sent: a plain cancellation, not an unknown outcome.
+ */
+class HelperNotStarted extends Error {}
+
+/** Why the signal fired: the task's budget, or a cancel (a bare abort included). */
+function abortReason(signal: AbortSignal): string {
+  return signal.reason instanceof Error && signal.reason.name !== "AbortError"
+    ? signal.reason.message
+    : "task_cancelled";
+}
+
 async function run(
   file: string,
   args: string[],
@@ -377,6 +395,7 @@ async function run(
   signal?: AbortSignal,
   env?: Record<string, string>,
 ): Promise<{ stdout: string; stderr: string }> {
+  if (signal?.aborted === true) throw new HelperNotStarted(abortReason(signal));
   try {
     const result = await execFileAsync(file, args, {
       timeout: timeoutMs,
@@ -410,7 +429,8 @@ async function run(
     if (error.killed === true || error.code === "ETIMEDOUT") {
       throw new Error(`computer_helper_timeout:${program}:${timeoutMs}ms`);
     }
-    if (signal?.aborted === true) throw new Error("task_cancelled");
+    // Read afresh: the check above ran before the helper did.
+    if ((signal as AbortSignal | undefined)?.aborted === true) throw new Error(abortReason(signal!));
     // First line only: interpreters follow the reason with a stack trace naming
     // the script we generated, which is noise to whoever reads this.
     const reason = (error.stderr ?? "").trim().split("\n")[0]?.trim();
@@ -803,10 +823,15 @@ class LinuxXdotoolAdapter implements ComputerAdapter {
     operation: ComputerOperation,
     signal?: AbortSignal,
   ): Promise<{ width: number; height: number }> {
-    const { stdout } = await this.xdotoolOutput(
-      ["getdisplaygeometry"],
-      operation,
-      signal,
+    // A probe ahead of the input: stopped, it sent nothing, so its timeout is
+    // a plain failure and a cancel during it a plain cancellation.
+    const { stdout } = await this.xdotoolOutput(["getdisplaygeometry"], operation, signal).catch(
+      (error: unknown) => {
+        if (signal?.aborted === true) throw new HelperNotStarted(abortReason(signal));
+        throw new Error(
+          `computer_display_geometry_unavailable: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      },
     );
     const [width, height] = stdout.trim().split(/\s+/).map(Number);
     if (
@@ -990,8 +1015,16 @@ class LinuxXdotoolAdapter implements ComputerAdapter {
           Math.min(20, Math.round((operation.deltaY ?? 0) / 100)),
         );
         const button = clicks < 0 ? "4" : "5";
-        for (let index = 0; index < Math.abs(clicks); index += 1) {
-          await this.xdotool(["click", button], operation, signal);
+        // One helper for every notch: one per notch, a cancel between two of
+        // them read as nothing sent, though the earlier ones had scrolled.
+        // xdotool sleeps 100 ms after each click by default, the last one
+        // included, so twenty notches would need two seconds of timeoutMs.
+        if (clicks !== 0) {
+          await this.xdotool(
+            ["click", "--delay", "10", "--repeat", String(Math.abs(clicks)), button],
+            operation,
+            signal,
+          );
         }
         return { success: true, action: "scroll", deltaY: operation.deltaY ?? 0 };
       }
@@ -1491,7 +1524,10 @@ export class ComputerRuntime {
     signal?: AbortSignal,
   ): Promise<Record<string, unknown>> {
     if (signal?.aborted === true) throw new Error("task_cancelled");
-    const capabilities = await this.adapter.capabilities();
+    const reported = await this.adapter.capabilities();
+    // The adapters look for tesseract only at its usual paths.
+    const capabilities =
+      this.options.ocrProgram === undefined ? reported : { ...reported, ocr: reported.screenshot };
     if (operation.action === "capabilities") {
       return { ...capabilities };
     }
@@ -1569,11 +1605,28 @@ export class ComputerRuntime {
         throw new Error("computer_normalized_coordinates_out_of_range");
       }
     }
-    const result = await this.adapter.execute(
-      resolved,
-      this.options.artifactDirectory,
-      signal,
-    );
+    // Read afresh: target resolution awaited since the check at the top, and
+    // a cancel may have landed meanwhile.
+    const cancelledBefore = (signal as AbortSignal | undefined)?.aborted === true;
+    let result: Record<string, unknown>;
+    try {
+      result = await this.adapter.execute(resolved, this.options.artifactDirectory, signal);
+    } catch (error) {
+      // A helper stopped by its timeout, or by a cancel or the budget once it
+      // was running, may already have clicked, typed or scrolled: not "it did
+      // not happen". A screenshot changes nothing, so it stays a plain failure,
+      // as does a helper a cancel kept from starting.
+      const message = error instanceof Error ? error.message : String(error);
+      if (
+        operation.action !== "screenshot" &&
+        !(error instanceof HelperNotStarted) &&
+        (message.startsWith("computer_helper_timeout:") ||
+          ((signal as AbortSignal | undefined)?.aborted === true && !cancelledBefore))
+      ) {
+        throw outcomeUnknown(message);
+      }
+      throw error;
+    }
     // The resolved element rides back on the result so a caller can verify what
     // was actually hit with `result_equals` on `element.name`, rather than
     // trusting that the name it asked for was the name that got clicked.
@@ -1586,7 +1639,7 @@ export class ComputerRuntime {
     capabilities: ComputerCapabilities,
     signal?: AbortSignal,
   ): Promise<DesktopElement[]> {
-    const observed = await this.observe(operation, capabilities, signal);
+    const observed = await this.observe(operation, capabilities, signal, true);
     const elements = elementsFrom(observed["elements"]);
     if (elements === undefined || elements.length === 0) {
       throw new Error("computer_elements_unavailable");
@@ -1609,6 +1662,7 @@ export class ComputerRuntime {
     operation: ComputerOperation,
     capabilities: ComputerCapabilities,
     signal?: AbortSignal,
+    forTarget = false,
   ): Promise<Record<string, unknown>> {
     const observed = await this.adapter.execute(
       { ...operation, action: "inspect" },
@@ -1620,7 +1674,16 @@ export class ComputerRuntime {
     if (!capabilities.ocr || !capabilities.screenshot) return observed;
     const displayWidth = observed["displayWidth"];
     if (typeof displayWidth !== "number") return observed;
-    const read = await this.readScreen(operation, displayWidth, signal);
+    // Installing tesseract only ever makes an `inspect` richer: a reading that
+    // fails (no screen-recording permission, a Wayland session, a cut capture)
+    // leaves it as it is on a host without tesseract. A target has nothing to
+    // fall back on, so its own reason is the one worth reporting.
+    const read = await this.readScreen(operation, displayWidth, signal).catch(
+      (error: unknown) => {
+        if (signal?.aborted === true || forTarget) throw error;
+        return [];
+      },
+    );
     return read.length === 0 ? observed : { ...observed, elements: read };
   }
 
@@ -1630,7 +1693,7 @@ export class ComputerRuntime {
     displayWidth: number,
     signal?: AbortSignal,
   ): Promise<DesktopElement[]> {
-    const program = await tesseract();
+    const program = this.options.ocrProgram ?? (await tesseract());
     if (program === undefined) return [];
     const { target: _named, ...rest } = operation;
     const captured = await this.adapter.execute(
@@ -1640,12 +1703,23 @@ export class ComputerRuntime {
     );
     const path = captured["path"];
     if (typeof path !== "string") return [];
-    const { stdout } = await run(
-      program,
-      [path, "stdout", "tsv"],
-      operation.timeoutMs,
-      signal,
-    );
-    return parseOcrElements(stdout, displayWidth);
+    try {
+      const { stdout } = await run(
+        program,
+        [path, "stdout", "tsv"],
+        operation.timeoutMs,
+        signal,
+      );
+      return parseOcrElements(stdout, displayWidth);
+    } finally {
+      // Taken to be read, not kept: no result names it, and it shows whatever
+      // was on the screen. Only a capture in the artifact directory is ours to
+      // delete.
+      // Best effort: a file still held (by a scanner, or a reader a cancel
+      // has not stopped yet) must not replace the reading or the cancel.
+      if (resolve(dirname(path)) === resolve(this.options.artifactDirectory)) {
+        await rm(path, { force: true }).catch(() => undefined);
+      }
+    }
   }
 }

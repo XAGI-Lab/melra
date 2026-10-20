@@ -569,6 +569,16 @@ export async function runConformance(
     return "a destructive effect needed its own approval and verified as absent";
   });
 
+  // Over HTTP the session outlives the client unless it is ended.
+  const transport = client.transport;
+  if (transport instanceof StreamableHTTPClientTransport) {
+    // Bounded: a target that stopped answering would hold the report for
+    // minutes. client.close() aborts the DELETE, which shares its signal.
+    await Promise.race([
+      transport.terminateSession().catch(() => undefined),
+      new Promise((settled) => setTimeout(settled, 2_000).unref()),
+    ]);
+  }
   await client.close();
 
   const failedLevels = new Set(

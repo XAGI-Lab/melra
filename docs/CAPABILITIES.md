@@ -53,9 +53,11 @@ Node types: `operation`, `approval`, `condition`, `parallel`, `bounded_loop`,
   `reconciliation` predicate asking the provider — or enter `recovery_required`.
 - Compensations unwind newest effect first, one at a time, across as many
   providers as the saga touched. An unwind that cannot finish stops and reports
-  `workflow_compensation_incomplete:<node>`. A step denied before it runs
-  starts the unwind, unless another step's outcome is unknown, and a denied
-  compensation stops it.
+  `workflow_compensation_incomplete:<node>`. A failed step, or one denied
+  before it runs, starts the unwind, unless another step's outcome is unknown:
+  then the run halts as `recovery_required` until that step is settled by its
+  `reconciliation`, and `workflow cancel` is the way out for a step that
+  declares none. A denied compensation stops the unwind.
 - Definitions allow at most 500 nodes, 100 dependencies per node, 20 parallel
   branches, and 100 loop iterations.
 - A `semantic` predicate is refused in any node
@@ -70,10 +72,24 @@ Node types: `operation`, `approval`, `condition`, `parallel`, `bounded_loop`,
 
 Actions: `list`, `read`, `stat`, `hash`, `write`, `move`, `delete`, `mkdir`.
 
-- Paths are resolved inside one workspace root.
-- Existing symlinks cannot escape that root.
+- Paths are resolved inside one workspace root. `list` takes the root however
+  it is spelled (`.`, `./`, its absolute path as configured or with its links
+  resolved); no other action takes the root itself.
+- An absolute path spelled through the root as configured, with a symlink or
+  junction in it left unresolved (macOS's `/tmp`, a symlinked project
+  directory), is read as the same path under the root as resolved when the
+  server started, and then checked like any other. The same holds for a
+  move's `destination`, file evidence, a terminal `cwd` and a browser
+  upload's `filePaths`. The root is resolved once: a link in it re-pointed
+  while the server runs takes effect after a restart.
+- Existing symlinks cannot escape that root. A `write` to a symlink inside it
+  writes the file it points to, as `read` reads it; one whose target does not
+  exist is refused (`file_write_dangling_symlink`).
 - Reads and writes are size-bounded by local policy.
 - Writes use a temporary sibling file followed by an atomic rename.
+- `encoding: "base64"` content must be base64 (line breaks, missing padding and
+  the URL-safe alphabet allowed), or the write is refused before anything lands
+  (`file_content_invalid_base64`).
 - Deletes are destructive and approval-gated.
 
 ### Terminal
@@ -81,6 +97,11 @@ Actions: `list`, `read`, `stat`, `hash`, `write`, `move`, `delete`, `mkdir`.
 Actions: `run`, `start`, `status`, `output`, `stop`, `send`.
 
 - Commands are spawned directly, never through a shell.
+- A bare program name is found only through `PATH` entries outside the
+  workspace, as written and through links. Entries inside it, and empty or
+  relative ones, which name the working directory, are left out of the search
+  and of the `PATH` the program itself sees. `--unsafe-local` keeps `PATH` as
+  given.
 - Shell interpreters, privilege escalation, and platform scripting shells are
   denied even if accidentally added to the normal allowlist.
 - Command, arguments, working directory, environment, duration, and output are
@@ -227,8 +248,9 @@ Actions: `navigate`, `back`, `forward`, `reload`, `inspect`, `wait`, `click`,
 - Resolves and checks the destination and every intercepted request.
 - Blocks private, link-local, multicast, unspecified, and cloud-metadata
   addresses. Localhost is opt-in.
-- Confines uploaded files to the workspace and downloaded files to the artifact
-  directory.
+- Confines uploaded files to the workspace, never MELRA's own data directory
+  except its artifacts, nor the browser profile, an HTTP archive or a
+  credential's file, and downloaded files to the artifact directory.
 
 - `MELRA_BROWSER_PROFILE` names a directory to keep, so a site logged into once
   stays logged in across runs. Unset, every run gets a throwaway profile.
@@ -249,9 +271,10 @@ Scopes: `session`, `task`, `project`, `workspace`, `user`, `procedural`.
 
 - Stored records include source, confidence, timestamps, and optional speaker,
   episode ID, and sequence metadata.
-- PEM private keys, AWS access key IDs, JWTs, Slack and GitHub tokens, common
-  API keys, bearer tokens, and password/secret assignments are redacted — the
-  same `SECRET_PATTERNS` list receipts and terminal output use.
+- PEM and PGP private keys, AWS access key IDs, JWTs, Slack, GitHub and npm
+  tokens, common API keys, authorization headers, URL credentials, and
+  password, secret, token and API-key assignments are redacted — the same
+  `SECRET_PATTERNS` list receipts and terminal output use.
 - Search is local and scoped with BM25-style lexical evidence, exact phrases,
   explicit speaker matching, bounded adjacent episode context, confidence,
   freshness, and bounded head diversity.
@@ -272,6 +295,9 @@ Actions: `capabilities`, `inspect`, `screenshot`, `click`, `move`, `drag`,
 - Capability discovery is read-only and reports the detected adapter and
   limitations.
 - Screenshots return a bounded artifact path, byte size, and SHA-256.
+  Artifacts sit in MELRA's data directory, so where a workspace reaches them
+  the file adapter, file verification and the browser may read them, and
+  nothing may change them.
 - Input actions are high-risk mutations requiring evidence and exact scoped
   approval.
 - Coordinates name normalized or pixel space; key input uses a fixed allowlist.
@@ -292,8 +318,13 @@ Actions: `capabilities`, `inspect`, `screenshot`, `click`, `move`, `drag`,
   screenshot through the adapter and runs `tesseract` over it, scaling each word
   from the captured image onto the display so a Retina capture does not double
   every coordinate. `capabilities.ocr` says whether the host has `tesseract` at
-  all, and the read only ever runs when the tree was empty — a tree states what
-  a control *is*, a reading only what it looks like.
+  its usual install paths (or, for a library embedder, whether a program was
+  named with `ComputerRuntimeOptions.ocrProgram` and screenshots work), and the read only ever runs when the tree was empty — a tree states what
+  a control *is*, a reading only what it looks like. The screenshot is deleted
+  once it has been read. A read that fails (no screen-recording permission, a
+  Wayland session) leaves `inspect` as it is without `tesseract`, with no
+  `elements`; a `target`, which has nothing to fall back on, is refused with
+  the reason the read failed.
 - A word read this way carries a `confidence` between 0 and 1; an element the
   platform reported carries none, so an absent `confidence` means "stated", not
   "certain". Below `0.3` a word is not reported; below `0.7` it is reported but
@@ -334,14 +365,19 @@ Action: `request`. Fields: `method`, `url`, `headers`, `content`,
 - `idempotencyKey` is sent as `Idempotency-Key` for providers that honour it.
   MELRA cannot check that they do, so it does not change the guarantee.
 - Response bodies are capped by `maxResponseBytes` (1 MiB by default); a body
-  past the cap stops being read and the result reports `truncated: true`.
+  past the cap stops being read: the result carries the body up to the cap,
+  `bytes` counts what was delivered, and it reports `truncated: true`.
 - The request payload travels as `content`, which redaction strips before
   anything is persisted. Raw bytes reach the live caller only.
 - Credentials the operator configured under `policy.credentials` are injected at
   send time when both the destination and the operation are covered — see
   [INSTALLATION.md](INSTALLATION.md#credentials). The result reports which ones
   by name under `credentials`, never their values, and a caller-supplied header
-  cannot shadow one.
+  cannot shadow one. A value the far end echoes back in the reason phrase, a
+  header or the body is replaced with `[REDACTED_CREDENTIAL]` and listed under
+  `redactions`; `bytes` still counts what arrived. A body cut at the size cap
+  on such a call always ends in the marker in place of its last few
+  characters, whatever they held, and lists it too.
 - `spend` declares what the call moves — `{ provider, account?, amount, currency }`,
   the amount in minor units. It is optional and means nothing until a grant with
   a `provider` block exists; from then on that grant covers declared spends only.
@@ -373,6 +409,9 @@ Action: `info`. Returns local runtime capability information without mutation.
 URL globs are anchored and schema-bounded. A completed action with unmet
 required evidence returns `partial`, never `verified_success`; one whose only
 unmet evidence is a `semantic` question waits in `waiting_user` instead (below).
+A `file_*` path that can only land outside the workspace or on its root is
+refused at planning (`evidence_path_outside_workspace`), since the verifier
+would refuse it every time it was asked.
 
 `custom` is for effects no built-in can confirm, such as a database row or a
 ticket in some SaaS. The verifier is code passed to `createMelraRuntime` as
@@ -418,9 +457,11 @@ rather than guessing either way, and a request that declared no reconciliation
 predicates stays parked for a human.
 
 `melra_execute` returns raw operation output directly to the connected client.
-Durable task state and receipts keep only centrally redacted input and output;
-file contents, browser text, terminal output, typed values, environment values,
-URL queries, and common secret formats are not retained there.
+Durable task state, receipts and certificates keep only centrally redacted
+input, output and evidence; file contents, browser text, terminal output, typed
+values, environment values, URL queries and userinfo, and common secret formats
+are not retained there. An `http_resource_matches` item names the URL it read
+without its query or userinfo; the request itself goes out as declared.
 
 Free-form task constraints fail closed because they cannot be enforced
 deterministically. `forbiddenEffects` accepts only `read`, `mutate`, and

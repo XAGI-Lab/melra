@@ -103,9 +103,9 @@ validated.
 
 ### …change the database
 
-`packages/storage-sqlite/src/index.ts`. Everything currently lives in migration
-version 1. A schema change needs a **new migration**, never an edit to the
-version-1 statements — someone out there has a database that already ran them.
+`packages/storage-sqlite/src/index.ts`, in migrations 1–6 today. A schema
+change needs a **new migration**, never an edit to an existing one's
+statements — someone out there has a database that already ran them.
 
 ### …touch anything that can carry a secret
 

@@ -43,6 +43,12 @@ describe("browser network policy", () => {
     ).rejects.toThrow("destination_credentials_not_allowed");
   });
 
+  it("lets an empty allowlist entry through nothing", async () => {
+    await expect(assertSafeUrl("https://example.com./", { allowedDomains: [""], allowLocalhost: false })).rejects.toThrow(
+      "destination_domain_not_allowed",
+    );
+  });
+
   it("checks an IPv6 literal as an address, not a hostname", async () => {
     // `URL.hostname` keeps the brackets; these used to skip the private-range
     // check entirely and fail only at DNS.

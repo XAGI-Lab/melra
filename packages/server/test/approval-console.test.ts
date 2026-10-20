@@ -7,7 +7,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "playwright-core";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { BrowserOperationSchema, TaskRequestSchema, WorkflowDefinitionSchema } from "@melra/protocol";
 import { BrowserRuntime, detectBrowserExecutable } from "@melra/browser-runtime";
 import { createMelraRuntime, serveHttp } from "../src/index.js";
@@ -90,7 +90,10 @@ describe("approval console", () => {
       if (init.token !== undefined) headers.authorization = `Bearer ${init.token}`;
       if (init.origin !== undefined) headers.origin = init.origin;
       const request = httpRequest(
-        { host: "127.0.0.1", port: server.port, path, method: init.method ?? "GET", headers },
+        // No pooled keep-alive socket: the server, in this same process, can
+        // time one out during a slow turn just as the next request is written
+        // to it, and the request then fails with ECONNRESET (#296).
+        { host: "127.0.0.1", port: server.port, path, method: init.method ?? "GET", headers, agent: false },
         (response) => {
           let data = "";
           response.on("data", (chunk) => (data += chunk));
@@ -148,6 +151,17 @@ describe("approval console", () => {
     const other = pending();
     const denied = await call(server, `/api/tasks/${other.id}/deny`, { method: "POST", token, origin, body: {} });
     expect(denied.body.task).toMatchObject({ status: "cancelled" });
+    // One the agent's server started after the page drew it runs, so the deny
+    // is refused rather than shown as done.
+    const started = pending();
+    const view = runtime.controller.approvalView.bind(runtime.controller);
+    vi.spyOn(runtime.controller, "approvalView").mockImplementationOnce((taskId) => {
+      const drawn = view(taskId);
+      runtime.store.saveTask({ ...drawn.task, status: "running" });
+      return drawn;
+    });
+    const late = await call(server, `/api/tasks/${started.id}/deny`, { method: "POST", token, origin, body: {} });
+    expect(late).toMatchObject({ status: 400, body: { error: "task_not_cancellable:running" } });
   });
 
   it("takes nothing the agent holds: its token, the pairing code, or its own server", async () => {

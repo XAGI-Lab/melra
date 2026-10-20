@@ -4,7 +4,9 @@
 
 MELRA is alpha software. Only the latest alpha is supported: security fixes
 land on `main` and ship in the next alpha release, published to npm under the
-`alpha` dist-tag and to `ghcr.io/xagi-lab/melra:alpha`. Older alphas do not get
+`alpha` and `latest` dist-tags and to `ghcr.io/xagi-lab/melra:alpha` and
+`:latest` (`:latest` from the release after `0.3.0-alpha.14`; see
+[RELEASES](docs/RELEASES.md#release-channels)). Older alphas do not get
 backports, so upgrade rather than pin when a fix is announced.
 
 ## Report a vulnerability

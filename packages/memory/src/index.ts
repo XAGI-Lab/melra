@@ -14,10 +14,12 @@ import {
  * How long an unreachable memory row survives before compaction reclaims it,
  * and an optional ceiling on live memories per scope.
  *
- * Expired and superseded rows are already filtered out of every read path, so
- * removing them changes nothing a caller can observe — it only stops the file
- * growing forever. `maxPerScope` is the opposite: it deletes memories that can
- * still be read, so `0` (no ceiling) is the default and an operator opts in.
+ * Expired and superseded rows are already filtered out of every read path;
+ * removing them stops the file growing forever. What a caller can still see is
+ * how far back undoing corrections reaches: deleting the live record revives
+ * the one it replaced, which compaction keeps, but one replaced before that is
+ * kept only `maxAgeDays`. `maxPerScope` deletes memories that can still be
+ * read, so `0` (no ceiling) is the default and an operator opts in.
  */
 export interface MemoryRetention {
   maxAgeDays: number;
@@ -325,6 +327,7 @@ export class LocalMemory {
         }
         const now = new Date().toISOString();
         const redacted = redactMemoryValue(operation.value);
+        const redactedKey = redactMemoryValue(operation.key);
         const redactedSpeaker =
           operation.speaker === undefined
             ? undefined
@@ -333,79 +336,93 @@ export class LocalMemory {
           operation.episodeId === undefined
             ? undefined
             : redactMemoryValue(operation.episodeId);
-        const existing =
-          operation.id === undefined
-            ? undefined
-            : this.store.getMemory(operation.id);
-        if (existing !== undefined && existing.scope !== operation.scope) {
-          throw new Error("memory_scope_mismatch");
-        }
-        if (existing?.supersededBy !== undefined) {
-          throw new Error("memory_superseded_record_immutable");
-        }
-        const superseded =
-          operation.supersedesId === undefined
-            ? undefined
-            : this.store.getMemory(operation.supersedesId);
-        if (
-          operation.supersedesId !== undefined &&
-          (superseded === undefined ||
-            superseded.scope !== operation.scope ||
-            operation.supersedesId === operation.id ||
-            // Already replaced by some other record: superseding it again is
-            // not possible, and finding that out after the write lost data.
-            (superseded.supersededBy !== undefined && superseded.supersededBy !== operation.id))
-        ) {
-          throw new Error("memory_supersedes_target_invalid");
-        }
-        const memory: MemoryRecord = {
-          id: operation.id ?? randomUUID(),
-          scope: operation.scope,
-          // Free text a caller writes, like the value: a token pasted into the
-          // key, the source or a tag is no more meant to be kept than one in
-          // the value.
-          key: redactMemoryValue(operation.key).value,
-          value: redacted.value,
-          source: redactMemoryValue(operation.source ?? "mcp-client").value,
-          confidence: operation.confidence,
-          tags: operation.tags.map((tag) => redactMemoryValue(tag).value),
-          ...(redactedSpeaker === undefined
-            ? {}
-            : { speaker: redactedSpeaker.value }),
-          ...(redactedEpisodeId === undefined
-            ? {}
-            : { episodeId: redactedEpisodeId.value }),
-          ...(operation.sequence === undefined
-            ? {}
-            : { sequence: operation.sequence }),
-          ...(operation.expiresAt === undefined
-            ? {}
-            : { expiresAt: operation.expiresAt }),
-          ...(operation.supersedesId === undefined
-            ? {}
-            : { supersedesId: operation.supersedesId }),
-          createdAt: existing?.createdAt ?? now,
-          updatedAt: now,
-        };
-        this.store.putMemory(memory);
-        if (
-          operation.supersedesId !== undefined &&
-          // Re-putting the record that already superseded it is an edit of
-          // that record, not a second supersede.
-          superseded?.supersededBy !== memory.id &&
-          !this.store.supersedeMemory(
-            operation.supersedesId,
-            operation.scope,
-            memory.id,
-          )
-        ) {
-          // Undo the write: put back what was there, or remove what was new.
-          // Deleting an existing record here lost it and orphaned the one it
-          // had superseded.
-          if (existing === undefined) this.store.deleteMemory(memory.id, memory.scope);
-          else this.store.putMemory(existing);
-          throw new Error("memory_supersedes_target_invalid");
-        }
+        // Read, checked and written as one transaction: another process
+        // editing or deleting the same chain in between left a record hidden
+        // with nothing pointing at it, or two live records for one fact.
+        const memory = this.store.transaction(() => {
+          const existing =
+            operation.id === undefined
+              ? undefined
+              : this.store.getMemory(operation.id);
+          if (existing !== undefined && existing.scope !== operation.scope) {
+            throw new Error("memory_scope_mismatch");
+          }
+          if (existing?.supersededBy !== undefined) {
+            throw new Error("memory_superseded_record_immutable");
+          }
+          const superseded =
+            operation.supersedesId === undefined
+              ? undefined
+              : this.store.getMemory(operation.supersedesId);
+          if (
+            operation.supersedesId !== undefined &&
+            (superseded === undefined ||
+              superseded.scope !== operation.scope ||
+              operation.supersedesId === operation.id ||
+              // Already replaced by some other record: superseding it again is
+              // not possible, and finding that out after the write lost data.
+              (superseded.supersededBy !== undefined && superseded.supersededBy !== operation.id))
+          ) {
+            throw new Error("memory_supersedes_target_invalid");
+          }
+          const memory: MemoryRecord = {
+            id: operation.id ?? randomUUID(),
+            scope: operation.scope,
+            // Free text a caller writes, like the value: a token pasted into the
+            // key, the source or a tag is no more meant to be kept than one in
+            // the value.
+            key: redactedKey.value,
+            value: redacted.value,
+            source: redactMemoryValue(operation.source ?? "mcp-client").value,
+            confidence: operation.confidence,
+            tags: operation.tags.map((tag) => redactMemoryValue(tag).value),
+            ...(redactedSpeaker === undefined
+              ? {}
+              : { speaker: redactedSpeaker.value }),
+            ...(redactedEpisodeId === undefined
+              ? {}
+              : { episodeId: redactedEpisodeId.value }),
+            ...(operation.sequence === undefined
+              ? {}
+              : { sequence: operation.sequence }),
+            ...(operation.expiresAt === undefined
+              ? {}
+              : { expiresAt: operation.expiresAt }),
+            ...(operation.supersedesId === undefined
+              ? {}
+              : { supersedesId: operation.supersedesId }),
+            createdAt: existing?.createdAt ?? now,
+            updatedAt: now,
+          };
+          this.store.putMemory(memory);
+          if (
+            operation.supersedesId !== undefined &&
+            // Re-putting the record that already superseded it is an edit of
+            // that record, not a second supersede.
+            superseded?.supersededBy !== memory.id &&
+            !this.store.supersedeMemory(
+              operation.supersedesId,
+              operation.scope,
+              memory.id,
+            )
+          ) {
+            // Rolled back with the write: what was there stays, and what was new
+            // is gone.
+            throw new Error("memory_supersedes_target_invalid");
+          }
+          // An edit that drops or changes what this record supersedes hands the
+          // old one back, as deleting the record would.
+          // Not when that record has expired: a lapsed correction revives
+          // nothing, as when compaction has removed it already.
+          if (
+            existing?.supersedesId !== undefined &&
+            existing.supersedesId !== memory.supersedesId &&
+            (existing.expiresAt === undefined || existing.expiresAt > now)
+          ) {
+            this.store.unsupersedeMemory(existing.supersedesId, memory.scope, memory.id);
+          }
+          return memory;
+        });
         // Compact on the write path rather than on a timer: a scope only grows
         // when something is put into it, so this is the one moment reclaiming
         // is worth doing, and a local store is small enough that the cost is a

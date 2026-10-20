@@ -25,6 +25,11 @@ All notable changes are documented here. The format follows
   (`workflow_semantic_evidence_unsupported:<node>`) until a workflow can wait on a
   verdict. `pnpm evals` has two new scenarios (54).
 
+- `ComputerRuntimeOptions.ocrProgram` names the OCR program for a library
+  embedder whose `tesseract` is outside its usual install paths; naming it
+  makes reading the screen available wherever screenshots are. The server and
+  CLI do not set it. (#251)
+
 - Each GitHub release attaches the single executable (Node inside, no Node
   install needed) for linux-x64, linux-arm64, darwin-arm64 and win-x64, built
   and smoke-tested by the same workflow every pull request runs, and covered by
@@ -36,8 +41,8 @@ All notable changes are documented here. The format follows
   on any pull request that touches the release files, it builds the binaries
   and every release file through the same steps a `v*` tag runs (now one
   shared `release-artifacts` action), checks the versions, `npm publish
-  --dry-run`s every package and checks the GitHub release's asset list and
-  checksums, with read-only permissions throughout. (#204)
+  --dry-run`s every package and checks the GitHub release's asset list (each
+  name once) and checksums, with read-only permissions throughout. (#204)
 
 - `melra console` approves in a browser, with the same authority as
   `melra approve`. Run in a terminal, it starts a loopback server of its own,
@@ -84,6 +89,12 @@ All notable changes are documented here. The format follows
   (`verifier_type_taken:semantic`) and the runtime does not start. Rename such
   a verifier, and the `custom` predicates that name it. (#54)
 
+- **Breaking:** `SqliteStore.getWorkflowDefinition` in `@melra/storage-sqlite`
+  returns a `RedactedWorkflowDefinition`: the redacted copy kept for reading,
+  of which only `id` and `version` are checked, since redaction may have
+  rewritten a node id or a URL in it. The definition a run uses is the sealed
+  payload. `createWorkflow` takes that redacted copy as `unknown`. (#278)
+
 - The eleven MCP tools describe themselves fully: each says what it does,
   when to use it instead of its siblings, what it returns and how its
   parameters relate, and every top-level parameter now carries a description
@@ -124,7 +135,509 @@ All notable changes are documented here. The format follows
   passes `--socket "$MELRA_SOCKET"` instead. The stderr warning `serve` printed
   in that case is gone with it. (#105)
 
+- **Breaking:** `melra setup` and `melra init` show the workspace they give
+  the agent, as a `Workspace` row and as `workspace` in the JSON, and no
+  longer make it the home directory, a directory holding it (`/Users`,
+  `/home`, `C:\Users`) or a filesystem root (`/`, or a drive root on
+  Windows) unasked. The workspace is the current directory unless
+  `MELRA_WORKSPACE` is set or a `MELRA_POLICY` file's `workspaceRoot` pins
+  it, so the README's `npx @melra/cli@alpha setup` run in a fresh terminal
+  gave the agent the whole home directory, with nothing printed to say so.
+  In a terminal they now say so and ask, defaulting to no; elsewhere (piped,
+  captured, `--json`) they refuse with `workspace_too_broad` and write
+  nothing. Either way they say to set `MELRA_WORKSPACE` to the project
+  directory or run from there; when a `MELRA_POLICY` file set the workspace,
+  to make the project that file's `workspaceRoot` instead of running from
+  it. A script that means it sets `MELRA_WORKSPACE`, which is never
+  questioned. Directories
+  are compared by identity, so a symlinked home and macOS's
+  `/System/Volumes/Data/...` spelling of it count.
+
+- Each GitHub release's notes are its version's `CHANGELOG.md` section, so a
+  breaking change is called out in them as `GOVERNANCE.md` asks, instead of a
+  list of pull request titles. Wrapped lines are joined, since a release body
+  shows every newline as a line break. `pnpm docs:check` fails while
+  `package.json`'s version has no section or an empty one, so a version bump
+  without notes fails its pull request rather than the tag release. The
+  container takes the tags npm does: the version, the release channel
+  (`:alpha`, `:beta`, `:rc`, or `:latest` for a stable version) and, before
+  1.0, `:latest` on every release, instead of always `:alpha`. The README and
+  `docs/INSTALLATION.md` now run `:latest`, which follows every release, while
+  `:alpha` stays on the last alpha once betas begin, as npm's `@alpha` does.
+  `scripts/release-channel.mjs` picks the channel for the release and its dry
+  run alike, and a prerelease id other than alpha, beta or rc fails
+  `pnpm check` instead of publishing under `latest`. The release dry run also
+  runs `pnpm security:audit` and extracts the notes, which otherwise stopped a
+  release only once its tag was cut.
+
 ### Fixed
+
+- A `browser` wait now ends within about its `timeoutMs` instead of running
+  several times longer on a busy page or one with many frames: calls get the
+  time left, with a 500 ms floor capped at the requested timeout, and retain
+  any shorter explicit bound. A poll stops walking candidates at the deadline
+  after looking at least once, then checks the page again before deciding;
+  its delay uses only the remaining time. A wait that times out ends with
+  `browser_wait_timeout`, or `browser_secret_field_filled` /
+  `browser_secret_check_unavailable` when its last poll could not vouch for
+  the page. (#297)
+- A `parallel` node runs each branch's steps in order, as documented. Every
+  step of every branch started at once, so a branch's read-back ran before
+  its write, a step ran after the one before it had failed, and challenges
+  were minted for steps that should never be reached. A step is now planned,
+  and asks for approval, only once the step before it has verified; branches
+  still run side by side. Recovery no longer records a parallel node complete
+  while a branch has steps that never ran. (#245)
+
+- A workflow node waiting for input or approval no longer holds up nodes that
+  do not depend on it. While any node waited, `melra_workflow_advance`
+  offered only the waiting ones, so an independent branch stopped until the
+  person answered. Each advance now offers the waiting nodes and the newly
+  ready ones together, except one that finds a waiting step's task denied or
+  otherwise moved since the last advance: it offers only the waiting nodes, so
+  nothing new starts on a run that may now fail. (#247)
+
+- A workflow step stopped by `workflow cancel` no longer reads in flight for
+  good when something else held the run's lease as its task ended. Its record
+  was written once and dropped on `workflow_lease_held`, so the step kept
+  reading `recovery_required` / `task_still_in_flight` while its task read
+  `cancelled` or `verified_success`. It is now tried again while the lease is
+  held, and cancelling the run again records any such step whose task has
+  ended, in this process or another. (#325)
+
+- A failing step no longer unwinds past a condition's step whose outcome is
+  unknown when the advance that ran it lost its commit (a locked database) and
+  the next advance cannot ask the condition's check (inconclusive or
+  unresolvable). The condition waited or failed naming no step, so a failed
+  sibling started the unwind and compensated what that step may depend on.
+  It now halts the run on that step (`recovery_required`), as after a
+  restart. (#318)
+
+- A deny and an execute in different processes no longer both win. Starting a
+  task, and cancelling one (`melra approve --deny`, the console's Deny,
+  `melra_task_cancel`), now moves it out of `planned` or `awaiting_approval`
+  only if it is still there when written. Before, an execute that read the
+  task just before a deny landed went on to run the effect the deny had
+  reported cancelled; a deny that read it just before an execute started it
+  rewrote the running task as `cancelled` while its effect ran; and two
+  processes executing one task could both run it. Now the second writer
+  loses: an execute is refused with `task_not_executable:<status>`, a cancel
+  returns the task as it now stands (exit 1 from `melra approve --deny`), and
+  the console refuses the Deny with `task_not_cancellable:<status>` where it
+  showed the task as denied. A workflow advance asking a step's expired
+  challenge again likewise reads the step as the running task when an execute
+  started it just first, where it asked again beside it and approving that
+  ran the effect twice. (#244)
+
+- Two reconciles of one parked task no longer both write. `melra_execute` on
+  a `recovery_required` task asks the provider and records the answer; a
+  second call meanwhile, or the sweep's recovery beside an agent's call, asked
+  too, and the slower answer was written over the first: one that could not
+  reach the provider, or that said the effect never happened, rewrote a task
+  already settled `verified_success` as parked or `failed` and dropped its
+  receipt. Now an answer is recorded, with its receipt and certificate, only
+  while the task is still `recovery_required`, and the later call writes
+  nothing and returns the task as it now stands. (#244)
+
+- `workflow pause`, `suspend`, `resume` and `cancel` (`melra_workflow_control`,
+  `melra_workflow_cancel`) no longer land under an advance that is running a
+  step. They wrote the run at once, so the advance's commit then failed with
+  `workflow_state_conflict`: a step whose effect ran and verified was left
+  `pending` with no task, a resumed run planned it again and wedged on the
+  duplicate, and a cancelled run left the effect out of its record for good.
+  Each now takes the run's lease for the moment it writes, as recovery does:
+  while an advance in any process holds it, each is refused with
+  `workflow_lease_held` and changes nothing, so retry once the advance
+  returns. Cancelling a running step's task with `melra_task_cancel` instead
+  fails that step, and the advance still running it starts the run's unwind
+  before the cancel can land.
+  An advance whose lease lapsed (it stalled, as across a laptop's sleep) is
+  taken over instead: it stops with `workflow_lease_lost` before its next
+  step, where before it ran that step on a paused or cancelled run. A pause,
+  suspend or resume leaves its expired lease in place, so the run is
+  recovered before it is next advanced. A cancel recovers the run itself
+  first, as it does for one whose advance died holding the lease or lost its
+  commit: each step is read again from the tasks under its keys, so the steps
+  that advance ran are recorded on the cancelled run rather than left off it
+  for good, and a task still running there is cancelled as the run's own.
+  That step is recorded as still in flight (`recovery_required`,
+  `task_still_in_flight`) rather than as cancelled, since in another process,
+  or one that died mid-effect, its effect may still land; one running in the
+  cancelling process is recorded as it ended once it stops. (#244)
+
+- `workflow cancel` (`melra_workflow_cancel`) cancels a run's tasks only once
+  the run's own cancel is recorded. It cancelled the challenges on the run's
+  steps, and whatever a lost advance left under them, first, so a cancel whose
+  write then failed (a locked database) left a step's challenge cancelled on a
+  run that went on: the next advance read it as a denial, failed the run and
+  offered its compensations. Now such a cancel changes no task; a failure
+  while cancelling the tasks after it is reported, and cancelling the
+  cancelled run again sweeps again. (#244)
+
+- A workflow step whose advance lost its commit is taken up by its
+  idempotency key on the next advance instead of planned afresh. An
+  `operation` or `approval` node, a `parallel` branch, a `bounded_loop`
+  iteration or a `compensation` that the run named no task for planned a new
+  one without looking for the task the lost advance left under the same key:
+  a leftover challenge stayed approvable beside the new one, a step that took
+  effect but failed its evidence (`partial`) ran a second time, and one that
+  verified was cancelled as its own duplicate and halted the run; one that
+  failed or was denied was run after all, while a compensation the lost
+  advance had already run for it was recorded as skipped. Now every step,
+  a condition's branch included, takes up the task committed under its key,
+  else the one recovery prefers of every task there, one that failed, was
+  denied or cancelled, ran out of budget or was refused by policy included,
+  and is planned afresh only when its key holds no task at all. A loop that
+  such an advance carried into its next iteration goes on there, rather than
+  ask `until` again of the iteration before and stop short of one that ran.
+  A pause no longer loses an advance's commit (above), but a failed write
+  still can, and runs an earlier version left this way heal on their next
+  advance. Each step finds the tasks under its key in SQL, on an index
+  (migration 6), so a long task history does not slow it. (#319)
+
+- Workflow recovery, at startup, in the sweep and when a parked step
+  settles, reads each step's tasks by its idempotency key, on the migration 6
+  index, instead of the newest 100,000 tasks in the home. Past that many, a
+  step's task could be missed: a `parallel` step with one branch run and
+  another still waiting for approval was recorded as complete. And each read
+  scanned the whole listing once per step key: recovering a 100-iteration
+  loop of 50 steps in a home of 100,000 tasks took 15-20 s per run, and
+  now takes about 0.1 s. `workflow cancel`, which now recovers the run first
+  (above), reads its steps the same way and never the whole history.
+
+- A condition step whose advance lost its commit (a pause landed while it ran)
+  keeps to one branch. Recovery read both branches' tasks together and could
+  reopen the step on the branch it had abandoned, or, when the branch it took
+  was empty, on the other one: that offered the abandoned branch's approval
+  again, ran both branches' effects, and counted a step done that never ran.
+  Without a restart, the challenge such an advance left on the branch not
+  taken stayed approvable, even once the run had finished. Now the branch with
+  a committed step is the branch, then the one the run recorded (a condition
+  recorded done with no task took its empty branch), and only then the
+  predicate. At recovery and at the advance that decides, the other branch's
+  tasks still planned or waiting for approval are cancelled, and each cancel
+  is read back, as `workflow cancel` does for a condition not yet decided.
+  A task there that may have had an effect, or one started before its cancel
+  landed, halts the run as `recovery_required` with
+  `workflow_condition_branch_conflict:<node>` instead of running the other
+  branch beside it. A task there that did not happen (its adapter reported it
+  failed, it ran out of budget, it was cancelled or refused by policy, or it
+  was reconciled as never applied) counts for nothing, and the run moves on.
+  One that took effect (it verified, or its evidence did not hold) cannot be
+  reconciled, so the run stays halted: inspect what that branch did, undo it
+  by hand, then `workflow cancel`, which compensates nothing, so what earlier
+  steps did is undone by hand too where it should not stand. A restart before
+  the condition is decided still reads a step such an advance ran whose
+  outcome is unknown as the condition's, so it halts the run rather than let
+  a failed sibling unwind past it; anything else such an advance left waits
+  for the next advance, so the run halts or moves on the same with or without
+  a restart. `workflow cancel` cancels whatever a lost advance left planned or waiting
+  for approval under any of the run's steps, not only the tasks the run
+  names, and cancelling an already cancelled run sweeps again; a run whose
+  definition can no longer be opened is still ended, but nothing is swept.
+  A branch's step is found by its idempotency key, so an advance no longer
+  asks again for a step whose effect already committed, nor reuses another
+  branch's task by position. (#268)
+
+- A workflow advance that lost its lease starts no further step. This happens
+  when the advance stalls past the lease, as across a laptop's sleep or a long
+  pause, and another process recovers the run and takes it over. The advance
+  now renews its lease before it plans each step of a sequence, loop
+  iteration, condition or parallel branch, or compensation, and before it
+  commits; when the lease has been taken it fails with `workflow_lease_lost`
+  and commits nothing. Before, it carried on and ran that step's effect a
+  second time beside the process that took over, and found out only at its
+  final commit (`workflow_state_conflict`). A lease that lapsed but that nobody
+  has taken yet is renewed there and kept, so a takeover landing after that
+  check is refused rather than running the step as well. A step already
+  running is not interrupted. A renewal the database was too busy for still
+  does not count as losing the lease between steps (#304); one just before a
+  step fails the advance with that error rather than start the step. Advance
+  the run again to carry on from wherever the other process left it. (#309)
+
+- An absolute path spelled through the workspace root as configured is
+  accepted when a symlink or junction lies in the root, as with macOS's
+  `/tmp` and `/var/folders`, a symlinked project directory or a Windows 8.3
+  short-name `TEMP`. A file operation's `path` and a move's `destination`,
+  file evidence (`file_exists`, `file_absent`, `file_hash`, and a registered
+  verifier's path through `workspacePath`) when planned and when checked, a
+  terminal `cwd` and a browser upload's `filePaths` were refused as outside
+  the workspace (`path_outside_workspace`, `evidence_path_outside_workspace`,
+  `verification_path_outside_workspace`, `cwd_outside_workspace`,
+  `browser_upload_outside_workspace`); only a relative path or the root's
+  resolved spelling worked. Such a path is read as the same path under the
+  root as resolved at startup, where the caller's input enters, and is then
+  checked like any other: the root itself (but for `list`), MELRA's own files
+  and `.git` are refused as before, a sibling whose name only starts like the
+  root's is still outside, and a link inside the workspace is still judged by
+  where it leads. The browser runtime now resolves the root once at startup,
+  as the others do, so a link in the root re-pointed while the server runs
+  takes effect after a restart. (#305)
+
+- `melra doctor`'s `data-location` advice and the enforced-mode refusal
+  `enforced_mode_refuses_data_inside_workspace` give the fix that fits the
+  layout. A workspace that is home or holds it, the usual cause, gets: set
+  `MELRA_WORKSPACE` to the project directory or run the command from there
+  (with a `MELRA_POLICY` file, or make the project its `workspaceRoot`), and
+  keep `MELRA_HOME` where it is. Only a `MELRA_HOME` put inside a project
+  gets: move it out of the workspace, with everything in it. Both always
+  said to move `MELRA_HOME`, which for the usual cause points the server at
+  a new, empty database and orphans the tasks and approvals in the old one.
+  `doctor --json` carries the advice as the check's `next`.
+
+- A parked mutation whose `reconciliation` predicate could not be asked stays
+  `recovery_required`: a URL token with nothing to fill it (`{{json.id}}`,
+  when there is no response on that path), a custom verifier the runtime does
+  not have, or one whose backend timed out. It was settled as `failed`,
+  `reconciliation_confirms_effect_not_applied`, without the provider being
+  asked, and the agent ran the effect again. A predicate whose check throws is
+  now `inconclusive` in the receipt, as an unreachable provider already was; a
+  missing file is still a plain no for `file_exists` and `file_hash`, and a
+  path under a regular file (`ENOTDIR`) is absent for `file_absent`, where it
+  was an error. An item the kernel itself refused to ask (a path outside the
+  workspace or reserved, a path the filesystem will not take whole, a URL
+  token with nothing to fill it, a verifier or probe the runtime does not
+  have) also carries `unanswerable: true`, so a caller can tell a question that
+  is refused every time from one worth asking again without reading its
+  summary; a verifier cannot set it. The task's `error` says which:
+  `reconciliation_unanswerable:<refusal>` means the declaration needs fixing,
+  `reconciliation_inconclusive` that the provider may answer later. Planning
+  refuses a `reconciliation` verifier the runtime does not have
+  (`evidence_verifier_unavailable`), as it did for `requiredEvidence`, a
+  `file_exists`, `file_absent` or `file_hash` path in either that can only
+  land outside the workspace or on its root
+  (`evidence_path_outside_workspace`), and a reconciliation URL token the
+  facts it is read against (`taskId`, `url`, `method`, `idempotencyKey`)
+  cannot fill (`reconciliation_unanswerable:verification_token_unresolved:<token>`):
+  such evidence ended `partial` after the effect ran, and such a
+  reconciliation left the task parked for good. A workflow run accepted before
+  this change is not stopped at that step.
+
+- A mutation whose adapter returned, but whose result, receipt or task could
+  not then be written (a locked or full database), parks as
+  `recovery_required` with inconclusive evidence. It was recorded as
+  `failed`, which reads as the effect not having happened, and counted against
+  the target's circuit breaker though the target had answered. A task already
+  recorded as `verified_success` keeps that outcome when only its certificate
+  fails to write; it was rewritten as `failed` beside its own verified
+  receipt. A workflow step's certificate is then written by the run's next
+  `advance`, so the run still finishes. It is written only if none is stored,
+  as the executor's own now is, so two processes never hand out different
+  certificates for one task, and reading receipts writes nothing. A mutation
+  that had verified and committed its idempotency key before the write failed
+  settles as `verified_success` when it is next reconciled (`melra_execute`),
+  declared `reconciliation` or not.
+
+- A workflow step whose adapter error runs past 10,000 characters is
+  recorded. The task kept the whole message and a workflow node's `error`
+  holds 10,000, so writing the run failed after the step ran, and the next
+  `advance` ran the step again. The task, its receipt and the node now keep
+  the first 10,000 characters.
+
+- A workflow `condition`, a `bounded_loop`'s `until` and a `delegation`'s
+  `requiredEvidence` no longer read a check the provider did not answer (an
+  `http_resource_matches` read that got a 503, a 429 or no connection) as a
+  "no". The condition took its other branch for good, refunding a charge that
+  went through while the provider was briefly down; the loop ran another
+  iteration of its body; and the delegation failed its run. Nothing is decided
+  on such a check now: the advance records the other nodes and fails with
+  `workflow_check_inconclusive:<node>`, the condition runs neither branch, the
+  loop keeps the iteration it ran and starts no other, the delegation stays
+  `awaiting_input` and keeps the report it was sent, and the next advance asks
+  again. The node's `error` names the check it waits on, by type and source (a
+  URL without its query, which can carry a token), and asking again writes
+  nothing, however the provider words its failure. A definite no among a
+  delegation's checks still fails it while another goes unanswered. A provider
+  that never answers holds the run until `melra_workflow_cancel`, which does
+  not compensate. Planning refuses a check no registered verifier can ask
+  (`evidence_verifier_unavailable`) or on a file path outside the workspace
+  (`evidence_path_outside_workspace`). A condition or delegation check the
+  kernel refuses to ask when it runs (an `unanswerable` item: a URL `{{token}}`
+  its source result cannot fill, a verifier gone since planning, a reserved
+  path) fails its node (`workflow_check_unresolvable:<node>`) rather than
+  waiting on an answer that cannot change. A loop's `until` reads it as a no,
+  since the next iteration's result may fill the token, and runs to
+  `maxIterations` at most.
+
+- `melra_workflow_advance` on a run with nothing due, such as a step still
+  waiting for approval or input, changes nothing, as its description says. Each
+  call recorded each waiting step again, so every poll bumped `stateVersion`
+  and appended a `workflow.node_changed` event per waiting step. It now returns
+  the run as it was, with no events, and the waiting steps' tasks as before.
+
+- `melra policy test` previews a mutation that declares no evidence with the
+  evidence the server derives for it, as `melra_plan` does, and prints it as
+  `requiredEvidence`. It previewed such a mutation as `deny
+  mutation_requires_evidence` even where the server derives evidence for it
+  and asks for approval, as for most file, memory, browser, computer and http
+  mutations. (#283)
+
+- `melra tasks` and `melra status` count a task whose approval has expired
+  apart from those still waiting, and say to plan it again or clear it with
+  `melra approve <task-id> --deny`. They counted it as waiting forever and
+  pointed at `melra approve`, which refused it. An expired workflow step is
+  counted on its own and pointed at its run with `melra workflow inspect`,
+  with no advice to deny: where the run still waits on the step, its next
+  advance asks again, and a deny would fail the run, or for a compensation
+  stall its unwind. Only a step that
+  a cancelled or verified_complete run names gets the plain hint, since that
+  run never advances again. A task
+  approved in time and not yet run counts as neither, since its agent can
+  still run it, and in enforced mode a task answered in band is no longer
+  counted as waiting for an answer it cannot take. `status --json` adds
+  `expiredApprovals` and `expiredWorkflowSteps`; `awaitingApproval` counts only
+  approvals that can still be given. (#284)
+
+- `melra tasks --status` and `--limit` with nothing after them are refused.
+  They were ignored, so `--status $S` with `S` unset listed every status as if
+  filtered. (#285)
+
+- A process whose database is closed while a workflow advance is still
+  running, as at shutdown, no longer dies on an uncaught `database is not
+  open` from the lease renewal timer. The timer stops renewing, and the
+  advance fails on its own next write. A renewal that fails for any other
+  reason, such as a database too busy to answer, is tried again on the next
+  tick, so the lease never lapses under a running step (#304).
+
+- A file `move` that only changes letter case (`Readme.md` to `README.md`)
+  verifies on a case-insensitive disk, such as macOS's default. The
+  `file_absent` evidence derived for the source found the renamed file under
+  the old spelling, so a correct rename ended `partial`. Against a move's own
+  result, the move's source now reads absent when what its spelling reaches is
+  the destination's own entry, with no other name, and the directory no longer
+  holds that spelling; a symlink renamed by case included, and one recovered
+  after a crash interrupted its verification. Anywhere else, a path that
+  reaches a file still reads present, however it is spelled. (#280)
+
+- Deleting a live memory that superseded another makes the one it replaced
+  live again, and so does editing it to supersede something else or nothing;
+  deleting one in the middle of a chain links the records on either side. The
+  replaced record used to stay hidden with nothing live pointing at it: it
+  could not be read, edited or superseded, and compaction deleted it a
+  `maxAgeDays` later. A correction that expires, or that `maxPerScope`
+  evicts, revives nothing, and `docs/INSTALLATION.md` says why, and how far
+  back deleting corrections reaches once compaction has run. Edits and
+  deletes of one chain from two processes no longer interleave. (#250)
+
+- A terminal `run` stopped by its own `timeoutMs` is an unknown outcome
+  (`recovery_required` for a mutation), as it already was when the task's
+  budget or a cancel stopped it. It was recorded `failed`, though the program
+  may have done its work first, and a retry then ran it again. A computer
+  input action (click, move, drag, type, key, scroll) whose helper is stopped
+  by its timeout, or by a cancel while it runs, is an unknown outcome too.
+  Reads, screenshots and target resolution are unchanged, except that a
+  terminal read stopped by its timeout is now retried up to
+  `budget.maxRetries`, as other failed reads are. A timed-out `run` no longer
+  returns a result with `timedOut: true`. (#248)
+
+- `melra serve --http` and `--socket` no longer keep every MCP session for the
+  life of the process. The TypeScript SDK's `close()` and `melra conformance
+  --url` now end their session, which they never did, waiting at most two
+  seconds for the server. Past 256 sessions, a new one ends the least
+  recently used session with no request in flight and no event stream open,
+  such as one whose client vanished; a client holding the event stream open,
+  as both SDKs do, is never ended. A
+  request naming a session the server does not have, such as one from before
+  a restart, gets 404 with JSON-RPC error -32001, which tells an MCP client to
+  start a new session. It used to get 400. (#253, #257)
+
+- A file `write` with `encoding: "base64"` refuses content that is not base64
+  (`file_content_invalid_base64`) before anything is written; line breaks,
+  missing padding and the URL-safe alphabet are accepted. Node's lenient
+  decoder wrote two joined chunks as the first, plain text as noise and `!!!!`
+  as an empty file, each verifying as a success. (#279)
+
+- A file `write` to a symlink inside the workspace writes the file it points
+  to, as `read` reads it, and keeps that file's permissions. It replaced the
+  link with a plain file and left the target unchanged. A write to a dangling
+  link is refused (`file_write_dangling_symlink`). (#281)
+
+- A file `list` of the workspace root works however the root is spelled
+  relative to itself (`./`, `sub/..`) or by its resolved absolute path, not
+  only `.`. The others were refused as `path_outside_workspace`. (#282)
+
+- A workflow step parked as `recovery_required` moves at the run's next
+  `advance` once its task is settled, for example by `melra_execute`
+  reconciling it against the provider, and so does a compensation an unwind
+  stopped at. The run used to stay
+  `recovery_required`, with no events, until a process restart ran recovery:
+  a long-running server could not finish the workflow, the steps waiting on a
+  reconciled success never ran, and a reconciled failure never failed the run
+  or started its unwind. (#246)
+
+- A workflow step that fails no longer starts the unwind while another step's
+  outcome is unknown or unsettled (`recovery_required`: an effect that may have
+  happened, or a task still running). The run halts as `recovery_required`,
+  starts no further step, and fails and unwinds only once that step is
+  settled by its `reconciliation`, as a denied step already did; one that
+  declares none leaves `workflow cancel` as the way out. It used to refund a charge whose
+  shipment might be in transit, and skip the compensation of a step that went
+  on to verify. This holds for sibling steps and for branches of one
+  `parallel` node, live and after a restart; a branch refused for a wrong
+  approval no longer reports before the others finish, which left the node
+  recorded as it was and let the unwind start. A run an earlier version left
+  `failed` beside such a step, including a `parallel` node it recorded as
+  failed, is halted the same way at its next advance. The unknown step's
+  compensation, which that unwind skipped, is offered again, also when the step
+  ran under its `approval` node or when that unwind had stalled. (#270)
+
+
+
+- A workflow with an `exit_code` evidence predicate can be planned, and so can
+  one with a node id, verifier name or URL that looks like an API key
+  (`api-integration-tests`). Planning parsed the redacted copy it stores
+  against the definition schema, and redaction had turned the exit status into
+  a string and such names into `[REDACTED_API_KEY]`, so every interface refused
+  the plan and blamed the caller's valid input. The redacted copy is now
+  stored as it is; the sealed definition is the one that runs. An `exit_code`
+  predicate's whole-number value is also kept in that copy, since no secret
+  can hide in it. Any other `value` is still redacted. (#278)
+
+- An `http` response past `maxResponseBytes` returns the body up to the cap.
+  The chunk that crossed the cap was dropped whole, so a body that arrived in
+  one read (anything up to tens of KB) came back empty, and `bytes` counted
+  the dropped chunk; it now counts the bytes delivered. An
+  `http_resource_matches` read that misses on a path into a 2xx body cut at
+  the cap (`json.*`, or a `bytes` or `content` larger than what arrived) is
+  inconclusive, not a "did not match": as reconciliation it leaves the task
+  `recovery_required` instead of `failed`, and as evidence the item is marked
+  inconclusive. A cut body never matches an exact `bytes` or `content`,
+  whether in `http_resource_matches` or in `result_equals` on the adapter's
+  own result, since the whole body is longer than what arrived. A miss on the
+  status or a header is still the provider's answer. (#249)
+
+- The screen reading that `inspect` falls back to when no element tree came
+  back deletes its screenshot once `tesseract` has read it. Each such
+  `inspect`, and each `click`, `move` or `drag` given a `target`, used to leave
+  a full-screen capture in `<MELRA_HOME>/artifacts` that no result named. A
+  reading that fails no longer fails the `inspect`: it returns what the adapter
+  observed, without `elements`, as on a host without `tesseract`. A `target`
+  still fails with the reason the reading failed. (#251)
+
+- `docs/COMPATIBILITY.md` names MCP Python SDK `1.30.x`, the version `sdk-py`
+  pins and tests, not `1.28.x`. `pnpm check` now fails when either SDK line
+  stops naming the pinned version. (#286)
+
+- The TypeScript SDK's `execute()` and `advanceWorkflow()` wait up to 36
+  minutes for the server, past a task's budget and its built-in evidence
+  reads, instead of the MCP client's 60 s default. A task that
+  ran longer than a minute was reported to the caller as `Request timed out`
+  while the server went on and verified it, and a caller that took that as a
+  failure could run it again. `MelraClient.connect({ runTimeoutMs })` sets the
+  limit, and refuses a value that is not a whole number of milliseconds from 1
+  to 2147483647. (#256)
+
+- `send` to an interactive terminal job whose program has closed its stdin is
+  refused as `terminal_job_stdin_closed`. Every send after the failed write
+  was refused as `terminal_job_not_interactive`, and the send whose write
+  failed on the spot was reported as sent. A send to a job whose program has
+  exited is refused as `terminal_job_not_running` even while something it
+  started still holds its output open. (#271)
+
+- The Python SDK's README says how to install it: the wheel attached to each
+  GitHub release, checked against `SHA256SUMS` and its attestation, or
+  `pip install ./sdk-py` from a checkout. No doc said so before, and the SDK
+  is not on PyPI, so `pip install melra` does not install it. (#259)
 
 - Denying a durable workflow's step (`melra approve <id> --deny`, the
   console's Deny) or cancelling its task (`melra_task_cancel`) no longer leaves
@@ -301,7 +814,148 @@ All notable changes are documented here. The format follows
   stayed at 0.3.0-alpha.12 through two releases. `docs/RELEASES.md` lists the
   MCP Registry publish step.
 
+- The container image moves only once a release run has passed everything
+  else, the install smoke on every runner included. The 0.3.0-alpha.13 and
+  alpha.14 runs pushed `ghcr.io/xagi-lab/melra:alpha` while their artifacts
+  jobs failed after the npm publish and before creating the GitHub release,
+  because the container job waited for nothing. npm still moves first, so
+  after such a failure npm's dist-tags lead the image's until the failed jobs
+  are re-run. npm packages publish in dependency order with `@melra/cli` last,
+  so a run that stops partway leaves no published package whose `@melra/*`
+  dependencies are missing; the order came from a glob that could put the CLI
+  first. The order is worked out in full before the first publish, so a
+  dependency cycle stops the run with nothing published.
+
 ### Security
+
+- **Breaking:** the files the browser keeps its session in and credentials
+  are read from are reserved like the `MELRA_POLICY` file, wherever they lie
+  and in every mode: the browser profile (`MELRA_BROWSER_PROFILE`), both HTTP
+  archives (`MELRA_BROWSER_HAR_PATH`, `MELRA_BROWSER_HAR_REPLAY`) and every
+  credential's `source.file`. No file effect, verification or browser upload
+  may name them, nor a terminal argument as a path or a plain `@`/`<`
+  reference (`path_reserved`, `terminal_path_reserved`), approved or not; a
+  program reading files by means of its own stays the accepted residual of
+  approving it. Enforced mode now refuses to start in a workspace that holds
+  one, with `enforced_mode_refuses_secret_inside_workspace` naming which; move
+  it out of the workspace. A workspace inside the browser profile is refused at
+  startup in every mode (`workspace_inside_browser_profile`). The recording's
+  directory is made at startup rather than at the browser's first start.
+  `melra doctor` reports the layout on a new `secret-location` line, which
+  fails where the server would refuse to start and warns where a developer
+  mode workspace holds one.
+
+- **Breaking:** a bare program name in a terminal command is looked up only
+  in `PATH` entries outside the workspace, as written and through links.
+  Entries inside it, and empty or relative ones, which name the working
+  directory, are skipped, and the program's own `PATH` leaves them out too,
+  so a file left in the workspace is not run in place of an allowlisted
+  program. A tool found only in a project's `node_modules/.bin`
+  (`vitest`, `tsc`) now fails with `terminal_command_not_found`; run it
+  through `npx` or `pnpm exec`, or allowlist its path. A workspace that holds
+  tool directories, such as a home directory with `~/.local/bin` or a
+  version manager's, loses those programs the same way, which is one more
+  reason to narrow it. If no entry is left, as with a workspace at the
+  filesystem root, or `PATH` is not set at all, every command fails with
+  `terminal_path_empty_after_filter`, a path-qualified one too: a program
+  given an empty `PATH`, or none, may search the working directory.
+  `--unsafe-local` keeps `PATH` as given. On Windows, the program lookup
+  also skips relative `PATH` entries.
+
+- A terminal argument that names a file for the program to read as a plain
+  reference (`@file`, `-d@file`, `--data=@file`, `name=@file`, `name=<file`)
+  has that file judged too, as the one file it names: MELRA's own files are
+  refused in every mode (`terminal_path_reserved`), and enforced mode
+  refuses one spelled inside that leads out
+  (`terminal_path_outside_workspace`). Only these plain forms are judged; a
+  program's own other ways of naming a file stay the accepted residual of
+  approving that program. Text that only looks like a reference, as in
+  `rg "@/" src`, `rg "</div>" src` or `git show @~1`, runs as before, and so does approval: no command that runs without one reads a
+  reference, and one that does, such as `curl`, already needs it.
+
+- MELRA's data directory is reserved as a whole, by every adapter and by
+  verification, in every mode. A file effect can no longer write into it,
+  replace it, or move or remove it or any directory that holds it (`path_reserved`),
+  and the files there are no longer read through the file adapter or named in
+  a terminal command. A path is judged as written and with its links
+  resolved, a link whose target does not exist included, and a terminal
+  argument also at each directory it climbs back out of (at most 128 per
+  command, `terminal_path_too_complex`) and as a program that folds `..` as
+  text reads it; a chain of more links than the system follows is refused.
+  These checks narrow what a refusal can reveal about the data directory;
+  they do not yet promise the same answer for every spelling of a path.
+  Artifacts
+  (screenshots and downloads) are the exception for reading: the file
+  adapter's `list`, `read`, `stat` and `hash`, file
+  verification, and the browser's upload and `file:` loads still reach them
+  where they did before, but nothing may change them. The browser no longer
+  uploads other reserved files or loads them through a `file:` URL, which only
+  `--unsafe-local` allows (`browser_path_reserved`), whether or not the file
+  exists, and refuses such an upload before it starts a browser; a download
+  refused that way is still an unknown outcome, since the click went out, and
+  now names `browser_path_reserved`. `file_exists`,
+  `file_absent` and registered verifiers get no answer about a reserved path,
+  whether or not it exists (`verification_path_reserved`), and a path a link
+  leads out of the workspace gets the same refusal present or absent. On
+  macOS, enforced mode now also recognises a workspace that holds the data
+  directory through the data volume, and refuses to start there, and a path
+  that names a file by its inode number alone is refused. The policy file
+  `MELRA_POLICY` names is reserved the same way wherever it lies, since every
+  start reads it again; a workspace holding it is still an ordinary one.
+
+- In enforced mode, a terminal argument spelled inside the workspace is
+  judged at each directory it climbs out of and where it ends, with its links
+  followed (a link to a name not there yet included), also past a `..` or
+  parts not there yet, and where a program that folds `..` as text would
+  land from its working directory, so one that leads out, even on its way
+  back in, is refused (`terminal_path_outside_workspace`).
+
+- A workspace that is the data directory, or sits inside it, including through
+  a link, is refused at startup in every mode with
+  `workspace_inside_data_directory`, and `melra doctor` fails its
+  `data-location` check for it, rather than starting with every path refused.
+  Point `MELRA_WORKSPACE` at the project instead.
+
+- **Breaking:** the policy file is read strictly, against `PolicyFileSchema`
+  in `@melra/protocol`. A key MELRA does not know, at any depth
+  (`"allowedComands"`, `memoryRetention.maxAge`), or a value of the wrong type
+  (`"allowedCommands": "git"`, `"maxFileBytes": "10mb"`, `"mutations": "Deny"`,
+  an unknown trait in `deniedTraits`) now stops the server from starting, with
+  every problem named by its path: `policy_invalid:
+  /home/you/.melra/policy.json: allowedComands: unknown key`. Before, an
+  unknown key was dropped for the default the operator meant to replace, and a
+  wrong type reached policy as written. Some of those files were read more
+  permissively than they said: `"unhinged": "false"` and `"allowLocalhost":
+  "false"` are truthy strings, so the first switched the guardrails off and the
+  second let localhost through; `"mutations": "Deny"` still asked for approval
+  instead of refusing; `"mdoe": "enforced"` left the machine in developer mode;
+  an empty entry in `allowedDomains`, as an unset variable leaves, let through
+  any host written with a trailing dot. An empty entry in `allowedDomains` or
+  `allowedCommands` is now refused, and the domain allowlist matches nothing
+  with one.
+  Others were harmless and are refused all the same, which is why this is
+  breaking: a `"comment"` or `"$schema"` key (MELRA defines neither), and `null` as
+  "use the default". `"mode"`, `"allowedCommands"`, `"allowedDomains"`,
+  `"deniedTraits"`, `"memoryRetention"` and `"circuitBreaker"` set to `null`
+  used to load as the defaults and now refuse (`mode: Invalid input: expected
+  string, received null`); leave the key out instead. A misspelt field in a
+  grant or credential was already refused; only its message changed, from
+  zod's raw JSON to the same one line. A key that is not an identifier is
+  bracketed (`credentials["stripe-test"].inject.extra: unknown key`), and a
+  credential `source` of neither shape says `expected {"env": ...} or {"file":
+  ...}`. A mode typo reads `policy_invalid: <file>: mode:
+  deployment_mode_unknown`, so it is not blamed on `MELRA_MODE`. A bad
+  `approvalTtlMs` is listed with the file's other problems, as `approvalTtlMs:
+  policy_approval_ttl_invalid: must be a whole number of milliseconds from 1 to
+  86400000 (24 hours)` after `policy_invalid: <file>:`, rather than leading the
+  message alone. A file that is not JSON says only where (`policy_invalid:
+  <file>: not valid JSON at line 3 column 1`, or no position for a mistake
+  Node gives none for, such as a trailing comma in a list), never the text there, which V8 quoted and which could be a
+  token. Every policy a release's `melra init` or `melra setup` wrote still
+  loads. `melra doctor` fails its `policy` check with the message, `melra
+  policy test` prints it, and `melra tasks --json` gives it as `policyError`,
+  as `melra status` does, rather than counting approvals by the defaults
+  without a word.
 
 - An authorization code issued to an OAuth client before `melra clients
   --revoke` can no longer be redeemed after it. The revoke runs in another
@@ -420,6 +1074,66 @@ All notable changes are documented here. The format follows
   `MELRA_BROWSER_CDP_ENDPOINT` is set: every tab in that browser, signed-in
   sites included, is a `tab_switch` away from the agent; its next step says to
   point that endpoint at a browser you do not use yourself, or unset it.
+
+- More credential formats are redacted wherever MELRA redacts text (stored
+  records, receipts, memory and terminal output): fine-grained GitHub tokens,
+  npm tokens, Google API keys, Stripe restricted keys and webhook secrets,
+  more kinds of Slack token, and PGP private key blocks. So is an
+  `Authorization` or `Proxy-Authorization` header value: a `Digest` or
+  `AWS4-HMAC-SHA256` parameter list to the end of its line, a value under
+  another known scheme (Basic, Bearer, Negotiate, NTLM, token) that holds a
+  digit or `=` or is sixteen characters long, and a bare value of sixteen
+  characters with a digit that is not a dotted name. So are token and API-key
+  headers and assignments (`x-api-key: ...`, `access_token=...`,
+  `"apiKey": "..."`) whose value is eight or more token characters with a
+  digit, and URL userinfo: a password of any length (an RDS IAM token is
+  hundreds of characters) holding `/`, brackets or braces, a literal password
+  after a `{user}`, `{{ user }}` or `${USER}` template, and an http(s) user
+  alone of twenty or more URL-safe characters with a digit, the shape of an
+  issued token. A stored field whose name ends in a credential word (`access_token`,
+  `clientSecret`, `x-api-key`) is redacted whole unless it holds a boolean or
+  null, so `isSecret: false` keeps its type; a number or any string there
+  still goes, a tokenizer's `eos_token` and a `nextPageToken` included.
+  Kept as they were: counts and kinds (`max_tokens`, `token_type`), the
+  `credentials` list of names, code and prose that name a credential without
+  holding one (`token: string`, `tokens[0]`, `z.string().min(1)`,
+  `process.env.API_TOKEN_V2`, a CSS `#00ff00ab`, `Authorization: required`,
+  `Basic credentials`), a plain user name such as `https://alice@host`, the
+  host after `x-access-token:<token>@`, and a `{password}` or `${DB_PASS}`
+  template. Limits: a URL whose port is followed by an `@` later in its path
+  or query is not read as carrying credentials, so a password of digits
+  followed by a raw `?` is read as a port and kept; a URL's user name stops at
+  a comma, quote, bracket or brace and its password at a quote, a space, `${`
+  or `://`, so a password holding one of those is not recognised; a scheme value
+  under sixteen characters with no digit or `=` is kept; an assigned token is
+  redacted only up to the first character outside the token set; and the rest
+  of a line after a `Digest` or `AWS4-HMAC-SHA256` header goes with it. A
+  dotted expression with a digit assigned to a key name
+  (`apiKey: settings.keyV2`) and a page token in text are redacted too.
+
+- Redacting text built to make a secret pattern backtrack, such as a long run
+  of a repeated name fragment or of URL scheme characters, takes one pass
+  instead of seconds to a minute.
+
+- Evidence is redacted before it is stored in a receipt or certificate, as
+  the rest of a receipt already was. An `http_resource_matches` item names the
+  URL it read without its query or userinfo, while the request itself goes out
+  as declared, and every item's summary and source pass the shared secret
+  patterns, so a token in a verification URL or in a provider's error text no
+  longer reaches either record. Records written earlier keep what they stored.
+
+- A credential the kernel brokered into an `http` request no longer comes back
+  in the result when the far end echoes it. Each copy of the value in the
+  reason phrase, a response header or the body is replaced with
+  `[REDACTED_CREDENTIAL]` before the caller, the verifier or any stored record
+  sees it, and the result lists that marker under `redactions`. A body cut at
+  the size cap on such a call always ends in the marker in place of as many
+  of its last characters as the longest brokered value has, whatever they
+  held, so neither a value cut partway nor the cut itself says anything about
+  it. A brokered value must be printable ASCII, so each character is one byte
+  and an echo is matched byte for byte; one holding anything else is refused
+  with `credential_source_invalid:<name>`. `bytes` still counts what arrived.
+  Only a copy as sent is recognised, not one the provider encoded or altered.
 
 ## [0.3.0-alpha.14] - 2026-10-16
 

@@ -189,6 +189,24 @@ describe("harness tools in enforced mode", () => {
     }
   });
 
+  it("does not tell the model to stop a running step's task to cancel its run", async () => {
+    // melra_task_cancel on that task fails the step, and the advance still
+    // running it unwinds the run before the workflow cancel can land.
+    const [left, right] = InMemoryTransport.createLinkedPair();
+    await createMcpServer(runtime).connect(right);
+    const client = new Client({ name: "t", version: "1" });
+    await client.connect(left);
+    try {
+      const { tools } = await client.listTools();
+      const cancel = tools.find((tool) => tool.name === "melra_workflow_cancel")?.description ?? "";
+      expect(cancel).not.toContain("stop a running step's task first with melra_task_cancel");
+      expect(cancel).toContain("starts the run's unwind");
+      expect(cancel).toContain("may still run");
+    } finally {
+      await client.close();
+    }
+  });
+
   it("tells the model an operator approves, and leaves developer mode's words alone", async () => {
     const instructions = async (server: ReturnType<typeof createMcpServer>) => {
       const [left, right] = InMemoryTransport.createLinkedPair();

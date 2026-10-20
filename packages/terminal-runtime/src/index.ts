@@ -3,9 +3,9 @@
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { realpath } from "node:fs/promises";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { outcomeUnknown, terminalArgumentPaths, type TerminalOperation } from "@melra/protocol";
+import { readlink, realpath } from "node:fs/promises";
+import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { outcomeUnknown, terminalArgumentPaths, terminalArgumentReferences, type TerminalOperation } from "@melra/protocol";
 import { redactSecrets } from "@melra/receipt-schema";
 import { resolveCommand } from "./resolve-command.js";
 
@@ -22,6 +22,14 @@ export interface TerminalRuntimeOptions {
   holdsReserved?: (path: string) => Promise<boolean>;
   /** Refuse an argument spelled inside the root that leads out: policy asked approval only for ones spelled outside. */
   confineArguments?: boolean;
+  /**
+   * The workspace no PATH entry may lead into, as spelled or through links: a
+   * program a bare name finds there is one an approved write may have left,
+   * run later by a read that needs no approval. Empty and relative entries,
+   * which name the working directory, are dropped too. Absent, PATH passes as
+   * given.
+   */
+  pathOutside?: string;
 }
 
 /**
@@ -42,10 +50,106 @@ export function redactTerminalOutput(value: string): string {
   return redactSecrets(value).value;
 }
 
-/** Where a path leads: through every link, or for one not there yet, through its directory's. */
-async function leadsTo(spelled: string): Promise<string> {
-  return await realpath(spelled).catch(async () =>
-    join(await realpath(dirname(spelled)).catch(() => resolve(dirname(spelled))), basename(spelled)));
+/**
+ * Where a path with no `..` in it leads: its deepest part that is there,
+ * through every link, then the rest as written, which `mkdir -p` would make
+ * there, however many parts that is. `links` keeps where each link to a name
+ * not there yet leads, so one check follows it once, however many arguments
+ * and places go through it.
+ */
+async function leadsTo(spelled: string, links: Map<string, { to: string; there: boolean }>, hops = 0): Promise<string> {
+  let code: unknown;
+  const failed = (error: NodeJS.ErrnoException) => {
+    code = error.code;
+    return undefined;
+  };
+  const whole = await realpath(spelled).catch(failed);
+  if (whole !== undefined) return whole;
+  const chain: string[] = [];
+  for (let at = spelled; ; at = dirname(at)) {
+    chain.unshift(at);
+    if (dirname(at) === at) break;
+  }
+  // A part resolves only if every part above it does, so the deepest one that
+  // does is found by halving: about log2(depth) lookups, not one per part.
+  let [resolves, fails, leads] = [-1, chain.length - 1, spelled];
+  let parent: string = sep;
+  while (fails - resolves > 1) {
+    const middle = (resolves + fails) >> 1;
+    const at = chain[middle] as string;
+    const real = await realpath(at).catch(failed);
+    if (real === undefined) fails = middle;
+    else [resolves, leads, parent] = [middle, join(real, relative(at, spelled)), real];
+  }
+  // A link to a name not there yet: `touch link` makes its target, so it
+  // leads where the link points, as the file adapter follows one. A loop, or
+  // more links than one lookup follows, fails the lookup and makes nothing.
+  if (code === "ELOOP" || hops >= 40) return leads;
+  const link = join(parent, basename(chain[fails] as string));
+  let known = links.get(link);
+  if (known === undefined) {
+    const target = await readlink(link).catch(() => undefined);
+    if (target === undefined) return leads;
+    const to = await leadsTo((await climbedFrom(isAbsolute(target) ? target : `${parent}${sep}${target}`)).end, links, hops + 1);
+    known = { to, there: await realpath(to).then(() => true, () => false) };
+    links.set(link, known);
+  }
+  // Nothing is below a name that is not there, so the rest is as written;
+  // below one that is, it is looked up.
+  const rest = spelled.slice((chain[fails] as string).length);
+  return known.there && rest !== "" ? await leadsTo(`${known.to}${rest}`, links, hops + 1) : `${known.to}${rest}`;
+}
+
+/**
+ * Where a lookup of `spelled` stands at each `..` in it (`places`), and where
+ * it ends (`end`, with no `..` left), its links followed as the kernel follows
+ * them: folding `link/..` as text would land beside the link, not beside its
+ * target. Every part before a `..` is looked up, so whether it is there is an
+ * answer, though folding the path drops it. Windows folds `..` away before
+ * any lookup.
+ */
+async function climbedFrom(spelled: string): Promise<{ places: string[]; end: string }> {
+  if (process.platform === "win32") return { places: [], end: resolve(spelled) };
+  const places: string[] = [];
+  let at: string = sep;
+  for (const part of spelled.split(sep)) {
+    if (part !== "..") {
+      at = join(at, part);
+      continue;
+    }
+    places.push(at);
+    // A part that is not there does not end the walk: `mkdir -p` makes it,
+    // then climbs back out, to its directory as that directory leads.
+    const from = at;
+    at = await realpath(from).then(dirname, () => realpath(dirname(from)).catch(() => dirname(from)));
+  }
+  return { places, end: at };
+}
+
+/**
+ * Distinct places one command may climb out of. Each is judged on its own,
+ * which for a 4 KB argument costs milliseconds, so arguments built to climb
+ * out of thousands would cost minutes; ordinary ones climb out of a few.
+ */
+const MAX_CLIMBED_PLACES = 128;
+
+/**
+ * `path` without the entries a bare name may not be found through: empty and
+ * relative ones, and ones inside any of `protect`, as spelled or where they
+ * lead. ponytail: a spelling realpath does not fold (macOS's
+ * /System/Volumes/Data, a bind mount) is judged as written; compare
+ * identities, as the file runtime does, if a PATH ever spells it that way.
+ */
+async function searchPath(path: string, protect: string[]): Promise<string> {
+  const links = new Map<string, { to: string; there: boolean }>();
+  const kept: string[] = [];
+  for (const entry of path.split(delimiter)) {
+    if (!isAbsolute(entry)) continue;
+    const leads = await leadsTo((await climbedFrom(entry)).end, links);
+    if (protect.some((root) => inside(root, resolve(entry)) || inside(root, leads))) continue;
+    kept.push(entry);
+  }
+  return kept.join(delimiter);
 }
 
 /** The null device, so git's system/global config files resolve to nothing. */
@@ -291,14 +395,18 @@ export class TerminalRuntime {
   private readonly reserved: (path: string) => Promise<boolean>;
   private readonly holdsReserved: (path: string) => Promise<boolean>;
   private readonly confineArguments: boolean;
+  /** The protected workspace, as spelled and resolved; absent, PATH is not filtered. */
+  private readonly pathOutside: string[] | undefined;
   private readonly jobs = new Map<string, BackgroundJob>();
   private closed = false;
 
   private constructor(
     options: TerminalRuntimeOptions,
     root: string,
+    pathOutside: string[] | undefined,
   ) {
     this.root = root;
+    this.pathOutside = pathOutside;
     this.allowedEnvironment = new Set(
       options.allowedEnvironment ?? ["CI", "LANG", "LC_ALL", "NO_COLOR", "TERM"],
     );
@@ -310,12 +418,25 @@ export class TerminalRuntime {
   }
 
   static async create(options: TerminalRuntimeOptions): Promise<TerminalRuntime> {
-    return new TerminalRuntime(options, await realpath(options.root));
+    const outside = options.pathOutside;
+    return new TerminalRuntime(
+      options,
+      await realpath(options.root),
+      outside === undefined ? undefined : [resolve(outside), await realpath(outside).catch(() => resolve(outside))],
+    );
   }
 
   private async resolveCwd(cwd: string | undefined): Promise<string> {
-    const candidate = resolve(this.root, cwd ?? ".");
+    const spelled = cwd !== undefined && isAbsolute(cwd) ? resolve(cwd) : undefined;
+    const input =
+      spelled !== undefined && inside(this.lexicalRoot, spelled)
+        ? resolve(this.root, relative(this.lexicalRoot, spelled))
+        : cwd ?? ".";
+    const candidate = resolve(this.root, input);
     if (!inside(this.root, candidate)) throw new Error("cwd_outside_workspace");
+    // Before the lookup, so a reserved name gets the same answer whether it
+    // exists or not.
+    if (await this.reserved(candidate)) throw new Error("terminal_path_reserved");
     const actual = await realpath(candidate);
     if (!inside(this.root, actual)) throw new Error("cwd_outside_workspace");
     return actual;
@@ -329,17 +450,50 @@ export class TerminalRuntime {
     const listsNames =
       !/[\\/]/.test(command) &&
       NAME_LISTERS.has(command.toLowerCase().replace(/\.(exe|cmd|bat|com|ps1)$/, ""));
-    for (const path of [".", ...terminalArgumentPaths(operation.args)]) {
+    const climbed = new Set<string>();
+    const confined = new Set<string>();
+    const links = new Map<string, { to: string; there: boolean }>();
+    const judged = [
+      ...[".", ...terminalArgumentPaths(operation.args)].map((path) => ({ path, reference: false })),
+      // A reference names one file to read, never a directory to walk, so only
+      // that file is judged: `rg "@/" src` searches for text.
+      ...terminalArgumentReferences(operation.args).map((path) => ({ path, reference: true })),
+    ];
+    // ponytail: a program's own path syntax (git's `:/x`, `:(top)x`) is judged as a plain path.
+    for (const { path, reference } of judged) {
       // Unnormalised: the program resolves `link/..` through the link.
-      const real = await leadsTo(isAbsolute(path) ? path : `${cwd}${sep}${path}`);
-      // findstr and where expand their own wildcards, reading the directory.
-      for (const probe of /[*?]/.test(path) ? [real, dirname(real)] : [real]) {
-        if ((await this.reserved(probe)) || (!listsNames && (await this.holdsReserved(probe)))) {
-          throw new Error("terminal_path_reserved");
+      const spelled = isAbsolute(path) ? path : `${cwd}${sep}${path}`;
+      const { places, end } = await climbedFrom(spelled);
+      for (const place of places) {
+        if (climbed.has(place)) continue;
+        climbed.add(place);
+        if (climbed.size > MAX_CLIMBED_PLACES) throw new Error("terminal_path_too_complex");
+        if (await this.reserved(place)) throw new Error("terminal_path_reserved");
+      }
+      const real = await leadsTo(end, links);
+      // Some programs fold `..` as text first (git pathspecs, path.resolve),
+      // so the argument is judged where that leads too.
+      const folded = resolve(cwd, path);
+      for (const at of new Set([real, folded])) {
+        // findstr and where expand their own wildcards, reading the directory.
+        for (const probe of /[*?]/.test(path) ? [at, dirname(at)] : [at]) {
+          if ((await this.reserved(probe)) || (!listsNames && !reference && (await this.holdsReserved(probe)))) {
+            throw new Error("terminal_path_reserved");
+          }
         }
       }
-      const spelledInside = inside(this.lexicalRoot, resolve(lexicalCwd, path));
-      if (this.confineArguments && spelledInside && !inside(this.root, real)) {
+      // After the reserved checks, so a reserved path gets that refusal.
+      if (!this.confineArguments || !inside(this.lexicalRoot, resolve(lexicalCwd, path))) continue;
+      // `mkdir -p` makes each place it climbs out of, not only where it ends.
+      for (const place of places) {
+        if (confined.has(place)) continue;
+        confined.add(place);
+        if (!inside(this.root, await leadsTo(place, links))) throw new Error("terminal_path_outside_workspace");
+      }
+      if (!inside(this.root, real)) throw new Error("terminal_path_outside_workspace");
+      // Folded as text from where it runs, too: a cwd through a link can stand
+      // at another depth than the one it is spelled at.
+      if (folded !== end && !inside(this.root, await leadsTo(folded, links))) {
         throw new Error("terminal_path_outside_workspace");
       }
     }
@@ -372,6 +526,20 @@ export class TerminalRuntime {
         throw new Error(`environment_variable_not_allowed:${name}`);
       }
       environment[name] = value;
+    }
+    if (this.pathOutside !== undefined) {
+      // Before the lookup, and for the spawn, so the program's own lookups get
+      // the same PATH, under every name Windows may spell it.
+      const names = Object.keys(environment).filter((key) => key.toUpperCase() === "PATH");
+      // An empty PATH searches the working directory again, and so can none
+      // at all: a shell fills in a default (macOS sh ends it in `.`). So a
+      // path-qualified program is refused too, by a cause the operator can see.
+      if (names.length === 0) throw new Error("terminal_path_empty_after_filter");
+      for (const name of names) {
+        const kept = await searchPath(environment[name] ?? "", this.pathOutside);
+        if (kept === "") throw new Error("terminal_path_empty_after_filter");
+        environment[name] = kept;
+      }
     }
     const resolved = await resolveCommand(operation.command, operation.args, {
       cwd,
@@ -441,6 +609,8 @@ export class TerminalRuntime {
       });
 
       const timer = setTimeout(() => {
+        // Already exited, with only its pipes left to drain: it finished.
+        if (child.exitCode !== null || child.signalCode !== null) return;
         timedOut = true;
         stopTree(child, KILL_GRACE_MS);
       }, prepared.timeoutMs);
@@ -479,17 +649,22 @@ export class TerminalRuntime {
         signal?.removeEventListener("abort", onAbort);
         if (settled) return;
         settled = true;
+        // Stopped by its own timeout, as by a cancel, it may well have done
+        // its work first: not "it did not happen". Reads are exempt upstream.
+        if (timedOut) {
+          reject(outcomeUnknown(`terminal_timeout:${prepared.timeoutMs}ms`));
+          return;
+        }
         resolvePromise({
           command: prepared.command,
           args: prepared.args,
           cwd: relative(this.root, prepared.cwd) || ".",
           exitCode: code,
           signal: terminationSignal,
-          timedOut,
           stdout: redactTerminalOutput(stdout),
           stderr: redactTerminalOutput(stderr),
           truncated,
-          success: code === 0 && !timedOut,
+          success: code === 0,
         });
       });
     });
@@ -616,20 +791,32 @@ export class TerminalRuntime {
     if (operation.input === undefined) {
       throw new Error("terminal_send_requires_input");
     }
-    if (job.endedAt !== undefined) throw new Error("terminal_job_not_running");
+    // Exited counts, not only closed: Node destroys stdin on exit, and the
+    // close waits for anything the program started that holds its output.
+    if (job.endedAt !== undefined || job.child.exitCode !== null || job.child.signalCode !== null) {
+      throw new Error("terminal_job_not_running");
+    }
     const stdin = job.child.stdin;
+    // Before the test below: a failed write marks the pipe errored at once and
+    // is heard a tick later, and either way a job whose reader went away was
+    // reported as not interactive.
+    if (job.stdinError !== undefined || (stdin?.errored ?? null) !== null) {
+      throw new Error("terminal_job_stdin_closed");
+    }
     // `start` without `interactive: true` gets an ignored stdin, and writing to
     // a closed one throws EPIPE asynchronously — which would surface as an
     // unhandled error rather than a failed task.
     if (stdin === null || stdin.destroyed || !stdin.writable) {
       throw new Error("terminal_job_not_interactive");
     }
-    if (job.stdinError !== undefined) throw new Error("terminal_job_stdin_closed");
     const payload =
       operation.appendNewline && !operation.input.endsWith("\n")
         ? `${operation.input}\n`
         : operation.input;
     stdin.write(payload);
+    // A write to a pipe whose reader closed fails on the spot (on POSIX), so
+    // it was not sent, whatever the error event later says.
+    if (stdin.errored !== null) throw new Error("terminal_job_stdin_closed");
     return {
       success: true,
       sent: true,

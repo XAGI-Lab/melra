@@ -14,7 +14,6 @@ import {
   WorkflowSnapshotSchema,
   type EncryptedPayload,
   type ApprovalDecision,
-  type WorkflowDefinition,
   type WorkflowEvent,
   type WorkflowRun,
   type WorkflowSnapshot,
@@ -114,6 +113,15 @@ function parseStored<T>(
     throw new Error(error);
   }
 }
+
+/**
+ * The redacted copy of a workflow definition, kept for reading. Redaction
+ * rewrites any string shaped like a credential, so a node id or a URL in it
+ * may no longer match the definition schema; only the identity it is stored
+ * under is checked. The sealed payload is the definition that runs.
+ */
+const RedactedWorkflowDefinitionSchema = WorkflowDefinitionSchema.pick({ id: true, version: true }).loose();
+export type RedactedWorkflowDefinition = ReturnType<typeof RedactedWorkflowDefinitionSchema.parse>;
 
 /**
  * Task records, events and receipts are for the user running MELRA alone:
@@ -365,6 +373,16 @@ export class SqliteStore {
       );
     `,
     );
+    // Migration 6 indexes tasks by idempotency key, so a workflow step finds
+    // the tasks under its key without reading every task. As for migration 4,
+    // the expression must match listTasksByKey's text exactly.
+    this.applyMigration(
+      6,
+      `
+      CREATE INDEX IF NOT EXISTS tasks_idempotency_key
+        ON tasks(json_extract(data, '$.idempotencyKey'));
+    `,
+    );
   }
 
   private applyMigration(version: number, statements: string): void {
@@ -383,11 +401,10 @@ export class SqliteStore {
   }
 
   /**
-   * Runs `action` under `BEGIN IMMEDIATE`, so a re-read, a decision and the
-   * writes it leads to settle once across processes sharing the database.
-   * `action` must be synchronous and must not call a method that opens its
-   * own transaction (`saveTaskExecutionResult`, `createWorkflow`,
-   * `transitionWorkflow`, `takeWorkflowLease`, `compactMemories`).
+   * Runs `action` as one write transaction: another process sharing the
+   * database waits, so nothing it read changes before it writes, and a throw
+   * undoes every write it made. `action` must not call a method that opens a
+   * transaction of its own.
    */
   transaction<T>(action: () => T): T {
     this.database.exec("BEGIN IMMEDIATE");
@@ -426,6 +443,21 @@ export class SqliteStore {
           owner = COALESCE(excluded.owner, tasks.owner)
       `)
       .run(task.id, JSON.stringify(task), task.createdAt, task.updatedAt, owner ?? null);
+  }
+
+  /**
+   * `saveTask` only while the stored status is one of `expected`, saying
+   * whether it wrote: a compare-and-set, so of two processes moving one task
+   * out of a status (an execute and a deny, or two executes) exactly one does.
+   */
+  saveTaskIf(task: TaskRecord, expected: readonly TaskRecord["status"][], owner?: string): boolean {
+    const result = this.database
+      .prepare(`
+        UPDATE tasks SET data = ?, updated_at = ?, owner = COALESCE(?, owner)
+        WHERE id = ? AND json_extract(data, '$.status') IN (SELECT value FROM json_each(?))
+      `)
+      .run(JSON.stringify(task), task.updatedAt, owner ?? null, task.id, JSON.stringify(expected));
+    return Number(result.changes) === 1;
   }
 
   /**
@@ -563,6 +595,14 @@ export class SqliteStore {
     return rows.map((row) => JSON.parse(row.data) as TaskRecord);
   }
 
+  /** Every task planned under one idempotency key, any status, found by its index. */
+  listTasksByKey(idempotencyKey: string): TaskRecord[] {
+    const rows = this.database
+      .prepare("SELECT data FROM tasks WHERE json_extract(data, '$.idempotencyKey') = ?")
+      .all(idempotencyKey) as unknown as JsonRow[];
+    return rows.map((row) => JSON.parse(row.data) as TaskRecord);
+  }
+
   /** Counted in SQL so a summary does not have to load every task to add them up. */
   taskStatusCounts(): Record<string, number> {
     const rows = this.database
@@ -684,12 +724,12 @@ export class SqliteStore {
    * one), so only the run and its events are written.
    */
   createWorkflow(
-    redactedDefinition: WorkflowDefinition,
+    redactedDefinition: unknown,
     payload: EncryptedPayload | undefined,
     run: WorkflowRun,
     events: WorkflowEvent[],
   ): void {
-    const definition = WorkflowDefinitionSchema.parse(redactedDefinition);
+    const definition = RedactedWorkflowDefinitionSchema.parse(redactedDefinition);
     const sealed = payload === undefined ? undefined : EncryptedPayloadSchema.parse(payload);
     if (sealed === undefined && this.getWorkflowPayload(definition.id, definition.version) === undefined) {
       throw new Error("workflow_payload_not_found");
@@ -761,7 +801,7 @@ export class SqliteStore {
   getWorkflowDefinition(
     id: string,
     version: number,
-  ): WorkflowDefinition | undefined {
+  ): RedactedWorkflowDefinition | undefined {
     const row = this.database
       .prepare(`
         SELECT data FROM workflow_definitions WHERE id = ? AND version = ?
@@ -771,7 +811,7 @@ export class SqliteStore {
       ? undefined
       : parseStored(
           row.data,
-          WorkflowDefinitionSchema,
+          RedactedWorkflowDefinitionSchema,
           "stored_workflow_definition_invalid",
         );
   }
@@ -1219,15 +1259,23 @@ export class SqliteStore {
     return rows.map((row) => JSON.parse(row.data) as ActionReceipt);
   }
 
-  saveCertificate(certificate: ExecutionCertificate): void {
+  /**
+   * Stores a task's certificate in place of the one it had, and returns what
+   * is stored. With `ifAbsent` one already there stays instead, so two
+   * processes certifying the same outcome hand out the same certificate.
+   */
+  saveCertificate(
+    certificate: ExecutionCertificate,
+    { ifAbsent = false }: { ifAbsent?: boolean } = {},
+  ): ExecutionCertificate {
     this.database
       .prepare(`
         INSERT INTO certificates(id, task_id, data, created_at)
         VALUES (?, ?, ?, ?)
-        ON CONFLICT(task_id) DO UPDATE SET
+        ON CONFLICT(task_id) DO ${ifAbsent ? "NOTHING" : `UPDATE SET
           id = excluded.id,
           data = excluded.data,
-          created_at = excluded.created_at
+          created_at = excluded.created_at`}
       `)
       .run(
         certificate.certificateId,
@@ -1235,6 +1283,7 @@ export class SqliteStore {
         JSON.stringify(certificate),
         certificate.createdAt,
       );
+    return ifAbsent ? this.getCertificateForTask(certificate.taskId)! : certificate;
   }
 
   getCertificateForTask(taskId: string): ExecutionCertificate | undefined {
@@ -1374,11 +1423,64 @@ export class SqliteStore {
     return Number(result.changes) > 0;
   }
 
-  deleteMemory(id: string, scope: MemoryScope): boolean {
+  /**
+   * Make `id` live again if `supersededBy` is what retired it, for when the
+   * record that replaced it is deleted or stops claiming to replace it.
+   * Otherwise it stayed hidden with nothing live pointing at it, so it could
+   * be neither read, edited nor superseded, and compaction later deleted it.
+   */
+  unsupersedeMemory(
+    id: string,
+    scope: MemoryScope,
+    supersededBy: string,
+  ): boolean {
     const result = this.database
-      .prepare("DELETE FROM memories WHERE id = ? AND scope = ?")
-      .run(id, scope);
+      .prepare(`
+        UPDATE memories
+        SET superseded_by = NULL, updated_at = ?
+        WHERE id = ? AND scope = ? AND superseded_by = ?
+      `)
+      .run(new Date().toISOString(), id, scope, supersededBy);
     return Number(result.changes) > 0;
+  }
+
+  /**
+   * Deleting a live correction undoes it: what it replaced is live again.
+   * Deleting one in the middle of a chain links the records on either side of
+   * it, so the latest stays the only live one. An expired correction leaves
+   * what it replaced retired, as it does once compaction has removed it.
+   */
+  deleteMemory(id: string, scope: MemoryScope): boolean {
+    return this.transaction(() => {
+      const row = this.database
+        .prepare(`
+          SELECT supersedes_id AS supersedesId, superseded_by AS supersededBy, expires_at AS expiresAt
+          FROM memories WHERE id = ? AND scope = ?
+        `)
+        .get(id, scope) as
+        | { supersedesId: string | null; supersededBy: string | null; expiresAt: string | null }
+        | undefined;
+      const result = this.database
+        .prepare("DELETE FROM memories WHERE id = ? AND scope = ?")
+        .run(id, scope);
+      const replaced = row?.supersedesId;
+      // An expired correction changes nothing, spliced or not, so deleting it
+      // does what compaction removing it does, whichever comes first.
+      const live = row !== undefined && (row.expiresAt === null || row.expiresAt > new Date().toISOString());
+      if (live && replaced != null) {
+        if (row.supersededBy != null) {
+          this.database
+            .prepare("UPDATE memories SET superseded_by = ? WHERE id = ? AND scope = ? AND superseded_by = ?")
+            .run(row.supersededBy, replaced, scope, id);
+          this.database
+            .prepare("UPDATE memories SET supersedes_id = ? WHERE id = ? AND scope = ? AND supersedes_id = ?")
+            .run(replaced, row.supersededBy, scope, id);
+        } else {
+          this.unsupersedeMemory(replaced, scope, id);
+        }
+      }
+      return Number(result.changes) > 0;
+    });
   }
 
   clearMemories(scope: MemoryScope): number {
@@ -1400,9 +1502,8 @@ export class SqliteStore {
    * memories, which is data the caller stored and can still read. An operator
    * who wants a hard ceiling opts into one.
    *
-   * A superseded row is only dropped once nothing live points at it, so
-   * `supersedes_id` never dangles and a chain is removed from its tail
-   * inwards across successive compactions.
+   * A superseded row is only dropped once nothing live points at it, so a
+   * chain is removed from its tail inwards across successive compactions.
    */
   compactMemories(
     scope: MemoryScope,

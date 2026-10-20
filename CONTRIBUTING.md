@@ -26,6 +26,14 @@ No — prompt optimization, model selection, conversation memory, a planner,
 agent personality, subagent reasoning. It belongs to the harness above, and
 adding it here would make MELRA's guarantees depend on a model's judgement.
 
+## Documentation-only changes
+
+Markdown-only contributions do not need Node.js or pnpm setup. Before opening
+the pull request, run `git diff --check`; GitHub Actions runs the repository
+checks for every pull request. Each commit still needs a sign-off, including
+one made in GitHub's web editor (see
+[Developer Certificate of Origin](#developer-certificate-of-origin)).
+
 ## Development setup
 
 ```bash
@@ -74,11 +82,15 @@ By contributing, you certify the Developer Certificate of Origin 1.1:
 
 <https://developercertificate.org/>
 
-Sign commits with:
+From a terminal, create each commit with `-s` so Git adds the trailer automatically:
 
-```text
-Signed-off-by: Your Name <your-email@example.com>
+```bash
+git commit -s -m "Describe the change"
 ```
+
+This adds the `Signed-off-by: Your Name <your-email@example.com>` trailer using
+your configured name and email. Every commit in the pull request needs a sign-off.
+In GitHub's web editor, include the same trailer in the commit message.
 
 ## Reporting security problems
 

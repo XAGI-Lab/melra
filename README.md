@@ -61,7 +61,7 @@ made through other tools remain outside MELRA's control.
 
 <br /><br />
 
-[**Quick start**](#quick-start) &nbsp;·&nbsp; [**How it works**](#how-it-works) &nbsp;·&nbsp; [**See what it is doing**](#see-what-it-is-doing) &nbsp;·&nbsp; [**Docs**](#documentation) &nbsp;·&nbsp; [**Discussions**](https://github.com/XAGI-Lab/melra/discussions)
+[**26-second demo**](#26-second-demo) &nbsp;·&nbsp; [**Quick start**](#quick-start) &nbsp;·&nbsp; [**How it works**](#how-it-works) &nbsp;·&nbsp; [**See what it is doing**](#see-what-it-is-doing) &nbsp;·&nbsp; [**Docs**](#documentation) &nbsp;·&nbsp; [**Contribute**](#contributing) &nbsp;·&nbsp; [**Discussions**](https://github.com/XAGI-Lab/melra/discussions) &nbsp;·&nbsp; [**Product Hunt launch**](https://www.producthunt.com/products/melra)
 
 <br />
 
@@ -71,10 +71,95 @@ made through other tools remain outside MELRA's control.
 
 <br />
 
+### 26-second demo
+
+https://github.com/user-attachments/assets/e5cf895d-7ea6-4797-a1ef-e69cc5860d3f
+
+<br />
+
 > [!WARNING]
 > **MELRA is alpha software.** The local runtime is tested end to end, but APIs may
 > change before `1.0`. Use an isolated workspace, keep domain and command allowlists
 > narrow, and read every approval before you give it.
+
+---
+
+## Quick start
+
+You need **Node.js 22.13 or newer, or 23.4 or newer**. From the project the agent
+should work in, one command sets everything up:
+
+```bash
+cd ~/project
+npx @melra/cli@alpha setup
+```
+
+That directory becomes the agent's workspace, the boundary for its file and command
+operations. `setup` shows it, and asks before making your home directory, a directory
+holding it, or `/` the workspace; set `MELRA_WORKSPACE` to choose another.
+
+In a terminal, `setup` is a short wizard. It writes a safe local policy, finds the
+agent apps on your machine, asks which one should use MELRA, and writes MELRA into
+that app's own config file, keeping everything else in it (and saving a `.bak` first):
+
+```text
+Which MCP client should use MELRA?
+
+  1)   Claude Code                      detected: 'claude' on PATH
+  2)   Cursor                           detected: config file found
+  3)   Gemini CLI                       detected: config folder found
+  ...
+
+Choose 1-26 [1]: 1
+Write it into ~/project/.mcp.json? [Y/n]
+
+  ✓  Workspace    ~/project
+  ✓  Policy       ~/.melra/policy.json
+  ✓  Claude Code  ~/project/.mcp.json
+
+Next: Start claude in this workspace and approve the 'melra' server when it asks; 'claude mcp list' then shows it connected.
+```
+
+Then restart your agent app (Claude Code asks you to approve a project's server
+once) and ask it to do something, for example *"use melra to
+show me the system info"*. That's it.
+
+<details>
+<summary><b>Prefer flags, a container, or building from source?</b></summary>
+
+<br />
+
+| How | Command |
+|---|---|
+| One client, no questions | `npx @melra/cli@alpha setup --client cursor --write` |
+| Print the config instead of writing it | `npx @melra/cli@alpha setup --client codex` |
+| Install globally | `npm install -g @melra/cli@alpha && melra setup` |
+| Container (no Node needed) | `docker run --rm ghcr.io/xagi-lab/melra:alpha doctor` |
+| Prebuilt release | download from [releases](https://github.com/XAGI-Lab/melra/releases), verify against `SHA256SUMS`, then `node melra/dist/bin.js doctor` |
+| From source | `git clone https://github.com/XAGI-Lab/melra.git && cd melra && corepack enable && pnpm install --frozen-lockfile && pnpm build && pnpm melra setup` |
+| One file, no Node needed *(experimental)* | from a checkout: `pnpm build:sea`, then `./dist-sea/melra setup`; see [single executable](docs/INSTALLATION.md#single-executable-experimental) |
+| Check what you installed | `npm audit signatures` verifies registry signatures; npm provenance links each package to its GitHub Actions build (see [npm packages](docs/INSTALLATION.md#npm)) |
+
+Every command prints readable output in a terminal and plain JSON when piped or with
+`--json`, so scripts keep working. MELRA creates `<MELRA_HOME>/payload.key` with
+private permissions on first start; back it up with the SQLite files, because losing
+it makes persisted payloads unreadable. See [installation](docs/INSTALLATION.md) for
+every install path, environment variable, and the hardened Docker invocation.
+
+</details>
+
+> [!CAUTION]
+> This project publishes only under the `@melra/` npm scope (`@melra/cli` is the CLI)
+> and on its [releases](https://github.com/XAGI-Lab/melra/releases), where the Python
+> SDK's wheel is. An **unscoped** npm package `melra` or a PyPI package `melra` is
+> **not this project's**. Install from that scope, from this repository, or from the
+> releases.
+
+If MELRA helps, [star the repository](https://github.com/XAGI-Lab/melra) so other
+agent builders can find it. Trying it in Cursor or another client? Share the client
+and its version, your OS, and your MELRA version (`npx @melra/cli@alpha version`) in
+[issue #184](https://github.com/XAGI-Lab/melra/issues/184); partial test results are
+useful too.
 
 ---
 
@@ -133,77 +218,6 @@ system sits underneath your apps:
 > **The LLM reasons. The harness manages the loop. MELRA governs the effect lifecycle
 > for calls routed through it.** Swap the model or the agent; MELRA's policies,
 > approvals, credentials, history and receipts can stay in place.
-
----
-
-## Quick start
-
-You need **Node.js 22.13 or newer, or 23.4 or newer**. One command sets everything up:
-
-```bash
-npx @melra/cli@alpha setup
-```
-
-In a terminal, `setup` is a short wizard. It writes a safe local policy, finds the
-agent apps on your machine, asks which one should use MELRA, and writes MELRA into
-that app's own config file, keeping everything else in it (and saving a `.bak` first):
-
-```text
-Which MCP client should use MELRA?
-
-  1)   Claude Code                      detected: 'claude' on PATH
-  2)   Cursor                           detected: config file found
-  3)   Gemini CLI                       detected: config folder found
-  ...
-
-Choose 1-26 [1]: 1
-Write it into ~/project/.mcp.json? [Y/n]
-
-  ✓  Policy       ~/.melra/policy.json
-  ✓  Claude Code  ~/project/.mcp.json
-
-Next: Start claude in this workspace and approve the 'melra' server when it asks; 'claude mcp list' then shows it connected.
-```
-
-Then restart your agent app (Claude Code asks you to approve a project's server
-once) and ask it to do something, for example *"use melra to
-show me the system info"*. That's it.
-
-<details>
-<summary><b>Prefer flags, a container, or building from source?</b></summary>
-
-<br />
-
-| How | Command |
-|---|---|
-| One client, no questions | `npx @melra/cli@alpha setup --client cursor --write` |
-| Print the config instead of writing it | `npx @melra/cli@alpha setup --client codex` |
-| Install globally | `npm install -g @melra/cli@alpha && melra setup` |
-| Container (no Node needed) | `docker run --rm ghcr.io/xagi-lab/melra:alpha doctor` |
-| Prebuilt release | download from [releases](https://github.com/XAGI-Lab/melra/releases), verify against `SHA256SUMS`, then `node melra/dist/bin.js doctor` |
-| From source | `git clone https://github.com/XAGI-Lab/melra.git && cd melra && corepack enable && pnpm install --frozen-lockfile && pnpm build && pnpm melra setup` |
-| One file, no Node needed *(experimental)* | from a checkout: `pnpm build:sea`, then `./dist-sea/melra setup`; see [single executable](docs/INSTALLATION.md#single-executable-experimental) |
-| Check what you installed | `npm audit signatures` verifies registry signatures; npm provenance links each package to its GitHub Actions build (see [npm packages](docs/INSTALLATION.md#npm)) |
-
-Every command prints readable output in a terminal and plain JSON when piped or with
-`--json`, so scripts keep working. MELRA creates `<MELRA_HOME>/payload.key` with
-private permissions on first start; back it up with the SQLite files, because losing
-it makes persisted payloads unreadable. See [installation](docs/INSTALLATION.md) for
-every install path, environment variable, and the hardened Docker invocation.
-
-</details>
-
-> [!CAUTION]
-> The **unscoped** npm package `melra` and the PyPI package `melra` are **unrelated
-> third-party projects**. This project publishes only under the `@melra/` npm scope:
-> `@melra/cli` is the CLI. Install from that scope, from this repository, or from the
-> official [releases](https://github.com/XAGI-Lab/melra/releases).
-
-If MELRA helps, [star the repository](https://github.com/XAGI-Lab/melra) so other
-agent builders can find it. Trying it in Cursor or another client? Share the client
-and its version, your OS, and your MELRA version (`npx @melra/cli@alpha version`) in
-[issue #184](https://github.com/XAGI-Lab/melra/issues/184); partial test results are
-useful too.
 
 ---
 
@@ -779,6 +793,7 @@ documentation and threat analysis are all welcome.
 |---|---|
 | [good first issue](https://github.com/XAGI-Lab/melra/labels/good%20first%20issue) | Scoped, with the files to touch named in the issue |
 | [help wanted](https://github.com/XAGI-Lab/melra/labels/help%20wanted) | Larger, still well defined |
+| [Open design proposals](https://github.com/XAGI-Lab/melra/issues?q=is%3Aissue+is%3Aopen+label%3Aproposal) | Comment on open questions before implementation; see [semantic verification #54](https://github.com/XAGI-Lab/melra/issues/54) |
 | [Contributing guide](docs/CONTRIBUTING_GUIDE.md) | How the pipeline fits together and which files one change touches |
 
 1. Read [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md).

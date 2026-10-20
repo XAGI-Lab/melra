@@ -38,6 +38,10 @@ jobs:
       id-token: write # npm trusted publishing (OIDC), provenance, and attestation
       attestations: write
       artifact-metadata: write
+    outputs:
+      # alpha, beta, rc or latest (scripts/release-channel.mjs): the npm
+      # dist-tag this release publishes under, and the container tag it moves.
+      channel: ${{ steps.channel.outputs.channel }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -68,6 +72,17 @@ jobs:
         run: |
           version="$(node -p "require('./package.json').version")"
           test "${GITHUB_REF_NAME}" = "v${version}"
+      # The GitHub release's notes are this version's CHANGELOG.md section,
+      # where GOVERNANCE.md wants breaking changes called out. Written before
+      # anything is published, so a version with no notes stops here.
+      - name: Extract the release notes
+        run: node scripts/check-changelog.mjs --notes "${RUNNER_TEMP}/release-notes.md"
+      - name: Pick the release channel
+        id: channel
+        shell: bash
+        run: |
+          channel="$(node scripts/release-channel.mjs)"
+          echo "channel=${channel}" >> "${GITHUB_OUTPUT}"
       - uses: ./.github/actions/release-artifacts
       - name: Attest release artifacts
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
@@ -81,13 +96,9 @@ jobs:
       - run: npm install -g npm@11.21.0
       - name: Publish to npm
         shell: bash
+        env:
+          CHANNEL: ${{ steps.channel.outputs.channel }}
         run: |
-          case "${GITHUB_REF_NAME}" in
-            *-alpha*) tag=alpha ;;
-            *-beta*)  tag=beta ;;
-            *-rc*)    tag=rc ;;
-            *)        tag=latest ;;
-          esac
           # pnpm packs, which turns `workspace:*` into the released version;
           # npm publishes, because npm is what speaks OIDC to the registry.
           # Publishing runs before the GitHub release is created, so a failure
@@ -96,9 +107,13 @@ jobs:
           # A package already on the registry at this version is skipped, so a
           # re-run after a later step failed gets past this step instead of
           # stopping on npm's refusal to publish a version twice.
+          #
+          # Dependencies first, the CLI last, so a run that stops partway has
+          # put nothing under the channel's dist-tag whose @melra/* dependencies
+          # are not on the registry.
           mkdir -p "${RUNNER_TEMP}/npm"
           version="$(node -p "require('./package.json').version")"
-          node -e 'const fs=require("node:fs");for(const p of fs.globSync("{apps,packages}/*/package.json")){const m=JSON.parse(fs.readFileSync(p,"utf8"));if(!m.private)console.log(require("node:path").dirname(p)+" "+m.name)}' \
+          node scripts/publish-order.mjs \
             | while read -r dir name; do
                 if npm view "${name}@${version}" version >/dev/null 2>&1; then
                   echo "${name}@${version} is already published"
@@ -107,7 +122,7 @@ jobs:
                 (cd "${dir}" && pnpm pack --pack-destination "${RUNNER_TEMP}/npm" >/dev/null)
                 # npm's own tarball name: @scope/name becomes scope-name.
                 tarball="${RUNNER_TEMP}/npm/$(printf '%s' "${name#@}" | tr '/' '-')-${version}.tgz"
-                npm publish "${tarball}" --tag "${tag}" --access public --provenance
+                npm publish "${tarball}" --tag "${CHANNEL}" --access public --provenance
               done
       # Every release up to 0.3.0-alpha.12 passed --provenance and shipped
       # without it, unnoticed, because nothing looked. This looks: each
@@ -117,8 +132,8 @@ jobs:
         shell: bash
         run: |
           version="$(node -p "require('./package.json').version")"
-          node -e 'const fs=require("node:fs");for(const p of fs.globSync("{apps,packages}/*/package.json")){const m=JSON.parse(fs.readFileSync(p,"utf8"));if(!m.private)console.log(m.name)}' \
-            | while read -r name; do
+          node scripts/publish-order.mjs \
+            | while read -r _ name; do
                 # The registry shows the attestation minutes after the publish:
                 # 0.3.0-alpha.14 stopped here after 2.5 minutes, and its
                 # attestations were all there by 7. Up to 15 minutes each.
@@ -138,7 +153,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          assets=(release/*.tar.gz release/*.whl release/*.json release/melra-[0-9]* release/SHA256SUMS)
+          assets=(release/*.tar.gz release/*.whl release/*.json release/melra-[0-9]*-{linux,darwin,win}-* release/SHA256SUMS)
           if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
             # Re-run after a later step failed: keep the release, refresh its assets.
             gh release upload "${GITHUB_REF_NAME}" "${assets[@]}" --clobber
@@ -146,7 +161,8 @@ jobs:
             prerelease=""
             if [[ "${GITHUB_REF_NAME}" == *-* ]]; then prerelease="--prerelease"; fi
             gh release create "${GITHUB_REF_NAME}" "${assets[@]}" \
-              --verify-tag --generate-notes ${prerelease}
+              --verify-tag --title "${GITHUB_REF_NAME}" \
+              --notes-file "${RUNNER_TEMP}/release-notes.md" ${prerelease}
           fi
       - name: Point latest at this prerelease
         if: ${{ contains(github.ref_name, '-') }}
@@ -158,14 +174,17 @@ jobs:
           # most obvious command installs a build several releases behind. Delete
           # this step at 1.0, where `latest` has to mean the stable line.
           #
+          # The container's :latest follows the same rule, so delete its line
+          # in the container job with this step.
+          #
           # Trusted publishing moves a dist-tag only for a package whose
           # trusted-publisher settings on npmjs.com allow it ("Allow npm
           # dist-tag"); 0.3.0-alpha.13 stopped here on a 403 without it. The
           # release is already out by now, so a refusal is a warning to act on,
           # not a reason to skip the install smoke below.
           version="$(node -p "require('./package.json').version")"
-          node -e 'const fs=require("node:fs");for(const p of fs.globSync("{apps,packages}/*/package.json")){const m=JSON.parse(fs.readFileSync(p,"utf8"));if(!m.private)console.log(m.name)}' \
-            | while read -r name; do
+          node scripts/publish-order.mjs \
+            | while read -r _ name; do
                 npm dist-tag add "${name}@${version}" latest \
                   || echo "::warning::${name}: latest not moved to ${version}; allow npm dist-tag for this package's trusted publisher, or run 'npm dist-tag add ${name}@${version} latest'"
               done
@@ -285,8 +304,15 @@ jobs:
           done < "${RUNNER_TEMP}/retag-packages.txt"
           test "${failed}" = 0
 
+  # Last, once the artifacts job and the install smoke on every runner have
+  # passed: 0.3.0-alpha.13 and alpha.14 pushed :alpha while their artifacts
+  # jobs failed, after the npm publish and before creating the GitHub release.
+  # npm still moves first, so until a failed run is re-run to the end, npm's
+  # dist-tags are a release ahead of the image's. The image takes the tags
+  # npm does: the channel, and latest on every release before 1.0.
   container:
     if: github.event_name == 'push'
+    needs: [artifacts, installed]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -318,7 +344,8 @@ jobs:
           sbom: true
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:alpha
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.artifacts.outputs.channel }}
+            ${{ contains(github.ref_name, '-') && format('{0}/{1}:latest', env.REGISTRY, env.IMAGE_NAME) || '' }}
       - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}

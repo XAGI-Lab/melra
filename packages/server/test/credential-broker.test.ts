@@ -37,6 +37,14 @@ beforeAll(async () => {
         url: req.url ?? "",
         headers: req.headers as Record<string, string | undefined>,
       });
+      // A provider that reflects the credential it was sent, as an error or a
+      // debug header might.
+      if (req.url?.endsWith("/echo") === true) {
+        const key = req.headers.authorization ?? "";
+        res.writeHead(200, `OK ${key}`, { "content-type": "application/json", "x-debug-key": key });
+        res.end(JSON.stringify({ received: key }));
+        return;
+      }
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ ok: true }));
     });
@@ -126,6 +134,18 @@ describe("a credential the agent never holds", () => {
     const everythingTheCallerSees = JSON.stringify({ planned, task, output, receipt });
     expect(everythingTheCallerSees).toContain("billing");
     expect(everythingTheCallerSees).not.toContain(SECRET);
+  });
+
+  it("stays out of the result even when the far end echoes it back", async () => {
+    const { planned, task, output, receipt } = await run(charge("127.0.0.1", "POST", "/charges/echo"));
+    expect(task.status).toBe("verified_success");
+    expect(seen.at(-1)?.headers.authorization).toBe(`Bearer ${SECRET}`);
+    expect(output?.credentials).toEqual(["billing"]);
+    expect(output?.statusText).toBe("OK [REDACTED_CREDENTIAL]");
+    expect(receipt?.redactions).toContain("[REDACTED_CREDENTIAL]");
+    expect(JSON.stringify({ planned, task, output, receipt })).not.toContain(SECRET);
+    expect(JSON.stringify(runtime.store.getTask(task.id))).not.toContain(SECRET);
+    expect(JSON.stringify(runtime.store.getReceiptsForTask(task.id))).not.toContain(SECRET);
   });
 
   it("is not in the database either", async () => {

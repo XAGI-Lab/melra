@@ -130,8 +130,9 @@ function domainAllowed(host: string, allowed: string[]): boolean {
   return allowed.some(
     (entry) =>
       entry === "*" ||
-      host === entry.toLowerCase() ||
-      host.endsWith(`.${entry.toLowerCase()}`),
+      // Empty, `.${entry}` is "." and every host spelled with a trailing dot
+      // ends with it.
+      (entry !== "" && (host === entry.toLowerCase() || host.endsWith(`.${entry.toLowerCase()}`))),
   );
 }
 

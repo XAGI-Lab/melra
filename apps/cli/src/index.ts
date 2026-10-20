@@ -24,8 +24,13 @@ import {
 } from "@melra/protocol";
 import {
   assertEnforceable,
+  broadWorkspace,
   confinedRoot,
   createMelraRuntime,
+  dataLocationAdvice,
+  narrowWorkspaceAdvice,
+  secretFiles,
+  secretInsideWorkspace,
   serveHttp,
   OAuthProvider,
   clientPrincipal,
@@ -33,11 +38,12 @@ import {
   serveStdio,
   unconfinedRoot,
   workspaceHoldsData,
+  workspaceInsideData,
   type MelraRuntime,
 } from "@melra/server";
 import { detectBrowserExecutable } from "@melra/browser-runtime";
 import { createSystemComputerAdapter } from "@melra/computer-runtime";
-import { capabilityUsageReader } from "@melra/runtime-core";
+import { capabilityUsageReader, withDefaultEvidence } from "@melra/runtime-core";
 import { SqliteStore } from "@melra/storage-sqlite";
 import {
   classifyOperation,
@@ -59,6 +65,9 @@ import { clientStatuses, clientsCheck, detectClients } from "./client-status.js"
 import { RESTART_SAFE_WORKFLOW } from "./demo-workflow.js";
 import { detectIsolation, isolationCheck } from "./isolation.js";
 import {
+  broadWorkspaceWarning,
+  confirmBroadWorkspace,
+  prompter,
   renderConformance,
   renderDoctor,
   renderInit,
@@ -68,6 +77,7 @@ import {
   type DoctorCheck,
   type DoctorReport,
   type InitResult,
+  type Prompter,
 } from "./human.js";
 import { isHuman, paint, printJsonOrHuman } from "./output.js";
 import {
@@ -90,8 +100,9 @@ import {
  * runs wrote their own workspace into the shared ~/.melra/policy.json, and a
  * server for any later project was then confined to the first one instead.
  *
- * A file that does not parse changes nothing here; `doctor` reports it and the
- * server refuses to start on it.
+ * A file that does not load changes nothing here, the mode included: nothing in
+ * an invalid file is trusted to mean what it seems to. `doctor`, `status` and
+ * `tasks` report it, and `serve`, `run` and `approve` refuse to start on it.
  */
 async function settle(env: CliEnvironment): Promise<CliEnvironment> {
   const path = await existingPolicyPath(env);
@@ -567,24 +578,35 @@ async function doctor(env: CliEnvironment): Promise<{
     });
   }
   // Only once both exist as directories: the check would create a missing
-  // workspace. Not in unsafe-local, which reaches every file on the machine and
-  // whose guardrails warning already says so.
-  if (
-    !env.unhinged &&
-    checks.every((check) => !["workspace", "data-directory"].includes(check.name) || check.status !== "fail")
-  ) {
+  // workspace.
+  if (checks.every((check) => !["workspace", "data-directory"].includes(check.name) || check.status !== "fail")) {
     try {
-      const inside = await workspaceHoldsData(env.workspaceRoot, env.dataDirectory);
-      checks.push(
-        inside
-          ? {
-              name: "data-location",
-              // The server refuses to start this way in enforced mode.
-              status: env.mode === "enforced" ? "fail" : "warn",
-              detail: `${env.dataDirectory} is inside the workspace, where a recursive read reaches payload.key without naming it`,
-            }
-          : { name: "data-location", status: "pass", detail: "outside the workspace" },
-      );
+      if (await workspaceInsideData(env.workspaceRoot, env.dataDirectory)) {
+        checks.push({
+          name: "data-location",
+          // The server refuses to start this way in every mode.
+          status: "fail",
+          detail:
+            `workspace_inside_data_directory: ${env.workspaceRoot} is inside ${env.dataDirectory}, ` +
+            "where every path is MELRA's own; point MELRA_WORKSPACE at the project",
+        });
+      } else if (!env.unhinged) {
+        // Not in unsafe-local, which reaches every file on the machine and
+        // whose guardrails warning already says so.
+        const inside = await workspaceHoldsData(env.workspaceRoot, env.dataDirectory);
+        checks.push(
+          inside
+            ? {
+                name: "data-location",
+                // The server refuses to start this way in enforced mode.
+                status: env.mode === "enforced" ? "fail" : "warn",
+                detail: `${env.dataDirectory} is inside the workspace, where a recursive read reaches payload.key without naming it`,
+                // As the server words its refusal.
+                next: await dataLocationAdvice(env.workspaceRoot, env.dataDirectory, env.policyPath),
+              }
+            : { name: "data-location", status: "pass", detail: "outside the workspace" },
+        );
+      }
     } catch (error) {
       checks.push({
         name: "data-location",
@@ -632,10 +654,11 @@ async function doctor(env: CliEnvironment): Promise<{
       ? `${computer.adapter}: screenshot=${computer.screenshot}, pointer=${computer.pointer}, keyboard=${computer.keyboard}, scroll=${computer.scroll}`
       : computer.limitations.join("; "),
   });
+  let credentials: LocalPolicy["credentials"] = {};
   try {
     const path = await existingPolicyPath(env);
     // The server's own parser, so a bad `mode` or grant fails here too.
-    if (path !== undefined) await loadPolicy(path, env.workspaceRoot);
+    if (path !== undefined) ({ credentials } = await loadPolicy(path, env.workspaceRoot));
     checks.push({
       name: "policy",
       status: "pass",
@@ -647,6 +670,44 @@ async function doctor(env: CliEnvironment): Promise<{
       status: "fail",
       detail: error instanceof Error ? error.message : String(error),
     });
+  }
+  // Where the browser's and the credential broker's secret files lie, judged as
+  // the server judges them before it starts. Only once the workspace exists:
+  // the check would create it.
+  const secrets = secretFiles(env, credentials);
+  if (secrets.size > 0 && checks.some((check) => check.name === "workspace" && check.status === "pass")) {
+    try {
+      const profile = secrets.get("MELRA_BROWSER_PROFILE");
+      if (profile !== undefined && (await workspaceInsideData(env.workspaceRoot, profile))) {
+        checks.push({
+          name: "secret-location",
+          // The server refuses to start this way in every mode.
+          status: "fail",
+          detail: `workspace_inside_browser_profile: ${env.workspaceRoot} is inside ${profile}`,
+          next: "point MELRA_WORKSPACE at the project, outside MELRA_BROWSER_PROFILE",
+        });
+      } else if (!env.unhinged) {
+        // Not in unsafe-local, as for the data directory.
+        const held = await secretInsideWorkspace(env.workspaceRoot, secrets);
+        checks.push(
+          held === undefined
+            ? { name: "secret-location", status: "pass", detail: "outside the workspace" }
+            : {
+                name: "secret-location",
+                // The server refuses to start this way in enforced mode.
+                status: env.mode === "enforced" ? "fail" : "warn",
+                detail: `${held} names ${secrets.get(held)}, inside the workspace, where a recursive read reaches it without naming it`,
+                next: `move ${secrets.get(held)} out of the workspace`,
+              },
+        );
+      }
+    } catch (error) {
+      checks.push({
+        name: "secret-location",
+        status: "fail",
+        detail: `could not resolve the workspace: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
   }
   if (env.socketPath !== undefined) checks.push(await socketCheck(env.socketPath));
   checks.push(isolationCheck(await detectIsolation(), env.mode));
@@ -711,6 +772,7 @@ async function init(args: string[], env: CliEnvironment): Promise<InitResult> {
     return {
       initialized: true,
       client,
+      workspace: env.workspaceRoot,
       policyPath,
       configPath,
       written: true,
@@ -725,6 +787,7 @@ async function init(args: string[], env: CliEnvironment): Promise<InitResult> {
   return {
     initialized: true,
     client,
+    workspace: env.workspaceRoot,
     policyPath,
     ...(configPath === undefined ? {} : { configPath }),
     config,
@@ -736,25 +799,55 @@ async function init(args: string[], env: CliEnvironment): Promise<InitResult> {
   };
 }
 
+// A broad workspace (home, a directory holding it, or a filesystem root) hands
+// the agent every project at once, and a fresh terminal starts in home.
+// MELRA_WORKSPACE naming it is a choice already made; otherwise a person at a
+// terminal is asked, defaulting to no, and anything else is refused before a
+// file is written.
+async function workspaceAgreed(env: CliEnvironment, reader: Prompter | undefined): Promise<boolean> {
+  const broad = env.workspaceSet === true ? undefined : await broadWorkspace(env.workspaceRoot);
+  if (broad === undefined) return true;
+  const warning = broadWorkspaceWarning(
+    env.workspaceRoot,
+    broad,
+    narrowWorkspaceAdvice(env.dataDirectory, env.policyPath),
+  );
+  if (reader === undefined) {
+    throw new Error(`workspace_too_broad: ${warning} (MELRA_WORKSPACE=${env.workspaceRoot} to use it anyway)`);
+  }
+  if (await confirmBroadWorkspace(reader, env.workspaceRoot, warning)) return true;
+  process.stdout.write("Nothing was written.\n");
+  return false;
+}
+
+// Only a person at a terminal on both ends is asked anything. Anything else —
+// a pipe, a test, `--json` — gets the non-interactive behaviour.
+function questions(args: string[]): Prompter | undefined {
+  return isHuman(args) && process.stdin.isTTY ? prompter({ input: process.stdin, output: process.stdout }) : undefined;
+}
+
 // One command for the whole local setup: write the policy, emit a working
 // client config, and verify the machine can actually run it.
 async function setup(args: string[], env: CliEnvironment): Promise<number> {
   let chosen = args;
-  // Only a person at a terminal on both ends is asked. Anything else — a pipe,
-  // a test, `--json` — gets today's non-interactive generic setup unchanged.
-  if (argument("--client", args) === undefined && isHuman(args) && process.stdin.isTTY) {
-    const answer = await setupWizard(
-      { input: process.stdin, output: process.stdout },
-      detectClients(env.workspaceRoot),
-    );
-    if (answer === undefined) {
-      process.stdout.write("\nCancelled; nothing was written.\n");
-      return 130;
+  // One reader for the workspace question and the wizard, so answers typed
+  // ahead of the second are not dropped with the first.
+  const reader = questions(args);
+  try {
+    if (!(await workspaceAgreed(env, reader))) return 1;
+    if (argument("--client", args) === undefined && reader !== undefined) {
+      const answer = await setupWizard(reader, detectClients(env.workspaceRoot));
+      if (answer === undefined) {
+        process.stdout.write("\nCancelled; nothing was written.\n");
+        return 130;
+      }
+      process.stdout.write("\n");
+      // The same arguments the person could have typed, so the wizard cannot
+      // drift from what `--client X --write` does.
+      chosen = ["--client", answer.client, ...(answer.write ? ["--write"] : [])];
     }
-    process.stdout.write("\n");
-    // The same arguments the person could have typed, so the wizard cannot
-    // drift from what `--client X --write` does.
-    chosen = ["--client", answer.client, ...(answer.write ? ["--write"] : [])];
+  } finally {
+    reader?.close();
   }
   const initialized = await init(chosen, env);
   const { report, failed } = await doctor(env);
@@ -859,7 +952,10 @@ async function inspectTask(args: string[], env: CliEnvironment): Promise<void> {
 }
 
 async function policyTest(args: string[], env: CliEnvironment): Promise<void> {
-  const request = await readTaskRequest(args);
+  // With the evidence the server derives for a mutation that declares none, as
+  // plan does: without it, a file write the server would ask approval for was
+  // previewed as denied for want of evidence.
+  const request = withDefaultEvidence(await readTaskRequest(args));
   // Reports what this process would actually decide, unhinged mode included —
   // a dry run that disagreed with the server it is previewing is worse than
   // none. That is also why the operator's own `policy.json` is loaded rather
@@ -884,6 +980,7 @@ async function policyTest(args: string[], env: CliEnvironment): Promise<void> {
     output({
       ...evaluatePolicy(taskId, request, policy, capabilityUsageReader(store)),
       classified: { capability, target },
+      requiredEvidence: request.requiredEvidence,
     });
   } finally {
     store.close();
@@ -1008,7 +1105,13 @@ server uses. Without a terminal or a browser to open, it refuses to start.
 
 In a terminal, doctor, setup, init, and version print a readable report, and
 'melra setup' with no --client asks which detected client to set up. Piped or
-captured, they print JSON (version: the bare number), exactly as before.
+captured, they print JSON (version: the bare number).
+
+The workspace setup and init write into the config is the current directory,
+unless MELRA_WORKSPACE (or a MELRA_POLICY file's workspaceRoot) names one. If
+that is your home directory, a directory holding it, or a filesystem root,
+they ask first in a terminal, and refuse with workspace_too_broad otherwise;
+setting MELRA_WORKSPACE to it skips the question.
 
 Flags:
   --json           Print JSON even in a terminal, and never ask a question.
@@ -1137,10 +1240,16 @@ async function main(): Promise<void> {
       process.exitCode = failed ? 1 : 0;
       return;
     }
-    case "init":
+    case "init": {
       rejectUnknownFlags(args, ["--client", "--write", "--json"]);
+      const reader = questions(args);
+      if (!(await workspaceAgreed(env, reader).finally(() => reader?.close()))) {
+        process.exitCode = 1;
+        return;
+      }
       printJsonOrHuman(await init(args, env), renderInit, args);
       return;
+    }
     case "setup":
       rejectUnknownFlags(args, ["--client", "--write", "--json"]);
       process.exitCode = await setup(args, env);
@@ -1270,15 +1379,41 @@ async function main(): Promise<void> {
       return;
     case "tasks": {
       rejectUnknownFlags(args, ["--limit", "--status", "--json"]);
+      // A trailing --status, as an unquoted `--status $S` sends with S unset,
+      // listed every status: an unfiltered list that looked filtered.
+      for (const flag of ["--limit", "--status"]) {
+        const value = argument(flag, args);
+        if (args.includes(flag) && (value === undefined || value.startsWith("--"))) {
+          throw new Error(`${flag} requires a value`);
+        }
+      }
       const limit = Number(argument("--limit", args) ?? "20");
       if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
         throw new Error("--limit must be a whole number from 1 to 500");
       }
       const status = argument("--status", args);
+      // Approvals are read by the window and mode a server started here would
+      // use; a policy file that does not load leaves the defaults, and says so,
+      // as status does: a server would refuse to start on it.
+      const policyPath = await existingPolicyPath(env);
+      let policy: LocalPolicy | undefined;
+      let policyError: string | undefined;
+      if (policyPath !== undefined) {
+        try {
+          policy = await loadPolicy(policyPath, env.workspaceRoot);
+        } catch (error) {
+          policyError = error instanceof Error ? error.message : String(error);
+        }
+      }
       process.exitCode = tasksCommand(env, {
         limit,
         json: args.includes("--json"),
         ...(status === undefined ? {} : { status: TaskStatusSchema.parse(status) }),
+        ...(policyError === undefined ? {} : { policyError }),
+        window: {
+          mode: env.mode === "enforced" || policy?.mode === "enforced" ? "enforced" : "developer",
+          ...(policy?.approvalTtlMs === undefined ? {} : { approvalTtlMs: policy.approvalTtlMs }),
+        },
       });
       return;
     }

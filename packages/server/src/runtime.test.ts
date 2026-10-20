@@ -2,17 +2,20 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join, parse, resolve } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { basename, delimiter, dirname, join, parse, resolve } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { deploymentMode, TaskRequestSchema, type TaskRequest } from "@melra/protocol";
 import { serveHttp } from "./http-server.js";
 import {
   assertEnforceable,
+  broadWorkspace,
   createMelraRuntime,
   unconfinedRoot,
   unhingedFromEnvironment,
+  workspaceInsideData,
   type MelraRuntime,
 } from "./runtime.js";
 
@@ -177,6 +180,33 @@ describe("unhinged runtime", () => {
     });
     expect(runtime.policy.unhinged).toBe(true);
   });
+
+  it.skipIf(process.platform === "win32")(
+    "finds a bare program only through PATH entries outside the workspace, unless unhinged",
+    async () => {
+      await mkdir(join(workspace, "bin"));
+      await writeFile(join(workspace, "bin", "ls"), "#!/bin/sh\necho SHADOWED\n", "utf8");
+      await chmod(join(workspace, "bin", "ls"), 0o755);
+      vi.stubEnv("PATH", `${join(workspace, "bin")}${delimiter}${process.env.PATH ?? ""}`);
+      try {
+        const ls = async () => {
+          const planned = runtime!.controller.plan(
+            request({ operation: { kind: "terminal", action: "run", command: "ls", args: [] } }),
+          );
+          const output = ((await runtime!.controller.execute(planned.id)).output ?? {}) as Record<string, unknown>;
+          return String(output.stdout ?? "");
+        };
+        runtime = await createMelraRuntime({ workspaceRoot: workspace, dataDirectory: data, environment: {} });
+        expect(await ls()).toContain("bin");
+        await runtime.close();
+        // Unsafe-local keeps the operator's PATH as given: nothing there is approved.
+        runtime = await createMelraRuntime({ workspaceRoot: workspace, dataDirectory: data, environment: {}, unhinged: true });
+        expect(await ls()).toContain("SHADOWED");
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    },
+  );
 });
 
 describe("deploymentMode", () => {
@@ -333,7 +363,8 @@ describe("terminal arguments", () => {
       planned.approval === undefined
         ? undefined
         : { approvalId: planned.approval.approvalId, phrase: planned.approval.phrase! };
-    return { planned, task: (await runtime!.controller.execute(planned.id, approval)).task };
+    const { task: done, receipt } = await runtime!.controller.execute(planned.id, approval);
+    return { planned, task: done, receipt };
   };
 
   it("refuses MELRA's own files however an argument reaches them, in every mode", async () => {
@@ -380,6 +411,24 @@ describe("terminal arguments", () => {
     expect(unhinged.task.error).toMatch(/terminal_path_reserved/);
   });
 
+  it("refuses MELRA's own files named as a file reference, in every mode", async () => {
+    runtime = await createMelraRuntime({ workspaceRoot: workspace, dataDirectory: data, environment: {} });
+    const key = join(data, "payload.key");
+    // One program each: three failures of one open its circuit.
+    for (const task of [
+      terminal("cat", [`@${key}`]),
+      terminal("head", [`-c@${key}`]),
+      terminal("tail", [`--file=@${key}`]),
+      terminal("wc", ["-l", `f=<${key}`]),
+    ]) {
+      const { task: done } = await run(task);
+      expect(done.error, JSON.stringify(task.operation)).toMatch(/terminal_path_reserved/);
+    }
+    // A search pattern, as in `rg "@/" src`, is not a directory a reader walks.
+    const patterns = (await run(terminal("node", ["-e", "", "--", "@/", "</", "@.."], true))).task;
+    expect(patterns.status, patterns.error).toBe("verified_success");
+  });
+
   it("in enforced mode, shows a person a read outside the workspace and refuses a link out", async () => {
     await writeFile(join(base, "outside.txt"), "outside", "utf8");
     await mkdir(join(base, "outside"));
@@ -405,6 +454,8 @@ describe("terminal arguments", () => {
     expect(linked.planned.status).toBe("planned");
     expect(linked.task.status).toBe("failed");
     expect(linked.task.error).toMatch(/terminal_path_outside_workspace/);
+    // So is one named as a file reference.
+    expect((await run(terminal("head", [`@${join("out", "f")}`]))).task.error).toMatch(/terminal_path_outside_workspace/);
     await runtime.close();
     runtime = await createMelraRuntime({ workspaceRoot: workspace, dataDirectory: data, environment: {} });
     if (process.platform !== "win32") {
@@ -419,12 +470,298 @@ describe("terminal arguments", () => {
         dataDirectory: join(base, ".melra"),
         environment: { MELRA_MODE: "enforced" },
       }),
-    ).rejects.toThrow(/enforced_mode_refuses_data_inside_workspace/);
+    ).rejects.toThrow(
+      // A project workspace someone put MELRA_HOME inside: narrowing the
+      // workspace cannot help, so the data moves, database and all.
+      "enforced_mode_refuses_data_inside_workspace: move the MELRA_HOME directory, with everything in it, out of the workspace",
+    );
+    if (process.platform === "darwin") {
+      // The data volume mounted whole holds it too, through no `..` from it.
+      for (const workspaceRoot of ["/System/Volumes/Data", "/System"]) {
+        await expect(
+          createMelraRuntime({ workspaceRoot, dataDirectory: data, environment: { MELRA_MODE: "enforced" } }),
+          workspaceRoot,
+        ).rejects.toThrow(/enforced_mode_refuses_data_inside_workspace/);
+      }
+    }
     // Developer mode starts, and the workspace itself is still usable: refusing
     // the directories above the data would refuse every command there.
     runtime = await createMelraRuntime({ workspaceRoot: base, dataDirectory: join(base, ".melra"), environment: {} });
     const { task } = await run(terminal("node", ["-e", "", "."], true));
     expect(task.status).toBe("verified_success");
+  });
+
+  it("refuses the policy file a later start reads, without counting it as data in the workspace", async () => {
+    const policyPath = join(workspace, "melra-policy.json");
+    await writeFile(policyPath, "{}", "utf8");
+    runtime = await createMelraRuntime({ workspaceRoot: workspace, dataDirectory: data, environment: {}, policyPath });
+    const write = await run(
+      request({
+        operation: { kind: "file", action: "write", path: "melra-policy.json", content: "{ }" },
+        requiredEvidence: [{ type: "file_exists", path: "melra-policy.json" }],
+      }),
+    );
+    expect(write.task.error).toMatch(/path_reserved/);
+    expect(await readFile(policyPath, "utf8")).toBe("{}");
+    expect((await run(terminal("cat", [policyPath]))).task.error).toMatch(/terminal_path_reserved/);
+    // Commands in the workspace holding it still run, and enforced mode starts.
+    expect((await run(terminal("node", ["-e", "", "."], true))).task.status).toBe("verified_success");
+    await runtime.close();
+    runtime = await createMelraRuntime({
+      workspaceRoot: workspace,
+      dataDirectory: data,
+      environment: { MELRA_MODE: "enforced" },
+      policyPath,
+    });
+  });
+
+  it("refuses MELRA's data spelled through the workspace as configured, through a link", async () => {
+    const real = join(base, "real");
+    const linked = join(base, "linked");
+    await mkdir(real);
+    await symlink(real, linked, "junction");
+    runtime = await createMelraRuntime({ workspaceRoot: linked, dataDirectory: join(real, ".melra"), environment: {} });
+    const write = (path: string, evidence = path) =>
+      run(
+        request({
+          operation: { kind: "file", action: "write", path, content: "x" },
+          requiredEvidence: [{ type: "file_exists", path: evidence }],
+        }),
+      );
+    // That spelling reaches the workspace...
+    expect((await write(join(linked, "notes.txt"))).task.status).toBe("verified_success");
+    // ...and not the data directory inside it, present or absent, nor does evidence.
+    for (const path of [join(linked, ".melra", "payload.key"), join(linked, ".melra", "planted")]) {
+      expect((await write(path)).task.error, path).toMatch(/path_reserved/);
+    }
+    const checked = await write(join(linked, "notes.txt"), join(linked, ".melra", "payload.key"));
+    expect(checked.receipt?.evidence[0]?.summary).toBe("verification_path_reserved");
+  });
+
+  it("refuses, in every mode, a workspace that is or sits inside the data directory", async () => {
+    // Also one reached through a link that leads well inside it.
+    const linked = join(base, "linked");
+    await mkdir(join(data, "projects", "app"), { recursive: true });
+    await symlink(join(data, "projects", "app"), linked);
+    expect(await workspaceInsideData(linked, data)).toBe(true);
+    for (const [workspaceRoot, environment] of [
+      [data, {}],
+      [join(data, "workspace"), {}],
+      [join(data, "workspace"), { MELRA_MODE: "enforced" }],
+      [join(data, "workspace"), { MELRA_UNHINGED: "1" }],
+      [linked, {}],
+      [linked, { MELRA_MODE: "enforced" }],
+    ] as const) {
+      await expect(
+        createMelraRuntime({ workspaceRoot, dataDirectory: data, environment }),
+        `${workspaceRoot} ${JSON.stringify(environment)}`,
+      ).rejects.toThrow(/workspace_inside_data_directory/);
+    }
+  });
+
+  describe("the browser's and the credential broker's secret files", () => {
+    let outside: string;
+    beforeEach(async () => {
+      outside = join(base, "outside");
+      await mkdir(outside);
+    });
+    const secret = async (path: string) => {
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, "sk_live_reservedsecretvalue0000", { mode: 0o600 });
+    };
+    /** A policy file naming a credential read from `file`. */
+    const policyWith = async (file: string, extra: Record<string, unknown> = {}) => {
+      const path = join(outside, "policy.json");
+      const credential = {
+        source: { file },
+        inject: { header: "Authorization", scheme: "Bearer" },
+        hosts: ["api.example.com"],
+        capability: "http.post:*",
+      };
+      await writeFile(path, JSON.stringify({ ...extra, credentials: { billing: credential } }), "utf8");
+      return path;
+    };
+    const write = (path: string) =>
+      request({
+        operation: { kind: "file", action: "write", path, content: "x" },
+        requiredEvidence: [{ type: "file_exists", path }],
+      });
+
+    it("are reserved wherever they lie, in every mode", async () => {
+      await secret(join(workspace, "secrets", "billing.key"));
+      await secret(join(workspace, "profile", "Default", "Cookies"));
+      await secret(join(outside, "replay.har"));
+      runtime = await createMelraRuntime({
+        workspaceRoot: workspace,
+        dataDirectory: data,
+        environment: {},
+        policyPath: await policyWith(join(workspace, "secrets", "billing.key")),
+        browserProfileDir: join(workspace, "profile"),
+        // Its directory is not there until the browser first starts.
+        browserHarPath: join(workspace, "recordings", "session.har"),
+      });
+      for (const task of [
+        request({ operation: { kind: "file", action: "read", path: join("secrets", "billing.key") } }),
+        request({ operation: { kind: "file", action: "read", path: join("profile", "Default", "Cookies") } }),
+        write(join("recordings", "session.har")),
+      ]) {
+        expect((await run(task)).task.error, JSON.stringify(task.operation)).toMatch(/path_reserved/);
+      }
+      expect((await run(terminal("head", [join("profile", "Default", "Cookies")]))).task.error).toMatch(
+        /terminal_path_reserved/,
+      );
+      // A workspace holding them is still an ordinary one in developer mode.
+      expect((await run(terminal("node", ["-e", "", "."], true))).task.status).toBe("verified_success");
+      await runtime.close();
+      // Unsafe-local reaches every other file, but not these.
+      runtime = await createMelraRuntime({
+        workspaceRoot: workspace,
+        dataDirectory: data,
+        environment: {},
+        unhinged: true,
+        policyPath: await policyWith(join(workspace, "secrets", "billing.key")),
+        browserHarReplayPath: join(outside, "replay.har"),
+      });
+      expect((await run(terminal("cat", [join(outside, "replay.har")]))).task.error).toMatch(/terminal_path_reserved/);
+      expect((await run(terminal("tail", [join(workspace, "secrets", "billing.key")]))).task.error).toMatch(
+        /terminal_path_reserved/,
+      );
+    });
+
+    it("refuse enforced mode when the workspace holds one, naming it, and stay refused outside it once approved", async () => {
+      const enforced = { MELRA_MODE: "enforced" };
+      await secret(join(workspace, "secrets", "billing.key"));
+      await secret(join(workspace, "replay.har"));
+      for (const [options, name] of [
+        [{ browserProfileDir: join(workspace, "profile") }, "MELRA_BROWSER_PROFILE"],
+        [{ browserHarPath: join(workspace, "recordings", "session.har") }, "MELRA_BROWSER_HAR_PATH"],
+        [{ browserHarReplayPath: join(workspace, "replay.har") }, "MELRA_BROWSER_HAR_REPLAY"],
+        [{ policyPath: await policyWith(join(workspace, "secrets", "billing.key")) }, "credentials.billing"],
+      ] as const) {
+        await expect(
+          createMelraRuntime({ workspaceRoot: workspace, dataDirectory: data, environment: enforced, ...options }),
+          name,
+        ).rejects.toThrow(`enforced_mode_refuses_secret_inside_workspace: ${name}`);
+      }
+      await secret(join(outside, "billing.key"));
+      runtime = await createMelraRuntime({
+        workspaceRoot: workspace,
+        dataDirectory: data,
+        environment: enforced,
+        policyPath: await policyWith(join(outside, "billing.key")),
+        browserProfileDir: join(outside, "profile"),
+      });
+      const planned = runtime.controller.plan(terminal("cat", [join(outside, "billing.key")]));
+      expect(planned.policyDecision.reason).toBe("read_outside_workspace");
+      runtime.controller.decide(planned.id, runtime.controller.approvalView(planned.id).renderDigest, "cli:test");
+      expect((await runtime.controller.execute(planned.id)).task.error).toMatch(/terminal_path_reserved/);
+    });
+
+    it("refuse, in every mode, a workspace inside the browser profile", async () => {
+      const profile = join(base, "profile");
+      await mkdir(join(profile, "Default"), { recursive: true });
+      for (const [workspaceRoot, environment] of [
+        [profile, {}],
+        [join(profile, "Default"), {}],
+        [join(profile, "Default"), { MELRA_MODE: "enforced" }],
+        [join(profile, "Default"), { MELRA_UNHINGED: "1" }],
+      ] as const) {
+        await expect(
+          createMelraRuntime({ workspaceRoot, dataDirectory: data, environment, browserProfileDir: profile }),
+          `${workspaceRoot} ${JSON.stringify(environment)}`,
+        ).rejects.toThrow(/workspace_inside_browser_profile/);
+      }
+    });
+  });
+});
+
+describe("a broad workspace", () => {
+  let base: string;
+  const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+
+  beforeEach(async () => {
+    base = await realpath(await mkdtemp(join(tmpdir(), "melra-broad-")));
+  });
+
+  afterEach(async () => {
+    // Restored in place, so os.homedir() reads the real environment again.
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    await rm(base, { recursive: true, force: true });
+  });
+
+  it("is home, a directory holding it, or a filesystem root, however it is spelled", async () => {
+    const home = join(base, "home");
+    await mkdir(join(home, "project"), { recursive: true });
+    await mkdir(join(base, "beside"));
+    await symlink(home, join(base, "link"));
+    expect(await broadWorkspace(home, home)).toBe("home");
+    // Through a link, either side: a symlinked home is still home.
+    expect(await broadWorkspace(join(base, "link"), home)).toBe("home");
+    expect(await broadWorkspace(home, join(base, "link"))).toBe("home");
+    // What holds home holds every user's files, as /Users, /home or C:\Users do.
+    expect(await broadWorkspace(base, home)).toBe("holds-home");
+    // A project under home, or a directory beside it, is the ordinary case.
+    expect(await broadWorkspace(join(home, "project"), home)).toBeUndefined();
+    expect(await broadWorkspace(join(base, "beside"), home)).toBeUndefined();
+    // `/`, or the drive root on Windows.
+    expect(await broadWorkspace(parse(base).root, home)).toBe("root");
+    // One that does not resolve is doctor's to report.
+    expect(await broadWorkspace(join(base, "missing"), home)).toBeUndefined();
+    // macOS reaches every directory on the data volume through the
+    // /System/Volumes/Data firmlink too, which realpath does not fold.
+    const firmlink = join("/System/Volumes/Data", home);
+    if (existsSync(firmlink)) {
+      expect(await broadWorkspace(firmlink, home)).toBe("home");
+      expect(await broadWorkspace(join("/System/Volumes/Data", base), home)).toBe("holds-home");
+      expect(await broadWorkspace("/System/Volumes/Data", home)).toBe("holds-home");
+      expect(await broadWorkspace(join(firmlink, "project"), home)).toBeUndefined();
+    }
+  });
+
+  it("is what an enforced refusal tells you to narrow, keeping MELRA_HOME where it is", async () => {
+    Object.assign(process.env, { HOME: base, USERPROFILE: base });
+    const refusal = (workspaceRoot: string, policyPath?: string) =>
+      expect(
+        createMelraRuntime({
+          workspaceRoot,
+          dataDirectory: join(base, ".melra"),
+          environment: { MELRA_MODE: "enforced" },
+          ...(policyPath === undefined ? {} : { policyPath }),
+        }),
+      ).rejects;
+    // Home holding the default ~/.melra, as from a fresh terminal. Not "run
+    // setup", which does not change the workspace `approve` or `console` use.
+    const narrow =
+      "enforced_mode_refuses_data_inside_workspace: set MELRA_WORKSPACE to your project directory, " +
+      "or run this from there; keep MELRA_HOME where it is (moving it orphans the database).";
+    await refusal(base).toThrow(narrow);
+    // Above home, likewise.
+    await refusal(dirname(base)).toThrow(narrow);
+    // The shared policy only narrows the workspace, so the advice stands.
+    await mkdir(join(base, ".melra"), { recursive: true });
+    await writeFile(join(base, ".melra", "policy.json"), "{}");
+    await refusal(base, join(base, ".melra", "policy.json")).toThrow(narrow);
+    // An operator's policy file can pin the workspace, so running from the
+    // project would not help; its workspaceRoot would.
+    await writeFile(join(base, "team.json"), "{}");
+    await refusal(base, join(base, "team.json")).toThrow(
+      `set MELRA_WORKSPACE to your project directory, or make that the workspaceRoot in ${join(base, "team.json")}; ` +
+        "keep MELRA_HOME where it is",
+    );
+    // MELRA_HOME inside a project under home: narrowing comes first, but it
+    // is not told to stay, since the next refusal would say to move it.
+    await expect(
+      createMelraRuntime({
+        workspaceRoot: base,
+        dataDirectory: join(base, "project", ".melra"),
+        environment: { MELRA_MODE: "enforced" },
+      }),
+    ).rejects.toThrow(
+      /^enforced_mode_refuses_data_inside_workspace: set MELRA_WORKSPACE to your project directory, or run this from there\.$/,
+    );
   });
 });
 

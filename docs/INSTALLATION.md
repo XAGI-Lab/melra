@@ -13,6 +13,18 @@ names a command your client can actually spawn, and runs every readiness check
 — in one step, with nothing installed beforehand. It exits non-zero if any
 readiness check fails, and it never overwrites an existing policy.
 
+Run it from the directory the agent should work in. That directory becomes the
+workspace, the boundary for the agent's file and command operations, which
+the config carries as `MELRA_WORKSPACE` and `setup` shows as `Workspace`.
+If it would be your home directory, a directory holding it (such as `/Users`
+or `/home`), or a filesystem root (`/`, or a drive root on Windows), `setup`
+and `init` say so and ask, defaulting to no; where nobody can answer (piped,
+captured, or with `--json`) they refuse with `workspace_too_broad` and write
+nothing. Set `MELRA_WORKSPACE` to choose the workspace yourself, home
+included, without the question. When a `MELRA_POLICY` file's `workspaceRoot`
+sets the workspace, the working directory does not count: change it there,
+or set `MELRA_WORKSPACE`.
+
 In a terminal it asks which client to set up, listing the ones it finds on
 this machine first, then offers to write the config for you:
 
@@ -27,19 +39,23 @@ Which MCP client should use MELRA?
 Choose 1-26 [1]: 1
 Write it into /home/you/.cursor/mcp.json? [Y/n]
 
-  ✓  Policy  /home/you/.melra/policy.json
-  ✓  Cursor  /home/you/.cursor/mcp.json
-             previous file saved as /home/you/.cursor/mcp.json.bak
+  ✓  Workspace  /home/you/project
+  ✓  Policy     /home/you/.melra/policy.json
+  ✓  Cursor     /home/you/.cursor/mcp.json
+                previous file saved as /home/you/.cursor/mcp.json.bak
 
 Next: Restart Cursor, then ask it to use the melra tools.
 
 ✓ Ready
 ```
 
-Ctrl-C or Ctrl-D at either question exits with status 130 and writes nothing.
+Ctrl-C or Ctrl-D at either question exits with status 130 and writes nothing;
+anything but `y` at the workspace question exits with status 1, likewise.
 Piped, captured, or run with `--json`, `setup`, `init`, and `doctor` ask
-nothing and print the same JSON they always have, so scripts and CI are
-unaffected; `NO_COLOR` turns the colours off.
+nothing and print the same JSON they always have, plus the `workspace` the
+config names, so scripts and CI are unaffected unless the workspace would be
+home, a directory holding it, or a filesystem root (see above); `NO_COLOR`
+turns the colours off.
 
 Name your client and MELRA writes itself into that client's own config file,
 in that client's own format, keeping everything already there and saving the
@@ -140,8 +156,11 @@ docker run --rm ghcr.io/xagi-lab/melra:alpha doctor
 ```
 
 Images are published for `linux/amd64` and `linux/arm64` with build
-provenance and an SBOM attested to the registry. Use `:alpha` for the latest
-alpha or pin an exact tag such as `:v0.3.0-alpha.12`. See
+provenance and an SBOM attested to the registry. `:alpha`, `:beta` and `:rc`
+follow only their own channel, like the npm dist-tags of the same name, so
+`:alpha` stays on the last alpha once betas begin. `:latest` follows every
+release before 1.0, as npm's `latest` does, from the first release after
+`0.3.0-alpha.14`; until that one ships it does not exist, so use `:alpha`. Or pin an exact tag such as `:v0.3.0-alpha.12`. See
 [Docker](#docker) below for the hardened `serve` invocation an MCP client
 should use.
 
@@ -181,9 +200,9 @@ build), and `-win-x64.exe`. They are covered by the release's `SHA256SUMS` and
 its signed provenance attestation, so check one before running it:
 
 ```bash
-sha256sum --check --ignore-missing SHA256SUMS
-gh attestation verify melra-<version>-linux-x64 --repo XAGI-Lab/melra
-chmod +x melra-<version>-linux-x64 && ./melra-<version>-linux-x64 doctor
+sha256sum --check --ignore-missing SHA256SUMS &&
+  gh attestation verify melra-<version>-linux-x64 --repo XAGI-Lab/melra &&
+  chmod +x melra-<version>-linux-x64 && ./melra-<version>-linux-x64 doctor
 ```
 
 They are not code-signed. macOS quarantines a downloaded copy until you clear
@@ -211,9 +230,9 @@ MELRA uses these environment variables:
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `MELRA_WORKSPACE` | Hard boundary for file and process operations; a policy file's `workspaceRoot` can only narrow it to a directory inside | the `workspaceRoot` of a `MELRA_POLICY` file, else the current directory |
-| `MELRA_HOME` | SQLite database and browser artifacts | `~/.melra` |
-| `MELRA_POLICY` | Optional local policy JSON | safe built-in policy |
+| `MELRA_WORKSPACE` | Hard boundary for file and process operations; a policy file's `workspaceRoot` can only narrow it to a directory inside. `setup` and `init` write it into the client config, and ask before making home, a directory holding it, or a filesystem root the workspace unless it is set | the `workspaceRoot` of a `MELRA_POLICY` file, else the current directory |
+| `MELRA_HOME` | SQLite database and browser artifacts. It must not be the workspace or hold it: a workspace inside it, even through a link, is refused at startup with `workspace_inside_data_directory`. On a case-sensitive filesystem a sibling whose name differs from it only in case is reserved too | `~/.melra` |
+| `MELRA_POLICY` | Optional local policy JSON. Every start reads it again, so wherever it lies it is reserved like `MELRA_HOME`: no file effect, verification or browser upload may name it, nor a terminal argument as a path or a plain `@`/`<` reference, and no file effect removes or moves a directory holding it. A workspace holding it is still an ordinary one | safe built-in policy |
 | `MELRA_BROWSER` | Chrome, Chromium, or Edge executable | auto-detected |
 | `MELRA_PAYLOAD_KEY` | Optional canonical base64url 256-bit payload key | private `<MELRA_HOME>/payload.key` |
 | `MELRA_UNHINGED` | Set to `1` to remove every guardrail — see below | unset (all guardrails on) |
@@ -236,17 +255,21 @@ unset for normal use, which keeps the default isolated browser behavior:
 |---|---|---|
 | `MELRA_BROWSER_CDP_ENDPOINT` | Attach to an already-running browser over CDP instead of launching one. Must be an `http`/`https` URL with no credentials, query, or fragment. | unset (MELRA launches its own browser) |
 | `MELRA_BROWSER_CDP_CONTEXT_INDEX` | Which existing browser context to use, or `-1` for the default context. Requires `MELRA_BROWSER_CDP_ENDPOINT`. | unset |
-| `MELRA_BROWSER_HAR_PATH` | Absolute path for an HTTP archive recording of the session, response bodies included so the recording can later be replayed. Treat the file as the session itself, not a log about it. | unset (no recording) |
-| `MELRA_BROWSER_HAR_REPLAY` | Absolute path to a recorded archive to serve every request from. Nothing reaches the network, and a request the archive does not contain is aborted rather than fetched. Cannot be combined with recording or CDP. | unset (live network) |
+| `MELRA_BROWSER_HAR_PATH` | Absolute path for an HTTP archive recording of the session, response bodies included so the recording can later be replayed. Treat the file as the session itself, not a log about it: it is reserved like `MELRA_POLICY`, and its directory is made at startup | unset (no recording) |
+| `MELRA_BROWSER_HAR_REPLAY` | Absolute path to a recorded archive to serve every request from. Nothing reaches the network, and a request the archive does not contain is aborted rather than fetched. Cannot be combined with recording or CDP. Reserved like `MELRA_POLICY` | unset (live network) |
 
 A browser profile is separate, and useful outside benchmarks:
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `MELRA_BROWSER_PROFILE` | Absolute directory keeping cookies, storage, and profile state between runs, so a site logged into once stays logged in. | unset (a fresh throwaway profile per run) |
+| `MELRA_BROWSER_PROFILE` | Absolute directory keeping cookies, storage, and profile state between runs, so a site logged into once stays logged in. Reserved like `MELRA_POLICY`; a workspace inside it is refused at startup with `workspace_inside_browser_profile` | unset (a fresh throwaway profile per run) |
 
 Treat that directory as a credential store: it holds live session cookies for
-every site the browser visited. It cannot be combined with
+every site the browser visited. So does MELRA: no file effect, verification
+or browser upload may name it or anything in it, nor a terminal argument as a
+path or a plain `@`/`<` reference, in any mode, and enforced mode refuses to
+start in a workspace that holds it, or either HTTP archive
+(`enforced_mode_refuses_secret_inside_workspace`). It cannot be combined with
 `MELRA_BROWSER_CDP_ENDPOINT` — an attached browser already has the profile it
 was started with, so a second one would silently do nothing.
 
@@ -305,6 +328,30 @@ melra init --client generic
 
 Neither `init` nor `setup` overwrites an existing policy.
 
+The policy file is read strictly. Every key is optional, but a key MELRA does
+not know, at any depth, or a value of the wrong type stops the server from
+starting rather than falling back to the default, with every problem named by
+its path:
+
+```text
+melra: policy_invalid: /home/you/.melra/policy.json: allowedComands: unknown key
+melra: policy_invalid: /home/you/.melra/policy.json: unhinged: Invalid input: expected boolean, received string
+melra: policy_invalid: /home/you/.melra/policy.json: not valid JSON at line 3 column 1
+```
+
+A file that is not JSON is never quoted, so the message is safe to paste into
+a bug report. Where Node reports the position it is named by line and column;
+for some mistakes, such as a trailing comma in a list, a comment or a bare
+word, Node gives none and the message says only `not valid JSON`.
+
+The keys are `version`, `workspaceRoot`, `allowedCommands`, `allowedDomains`,
+`allowLocalhost`, `popups`, `mutations`, `approvalTtlMs`, `maxFileBytes`,
+`memoryRetention`, `deniedTraits`, `capabilities`, `credentials`,
+`circuitBreaker`, `unhinged` and `mode`; there is no comment or `$schema`
+key. `melra doctor` fails its `policy` check with the same message, `melra
+policy test` prints it, and `melra status` and `melra tasks` report it
+(`policyError` in their JSON).
+
 The generated policy allows any public browser destination
 (`allowedDomains: ["*"]`) and localhost, so browsing works without editing
 anything. That list is a *narrowing* control, not the safety boundary: the
@@ -328,6 +375,18 @@ also bounds how long a task waits on a `semantic` question before it settles
 closed. A
 `policy.json` that `melra init` or `melra setup` wrote with an earlier release
 pins `"approvalTtlMs": 300000`; delete that key to get the mode's default.
+
+A bare name in `allowedCommands` runs the program `PATH` finds there, looked
+up only in `PATH` entries outside the workspace: an entry inside it (a
+project's `node_modules/.bin`, a `bin/` directory), or an empty or relative
+one, is skipped, and left out of the program's own `PATH` too. A tool
+installed only inside the workspace runs through `npx` or `pnpm exec`, or
+through a path-qualified entry in `allowedCommands` that names it. If no
+entry is left, as with a workspace at the filesystem root, or `PATH` is not
+set at all, every command is refused with `terminal_path_empty_after_filter`,
+a path-qualified one too, because a program given an empty `PATH`, or none,
+may search the working directory; narrow the workspace. With `--unsafe-local`, `PATH` is used as
+given.
 
 `allowedCommands` matches on the program's basename, so it cannot tell `npm
 test` from `npm install left-pad`. `deniedTraits` is the axis that can. MELRA
@@ -458,7 +517,16 @@ agent never receives it, and the effect still goes out.
 
 `source` is either `{ "env": "NAME" }` or `{ "file": "/path" }`. A file must be
 a regular file, not a symlink, and mode `0600` or tighter — a secret any other
-user can read is one the agent could have read for itself.
+user can read is one the agent could have read for itself. Wherever it lies,
+the file is reserved like `MELRA_POLICY`: no file effect, verification or
+browser upload may name it, nor a terminal argument as a path or a plain
+`@`/`<` reference, and enforced mode refuses to start in a workspace that
+holds it (`enforced_mode_refuses_secret_inside_workspace`). A program that
+reads files by means of its own is not covered, which is what approving that
+program accepts. Keep it outside the workspace. The value (a file's with
+surrounding whitespace trimmed) must be printable ASCII; one holding any other
+character is refused with `credential_source_invalid:<name>`, so a copy echoed
+back is matched byte for byte.
 
 The two lists are scoped differently on purpose, and the difference is the
 whole feature:
@@ -475,7 +543,10 @@ whole feature:
 Nothing else changes: the call is still classified, still policy-checked, still
 approval-gated, still verified. The caller's receipt records which credential
 authorised the effect by name; the value reaches the socket and nowhere else —
-not the plan, not the result, not the receipt, not the database. `melra_capabilities`
+not the plan, not the result, not the receipt, not the database. A provider
+that echoes the value back, in its reason phrase, a header or the body, has it
+replaced with `[REDACTED_CREDENTIAL]` before the result reaches anyone; only a
+copy as sent is recognised, not one the provider encoded or altered. `melra_capabilities`
 publishes the names so a caller knows not to go looking for a key it will never
 be given.
 
@@ -486,9 +557,18 @@ bounding their own secret, which is a different thing.
 Memories are reclaimed on the next `melra_execute` that writes to the same
 scope. `memoryRetention.maxAgeDays` (default `30`) is how long an expired or
 superseded record is kept after it stops being readable — no search or list can
-return one, so removing it changes nothing you can observe, it only stops the
-database growing forever. A superseded record survives while a live record still
-supersedes it, so `supersedesId` never dangles.
+return one, and removing it stops the database growing forever. A superseded
+record survives while a live record still supersedes it. Deleting the record
+that superseded another, or editing it to supersede something else or nothing,
+makes the one it replaced live again; deleting one in the middle of a chain
+links the records on either side, so the latest stays the only live one. So
+undoing the latest correction always brings back the one before it, but going
+back further, deleting a second correction too, finds an older record only
+within `maxAgeDays` of its replacement: after that compaction may have reclaimed
+it, and deleting both corrections leaves nothing for that key. A correction that expires, or that
+`maxPerScope` evicts, does not revive anything: its removal says the correction
+has lapsed or made room, not that the fact it replaced is true again, so that
+fact stays unreadable and compaction later reclaims it.
 
 `memoryRetention.maxPerScope` is a hard ceiling on *live* memories per scope and
 defaults to `0`, meaning none. It is different in kind: it deletes records you
@@ -569,6 +649,15 @@ Every route needs that token, as `Authorization: Bearer <token>` or `?token=`
 generated each start. **Anyone who can read the token can drive this machine** —
 the server binds loopback only, and putting it behind a proxy on a reachable
 interface hands out that reach.
+
+Each MCP client gets its own session, which lasts until the client ends it
+(both SDKs do, on close) or the server stops. Past 256 sessions, a new one ends
+the least recently used session with no request in flight and no event stream
+open: a client that vanished without ending its own, or one that only posts and
+has been quiet longest. A client that keeps the MCP event stream open, as both
+SDKs do, is never ended while connected. A request
+naming a session the server no longer has, such as one from before a restart,
+gets 404, which tells an MCP client to start a new session.
 
 The console this server serves is read-only, and the server has no approval
 route. To approve in a browser, run [`melra console`](#approving-in-a-browser),
@@ -810,7 +899,8 @@ closing every door it owns:
   and runs only once an operator approves it. Developer mode lets those reads
   through, as before.
 - **An argument that only looks inside the workspace is refused if it links
-  out**, with `terminal_path_outside_workspace`, approved or not.
+  out**, on its way, where it ends, or where a program that folds `..` as text
+  lands, with `terminal_path_outside_workspace`, approved or not.
 - **A browser action that drives a page names it.** `click`, `type`,
   `fill_form`, `select`, `press`, `upload`, `download`, `close` and
   `tab_switch` without a `url` are refused at planning with
@@ -820,7 +910,19 @@ closing every door it owns:
 - **`MELRA_HOME` must sit outside `MELRA_WORKSPACE`.** A workspace holding the
   data directory lets a recursive search of no path at all reach the database
   and the payload key, so the process exits with
-  `enforced_mode_refuses_data_inside_workspace` instead.
+  `enforced_mode_refuses_data_inside_workspace` instead, naming the fix that
+  fits. The usual cause is a workspace that is your home directory (or holds
+  it), which holds the default `~/.melra`: set `MELRA_WORKSPACE` to the
+  project directory, or run the command from there, and keep `MELRA_HOME`
+  where it is. Moved on its own, it starts an empty database, and the tasks
+  and approvals in the old one are orphaned. Only a `MELRA_HOME` you put
+  inside the project itself moves: out of the workspace, with everything in
+  it, and `MELRA_HOME` set to its new place.
+- **Secrets sit outside `MELRA_WORKSPACE` too.** A workspace holding the
+  browser profile, an HTTP archive (`MELRA_BROWSER_HAR_PATH`,
+  `MELRA_BROWSER_HAR_REPLAY`) or a credential's `source.file` is refused at
+  startup with `enforced_mode_refuses_secret_inside_workspace`, naming which
+  one, for the same reason. Move it out of the workspace.
 - **Only an operator approves.** A challenge carries no phrase, so the agent
   is handed nothing to echo, and `melra_execute` refuses any approval it is
   sent with `approval_in_band_refused`. A mutation runs only on a decision an
@@ -925,9 +1027,8 @@ If it stops with `enforced_mode_refuses_data_inside_workspace`, the workspace it
 worked out holds the data directory: with `MELRA_WORKSPACE` unset, the
 workspace is the current directory, and from your home directory that contains
 the default `~/.melra`. Set `MELRA_WORKSPACE` to the agent's workspace, or run
-the console from there. Do not move `MELRA_HOME` instead, as the error says to
-for a server: the console would then open an empty database, with no task
-waiting in it.
+the console from there. Do not move `MELRA_HOME` instead: the console would
+then open an empty database, with no task waiting in it.
 
 Once started, it opens the console in your default browser. A task waiting
 for approval shows the screen `melra approve` shows, with Approve and Deny.
@@ -1329,6 +1430,10 @@ its own, it points to Docker or WSL2 instead (see
 warns when it finds no restriction at all, or when it cannot read any.
 
 ## Python SDK
+
+To install it, see [the SDK's install section](../sdk-py/README.md#install):
+the wheel attached to each GitHub release, or `pip install ./sdk-py` from a
+checkout. It is not on PyPI, so `pip install melra` does not install it.
 
 For repository development:
 
