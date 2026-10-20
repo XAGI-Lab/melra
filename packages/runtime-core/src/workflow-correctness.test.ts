@@ -156,6 +156,56 @@ describe("workflow ordering", () => {
   });
 });
 
+describe("a parallel branch's steps, in order (#245)", () => {
+  it("does not start a branch's next step when the one before it fails", async () => {
+    const { controller, done } = await setup({ policy: { unhinged: true } });
+    // Its evidence cannot hold: a1 runs, and fails.
+    const a1 = TaskRequestSchema.parse({ ...put("a1"), requiredEvidence: [{ type: "result_equals", path: "stored", value: false }] });
+    const planned = controller.plan(workflow([{ id: "fan", type: "parallel", branches: [[a1, put("a2")], [put("b1")]] }]));
+    const run = (await controller.advance(planned.id)).run;
+    expect(run.nodes.fan?.status).toBe("failed");
+    // The other branch runs to its end.
+    expect([...done].sort()).toEqual(["a1", "b1"]);
+  });
+
+  it("does not run a branch's read-back while the write before it awaits approval", async () => {
+    const { controller, store, done } = await setup();
+    const planned = controller.plan(workflow([{ id: "fan", type: "parallel", branches: [[put("w"), read()], [read()]] }]));
+    const first = await controller.advance(planned.id);
+    expect(first.run.nodes.fan?.status).toBe("awaiting_approval");
+    // Only the other branch's read ran.
+    expect(first.tasks.filter((task) => task.request.operation.kind === "system")).toHaveLength(1);
+    let run = first.run;
+    for (let step = 0; step < 4 && run.status !== "verified_complete"; step += 1) {
+      run = (await controller.advance(planned.id, approvalsFor(run))).run;
+    }
+    expect(run.status).toBe("verified_complete");
+    expect(done).toEqual(["w"]);
+    // Each read once: the other branch's is not run again beside the read-back.
+    expect(store.listTasks(10).filter((task) => task.request.operation.kind === "system")).toHaveLength(2);
+  });
+
+  it("carries a branch on after an advance lost its commit between its steps", async () => {
+    const { controller, store, done, on } = await setup({ policy: { unhinged: true } });
+    const planned = controller.plan(workflow([{ id: "fan", type: "parallel", branches: [[put("a1"), put("a2")], [put("b1")]] }]));
+    // The pause lands as a1 runs, so the advance stops before a2.
+    on.put = (key) => {
+      if (key !== "a1") return;
+      delete on.put;
+      lapseAndPause(controller, store, planned.id);
+    };
+    await expect(controller.advance(planned.id)).rejects.toThrow("workflow_lease_lost");
+    controller.resume(planned.id);
+    let run = controller.status(planned.id);
+    for (let step = 0; step < 4 && run.status !== "verified_complete"; step += 1) {
+      run = (await controller.advance(planned.id)).run;
+    }
+    // Recovered as complete, a2 never ran.
+    expect(run.status).toBe("verified_complete");
+    expect([...done].sort()).toEqual(["a1", "a2", "b1"]);
+  });
+});
+
 describe("workflow decisions that have to stay made", () => {
   it("keeps the branch a condition started on even if its predicate changes", async () => {
     const { controller, root, done } = await setup();

@@ -144,6 +144,14 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- A `parallel` node runs each branch's steps in order, as documented. Every
+  step of every branch started at once, so a branch's read-back ran before
+  its write, a step ran after the one before it had failed, and challenges
+  were minted for steps that should never be reached. A step is now planned,
+  and asks for approval, only once the step before it has verified; branches
+  still run side by side. Recovery no longer records a parallel node complete
+  while a branch has steps that never ran. (#245)
+
 - A workflow node waiting for input or approval no longer holds up nodes that
   do not depend on it. While any node waited, `melra_workflow_advance`
   offered only the waiting ones, so an independent branch stopped until the
