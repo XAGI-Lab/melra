@@ -85,8 +85,11 @@ jobs:
         shell: bash
         run: |
           # The same list 'Publish GitHub release' uploads.
-          assets=(release/*.tar.gz release/*.whl release/*.json release/melra-[0-9]* release/SHA256SUMS)
+          assets=(release/*.tar.gz release/*.whl release/*.json release/melra-[0-9]*-{linux,darwin,win}-* release/SHA256SUMS)
           printf '%s\n' "${assets[@]}"
+          # A name listed twice fails the real upload: GitHub refuses the second copy.
+          dupes="$(printf '%s\n' "${assets[@]##*/}" | sort | uniq -d)"
+          [ -z "${dupes}" ] || { echo "::error::listed twice: ${dupes}"; exit 1; }
           version="$(node -p "require('./package.json').version")"
           for expected in \
             "release/melra-node-${version}.tar.gz" "release/melra-source-${version}.tar.gz" \
