@@ -261,6 +261,35 @@ result, so a `condition` or `delegation` fails
 asks of each iteration's new result, so it reads such a check as a no and runs
 the next iteration, up to `maxIterations`.
 
+A `condition` takes one branch, once. A branch with a committed step is the
+one taken, even when the advance that took it lost its commit (a pause landed
+while it ran); then the branch the run recorded; only then the predicate. An
+advance that lost its commit can have left tasks on the branch not taken:
+its challenges are cancelled when the branch is decided, or by `workflow
+cancel` before then, so none is approved later. One there that may have had
+an effect (it verified, its evidence did not hold, or its outcome is unknown)
+halts the run as `recovery_required` with
+`workflow_condition_branch_conflict:<node>`, rather than run the other branch
+beside it. One that did not happen counts for nothing: its adapter reported it
+failed, it ran out of budget, or it was cancelled or refused by policy. So a
+halted run moves on once the tasks it names are reconciled as never applied.
+Only a step whose outcome is unknown can be reconciled. One that took effect,
+whether it verified or its evidence did not hold (`partial`), stands, and the
+run stays halted: the operator inspects what that branch did, undoes it by
+hand, then ends the run with `workflow cancel`, which compensates nothing, so
+what earlier steps did is undone by hand too where it should not stand. A
+restart before the condition is decided reads a step such an advance ran
+whose outcome is unknown as the condition's own, so it halts the run there,
+as any other step's does, rather than let a failed sibling unwind past it.
+Anything else such an advance left waits for the next advance to decide, so
+the run halts or moves on the same with or without a restart, unless the
+condition cannot be decided on the next advance (its predicate inconclusive or
+unresolvable) while a sibling fails: the run then unwinds past the step
+(#318). `workflow cancel` cancels whatever a lost advance left planned or
+waiting for approval under any of the run's steps, not only the tasks the run
+names, and cancelling an already cancelled run sweeps again. A run whose
+definition can no longer be opened is still ended, but nothing is swept.
+
 ## Workflow state and events
 
 Workflow statuses are:

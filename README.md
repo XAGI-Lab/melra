@@ -792,6 +792,7 @@ documentation and threat analysis are all welcome.
 |---|---|
 | [good first issue](https://github.com/XAGI-Lab/melra/labels/good%20first%20issue) | Scoped, with the files to touch named in the issue |
 | [help wanted](https://github.com/XAGI-Lab/melra/labels/help%20wanted) | Larger, still well defined |
+| [Open design proposals](https://github.com/XAGI-Lab/melra/issues?q=is%3Aissue+is%3Aopen+label%3Aproposal) | Comment on open questions before implementation; see [semantic verification #54](https://github.com/XAGI-Lab/melra/issues/54) |
 | [Contributing guide](docs/CONTRIBUTING_GUIDE.md) | How the pipeline fits together and which files one change touches |
 
 1. Read [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md).

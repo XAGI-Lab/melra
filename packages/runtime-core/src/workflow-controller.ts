@@ -82,6 +82,9 @@ const RECOVERABLE: WorkflowRun["status"][] = [
   "recovery_required",
 ];
 
+// A condition whose other branch holds a task that may have had an effect.
+const BRANCH_CONFLICT = "workflow_condition_branch_conflict";
+
 // A failed run's advance runs its compensations, so an advance that died on
 // one leaves the same hazard as any other: a compensation it started, planned
 // and run again. Repaired too, but only once an expired lease says an advance
@@ -682,8 +685,58 @@ export class WorkflowController {
     allTasks: TaskRecord[],
     recorded: WorkflowNodeState,
   ): { state: WorkflowNodeState; found: Array<TaskRecord | undefined> } {
-    const found = expectedTaskKeys(runId, node, definition).map((key) =>
-      preferredTask(allTasks, key),
+    const keys = expectedTaskKeys(runId, node, definition);
+    const ignored = new Set<string>();
+    if (node.type === "condition") {
+      // Only one branch ever runs (#268). The one with a committed step, as
+      // the live path decides; else the run's own record: a condition
+      // finished with no task took its empty branch, and its first task names
+      // its branch (not a conflict's, whose tasks are the other branch's).
+      const trueKeys = keys.slice(0, node.whenTrue.length);
+      const committed = (branch: string[]) =>
+        branch.some((key) => this.store.getIdempotencyCommit(key) !== undefined);
+      const first =
+        recorded.error === BRANCH_CONFLICT || recorded.taskIds[0] === undefined
+          ? undefined
+          : this.store.getTask(recorded.taskIds[0])?.idempotencyKey;
+      const chosen = committed(trueKeys)
+        ? true
+        : committed(keys.slice(node.whenTrue.length))
+          ? false
+          : recorded.status === "verified_complete" && recorded.taskIds.length === 0
+            ? node.whenTrue.length === 0
+            : first === undefined || !keys.includes(first)
+              ? undefined
+              : trueKeys.includes(first);
+      const all = keys.map((key) => preferredTask(allTasks, key));
+      if (chosen === undefined) {
+        // Nothing decided it. A conflict stands while a task in it may have
+        // had an effect.
+        const cleared =
+          recorded.error === BRANCH_CONFLICT &&
+          recorded.taskIds.every((taskId) => {
+            const task = this.store.getTask(taskId);
+            return task !== undefined && hadNoEffect(task);
+          });
+        if (recorded.error === BRANCH_CONFLICT && !cleared) return { state: recorded, found: all };
+        // A step a lost advance ran whose outcome is unknown, on either
+        // branch, is read as the node's, so it halts the run here rather than
+        // a failed sibling unwinding past it (#270). Anything else it left (a
+        // challenge, or a step that took effect but failed its evidence) waits
+        // for the next advance, which decides as it would with no restart.
+        const unknown = all.filter(
+          (task): task is TaskRecord =>
+            task !== undefined && ["recovery_required", "running", "verifying"].includes(task.status),
+        );
+        if (unknown.length > 0) return { state: recoveredNodeState(node, unknown, recorded), found: all };
+        return { state: cleared ? { status: "pending", taskIds: [] } : recorded, found: all };
+      }
+      const halted = this.abandonBranch(node, keys, chosen, allTasks);
+      if (halted !== undefined) return { state: halted, found: all };
+      for (const key of chosen ? keys.slice(node.whenTrue.length) : trueKeys) ignored.add(key);
+    }
+    const found = keys.map((key) =>
+      ignored.has(key) ? undefined : preferredTask(allTasks, key),
     );
     let state = recoveredNodeState(
       node,
@@ -736,6 +789,52 @@ export class WorkflowController {
       state = { ...state, iterations: Math.floor((state.taskIds.length - 1) / node.body.length) };
     }
     return { state, found };
+  }
+
+  /**
+   * The branch a condition did not take. An advance that lost its commit (a
+   * pause landed) can have left tasks there. A challenge is cancelled, and
+   * the cancel read back, so nobody approves it later. A task that may have
+   * had an effect, or one started before its cancel landed, halts the node:
+   * both branches would stand. Reconciled as never applied, it no longer
+   * counts, and the node moves on.
+   */
+  private abandonBranch(
+    node: Extract<WorkflowNode, { type: "condition" }>,
+    keys: string[],
+    chosen: boolean,
+    allTasks: TaskRecord[],
+  ): WorkflowNodeState | undefined {
+    const other = chosen ? keys.slice(node.whenTrue.length) : keys.slice(0, node.whenTrue.length);
+    const conflicting = new Set<string>();
+    for (const key of other) {
+      const commit = this.store.getIdempotencyCommit(key);
+      if (commit !== undefined) conflicting.add(commit.taskId);
+    }
+    for (const task of this.cancelChallenges(other, allTasks)) {
+      if (!hadNoEffect(task)) conflicting.add(task.id);
+    }
+    return conflicting.size === 0
+      ? undefined
+      : // Sorted, so reading it again in another order records nothing new.
+        { status: "recovery_required", taskIds: [...conflicting].sort(), error: BRANCH_CONFLICT };
+  }
+
+  /**
+   * Every task under these keys, read again, with each challenge among them
+   * cancelled and the cancel read back, so nobody approves it later.
+   */
+  private cancelChallenges(keys: string[], allTasks: TaskRecord[]): TaskRecord[] {
+    const wanted = new Set(keys);
+    return allTasks
+      .filter((task) => task.idempotencyKey !== undefined && wanted.has(task.idempotencyKey))
+      .map((listed) => {
+        // Read again: the listing can predate an approver starting it.
+        const task = this.tasks.status(listed.id);
+        if (task.status !== "planned" && task.status !== "awaiting_approval") return task;
+        this.tasks.cancel(task.id);
+        return this.tasks.status(task.id);
+      });
   }
 
   /**
@@ -797,9 +896,9 @@ export class WorkflowController {
       draft.status = status;
       // Name the step, or "recovery_required" tells an operator that
       // something needs hands without saying which effect is half-undone.
-      const stalled = stalledCompensation(definition, draft.nodes);
-      if (status === "recovery_required" && stalled !== undefined) {
-        draft.error = `workflow_compensation_incomplete:${stalled.id}`;
+      const reason = status === "recovery_required" ? haltReason(definition, draft.nodes) : undefined;
+      if (reason !== undefined) {
+        draft.error = reason;
       } else {
         // The reducer clears `error` on every status change, so the draft has
         // to as well or replay no longer reproduces the projection.
@@ -861,12 +960,8 @@ export class WorkflowController {
       draft.status = status;
       // Named the way advanceOnce names a stalled unwind, so a run reads the
       // same whether its process died or not.
-      const stalled = stalledCompensation(definition, draft.nodes);
       if (status === "recovery_required") {
-        draft.error =
-          stalled === undefined
-            ? "workflow_contains_unreconciled_mutation"
-            : `workflow_compensation_incomplete:${stalled.id}`;
+        draft.error = haltReason(definition, draft.nodes) ?? "workflow_contains_unreconciled_mutation";
       } else {
         delete draft.error;
       }
@@ -941,12 +1036,29 @@ export class WorkflowController {
 
   cancel(workflowId: string): WorkflowRun {
     const current = this.status(workflowId);
-    if (
-      current.status === "verified_complete" ||
-      current.status === "cancelled"
-    ) {
-      return current;
+    if (current.status === "verified_complete") return current;
+    // A challenge a lost advance left is in no node's taskIds: a condition's
+    // is never adopted (it would follow its branch without asking, #268), and
+    // an operation's stays approvable beside the one the next advance plans
+    // afresh (#319). So the run cancels what is planned or waiting under every
+    // node's keys too, and cancelling a cancelled run sweeps again. A store
+    // failure stops the cancel, so a retry sweeps; only a definition that can
+    // no longer be opened goes unswept, and still lets the run end.
+    let definition: WorkflowDefinition | undefined;
+    try {
+      definition = this.loadDefinition(current);
+    } catch {
+      definition = undefined;
     }
+    if (definition !== undefined) {
+      const opened = definition;
+      this.cancelChallenges(
+        opened.nodes.flatMap((node) => expectedTaskKeys(current.id, node, opened)),
+        // Filtered in SQL, so the history is neither parsed nor cut short.
+        [...this.store.listTasks(100_000, "planned"), ...this.store.listTasks(100_000, "awaiting_approval")],
+      );
+    }
+    if (current.status === "cancelled") return current;
     return this.transition(current, (draft, emit) => {
       for (const [nodeId, node] of Object.entries(draft.nodes)) {
         if (
@@ -1134,30 +1246,43 @@ export class WorkflowController {
           throw new Error(`workflow_condition_source_unavailable:${node.id}`);
         }
         // Decided once. A branch that has started keeps going: re-evaluating a
-        // live predicate on a later advance could flip it and reuse the other
-        // branch's tasks by position.
+        // live predicate on a later advance could flip it and run the other
+        // branch as well.
         const identity = { workflowId: run.id, nodeId: node.id, iteration: 0 };
-        const started =
-          state.taskIds[0] === undefined ? undefined : this.tasks.status(state.taskIds[0]).idempotencyKey;
-        // A branch whose first step committed was chosen, though the advance
-        // that chose it may have lost its commit (a pause landed) and left no
-        // task here. Asking the predicate again would read a workspace that
-        // branch already changed, and could run the other one as well.
-        const committed = (branch: "true" | "false", requests: TaskRequest[]) =>
-          requests.length > 0 &&
-          this.store.getIdempotencyCommit(
-            taskIdempotencyKey({ ...identity, branch: `${branch}:0` }, requests[0]!),
-          ) !== undefined;
-        const chosen =
-          started !== undefined
-            ? node.whenTrue.length > 0 &&
-              started === taskIdempotencyKey({ ...identity, branch: "true:0" }, node.whenTrue[0]!)
-            : committed("true", node.whenTrue) ||
-              (!committed("false", node.whenFalse) &&
-                (await answered(node.id, this.tasks.verifyPersisted(sourceTaskId, [node.predicate]), {
+        const keys = expectedTaskKeys(run.id, node, definition);
+        const trueKeys = keys.slice(0, node.whenTrue.length);
+        const falseKeys = keys.slice(node.whenTrue.length);
+        // A branch with a committed step was chosen, though the advance that
+        // chose it may have lost its commit (a pause landed) and left no task
+        // here. Asking the predicate again would read a workspace that branch
+        // already changed, and could run the other one as well.
+        const committed = (branch: string[]) =>
+          branch.some((key) => this.store.getIdempotencyCommit(key) !== undefined);
+        const trueCommitted = committed(trueKeys);
+        const falseCommitted = committed(falseKeys);
+        const recorded = state.taskIds.map((taskId) => this.tasks.status(taskId).idempotencyKey ?? "");
+        const chosen = trueCommitted
+          ? true
+          : falseCommitted
+            ? false
+            : recorded.length > 0
+              ? trueKeys.includes(recorded[0]!)
+              : await answered(node.id, this.tasks.verifyPersisted(sourceTaskId, [node.predicate]), {
                   state,
                   tasks: [],
-                })));
+                });
+        // The other branch is settled by the advance that decides, or one that
+        // finds the run naming it: only then can an advance that lost its
+        // commit have left a task there.
+        const own = chosen ? trueKeys : falseKeys;
+        if (
+          (chosen ? falseCommitted : trueCommitted) ||
+          recorded.length === 0 ||
+          recorded.some((key) => !own.includes(key))
+        ) {
+          const halted = this.abandonBranch(node, keys, chosen, this.store.listTasks(100_000));
+          if (halted !== undefined) return { state: halted, tasks: [] };
+        }
         return await this.runSequential(
           chosen ? node.whenTrue : node.whenFalse,
           state,
@@ -1375,18 +1500,28 @@ export class WorkflowController {
     approvals: ApprovalResponse[],
     identity: TaskIdentity,
   ): Promise<NodeAdvance> {
-    const taskIds = [...state.taskIds];
+    const taskIds: string[] = [];
     const tasks: TaskRecord[] = [];
+    let every: TaskRecord[] | undefined;
     for (const [index, request] of requests.entries()) {
-      const result = await this.runTask(
-        request,
-        taskIds[index],
-        approvals,
-        true,
-        { ...identity, branch: `${identity.branch}:${index}` },
-      );
+      const taskIdentity = { ...identity, branch: `${identity.branch}:${index}` };
+      const key = taskIdempotencyKey(taskIdentity, request);
+      // The step's task is the one under its key. The run may name another
+      // branch's or step's (an earlier version merged both branches), or none
+      // (the advance that planned it lost its commit): one committed, or one
+      // that may have run or is still asking, is taken up, not planned again.
+      const named = state.taskIds[index];
+      let existing =
+        named !== undefined && this.tasks.status(named).idempotencyKey === key
+          ? named
+          : this.store.getIdempotencyCommit(key)?.taskId;
+      if (existing === undefined) {
+        const found = preferredTask((every ??= this.store.listTasks(100_000)), key);
+        if (found !== undefined && !hadNoEffect(found)) existing = found.id;
+      }
+      const result = await this.runTask(request, existing, approvals, true, taskIdentity);
       tasks.push(...result.tasks);
-      taskIds[index] = result.state.taskIds[0]!;
+      taskIds.push(result.state.taskIds[0]!);
       if (result.state.status !== "verified_complete") {
         return {
           state: { ...result.state, taskIds },
@@ -1909,6 +2044,28 @@ function stalledCompensation(
       node.type === "compensation" &&
       ["failed", "recovery_required", "cancelled"].includes(nodes[node.id]?.status ?? ""),
   );
+}
+
+/**
+ * Why a halted run needs hands, naming the step: an unwind that stopped, or a
+ * condition both of whose branches may have had an effect.
+ */
+function haltReason(definition: WorkflowDefinition, nodes: WorkflowRun["nodes"]): string | undefined {
+  const stalled = stalledCompensation(definition, nodes);
+  if (stalled !== undefined) return `workflow_compensation_incomplete:${stalled.id}`;
+  const conflict = definition.nodes.find((node) => nodes[node.id]?.error === BRANCH_CONFLICT);
+  return conflict === undefined ? undefined : `${BRANCH_CONFLICT}:${conflict.id}`;
+}
+
+/**
+ * Whether a task is known to have changed nothing, as the task layer records
+ * it: an adapter that may have acted reports an unknown outcome, which parks
+ * the task as recovery_required, so failed (the adapter said it failed, or
+ * reconciliation found it never applied), budget_exhausted, cancelled and
+ * policy_blocked all say it did not happen. Anything else may have.
+ */
+function hadNoEffect(task: TaskRecord): boolean {
+  return ["failed", "budget_exhausted", "cancelled", "policy_blocked"].includes(task.status);
 }
 
 function taskIdempotencyKey(
