@@ -5,7 +5,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readlink, realpath } from "node:fs/promises";
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { outcomeUnknown, terminalArgumentPaths, type TerminalOperation } from "@melra/protocol";
+import { outcomeUnknown, terminalArgumentPaths, terminalArgumentReferences, type TerminalOperation } from "@melra/protocol";
 import { redactSecrets } from "@melra/receipt-schema";
 import { resolveCommand } from "./resolve-command.js";
 
@@ -453,8 +453,14 @@ export class TerminalRuntime {
     const climbed = new Set<string>();
     const confined = new Set<string>();
     const links = new Map<string, { to: string; there: boolean }>();
+    const judged = [
+      ...[".", ...terminalArgumentPaths(operation.args)].map((path) => ({ path, reference: false })),
+      // A reference names one file to read, never a directory to walk, so only
+      // that file is judged: `rg "@/" src` searches for text.
+      ...terminalArgumentReferences(operation.args).map((path) => ({ path, reference: true })),
+    ];
     // ponytail: a program's own path syntax (git's `:/x`, `:(top)x`) is judged as a plain path.
-    for (const path of [".", ...terminalArgumentPaths(operation.args)]) {
+    for (const { path, reference } of judged) {
       // Unnormalised: the program resolves `link/..` through the link.
       const spelled = isAbsolute(path) ? path : `${cwd}${sep}${path}`;
       const { places, end } = await climbedFrom(spelled);
@@ -471,7 +477,7 @@ export class TerminalRuntime {
       for (const at of new Set([real, folded])) {
         // findstr and where expand their own wildcards, reading the directory.
         for (const probe of /[*?]/.test(path) ? [at, dirname(at)] : [at]) {
-          if ((await this.reserved(probe)) || (!listsNames && (await this.holdsReserved(probe)))) {
+          if ((await this.reserved(probe)) || (!listsNames && !reference && (await this.holdsReserved(probe)))) {
             throw new Error("terminal_path_reserved");
           }
         }
@@ -526,8 +532,10 @@ export class TerminalRuntime {
       // the same PATH, under every name Windows may spell it.
       for (const name of Object.keys(environment).filter((key) => key.toUpperCase() === "PATH")) {
         const kept = await searchPath(environment[name] ?? "", this.pathOutside);
-        // An empty PATH searches the working directory again.
-        if (kept === "") throw new Error(`terminal_command_not_found:${operation.command}`);
+        // An empty PATH searches the working directory again, and so can none
+        // at all: a shell fills in a default (macOS sh ends it in `.`). So a
+        // path-qualified program is refused too, by a cause the operator can see.
+        if (kept === "") throw new Error("terminal_path_empty_after_filter");
         environment[name] = kept;
       }
     }

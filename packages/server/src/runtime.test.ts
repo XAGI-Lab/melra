@@ -424,6 +424,9 @@ describe("terminal arguments", () => {
       const { task: done } = await run(task);
       expect(done.error, JSON.stringify(task.operation)).toMatch(/terminal_path_reserved/);
     }
+    // A search pattern, as in `rg "@/" src`, is not a directory a reader walks.
+    const patterns = (await run(terminal("node", ["-e", "", "--", "@/", "</", "@.."], true))).task;
+    expect(patterns.status, patterns.error).toBe("verified_success");
   });
 
   it("in enforced mode, shows a person a read outside the workspace and refuses a link out", async () => {

@@ -60,8 +60,7 @@ export const TerminalOperationSchema = z
 
 /**
  * Every string a terminal argument can hand a program as a path: the argument
- * itself, an option's attached value (`--file=x`, `-fx`, `/G:x`), and the file
- * any of those names as a reference to read (`@x`, `-d@x`, `name=<x`). No shell
+ * itself and an option's attached value (`--file=x`, `-fx`, `/G:x`). No shell
  * runs, so `~`, `$HOME` and globs reach the program as written. Policy judges
  * these by spelling and the terminal runtime by where they lead, so both read
  * them from here.
@@ -73,8 +72,18 @@ export function terminalArgumentPaths(args: readonly string[]): string[] {
     if (equals !== -1) paths.push(arg.slice(equals + 1));
     if (/^-[^-]./.test(arg)) paths.push(arg.slice(2));
     if (/^\/[a-z]+:/i.test(arg)) paths.push(arg.slice(arg.indexOf(":") + 1));
-    return paths.flatMap((path) => (/^[@<]/.test(path) ? [path, path.slice(1)] : [path]));
+    return paths;
   });
+}
+
+/**
+ * The file each of those names as a reference for some programs to read
+ * (`@x`, `-d@x`, `name=<x`): one file, never a directory to walk. Kept apart,
+ * because to most programs `@/` and `</` are text (`rg "@/" src`), so only the
+ * terminal runtime judges these, and only as the file itself.
+ */
+export function terminalArgumentReferences(args: readonly string[]): string[] {
+  return terminalArgumentPaths(args).flatMap((path) => (/^[@<]/.test(path) ? [path.slice(1)] : []));
 }
 
 export const BrowserTargetSchema = z

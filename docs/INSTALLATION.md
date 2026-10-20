@@ -379,8 +379,12 @@ up only in `PATH` entries outside the workspace: an entry inside it (a
 project's `node_modules/.bin`, a `bin/` directory), or an empty or relative
 one, is skipped, and left out of the program's own `PATH` too. A tool
 installed only inside the workspace runs through `npx` or `pnpm exec`, or
-through a path-qualified entry in `allowedCommands` that names it. With
-`--unsafe-local`, `PATH` is used as given.
+through a path-qualified entry in `allowedCommands` that names it. If no
+entry is left, as with a workspace at the filesystem root, every command is
+refused with `terminal_path_empty_after_filter`, a path-qualified one too,
+because a program given an empty `PATH`, or none, may search the working
+directory; narrow the workspace. With `--unsafe-local`, `PATH` is used as
+given.
 
 `allowedCommands` matches on the program's basename, so it cannot tell `npm
 test` from `npm install left-pad`. `deniedTraits` is the axis that can. MELRA

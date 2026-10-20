@@ -817,18 +817,22 @@ All notable changes are documented here. The format follows
   through `npx` or `pnpm exec`, or allowlist its path. A workspace that holds
   tool directories, such as a home directory with `~/.local/bin` or a
   version manager's, loses those programs the same way, which is one more
-  reason to narrow it. `--unsafe-local` keeps `PATH` as given. On Windows,
-  the program lookup also skips relative `PATH` entries.
+  reason to narrow it. If no entry is left, as with a workspace at the
+  filesystem root, every command fails with
+  `terminal_path_empty_after_filter`, a path-qualified one too: a program
+  given an empty `PATH`, or none, may search the working directory.
+  `--unsafe-local` keeps `PATH` as given. On Windows, the program lookup
+  also skips relative `PATH` entries.
 
 - A terminal argument that names a file for the program to read as a
   reference (`@file`, `-d@file`, `--data=@file`, `name=@file`, `name=<file`)
-  has that file judged like any other path an argument names: MELRA's own
-  files are refused in every mode (`terminal_path_reserved`), and enforced
-  mode shows a person one outside the workspace (`read_outside_workspace`) and
+  has that file judged too, as the one file it names: MELRA's own files are
+  refused in every mode (`terminal_path_reserved`), and enforced mode
   refuses one spelled inside that leads out
-  (`terminal_path_outside_workspace`). Only more is judged: an `@` that is
-  not a file reference, as in `git show @~1`, names a path inside the
-  workspace and runs as before.
+  (`terminal_path_outside_workspace`). Text that only looks like a
+  reference, as in `rg "@/" src`, `rg "</div>" src` or `git show @~1`, runs
+  as before, and so does approval: no command that runs without one reads a
+  reference, and one that does, such as `curl`, already needs it.
 
 - MELRA's data directory is reserved as a whole, by every adapter and by
   verification, in every mode. A file effect can no longer write into it,

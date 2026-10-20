@@ -457,9 +457,14 @@ describe("TerminalRuntime", () => {
         }),
       );
       expect(printed.stdout).toBe("/usr/bin");
-      // None left is no PATH at all, never an empty one, which is the working directory again.
+      // None left is refused, a path-qualified program too: an empty PATH is
+      // the working directory again, and a shell given none fills in a
+      // default that can end in it.
       const none = await TerminalRuntime.create({ root: ws, pathOutside: ws, baseEnvironment: { PATH: "bin" } });
-      await expect(none.execute(ls)).rejects.toThrow("terminal_command_not_found:ls");
+      const node = TerminalOperationSchema.parse({ kind: "terminal", action: "run", command: process.execPath, args: ["-e", ""] });
+      for (const operation of [node, ls]) {
+        await expect(none.execute(operation), operation.command).rejects.toThrow("terminal_path_empty_after_filter");
+      }
       // Nothing to keep it out of: PATH as given.
       const given = await TerminalRuntime.create({ root: ws, baseEnvironment: { PATH: `bin${delimiter}${system}` } });
       expect((await given.execute(ls)).stdout).toContain("SHADOWED");
@@ -642,6 +647,29 @@ describe("arguments", () => {
       await expect(run(runtime, spelling), spelling).rejects.toThrow(/terminal_path_reserved/);
     }
     await expect(run(runtime, "ok.txt")).resolves.toMatchObject({ success: true });
+  });
+
+  it("judges a file reference as the one file it names, never as a directory a reader walks", async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), "melra-terminal-")));
+    roots.push(base);
+    const ws = join(base, "ws");
+    const data = join(base, "data");
+    await mkdir(ws);
+    await mkdir(data);
+    const runtime = await TerminalRuntime.create({
+      root: ws,
+      reserved: async (path) => path === data || path.startsWith(`${data}${sep}`),
+      // As the server answers: every directory above the data holds it.
+      holdsReserved: async (path) => data.startsWith(path.endsWith(sep) ? path : `${path}${sep}`),
+    });
+    // Search patterns, as in `rg "@/" src` and `rg "</" page.html`.
+    for (const spelling of ["@/", "</", "-e</", "@..", "<.."]) {
+      await expect(run(runtime, spelling), spelling).resolves.toMatchObject({ success: true });
+    }
+    // Named plainly, a directory holding the data is still refused, and so is the data however named.
+    for (const spelling of [sep, "..", `@${data}`, `@${join("..", "data", "x")}`]) {
+      await expect(run(runtime, spelling), spelling).rejects.toThrow(/terminal_path_reserved/);
+    }
   });
 
   it.skipIf(process.platform === "win32")("answers the same for a path that passes a reserved name and climbs back out", async () => {
