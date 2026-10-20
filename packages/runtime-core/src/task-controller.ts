@@ -171,6 +171,8 @@ const BROWSER_LIST_ACTIONS = [
 
 export class TaskController {
   private readonly active = new Map<string, AbortController>();
+  /** Each task running here, settled once it has ended (see `settled`). */
+  private readonly running = new Map<string, Promise<void>>();
 
   private readonly breaker: CircuitBreaker;
 
@@ -475,6 +477,8 @@ export class TaskController {
     // Status and owner land in one write, so no running row is ever unowned.
     this.leaveUnstarted(task, this.store.ownerId());
     const controller = new AbortController();
+    let ended!: () => void;
+    this.running.set(task.id, new Promise<void>((resolve) => (ended = resolve)));
     this.active.set(task.id, controller);
     this.store.inFlight.add(task.id);
     const startedAt = now();
@@ -675,7 +679,18 @@ export class TaskController {
       this.active.delete(task.id);
       this.store.inFlight.delete(task.id);
       if (rechecked.grantId !== undefined) this.reserved.get(rechecked.grantId)?.delete(task.id);
+      this.running.delete(task.id);
+      ended();
     }
+  }
+
+  /**
+   * Resolves once a task this controller is running has ended, its outcome
+   * recorded: a cancel only signals the adapter to stop. At once for one it
+   * is not running.
+   */
+  settled(taskId: string): Promise<void> {
+    return this.running.get(taskId) ?? Promise.resolve();
   }
 
   cancel(taskId: string): TaskRecord {

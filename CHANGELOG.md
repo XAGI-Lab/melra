@@ -191,7 +191,10 @@ All notable changes are documented here. The format follows
   commit: each step is read again from the tasks under its keys, so the steps
   that advance ran are recorded on the cancelled run rather than left off it
   for good, and a task still running there is cancelled as the run's own.
-  (#244)
+  That step is recorded as still in flight (`recovery_required`,
+  `task_still_in_flight`) rather than as cancelled, since in another process,
+  or one that died mid-effect, its effect may still land; one running in the
+  cancelling process is recorded as it ended once it stops. (#244)
 
 - `workflow cancel` (`melra_workflow_cancel`) cancels a run's tasks only once
   the run's own cancel is recorded. It cancelled the challenges on the run's

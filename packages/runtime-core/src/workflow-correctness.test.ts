@@ -1373,7 +1373,8 @@ describe("a halt or cancel while an advance runs a step (#244)", () => {
       // Cancelled as the run read, before anything recovered it: a never
       // named the task that ran, and nothing recovers a cancelled run.
       expect(cancelled.status).toBe("cancelled");
-      expect(peer.status(planned.id).nodes.a?.taskIds).toEqual([ran!.id]);
+      // Stopped mid-step by the cancel, a step ignoring the stop is recorded as it ended.
+      expect(peer.status(planned.id).nodes.a).toEqual({ status: "verified_complete", taskIds: [ran!.id] });
       expect(peer.status(planned.id).nodes.b).toEqual({ status: "cancelled", taskIds: [] });
       expect(done).toEqual(["a"]);
     },

@@ -1162,4 +1162,53 @@ describe("workflow recovery across processes", () => {
     // No lease, no advance that died: the sweep does not touch it.
     expect(footprint(b.store, idle.id)).toEqual(idleBefore);
   });
+
+  it("cancels a run without calling a step cancelled that another process is running", async () => {
+    const at = await home();
+    const adapter = held();
+    const a = await side(at);
+    const b = await side(at, adapter.execute);
+    const run = a.workflows.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Ownership",
+        nodes: [{ id: "write", type: "operation", request: put("write") }],
+      }),
+    );
+    const waiting = (await a.workflows.advance(run.id)).run;
+    const taskId = waiting.nodes.write!.taskIds[0]!;
+    // Approved with melra_execute in B; A's next advance reads it in flight.
+    const executing = b.tasks.execute(taskId, approvalsFor(waiting)[0]);
+    await adapter.entered.opened;
+    const parked = (await a.workflows.advance(run.id)).run.nodes.write;
+    expect(parked).toEqual({ status: "recovery_required", taskIds: [taskId], error: "task_still_in_flight" });
+
+    const cancelled = a.workflows.cancel(run.id);
+    adapter.release.open();
+    expect((await executing).task.status).toBe("verified_success");
+    // Its outcome was not known when the run was cancelled, and it took effect.
+    expect(cancelled.status).toBe("cancelled");
+    expect(cancelled.nodes.write).toEqual(parked);
+  });
+
+  it("cancels a run without calling a step cancelled whose process died mid-effect", async () => {
+    const at = await home();
+    const adapter = held();
+    const a = await side(at, adapter.execute);
+    const b = await side(at);
+    const { id } = await midFlight(a, adapter);
+    const [running] = b.store.listTasks(1, "running");
+    a.store.close();
+    expireLease(b.store, id);
+
+    const cancelled = b.workflows.cancel(id);
+    expect(cancelled.status).toBe("cancelled");
+    expect(cancelled.nodes.write).toEqual({ status: "recovery_required", taskIds: [running!.id], error: "task_still_in_flight" });
+    // Task recovery cannot say whether the write landed, and nor does the run.
+    await b.tasks.recoverInterrupted();
+    expect(b.tasks.status(running!.id).status).toBe("recovery_required");
+    expect(b.workflows.status(id).nodes.write?.status).toBe("recovery_required");
+  });
 });

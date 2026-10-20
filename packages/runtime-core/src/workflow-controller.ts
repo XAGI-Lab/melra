@@ -839,6 +839,32 @@ export class WorkflowController {
   }
 
   /**
+   * A cancelled run's steps recorded still in flight, read again from their
+   * tasks once these have ended, as its cancel reads a step. One whose task
+   * runs on is left as it is.
+   */
+  private settleStopped(workflowId: string, definition: WorkflowDefinition): void {
+    this.underLease(workflowId, (run) => {
+      if (run.status !== "cancelled") return run;
+      const allTasks = this.store.listTasks(100_000);
+      return this.transition(run, (draft, emit) => {
+        for (const node of definition.nodes) {
+          const recorded = draft.nodes[node.id]!;
+          if (recorded.error !== "task_still_in_flight") continue;
+          const { state, found } = this.recoveredNode(run.id, node, definition, allTasks, recorded);
+          if (found.some((task) => task !== undefined && ["running", "verifying"].includes(task.status))) continue;
+          const settled: WorkflowNodeState = ["pending", "ready", "awaiting_approval"].includes(state.status)
+            ? { ...state, status: "cancelled" }
+            : state;
+          if (canonicalJson(settled) === canonicalJson(recorded)) continue;
+          draft.nodes[node.id] = settled;
+          emit("workflow.node_changed", { nodeId: node.id, from: recorded.status, state: settled });
+        }
+      });
+    });
+  }
+
+  /**
    * Parked steps whose tasks have since settled, recorded as such: forward
    * steps, and compensations an unwind stopped at. One still in flight is left
    * for recovery, which waits for its owner as at startup.
@@ -1077,9 +1103,10 @@ export class WorkflowController {
               // under its keys first, as the next advance would, so they are on
               // its nodes (a run already whole reads the same, and records
               // nothing more). A task still running there is stopped as the
-              // run's own. One that cannot be recovered (its history no longer
-              // replays) is cancelled as it reads, as for a definition that no
-              // longer opens: refused, it could never end.
+              // run's own, its step recorded as still in flight. One that
+              // cannot be recovered (its history no longer replays) is
+              // cancelled as it reads, as for a definition that no longer
+              // opens: refused, it could never end.
               if (definition !== undefined) {
                 try {
                   stopped.push(...this.recoverNodes(current, definition, this.store.listTasks(100_000), draft, emit));
@@ -1110,7 +1137,20 @@ export class WorkflowController {
       // Tasks are cancelled only once the run is: cancelled before a commit
       // that then failed, a step's challenge read as a denial on a run that
       // went on, and the run unwound.
+      const here = stopped.filter((taskId) => this.store.inFlight.has(taskId));
       for (const taskId of stopped) this.tasks.cancel(taskId);
+      // One running in this process is only told to stop. Its step is read
+      // again once it has ended, as recorded: cancelled, or done all the same.
+      // One running in another process, or whose process died, stays in
+      // flight: nothing here learns how it ends.
+      if (here.length > 0 && definition !== undefined) {
+        const opened = definition;
+        void Promise.all(here.map((taskId) => this.tasks.settled(taskId)))
+          .then(() => this.settleStopped(workflowId, opened))
+          // Left in flight, as the cancel recorded it (an advance holds the
+          // run, or the store closed).
+          .catch(() => undefined);
+      }
       // A challenge a lost advance left is in no node's taskIds: a condition's
       // is never adopted (it would follow its branch without asking, #268),
       // and another step's is taken up only when the run advances again
@@ -2294,6 +2334,12 @@ function recoveredNodeState(
       taskIds,
       ...(recovery.error === undefined ? {} : { error: recovery.error }),
     };
+  }
+  // Still running, in a live process or one that died mid-effect: unknown, as
+  // nodeStateForTask reads it. Read as cancelled, a cancel (which reads every
+  // step again) recorded the effect as cancelled on its run for good.
+  if (tasks.some((task) => task.status === "running" || task.status === "verifying")) {
+    return { status: "recovery_required", taskIds, error: "task_still_in_flight" };
   }
   const failed = tasks.find((task) =>
     [

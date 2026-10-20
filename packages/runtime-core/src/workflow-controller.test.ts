@@ -2645,6 +2645,10 @@ describe("WorkflowController execution", () => {
     // ended without compensating.
     expect(controller.status(planned.id).status).toBe("cancelled");
     expect(store.listTasks(100, "awaiting_approval")).toEqual([]);
+    // The shipment the cancel stopped is recorded as it ended, not as still in flight.
+    const ship = controller.status(planned.id).nodes.ship!;
+    expect(ship.status).toBe("cancelled");
+    expect(store.getTask(ship.taskIds[0]!)?.status).toBe("cancelled");
   });
 
   it("unwinds a run whose running step's task is cancelled before a workflow cancel can land", async () => {

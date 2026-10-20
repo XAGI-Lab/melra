@@ -323,8 +323,12 @@ next recovers it first; a cancel, which ends the run for good, recovers it
 itself before cancelling it, reading each step's tasks under its keys, so what
 that advance (or one that died holding the lease, or lost its commit) ran is
 recorded on the cancelled run, and a task still running there is cancelled as
-the run's own. The public schema also reserves
-`partially_complete`, which no command enters today.
+the run's own. Its step is recorded as still in flight (`recovery_required`,
+`task_still_in_flight`), not as cancelled: in another process, or one that
+died mid-effect, the effect may still land. One running in this process is
+recorded as it ended (cancelled, or done all the same) once it stops. The
+public schema also reserves `partially_complete`, which no command enters
+today.
 
 `cancelled` is entered only by `workflow cancel`. A step whose task is denied
 before it runs (`melra approve --deny`, the console's Deny, or
