@@ -384,6 +384,21 @@ describe("terminal arguments", () => {
     expect(unhinged.task.error).toMatch(/terminal_path_reserved/);
   });
 
+  it("refuses MELRA's own files named as a file reference, in every mode", async () => {
+    runtime = await createMelraRuntime({ workspaceRoot: workspace, dataDirectory: data, environment: {} });
+    const key = join(data, "payload.key");
+    // One program each: three failures of one open its circuit.
+    for (const task of [
+      terminal("cat", [`@${key}`]),
+      terminal("head", [`-c@${key}`]),
+      terminal("tail", [`--file=@${key}`]),
+      terminal("wc", ["-l", `f=<${key}`]),
+    ]) {
+      const { task: done } = await run(task);
+      expect(done.error, JSON.stringify(task.operation)).toMatch(/terminal_path_reserved/);
+    }
+  });
+
   it("in enforced mode, shows a person a read outside the workspace and refuses a link out", async () => {
     await writeFile(join(base, "outside.txt"), "outside", "utf8");
     await mkdir(join(base, "outside"));
@@ -409,6 +424,8 @@ describe("terminal arguments", () => {
     expect(linked.planned.status).toBe("planned");
     expect(linked.task.status).toBe("failed");
     expect(linked.task.error).toMatch(/terminal_path_outside_workspace/);
+    // So is one named as a file reference.
+    expect((await run(terminal("head", [`@${join("out", "f")}`]))).task.error).toMatch(/terminal_path_outside_workspace/);
     await runtime.close();
     runtime = await createMelraRuntime({ workspaceRoot: workspace, dataDirectory: data, environment: {} });
     if (process.platform !== "win32") {

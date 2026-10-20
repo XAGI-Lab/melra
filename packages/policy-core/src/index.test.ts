@@ -704,6 +704,8 @@ describe("enforced-mode reads that leave the workspace", () => {
     ["rg", [`-f${outside}`, "y"]],
     ["head", ["../../x"], "src"],
     ["npm", ["ls", "--prefix", outside]],
+    ["cat", [`@${outside}`]],
+    ["rg", ["-F", `--file=@${outside}`]],
   ];
 
   it("shows a person a read that names a path outside the workspace, and no other", () => {
@@ -725,6 +727,9 @@ describe("enforced-mode reads that leave the workspace", () => {
       ["git", ["diff", "HEAD~1..HEAD", "--stat"]],
       ["head", ["-n", "1", "fixture.txt"]],
       ["rg", ["foo.*", "src"]],
+      // An @ that is not a file reference still names something inside.
+      ["git", ["show", "@~1"]],
+      ["git", ["log", "@{u}"]],
     ] as const) {
       expect(read(command, [...args]).decision.reason, `${command} ${args.join(" ")}`).toBe("read_only_operation");
     }

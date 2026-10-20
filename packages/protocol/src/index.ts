@@ -60,7 +60,8 @@ export const TerminalOperationSchema = z
 
 /**
  * Every string a terminal argument can hand a program as a path: the argument
- * itself and an option's attached value (`--file=x`, `-fx`, `/G:x`). No shell
+ * itself, an option's attached value (`--file=x`, `-fx`, `/G:x`), and the file
+ * any of those names as a reference to read (`@x`, `-d@x`, `name=<x`). No shell
  * runs, so `~`, `$HOME` and globs reach the program as written. Policy judges
  * these by spelling and the terminal runtime by where they lead, so both read
  * them from here.
@@ -72,7 +73,7 @@ export function terminalArgumentPaths(args: readonly string[]): string[] {
     if (equals !== -1) paths.push(arg.slice(equals + 1));
     if (/^-[^-]./.test(arg)) paths.push(arg.slice(2));
     if (/^\/[a-z]+:/i.test(arg)) paths.push(arg.slice(arg.indexOf(":") + 1));
-    return paths;
+    return paths.flatMap((path) => (/^[@<]/.test(path) ? [path, path.slice(1)] : [path]));
   });
 }
 

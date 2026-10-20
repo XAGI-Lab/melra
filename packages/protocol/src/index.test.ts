@@ -10,6 +10,7 @@ import {
   MelraReceiptInputSchema,
   PROTOCOL_VERSION,
   TaskRequestSchema,
+  terminalArgumentPaths,
   TOOL_NAMES,
   type TaskRecord,
 } from "./index.js";
@@ -180,5 +181,14 @@ describe("effect contract", () => {
     );
     expect(write.executionGuarantee).toBe("at-most-once");
     expect(allowsRetry(write.executionGuarantee)).toBe(false);
+  });
+});
+
+describe("terminalArgumentPaths", () => {
+  it("also yields the file an @ or < reference names, alone or as an option's value", () => {
+    const paths = terminalArgumentPaths(["@a", "-d@b", "--data-binary=@c", "f=@d", "-Fe=<e", "name=<f"]);
+    expect(paths).toEqual(expect.arrayContaining(["a", "b", "c", "d", "e", "f"]));
+    // Nothing is judged less: the spellings it yielded before are all still there.
+    expect(paths).toEqual(expect.arrayContaining(["@a", "-d@b", "@b", "@c", "f=@d", "@d", "<e", "<f"]));
   });
 });

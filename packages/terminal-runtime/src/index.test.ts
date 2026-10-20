@@ -583,6 +583,8 @@ describe("arguments", () => {
     });
     const key = join(data, "payload.key");
     const spellings = [key, join("..", "data", "payload.key"), `--file=${key}`, `-f${key}`, join(data, "payload.*")];
+    // A file reference a program reads the named file for (curl, gh, response files).
+    spellings.push(`@${key}`, `-d@${key}`, `--data-binary=@${key}`, `f=<${key}`);
     if (process.platform !== "win32") {
       // The program resolves `l/..` through the link, to data/, not to ws/.
       await symlink(join(data, "sub"), join(ws, "l"));
@@ -842,7 +844,7 @@ describe("arguments", () => {
     // Spelled outside, policy already asked a person; spelled inside, it did not.
     const confined = await TerminalRuntime.create({ root: ws, confineArguments: true });
     // However many parts past the link are not there yet: `mkdir -p` makes them all.
-    for (const spelling of [join("out", "f"), join("out", "new", "f")]) {
+    for (const spelling of [join("out", "f"), join("out", "new", "f"), `@${join("out", "f")}`, `-d@${join("out", "f")}`]) {
       await expect(run(confined, spelling), spelling).rejects.toThrow(/terminal_path_outside_workspace/);
     }
     await expect(run(confined, join(base, "outside", "f"))).resolves.toMatchObject({ success: true });

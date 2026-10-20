@@ -791,6 +791,16 @@ All notable changes are documented here. The format follows
 
 ### Security
 
+- A terminal argument that names a file for the program to read as a
+  reference (`@file`, `-d@file`, `--data=@file`, `name=@file`, `name=<file`)
+  has that file judged like any other path an argument names: MELRA's own
+  files are refused in every mode (`terminal_path_reserved`), and enforced
+  mode shows a person one outside the workspace (`read_outside_workspace`) and
+  refuses one spelled inside that leads out
+  (`terminal_path_outside_workspace`). Only more is judged: an `@` that is
+  not a file reference, as in `git show @~1`, names a path inside the
+  workspace and runs as before.
+
 - MELRA's data directory is reserved as a whole, by every adapter and by
   verification, in every mode. A file effect can no longer write into it,
   replace it, or move or remove it or any directory that holds it (`path_reserved`),
