@@ -216,6 +216,13 @@ describe("semantic evidence (#54)", () => {
       status: "recovery_required",
       error: "semantic_judgement_expired",
     });
+    // Receipted as any recovered change, with what was checked again.
+    const { receipts, certificate } = controller.receipts({ taskId: planned.id });
+    expect(receipts.map((receipt) => receipt.success)).toEqual([true]);
+    expect(certificate?.evidence).toMatchObject([
+      { type: "file_exists", passed: true },
+      { type: "semantic", passed: false, inconclusive: true, summary: "semantic_judgement_expired" },
+    ]);
     expect(store.capabilityUsage("once", new Date(0).toISOString()).operations).toBe(1);
     expect(controller.plan(write([{ type: "file_exists", path: "out.txt" }, SEMANTIC])).status).toBe("policy_blocked");
     expect(executor.execute).not.toHaveBeenCalled();

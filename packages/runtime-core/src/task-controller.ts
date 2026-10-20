@@ -919,9 +919,6 @@ export class TaskController {
       );
     }
     this.drawGrant(task, request, classified);
-    // Evidence gathered after the fact answers no question about meaning: a
-    // semantic task, its effect done, settles closed as at expiry (#54).
-    if (asksSemantic(request)) return this.settleUnanswered(task);
     const receipt = this.createReceipt(
       task,
       request,
@@ -935,6 +932,10 @@ export class TaskController {
     );
     this.store.saveReceipt(receipt);
     task.receiptIds.push(receipt.receiptId);
+    // Evidence gathered after the fact answers no question about meaning: a
+    // semantic task, its effect done and receipted, settles closed as at
+    // expiry (#54).
+    if (asksSemantic(request)) return { ...this.settleUnanswered(task), receipt };
     task.status = "verified_success";
     delete task.error;
     task.updatedAt = now();
@@ -1082,8 +1083,9 @@ export class TaskController {
    * No answer is not a yes (#54). A task whose semantic question went
    * unanswered, at expiry or cut off after its commit, settles closed: its
    * effect ran, so a change is `recovery_required` (never `failed`) and a
-   * read is `partial`. Nothing ran here, so no receipt is written; the
-   * certificate is replaced.
+   * read is `partial`. Nothing runs here, so it writes no receipt: the
+   * certificate, replaced, carries the evidence of the task's last one, the
+   * live path's or the one recovery wrote.
    */
   private settleUnanswered(task: TaskRecord): ExecutionResult {
     const last = task.receiptIds[task.receiptIds.length - 1];
@@ -1127,11 +1129,16 @@ export class TaskController {
       const actionSucceeded = reported?.success !== false;
       // Against what the adapter reported, as the live path verifies: a
       // move's own result is what tells a case-only rename's source is gone.
+      // Its semantic item, never passed, rides along unanswered as on the
+      // live receipt, and is the one item not required to pass.
       const verification = await this.verifier.verify(
-        observable,
+        request.requiredEvidence,
         reported ?? {},
       );
-      if (actionSucceeded && verification.verified) {
+      if (
+        actionSucceeded &&
+        verification.evidence.every((item) => item.passed || item.type === "semantic")
+      ) {
         this.resolveAsVerified(task, request, classified, verification.evidence, {
           recovery: "independent_reobservation",
         });
