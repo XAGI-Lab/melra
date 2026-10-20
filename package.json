@@ -25,7 +25,6 @@
     "build": "node scripts/run-recursive.mjs build",
     "build:sea": "pnpm build && node scripts/build-sea.mjs",
     "clean": "pnpm -r clean",
-    "dev": "pnpm --filter @melra/cli dev",
     "melra": "tsx apps/cli/src/index.ts",
     "e2e": "pnpm --filter @melra/server test:e2e",
     "docker:smoke": "node scripts/docker-smoke.mjs",
@@ -54,7 +53,7 @@
     "@modelcontextprotocol/sdk": "1.32.1",
     "@types/node": "22.20.5",
     "esbuild": "0.25.10",
-    "playwright-core": "1.64.0",
+    "playwright-core": "1.64.1",
     "tsx": "4.23.15",
     "typescript": "5.9.3",
     "vitest": "4.1.11"

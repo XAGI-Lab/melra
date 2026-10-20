@@ -7,7 +7,6 @@ import { access, mkdir, readFile, realpath, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
-  Browser,
   BrowserContext,
   CDPSession,
   ElementHandle,
@@ -417,7 +416,6 @@ function collectFrame(limit: number) {
 export const APPROVAL_SURFACE = "melra-approval-surface";
 
 export class BrowserRuntime {
-  private browser: Browser | undefined;
   private context: BrowserContext | undefined;
   private activePage: Page | undefined;
   private connection: BrowserConnection | undefined;
@@ -698,7 +696,6 @@ export class BrowserRuntime {
       ...(proxy === undefined ? {} : { proxyServer: proxy.server }),
     });
     this.connection = connection;
-    this.browser = connection.browser;
     this.context = connection.context;
     this.routeHandler = async (route) => {
       const requestUrl = route.request().url();
@@ -2577,7 +2574,6 @@ export class BrowserRuntime {
     this.proxy = undefined;
     this.activePage = undefined;
     this.context = undefined;
-    this.browser = undefined;
     this.connection = undefined;
     this.routeHandler = undefined;
   }

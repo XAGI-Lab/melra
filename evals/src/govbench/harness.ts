@@ -257,13 +257,12 @@ function message(error: unknown): string {
 async function drive(
   runtime: MelraRuntime,
   request: GovCase["request"],
-  options: { idempotencyKey?: string } = {},
 ): Promise<Drive> {
   const parsed = parseRequest(request);
   if (!parsed.ok) return { status: "schema_rejected", reason: parsed.reason };
   let task;
   try {
-    task = runtime.controller.plan(parsed.value, options);
+    task = runtime.controller.plan(parsed.value);
   } catch (error) {
     return { status: "plan_error", reason: message(error) };
   }

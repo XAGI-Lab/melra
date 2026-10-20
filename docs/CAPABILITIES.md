@@ -250,7 +250,8 @@ Actions: `navigate`, `back`, `forward`, `reload`, `inspect`, `wait`, `click`,
   because the page may already have acted.
 - Resolves and checks the destination and every intercepted request.
 - Blocks private, link-local, multicast, unspecified, and cloud-metadata
-  addresses. Localhost is opt-in.
+  addresses. Localhost is open in developer mode and opt-in in enforced
+  mode (`allowLocalhost`).
 - Confines uploaded files to the workspace, never MELRA's own data directory
   except its artifacts, nor the browser profile, an HTTP archive or a
   credential's file, and downloaded files to the artifact directory.

@@ -657,13 +657,24 @@ async function doctor(env: CliEnvironment): Promise<{
   let credentials: LocalPolicy["credentials"] = {};
   try {
     const path = await existingPolicyPath(env);
+    let allowLocalhost: boolean | undefined;
     // The server's own parser, so a bad `mode` or grant fails here too.
-    if (path !== undefined) ({ credentials } = await loadPolicy(path, env.workspaceRoot));
+    if (path !== undefined) ({ credentials, allowLocalhost } = await loadPolicy(path, env.workspaceRoot));
     checks.push({
       name: "policy",
       status: "pass",
       detail: path ?? "using safe built-in defaults",
     });
+    // Enforced mode keeps loopback closed unless the file opens it, so say so
+    // when it does: the services this machine runs for itself are behind it.
+    if (env.mode === "enforced" && allowLocalhost === true) {
+      checks.push({
+        name: "loopback",
+        status: "warn",
+        detail: `${path} sets allowLocalhost, so HTTP and browser effects can reach services on this machine's loopback`,
+        next: `remove allowLocalhost from ${path} unless a task needs a service on this machine`,
+      });
+    }
   } catch (error) {
     checks.push({
       name: "policy",

@@ -353,14 +353,21 @@ policy test` prints it, and `melra status` and `melra tasks` report it
 (`policyError` in their JSON).
 
 The generated policy allows any public browser destination
-(`allowedDomains: ["*"]`) and localhost, so browsing works without editing
-anything. That list is a *narrowing* control, not the safety boundary: the
+(`allowedDomains: ["*"]`) and, in developer mode, localhost, so browsing works
+without editing anything. That list is a *narrowing* control, not the safety boundary: the
 browser runtime independently refuses non-`http(s)` protocols, URL credentials,
 private and link-local ranges, and cloud metadata (`169.254/16`), and it resolves
 DNS before allowing a navigation so a public name cannot be rebound to a private
 address. To restrict which public sites are reachable, replace `"*"` with the
 domains a task actually needs — `examples/04-browser-inspection/policy.json` is
 a worked example that allows only `example.com`.
+
+`allowLocalhost` decides whether HTTP and browser effects may reach this
+machine's loopback names and addresses (`localhost`, `127.0.0.0/8`, `::1`).
+Left out, it follows the mode: open in developer mode, closed in enforced mode.
+A `policy.json` that `melra init` or `melra setup` wrote with an earlier
+release sets `"allowLocalhost": true`, which keeps loopback open in enforced
+mode too; delete that key unless a task needs a service on this machine.
 
 Mutations default to `"confirm"`: every non-read operation returns a
 task-scoped approval challenge and runs only once it is approved. In developer
@@ -889,6 +896,12 @@ closing every door it owns:
   served at all, on loopback or anywhere else. Enforced mode admits service
   identities the operator issued, and nothing that asks to be let in — so the
   bearer token is the only way in.
+- **Loopback destinations stay closed unless the policy opens them.** An HTTP
+  or browser effect aimed at this machine's loopback, by name, address, or a
+  name that resolves there, is refused (`destination_domain_not_allowed` or
+  `destination_private_blocked`): the services a machine runs for itself sit
+  behind it. `"allowLocalhost": true` in the policy file opens it, and `melra
+  doctor` then warns on its `loopback` line.
 - **A read that leaves the workspace is shown to a person first.** A
   read-only terminal command whose argument or option value names a path
   outside the workspace plans as `confirm` with reason `read_outside_workspace`
