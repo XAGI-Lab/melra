@@ -865,7 +865,7 @@ describe("melra CLI", () => {
     expect(result.stdout.trim()).toBe(PRODUCT_VERSION);
   });
 
-  it("warns, or in enforced mode fails, when the workspace holds the data directory", async () => {
+  it("warns, or in enforced mode fails, when the workspace holds the data directory, and fails when the data holds it", async () => {
     const root = await realpath(await mkdtemp(join(tmpdir(), "melra-cli-")));
     roots.push(root);
     const doctorWith = async (extra: Record<string, string>) => {
@@ -895,6 +895,14 @@ describe("melra CLI", () => {
     // Unsafe-local reaches every file, which the guardrails check reports;
     // no data-location verdict pretends otherwise.
     expect(data(await doctorWith({ MELRA_HOME: join(root, "data"), MELRA_UNHINGED: "1" }))).toBeUndefined();
+    // Inside the data directory every path is MELRA's own, which the server
+    // refuses in every mode.
+    await mkdir(join(root, "data", "ws"), { recursive: true });
+    for (const extra of [{}, { MELRA_UNHINGED: "1" }]) {
+      const within = await doctorWith({ MELRA_WORKSPACE: join(root, "data", "ws"), MELRA_HOME: join(root, "data"), ...extra });
+      expect(data(within), JSON.stringify(extra)).toBe("fail");
+      expect(within.ready).toBe(false);
+    }
     // A workspace that is a file is the workspace's problem, reported once.
     await writeFile(join(root, "file"), "");
     const file = await doctorWith({ MELRA_WORKSPACE: join(root, "file"), MELRA_HOME: join(root, "data") });

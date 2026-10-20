@@ -4,6 +4,7 @@
 import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { BrowserOperationSchema } from "@melra/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { BrowserRuntime } from "./index.js";
 
@@ -47,6 +48,29 @@ describe("upload file paths", () => {
       join(configured, "..", "ws-evil", "report.pdf"),
     ]) {
       await expect(runtime.uploadPaths([path])).rejects.toThrow("browser_upload_outside_workspace");
+    }
+  });
+
+  it("refuses a reserved file before starting a browser", async () => {
+    const base = await mkdtemp(join(tmpdir(), "melra-upload-"));
+    roots.push(base);
+    const runtime = new BrowserRuntime({
+      workspaceRoot: base,
+      artifactDirectory: join(base, "artifacts"),
+      // Nothing is there, so starting one would fail with a launch error.
+      executablePath: join(base, "no-browser"),
+      allowedDomains: [],
+      allowLocalhost: false,
+      reserved: async (path) => path.endsWith("payload.key"),
+    });
+    try {
+      await expect(
+        runtime.execute(
+          BrowserOperationSchema.parse({ kind: "browser", action: "upload", target: { selector: "#f" }, filePaths: ["payload.key"] }),
+        ),
+      ).rejects.toThrow("browser_path_reserved");
+    } finally {
+      await runtime.close();
     }
   });
 });
