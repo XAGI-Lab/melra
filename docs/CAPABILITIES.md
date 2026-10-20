@@ -366,7 +366,9 @@ Action: `request`. Fields: `method`, `url`, `headers`, `content`,
   by name under `credentials`, never their values, and a caller-supplied header
   cannot shadow one. A value the far end echoes back in the reason phrase, a
   header or the body is replaced with `[REDACTED_CREDENTIAL]` and listed under
-  `redactions`; `bytes` still counts what arrived.
+  `redactions`; `bytes` still counts what arrived. A body cut at the size cap
+  on such a call always ends in the marker in place of its last few
+  characters, whatever they held, and lists it too.
 - `spend` declares what the call moves — `{ provider, account?, amount, currency }`,
   the amount in minor units. It is optional and means nothing until a grant with
   a `provider` block exists; from then on that grant covers declared spends only.

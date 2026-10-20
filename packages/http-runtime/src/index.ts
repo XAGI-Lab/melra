@@ -26,17 +26,12 @@ function scrubbed(text: string, { headers, secrets }: BrokeredHeaders, cut: bool
   for (const value of [...Object.values(headers), ...secrets].sort((a, b) => b.length - a.length)) {
     out = out.replaceAll(value, REDACTED_CREDENTIAL);
   }
-  if (!cut) return out;
-  // A body cut at the size cap can end partway through a secret.
-  for (const secret of secrets) {
-    for (let length = secret.length - 1; length > 0; length -= 1) {
-      if (out.endsWith(secret.slice(0, length))) {
-        out = `${out.slice(0, -length)}${REDACTED_CREDENTIAL}`;
-        break;
-      }
-    }
-  }
-  return out;
+  if (!cut || secrets.length === 0) return out;
+  // A body cut at the size cap can end partway through a secret, so its end
+  // goes whatever it holds. Deciding by whether it looks like the start of one
+  // would tell the caller something about the secret.
+  const tail = Math.max(...secrets.map((secret) => secret.length)) - 1;
+  return `${out.slice(0, Math.max(0, out.length - tail))}${REDACTED_CREDENTIAL}`;
 }
 
 export interface HttpRuntimeOptions extends NetworkPolicy {
@@ -162,10 +157,12 @@ export class HttpRuntime {
             // A provider can echo the credential it was sent, in an error, a
             // debug header or the reason phrase. The caller, the verifier and
             // every stored copy get what follows, so it goes here, once.
-            let echoed = false;
+            let redacted = false;
             const scrub = (text: string, cut = false): string => {
-              const out = brokered === undefined ? text : scrubbed(text, brokered, cut);
-              if (out !== text) echoed = true;
+              if (brokered === undefined) return text;
+              const out = scrubbed(text, brokered, cut);
+              // A cut body always counts, whatever its end held.
+              if (out !== text || (cut && brokered.secrets.length > 0)) redacted = true;
               return out;
             };
             const statusText = scrub(response.statusMessage ?? "");
@@ -199,7 +196,7 @@ export class HttpRuntime {
               // receipt should record; its value is the one thing that must not
               // leave this function.
               credentials: brokered?.used ?? [],
-              ...(echoed ? { redactions: [REDACTED_CREDENTIAL] } : {}),
+              ...(redacted ? { redactions: [REDACTED_CREDENTIAL] } : {}),
               // Echoed back so a reconciliation predicate can be written
               // against the one fact that was true *before* the call. After a
               // request that went unanswered there is no response to read, so

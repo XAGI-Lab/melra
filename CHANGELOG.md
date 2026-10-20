@@ -1016,10 +1016,12 @@ All notable changes are documented here. The format follows
 
 - A credential the kernel brokered into an `http` request no longer comes back
   in the result when the far end echoes it. Each copy of the value in the
-  reason phrase, a response header or the body, including a body cut at the
-  size cap partway through it, is replaced with `[REDACTED_CREDENTIAL]` before
-  the caller, the verifier or any stored record sees it, and the result lists
-  that marker under `redactions`. `bytes` still counts what arrived. Only a
+  reason phrase, a response header or the body is replaced with
+  `[REDACTED_CREDENTIAL]` before the caller, the verifier or any stored record
+  sees it, and the result lists that marker under `redactions`. A body cut at
+  the size cap on such a call always ends in the marker in place of its last
+  few characters, whatever they held, so neither a value cut partway nor the
+  cut itself says anything about it. `bytes` still counts what arrived. Only a
   copy as sent is recognised, not one the provider encoded or altered.
 
 ## [0.3.0-alpha.14] - 2026-10-16

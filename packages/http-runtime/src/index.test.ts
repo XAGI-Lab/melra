@@ -12,6 +12,8 @@ let server: Server;
 let origin: string;
 /** Last request the fixture saw, so header and body handling is assertable. */
 let seen: { method: string; url: string; headers: Record<string, unknown>; body: string };
+/** What `/customers/<id>` answers before the id; padded past the smallest cap. */
+const NOT_FOUND = `${"x".repeat(1_000)} no such customer: '`;
 
 beforeAll(async () => {
   server = createServer((req, res) => {
@@ -30,6 +32,11 @@ beforeAll(async () => {
         res.writeHead(401, `rejected ${key}`, { "x-debug-key": key, "set-cookie": [`seen=${key}`] });
         // Padded so a cap, which is at least 1,000 bytes, can fall inside it.
         res.end(JSON.stringify({ padding: "x".repeat(1_000), error: `invalid credential ${key}` }));
+        return;
+      }
+      // An API that reflects the id it was asked for, as a "not found" error might.
+      if (req.url?.startsWith("/customers/") === true) {
+        res.writeHead(404).end(`${NOT_FOUND}${req.url.slice("/customers/".length)}'`);
         return;
       }
       if (req.url === "/teapot") {
@@ -236,6 +243,33 @@ describe("http runtime", () => {
     );
     expect(cut.truncated).toBe(true);
     expect(cut.content).toBe(`${body.slice(0, body.indexOf(secret))}[REDACTED_CREDENTIAL]`);
+  });
+
+  it("ends a body cut at the size cap the same way whatever it held", async () => {
+    const secret = "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6";
+    const credentials = {
+      headersFor: async () => ({ headers: { authorization: `Bearer ${secret}` }, used: ["key"], secrets: [secret] }),
+    } as unknown as CredentialBroker;
+    const brokered = new HttpRuntime({ allowedDomains: ["*"], allowLocalhost: true, credentials });
+    // The far end reflects the caller's text and the cap falls right after it,
+    // so the end of the body is whatever the caller chose.
+    const reflected = async (text: string) => {
+      const result = await brokered.execute(
+        operation({ url: `${origin}/customers/${text}`, maxResponseBytes: NOT_FOUND.length + text.length }),
+      );
+      return { content: result.content, redactions: result.redactions };
+    };
+    // Text that begins the credential and text that does not, a character
+    // apart, come back alike, down to a single character.
+    for (let length = 1; length < secret.length; length += 1) {
+      const begins = secret.slice(0, length);
+      const differs = `${begins.slice(0, -1)}${begins.endsWith("x") ? "y" : "x"}`;
+      expect(await reflected(begins), begins).toEqual(await reflected(differs));
+    }
+    expect(await reflected("A")).toEqual({
+      content: `${`${NOT_FOUND}A`.slice(0, -(secret.length - 1))}[REDACTED_CREDENTIAL]`,
+      redactions: ["[REDACTED_CREDENTIAL]"],
+    });
   });
 
   it("reports a plain failure when the request never left the machine", async () => {
