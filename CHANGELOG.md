@@ -226,14 +226,15 @@ All notable changes are documented here. The format follows
   advance. Each step finds the tasks under its key in SQL, on an index
   (migration 6), so a long task history does not slow it. (#319)
 
-- Workflow recovery, at startup, in the sweep, for a parked step and in
-  `workflow cancel`, reads each step's tasks by its idempotency key, on the
-  migration 6 index, instead of the newest 100,000 tasks in the home. Past
-  that many, a step's task could be missed: a `parallel` step with one branch
-  run and another still waiting for approval was recorded as complete. And
-  each read scanned the whole listing once per step key, synchronously:
-  cancelling a 100-iteration loop of 50 steps in a home of 100,000 tasks took
-  19 s, and now takes under 0.1 s.
+- Workflow recovery, at startup, in the sweep and when a parked step
+  settles, reads each step's tasks by its idempotency key, on the migration 6
+  index, instead of the newest 100,000 tasks in the home. Past that many, a
+  step's task could be missed: a `parallel` step with one branch run and
+  another still waiting for approval was recorded as complete. And each read
+  scanned the whole listing once per step key: recovering a 100-iteration
+  loop of 50 steps in a home of 100,000 tasks took about 10 s per run, and
+  now takes about 0.1 s. `workflow cancel`, which now recovers the run first
+  (above), reads its steps the same way and never the whole history.
 
 - A condition step whose advance lost its commit (a pause landed while it ran)
   keeps to one branch. Recovery read both branches' tasks together and could
