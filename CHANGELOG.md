@@ -144,6 +144,22 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- A workflow step stopped by `workflow cancel` no longer reads in flight for
+  good when something else held the run's lease as its task ended. Its record
+  was written once and dropped on `workflow_lease_held`, so the step kept
+  reading `recovery_required` / `task_still_in_flight` while its task read
+  `cancelled` or `verified_success`. It is now tried again while the lease is
+  held, and cancelling the run again records any such step whose task has
+  ended, in this process or another. (#325)
+
+- A failing step no longer unwinds past a condition's step whose outcome is
+  unknown when the advance that ran it lost its commit (a locked database) and
+  the next advance cannot ask the condition's check (inconclusive or
+  unresolvable). The condition waited or failed naming no step, so a failed
+  sibling started the unwind and compensated what that step may depend on.
+  It now halts the run on that step (`recovery_required`), as after a
+  restart. (#318)
+
 - A deny and an execute in different processes no longer both win. Starting a
   task, and cancelling one (`melra approve --deny`, the console's Deny,
   `melra_task_cancel`), now moves it out of `planned` or `awaiting_approval`
@@ -194,8 +210,7 @@ All notable changes are documented here. The format follows
   That step is recorded as still in flight (`recovery_required`,
   `task_still_in_flight`) rather than as cancelled, since in another process,
   or one that died mid-effect, its effect may still land; one running in the
-  cancelling process is recorded as it ended once it stops, unless something
-  else holds the run's lease just then, when it keeps reading in flight. (#244)
+  cancelling process is recorded as it ended once it stops. (#244)
 
 - `workflow cancel` (`melra_workflow_cancel`) cancels a run's tasks only once
   the run's own cancel is recorded. It cancelled the challenges on the run's
@@ -263,9 +278,7 @@ All notable changes are documented here. The format follows
   outcome is unknown as the condition's, so it halts the run rather than let
   a failed sibling unwind past it; anything else such an advance left waits
   for the next advance, so the run halts or moves on the same with or without
-  a restart, unless the condition cannot be decided on the next advance (its
-  predicate inconclusive or unresolvable) while a sibling fails (#318).
-  `workflow cancel` cancels whatever a lost advance left planned or waiting
+  a restart. `workflow cancel` cancels whatever a lost advance left planned or waiting
   for approval under any of the run's steps, not only the tasks the run
   names, and cancelling an already cancelled run sweeps again; a run whose
   definition can no longer be opened is still ended, but nothing is swept.

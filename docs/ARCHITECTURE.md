@@ -259,7 +259,10 @@ verifier gone since planning, a reserved path) is refused again of the same
 result, so a `condition` or `delegation` fails
 (`workflow_check_unresolvable:<node>`) and the run unwinds. A loop's `until`
 asks of each iteration's new result, so it reads such a check as a no and runs
-the next iteration, up to `maxIterations`.
+the next iteration, up to `maxIterations`. Either way the call fails, but a
+`condition` under which an advance that lost its commit already ran a step
+whose outcome is unknown neither waits nor fails: it halts on that step
+(`recovery_required`, as after a restart), so nothing unwinds past it.
 
 A `condition` takes one branch, once. A branch with a committed step is the
 one taken, even when the advance that took it lost its commit (a pause landed
@@ -282,10 +285,8 @@ restart before the condition is decided reads a step such an advance ran
 whose outcome is unknown as the condition's own, so it halts the run there,
 as any other step's does, rather than let a failed sibling unwind past it.
 Anything else such an advance left waits for the next advance to decide, so
-the run halts or moves on the same with or without a restart, unless the
-condition cannot be decided on the next advance (its predicate inconclusive or
-unresolvable) while a sibling fails: the run then unwinds past the step
-(#318). `workflow cancel` cancels whatever a lost advance left planned or
+the run halts or moves on the same with or without a restart. `workflow
+cancel` cancels whatever a lost advance left planned or
 waiting for approval under any of the run's steps, not only the tasks the run
 names, and cancelling an already cancelled run sweeps again. Tasks are
 cancelled, the run's own and the leftovers, only once the run's cancel is
@@ -326,9 +327,9 @@ recorded on the cancelled run, and a task still running there is cancelled as
 the run's own. Its step is recorded as still in flight (`recovery_required`,
 `task_still_in_flight`), not as cancelled: in another process, or one that
 died mid-effect, the effect may still land. One running in this process is
-recorded as it ended (cancelled, or done all the same) once it stops, unless
-another holder has the run's lease at that moment: then it keeps reading in
-flight, which errs towards unknown. The
+recorded as it ended (cancelled, or done all the same) once it stops, tried
+again while another holder has the run's lease, and cancelling the run again
+records any such step whose task has since ended, in any process. The
 public schema also reserves `partially_complete`, which no command enters
 today.
 
