@@ -153,6 +153,15 @@ export async function workspaceHoldsData(workspaceRoot: string, dataDirectory: s
 }
 
 /**
+ * Whether a workspace is the data directory or inside it, which
+ * `createMelraRuntime` refuses in every mode: every path there is MELRA's own.
+ */
+export async function workspaceInsideData(workspaceRoot: string, dataDirectory: string): Promise<boolean> {
+  const files = await FileRuntime.create({ root: unconfinedRoot(dataDirectory), reserved: [dataDirectory] });
+  return files.isReserved(workspaceRoot);
+}
+
+/**
  * Whether a workspace hands the agent every project at once: a filesystem
  * root, the home directory, or a directory holding home (`/Users`, `/home`,
  * `C:\Users`). Decided by identity, so a symlinked home, a bind mount and
@@ -355,20 +364,39 @@ export async function createMelraRuntime(
   // What this process holds open or locked. A workspace can contain the data
   // directory (`serve` started from home), and an adapter opening and closing
   // one of these would drop this process's POSIX locks on it: SQLite's on the
-  // database, or the one other processes read this one's liveness from.
+  // database, or the one other processes read this one's liveness from. The
+  // data directory as a whole too: it also holds the key, the files a later
+  // start reads its policy and clients from, and the artifacts, which may be
+  // read but not changed.
   const reserved = [
+    dataDirectory,
     ...["", "-wal", "-shm", "-journal", "-owners"].map((suffix) => `${store.path}${suffix}`),
     join(dataDirectory, "payload.key"),
   ];
+  const artifacts = join(dataDirectory, "artifacts");
   const files = await FileRuntime.create({
     root: runtimeRoot,
     maxFileBytes: policy.maxFileBytes,
-    reserved,
+    // And the policy file, wherever it lies: every start reads it again.
+    reserved: options.policyPath === undefined ? reserved : [...reserved, resolve(options.policyPath)],
+    readable: [artifacts],
   });
+  // The data alone, for the layout checks and the terminal's directory check:
+  // a workspace holding only the policy file is an ordinary one, whose
+  // commands still run. ponytail: so a terminal command given a directory
+  // holding the policy file still reaches it unnamed.
+  const data = await FileRuntime.create({ root: runtimeRoot, reserved });
+  // Every path in such a workspace would be refused, without saying why.
+  if (await data.isReserved(policy.workspaceRoot)) {
+    store.close();
+    throw new Error(
+      "workspace_inside_data_directory: point MELRA_WORKSPACE at the project, outside MELRA_HOME.",
+    );
+  }
   // A workspace holding the data directory reaches it with a recursive read of
   // no path at all, so refusing the directories above it would be theatre
   // there; enforced mode refuses that layout instead.
-  const holdsData = await files.holdsReserved(files.root);
+  const holdsData = await data.holdsReserved(data.root);
   if (mode === "enforced" && holdsData) {
     store.close();
     const advice = await dataLocationAdvice(files.root, dataDirectory, options.policyPath);
@@ -377,16 +405,18 @@ export async function createMelraRuntime(
   const terminal = await TerminalRuntime.create({
     root: runtimeRoot,
     reserved: (path) => files.isReserved(path),
-    ...(holdsData ? {} : { holdsReserved: (path: string) => files.holdsReserved(path) }),
+    ...(holdsData ? {} : { holdsReserved: (path: string) => data.holdsReserved(path) }),
     confineArguments: mode === "enforced",
   });
   const browser = new BrowserRuntime({
-    artifactDirectory: join(dataDirectory, "artifacts"),
+    artifactDirectory: artifacts,
     workspaceRoot: runtimeRoot,
     allowedDomains: policy.allowedDomains,
     allowLocalhost: policy.allowLocalhost,
     popups: policy.popups,
     unhinged,
+    // Upload and file: loads only read, so its own artifacts stay usable.
+    reserved: (path) => files.isReserved(path, true),
     ...(options.browserExecutablePath === undefined
       ? {}
       : { executablePath: options.browserExecutablePath }),
@@ -411,7 +441,7 @@ export async function createMelraRuntime(
   });
   const memory = new LocalMemory(store, policy.memoryRetention);
   const computer = new ComputerRuntime({
-    artifactDirectory: join(dataDirectory, "artifacts"),
+    artifactDirectory: artifacts,
     ...(options.computerAdapter === undefined
       ? {}
       : { adapter: options.computerAdapter }),
@@ -435,7 +465,8 @@ export async function createMelraRuntime(
     http,
   );
   const verifier = await Verifier.create(runtimeRoot, {
-      reserved: (path) => files.isReserved(path),
+      // Reads only, so artifacts can be checked.
+      reserved: (path) => files.isReserved(path, true),
       ...(options.evidenceVerifiers === undefined ? {} : { verifiers: options.evidenceVerifiers }),
       // The same adapter the effects go through, so a verification request is
       // checked against the destination boundary, the allowlist, and the

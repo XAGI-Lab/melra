@@ -2,12 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createHash, randomBytes } from "node:crypto";
+import type { BigIntStats } from "node:fs";
 import {
   lstat,
   mkdir,
   open,
   readFile,
   readdir,
+  readlink,
   realpath,
   rename,
   rm,
@@ -29,6 +31,12 @@ export interface FileRuntimeOptions {
    * directory still reaches the same refusal.
    */
   reserved?: string[];
+  /**
+   * Directories inside a reserved one whose contents may still be read
+   * (`isReserved` with `reading`), recognised the same way: MELRA's artifacts.
+   * Nothing may change them, or the directory itself.
+   */
+  readable?: string[];
 }
 
 function inside(root: string, candidate: string): boolean {
@@ -64,6 +72,85 @@ async function sameEntry(left: string, right: string): Promise<boolean> {
   }
 }
 
+/** `look`, asked once per path for as long as `answers` is kept. */
+function remembered<T>(answers: Map<string, Promise<T>>, look: (at: string) => Promise<T>): (at: string) => Promise<T> {
+  return (at) => {
+    const answer = answers.get(at) ?? look(at);
+    answers.set(at, answer);
+    return answer;
+  };
+}
+
+/**
+ * More links than the kernel follows in one lookup (40 on Linux, 32 on
+ * macOS): a path that needs them opens nothing.
+ */
+const MAX_LINKS = 40;
+
+/**
+ * `real`: `path` with the deepest part of it that exists resolved through
+ * links, and the rest as written. `next`: when the first part that does not
+ * exist is a link, `path` with that link replaced by its target, where the
+ * kernel would go on. `resolved` keeps each lookup's answer, or why it failed,
+ * for the next spelling of a chain.
+ */
+async function realSpelling(
+  path: string,
+  resolved = new Map<string, Promise<string | NodeJS.ErrnoException>>(),
+): Promise<{ real: string; next?: string }> {
+  const resolveLinks = remembered(resolved, (at) => realpath(at).catch((error: NodeJS.ErrnoException) => error));
+  const whole = await resolveLinks(path);
+  if (typeof whole === "string") return { real: whole };
+  // A part resolves only if every part above it does, so the deepest one that
+  // does is found by halving: about log2(depth) lookups, not one per part.
+  // ponytail: each realpath still walks its whole prefix, so 100 arguments 300
+  // parts deep cost ~1 s here (12 s at one lookup per part). Memoise resolved
+  // prefixes across a call's arguments if that ever shows up.
+  const chain: string[] = [];
+  for (let probe = path; ; probe = dirname(probe)) {
+    chain.unshift(probe);
+    if (dirname(probe) === probe) break;
+  }
+  let real = path;
+  let parent: string | undefined;
+  let [resolves, fails] = [-1, chain.length - 1];
+  while (fails - resolves > 1) {
+    const middle = (resolves + fails) >> 1;
+    const probe = chain[middle] as string;
+    const actual = await resolveLinks(probe);
+    if (typeof actual !== "string") fails = middle;
+    else [resolves, real, parent] = [middle, join(actual, relative(probe, path)), actual];
+  }
+  if (parent === undefined) return { real };
+  // By its bare name in its resolved directory: a trailing separator would
+  // follow the link instead of naming it.
+  const link = chain[fails] as string;
+  const at = join(parent, basename(link));
+  if ((await lstat(at).catch(() => undefined))?.isSymbolicLink() !== true) return { real };
+  const target = await readlink(at).catch(() => undefined);
+  if (target === undefined) return { real };
+  // Joined as written, not normalised: the kernel takes a `..` in it after
+  // following the links before it. ponytail: judged where it leads, not at
+  // each part it passes on the way; judge those as the terminal judges its
+  // arguments (`climbedFrom`) to answer the same there too.
+  const joined = isAbsolute(target) ? target : `${parent}${sep}${target}`;
+  const next = `${joined}${path.slice(link.length)}`;
+  // Nothing through a part that does not resolve does, so the next spelling
+  // need not ask again; each ask follows the rest of the chain. The target of
+  // a link to a missing name is missing too; after too many links, one fewer
+  // may resolve, so that is asked once.
+  const failure = await resolveLinks(link);
+  const missing = typeof failure !== "string" && (failure.code === "ENOENT" || failure.code === "ENOTDIR");
+  const onward = missing ? failure : await resolveLinks(joined);
+  if (typeof onward !== "string") {
+    for (let through = next; through.length >= joined.length; through = dirname(through)) {
+      resolved.set(through, Promise.resolve(onward));
+      if (dirname(through) === through) break;
+    }
+  }
+  return { real, next };
+}
+
 /**
  * The bytes a write's content stands for. Node's base64 decoder is lenient: it
  * stops at the first padding, skips what is not base64, and decoded two joined
@@ -89,11 +176,13 @@ export class FileRuntime {
   readonly maxEntries: number;
   private readonly lexicalRoot: string;
   private readonly reserved: string[];
+  private readonly readable: string[];
 
   private constructor(options: FileRuntimeOptions, root: string) {
     this.root = root;
     this.lexicalRoot = resolve(options.root);
     this.reserved = (options.reserved ?? []).map((path) => resolve(path));
+    this.readable = (options.readable ?? []).map((path) => resolve(path));
     this.maxFileBytes = options.maxFileBytes ?? 10 * 1024 * 1024;
     this.maxEntries = options.maxEntries ?? 1_000;
   }
@@ -130,7 +219,7 @@ export class FileRuntime {
    * ponytail: by name, so an NTFS stream spelling of `.git` is not caught; the
    * reserved-file check has the same Windows follow-up.
    */
-  async resolvePath(input: string, allowRoot = false, creating = false): Promise<string> {
+  async resolvePath(input: string, allowRoot = false, creating = false, changing = creating): Promise<string> {
     const lexical = resolve(this.root, input);
     // "Is it the root" asked the way `inside` asks "is it within": through
     // `relative`, which ignores case on Windows. A string compare let `..\\WS`
@@ -138,6 +227,10 @@ export class FileRuntime {
     if (!inside(this.root, lexical) || (!allowRoot && relative(this.root, lexical) === "")) {
       throw new Error("path_outside_workspace");
     }
+    // Before following links, so every reserved name gets the same answer,
+    // wherever a link inside it leads. `isReserved` follows them itself, the
+    // same way as below, so the path found there needs no second judgement.
+    if (await this.isReserved(lexical, !changing)) throw new Error("path_reserved");
 
     let probe = lexical;
     let real = lexical;
@@ -158,59 +251,117 @@ export class FileRuntime {
         probe = parent;
       }
     }
-    if (await this.isReserved(real)) throw new Error("path_reserved");
+    // A directory holding reserved data takes it along when it is moved or
+    // removed, so neither may happen to it. Making it again changes nothing,
+    // and nothing can be renamed onto it while it holds anything.
+    if (changing && !creating && (await this.holdsReserved(real))) throw new Error("path_reserved");
     if (creating && relative(this.root, real).split(sep).some((part) => spelling(part) === ".git")) {
       throw new Error("path_git_metadata");
     }
     return lexical;
   }
 
-  /** Whether `path` is, or is inside, one of the reserved entries. */
-  async isReserved(path: string): Promise<boolean> {
+  /**
+   * Whether `path` is one of `entries`: by a case-insensitive name and the
+   * identity of the directory holding it. On a case-sensitive filesystem a
+   * sibling whose name differs from an entry only in case, such as a twin of
+   * the data directory, is matched too; that refuses more, never less.
+   */
+  private async named(path: string, entries: string[]): Promise<boolean> {
+    const name = spelling(basename(path));
+    for (const entry of entries) {
+      // Only a matching name costs a stat, so ordinary paths cost nothing.
+      if (spelling(basename(entry)) === name && (await sameEntry(dirname(path), dirname(entry)))) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Whether `path` is, or is inside, one of the reserved entries. `reading`
+   * says nothing will change it, so the contents of a readable directory are
+   * judged only below that directory, where a link to reserved data is still
+   * refused. Judged as spelled and again with the part that exists resolved
+   * through links: a link may lead below a reserved directory, where neither
+   * the names nor the identities compared here would recognise the path. A
+   * link whose target does not exist is followed too, so a link to a missing
+   * reserved name is refused like one to a present name.
+   */
+  async isReserved(path: string, reading = false): Promise<boolean> {
+    const spelled = resolve(path);
+    // Each part looked up once per call: the spellings a chain of links
+    // passes through share most of their parts.
+    const lookup = remembered(new Map<string, Promise<BigIntStats | undefined>>(), (at) =>
+      stat(at, { bigint: true }).catch(() => undefined),
+    );
+    const resolved = new Map<string, Promise<string | NodeJS.ErrnoException>>();
+    // The same thing under another name, a hard link: so the target and each
+    // directory above it are compared by identity with every reserved entry
+    // and every file inside a reserved directory.
+    const identities = new Set<string>();
+    for (const entry of this.reserved) {
+      const held = await lookup(entry);
+      if (held === undefined) continue;
+      identities.add(identity(held));
+      if (!held.isDirectory()) continue;
+      for (const name of await readdir(entry).catch(() => [])) {
+        const file = await lookup(join(entry, name));
+        if (file !== undefined) identities.add(identity(file));
+      }
+    }
+    const judge = (at: string) => this.reservedAsSpelled(at, reading, identities, lookup);
+    if (await judge(spelled)) return true;
+    const seen = new Set<string>();
+    for (let next: string | undefined = spelled; next !== undefined && !seen.has(next); ) {
+      // No lookup follows a chain this long, but the answer would still tell
+      // where it ends: refused, whatever is there. ponytail: deleting or moving
+      // the link itself is refused too; allowing that needs a chain to a
+      // present name refused at the same length first.
+      if (seen.size > MAX_LINKS) return true;
+      seen.add(next);
+      const step = await realSpelling(next, resolved);
+      if (step.real !== spelled && (await judge(step.real))) return true;
+      next = step.next;
+    }
+    // Every spelling on the way judged, or a loop, which opens nothing.
+    return false;
+  }
+
+  private async reservedAsSpelled(
+    path: string,
+    reading: boolean,
+    identities: Set<string>,
+    lookup: (at: string) => Promise<BigIntStats | undefined>,
+  ): Promise<boolean> {
     // A descriptor path names whatever this process has open, MELRA's locked
     // files included, and on macOS realpath leaves it under /dev/fd.
     if (process.platform !== "win32" && inside("/dev/fd", resolve(path))) return true;
+    // macOS's /.vol/<dev>/<ino> names any file or directory by its inode
+    // alone, so below it no name or identity compared here need match.
+    if (process.platform === "darwin" && inside("/.vol", resolve(path))) return true;
+    let above: string | undefined;
+    for (let current = resolve(path); reading && above === undefined; current = dirname(current)) {
+      if (await this.named(current, this.readable)) above = current;
+      if (dirname(current) === current) break;
+    }
     // ponytail: one stat per name match, so `payload.key/` repeated 340 times
     // across 100 arguments still costs about 0.9 s. Cache the reserved
     // identities if that ever shows up.
-    for (let current = resolve(path); ; current = dirname(current)) {
-      const name = spelling(basename(current));
-      for (const entry of this.reserved) {
-        // Only a matching name costs a stat, so ordinary paths cost nothing.
-        if (spelling(basename(entry)) === name && (await sameEntry(dirname(current), dirname(entry)))) {
-          return true;
-        }
-      }
+    for (let current = resolve(path); current !== above; current = dirname(current)) {
+      if (await this.named(current, this.reserved)) return true;
       if (dirname(current) === current) break;
-    }
-    // The same thing under another name: a hard link, or macOS's
-    // /.vol/<dev>/<ino>, which names a file or directory by its inode alone.
-    // So the target and each directory above it are compared by identity with
-    // every reserved entry and every file inside a reserved directory.
-    const identities = new Set<string>();
-    for (const entry of this.reserved) {
-      const found = await stat(entry, { bigint: true }).catch(() => undefined);
-      if (found === undefined) continue;
-      identities.add(identity(found));
-      if (!found.isDirectory()) continue;
-      for (const name of await readdir(entry).catch(() => [])) {
-        const file = await stat(join(entry, name), { bigint: true }).catch(() => undefined);
-        if (file !== undefined) identities.add(identity(file));
-      }
     }
     if (identities.size === 0) return false;
     // Root first, stopping at the first missing directory: nothing below it
     // exists, and a 4 KB argument would otherwise cost thousands of failed stats.
     const chain: string[] = [];
-    for (let current = resolve(path); ; current = dirname(current)) {
+    for (let current = resolve(path); current !== above; current = dirname(current)) {
       chain.unshift(current);
       if (dirname(current) === current) break;
     }
     for (const current of chain) {
-      const found = await stat(current, { bigint: true }).catch(() => undefined);
+      const found = await lookup(current);
       if (found !== undefined && identities.has(identity(found))) return true;
-      // Except /.vol/<dev>, which never stats though /.vol/<dev>/<ino> below it does.
-      if (found === undefined && dirname(current) !== "/.vol") return false;
+      if (found === undefined) return false;
     }
     return false;
   }
@@ -220,8 +371,18 @@ export class FileRuntime {
     const target = await stat(path, { bigint: true }).catch(() => undefined);
     if (target?.isDirectory() !== true) return false;
     for (const holder of new Set(this.reserved.map((entry) => dirname(entry)))) {
-      // Lexically and through links, so a holder under a symlinked home is still found.
-      for (const start of new Set([holder, await realpath(holder).catch(() => holder)])) {
+      // Lexically and through links, so a holder under a symlinked home is
+      // still found, even before the holder itself exists.
+      const { real } = await realSpelling(holder);
+      // macOS also mounts the data volume whole at /System/Volumes/Data, so a
+      // directory there, or above it, holds what a firmlinked directory such as
+      // /Users or /private holds, though no `..` from those leads to it. For
+      // data on another volume this may count those system directories as
+      // holders too, which only refuses more.
+      const firmlinked = process.platform === "darwin" ? [join("/System/Volumes/Data", real)] : [];
+      // ponytail: a second bind mount of an ancestor placed inside the target
+      // is on none of these chains; reading the mount table would find it.
+      for (const start of new Set([holder, real, ...firmlinked])) {
         for (let current = start; ; current = dirname(current)) {
           const found = await stat(current, { bigint: true }).catch(() => undefined);
           if (found !== undefined && identity(found) === identity(target)) return true;
@@ -239,6 +400,7 @@ export class FileRuntime {
       // ".": the others were refused as outside the workspace.
       operation.action === "list",
       operation.action === "write" || operation.action === "mkdir",
+      !["list", "read", "stat", "hash"].includes(operation.action),
     );
     switch (operation.action) {
       case "list": {

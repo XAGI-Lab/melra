@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { createReadStream, type BigIntStats } from "node:fs";
 import { lstat, readdir, realpath, stat } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
-import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { EvidencePredicate } from "@melra/protocol";
 import { evidenceStrength, type EvidenceItem } from "@melra/receipt-schema";
 
@@ -557,9 +557,9 @@ export class Verifier {
   }
 
   private async filePath(input: string): Promise<string> {
-    const candidate = this.spelled(input);
-    if (candidate === undefined) throw new Refusal("verification_path_outside_workspace");
-    const actual = await realpath(candidate);
+    // Where the path leads is decided before whether it is there, which is an
+    // answer, so a refused path gets the same refusal present or absent.
+    const actual = await realpath(await this.potentiallyAbsentFilePath(input));
     if (!inside(this.root, actual)) {
       throw new Refusal("verification_path_outside_workspace");
     }
@@ -572,12 +572,19 @@ export class Verifier {
   private async potentiallyAbsentFilePath(input: string): Promise<string> {
     const candidate = this.spelled(input);
     if (candidate === undefined) throw new Refusal("verification_path_outside_workspace");
+    // Before following links, so every reserved name gets the same answer,
+    // wherever a link inside it leads; the runtime's check follows them itself.
+    if ((await this.reserved?.(candidate)) === true) throw new Refusal("verification_path_reserved");
     let probe = candidate;
     while (true) {
       try {
         const actual = await realpath(probe);
         if (!inside(this.root, actual)) {
           throw new Refusal("verification_path_outside_workspace");
+        }
+        // Whether a reserved name is absent is no more answered than whether it exists.
+        if ((await this.reserved?.(join(actual, relative(probe, candidate)))) === true) {
+          throw new Refusal("verification_path_reserved");
         }
         return candidate;
       } catch (error) {

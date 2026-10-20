@@ -36,6 +36,7 @@ import {
   serveStdio,
   unconfinedRoot,
   workspaceHoldsData,
+  workspaceInsideData,
   type MelraRuntime,
 } from "@melra/server";
 import { detectBrowserExecutable } from "@melra/browser-runtime";
@@ -575,26 +576,35 @@ async function doctor(env: CliEnvironment): Promise<{
     });
   }
   // Only once both exist as directories: the check would create a missing
-  // workspace. Not in unsafe-local, which reaches every file on the machine and
-  // whose guardrails warning already says so.
-  if (
-    !env.unhinged &&
-    checks.every((check) => !["workspace", "data-directory"].includes(check.name) || check.status !== "fail")
-  ) {
+  // workspace.
+  if (checks.every((check) => !["workspace", "data-directory"].includes(check.name) || check.status !== "fail")) {
     try {
-      const inside = await workspaceHoldsData(env.workspaceRoot, env.dataDirectory);
-      checks.push(
-        inside
-          ? {
-              name: "data-location",
-              // The server refuses to start this way in enforced mode.
-              status: env.mode === "enforced" ? "fail" : "warn",
-              detail: `${env.dataDirectory} is inside the workspace, where a recursive read reaches payload.key without naming it`,
-              // As the server words its refusal.
-              next: await dataLocationAdvice(env.workspaceRoot, env.dataDirectory, env.policyPath),
-            }
-          : { name: "data-location", status: "pass", detail: "outside the workspace" },
-      );
+      if (await workspaceInsideData(env.workspaceRoot, env.dataDirectory)) {
+        checks.push({
+          name: "data-location",
+          // The server refuses to start this way in every mode.
+          status: "fail",
+          detail:
+            `workspace_inside_data_directory: ${env.workspaceRoot} is inside ${env.dataDirectory}, ` +
+            "where every path is MELRA's own; point MELRA_WORKSPACE at the project",
+        });
+      } else if (!env.unhinged) {
+        // Not in unsafe-local, which reaches every file on the machine and
+        // whose guardrails warning already says so.
+        const inside = await workspaceHoldsData(env.workspaceRoot, env.dataDirectory);
+        checks.push(
+          inside
+            ? {
+                name: "data-location",
+                // The server refuses to start this way in enforced mode.
+                status: env.mode === "enforced" ? "fail" : "warn",
+                detail: `${env.dataDirectory} is inside the workspace, where a recursive read reaches payload.key without naming it`,
+                // As the server words its refusal.
+                next: await dataLocationAdvice(env.workspaceRoot, env.dataDirectory, env.policyPath),
+              }
+            : { name: "data-location", status: "pass", detail: "outside the workspace" },
+        );
+      }
     } catch (error) {
       checks.push({
         name: "data-location",

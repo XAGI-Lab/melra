@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createHash } from "node:crypto";
-import { link, lstat, mkdir, mkdtemp, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { link, lstat, mkdir, mkdtemp, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { Verifier } from "./index.js";
+import { Verifier, type PredicateVerifier } from "./index.js";
 
 const roots: string[] = [];
 
@@ -104,6 +104,89 @@ describe("Verifier", () => {
     );
     expect(hashed.verified).toBe(false);
     expect(hashed.evidence[0]?.summary).toBe("verification_path_reserved");
+  });
+
+  it("gives no answer about a reserved name, present or absent", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-verifier-")));
+    roots.push(root);
+    const owners = join(root, "melra.sqlite-owners");
+    await mkdir(owners);
+    await writeFile(join(owners, "live"), "");
+    const asks: PredicateVerifier<{ type: "asks"; path: string }> = {
+      type: "asks",
+      async check(predicate, _result, context) {
+        await context.workspacePath(predicate.path, { mayBeAbsent: true });
+        return { passed: true, summary: "asked" };
+      },
+    };
+    const verifier = await Verifier.create(root, {
+      reserved: async (path) => path === owners || path.startsWith(`${owners}${sep}`),
+      verifiers: [asks],
+    });
+    const { evidence } = await verifier.verify(
+      [
+        { type: "file_absent", path: "melra.sqlite-owners/live" },
+        { type: "file_absent", path: "melra.sqlite-owners/gone" },
+        { type: "file_exists", path: "melra.sqlite-owners/gone" },
+        { type: "custom", verifier: "asks", params: { path: "melra.sqlite-owners/gone" } },
+      ],
+      {},
+    );
+    expect(evidence.map(({ summary, unanswerable }) => [summary, unanswerable ?? false])).toEqual(
+      Array.from({ length: 4 }, () => ["verification_path_reserved", true]),
+    );
+  });
+
+  it("answers the same for every reserved name, wherever a link inside it leads", async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), "melra-verifier-")));
+    roots.push(base);
+    const root = join(base, "workspace");
+    const data = join(root, ".melra");
+    await mkdir(data, { recursive: true });
+    await mkdir(join(base, "outside"));
+    await writeFile(join(base, "outside", "f"), "outside");
+    await symlink(join(base, "outside"), join(data, "out"), "junction");
+    const verifier = await Verifier.create(root, {
+      reserved: async (path) => path === data || path.startsWith(`${data}${sep}`),
+    });
+    const { evidence } = await verifier.verify(
+      [".melra/out/f", ".melra/out/missing", ".melra/missing"].flatMap((path) => [
+        { type: "file_exists", path },
+        { type: "file_absent", path },
+      ]),
+      {},
+    );
+    expect(evidence.map(({ summary }) => summary)).toEqual(
+      Array.from({ length: 6 }, () => "verification_path_reserved"),
+    );
+  });
+
+  it("gives the same refusal, present or absent, for a name a link leads out to", async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), "melra-verifier-")));
+    roots.push(base);
+    const root = join(base, "workspace");
+    const data = join(base, "data");
+    await mkdir(root);
+    await mkdir(data);
+    await symlink(data, join(root, "linked"));
+    const verifier = await Verifier.create(root, {
+      reserved: async (path) => path === data || path.startsWith(`${data}${sep}`),
+    });
+    const ask = () =>
+      verifier.verify(
+        [
+          { type: "file_exists", path: "linked/policy.json" },
+          { type: "file_hash", path: "linked/policy.json", sha256: "0".repeat(64) },
+        ],
+        {},
+      );
+    await writeFile(join(data, "policy.json"), "{}");
+    const present = await ask();
+    await rm(join(data, "policy.json"));
+    const absent = await ask();
+    expect([...present.evidence, ...absent.evidence].map(({ summary }) => summary)).toEqual(
+      Array.from({ length: 4 }, () => "verification_path_outside_workspace"),
+    );
   });
 
   it("answers a missing file as no, not as no answer", async () => {
