@@ -25,7 +25,6 @@
     "build": "node scripts/run-recursive.mjs build",
     "build:sea": "pnpm build && node scripts/build-sea.mjs",
     "clean": "pnpm -r clean",
-    "dev": "pnpm --filter @melra/cli dev",
     "melra": "tsx apps/cli/src/index.ts",
     "e2e": "pnpm --filter @melra/server test:e2e",
     "docker:smoke": "node scripts/docker-smoke.mjs",

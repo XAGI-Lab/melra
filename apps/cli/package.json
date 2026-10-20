@@ -43,7 +43,6 @@
   "scripts": {
     "build": "tsc -p tsconfig.json && chmod +x dist/bin.js dist/index.js",
     "clean": "rm -rf dist",
-    "dev": "tsx src/index.ts",
     "start": "tsx src/index.ts",
     "pack:check": "npm pack --dry-run",
     "test": "vitest run --testTimeout=20000",
