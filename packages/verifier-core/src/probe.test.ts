@@ -137,6 +137,27 @@ describe("verification through a channel that did not act", () => {
     });
   });
 
+  it("names the resource it read without the query or userinfo it read it with", async () => {
+    const url = "https://reader:pw-in-url@api.example.com/refunds/{{json.id}}?access_token=query-held";
+    const verifier = await Verifier.create(root, {
+      probe: probeReturning({ state: "succeeded" }),
+    });
+    const { evidence } = await verifier.verify([predicate({ url })], created);
+    // The request itself is the one the caller declared.
+    expect(asked).toEqual([
+      "https://reader:pw-in-url@api.example.com/refunds/rf_123?access_token=query-held",
+    ]);
+    expect(evidence[0]).toMatchObject({ passed: true, source: "https://api.example.com/refunds/rf_123" });
+    // And when the provider could not be asked.
+    const unreachable = await Verifier.create(root, {
+      probe: async () => {
+        throw new Error("ECONNREFUSED");
+      },
+    });
+    const missed = await unreachable.verify([predicate({ url })], created);
+    expect(missed.evidence[0]).toMatchObject({ inconclusive: true, source: "https://api.example.com/refunds/rf_123" });
+  });
+
   it("reads a provider error status as no answer, not as no", async () => {
     for (const status of [503, 429, 500, 401]) {
       const verifier = await Verifier.create(root, {

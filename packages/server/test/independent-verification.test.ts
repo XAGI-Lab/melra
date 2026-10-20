@@ -128,6 +128,31 @@ describe("a provider's own state, not the provider's answer", () => {
     expect(seen).toHaveLength(2);
   });
 
+  it("keeps a token in the read's query out of the stored receipt and certificate", async () => {
+    state = "succeeded";
+    const token = "query-held-A1b2C3d4E5f6";
+    const { task, receipt, certificate } = await run(
+      TaskRequestSchema.parse({
+        ...refund(),
+        requiredEvidence: [
+          {
+            type: "http_resource_matches",
+            url: `http://127.0.0.1:${port}/refunds/{{json.id}}?access_token=${token}`,
+            path: "json.state",
+            value: "succeeded",
+          },
+        ],
+      }),
+    );
+    expect(task.status).toBe("verified_success");
+    // The read went out as declared.
+    expect(seen).toEqual(["POST /refunds", `GET /refunds/rf_1?access_token=${token}`]);
+    expect(receipt?.evidence[0]?.source).toBe(`http://127.0.0.1:${port}/refunds/rf_1`);
+    expect(JSON.stringify(runtime.store.getReceiptsForTask(task.id))).not.toContain(token);
+    expect(JSON.stringify(runtime.store.getCertificateForTask(task.id))).not.toContain(token);
+    expect(JSON.stringify(certificate)).not.toContain(token);
+  });
+
   it("cannot reach a destination the effect could not reach", async () => {
     state = "succeeded";
     // Same machine, a name the allowlist does not carry. A probe that skipped

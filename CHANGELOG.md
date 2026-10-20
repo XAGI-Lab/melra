@@ -1007,6 +1007,13 @@ All notable changes are documented here. The format follows
   followed by an `@` later in its path or query is no longer read as carrying
   credentials.
 
+- Evidence is redacted before it is stored in a receipt or certificate, as
+  the rest of a receipt already was. An `http_resource_matches` item names the
+  URL it read without its query or userinfo, while the request itself goes out
+  as declared, and every item's summary and source pass the shared secret
+  patterns, so a token in a verification URL or in a provider's error text no
+  longer reaches either record. Records written earlier keep what they stored.
+
 ## [0.3.0-alpha.14] - 2026-10-16
 
 ### Fixed

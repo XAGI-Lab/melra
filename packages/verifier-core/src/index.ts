@@ -7,7 +7,7 @@ import { lstat, readdir, realpath, stat } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { EvidencePredicate } from "@melra/protocol";
-import { evidenceStrength, type EvidenceItem } from "@melra/receipt-schema";
+import { evidenceStrength, redactStructuredValue, type EvidenceItem } from "@melra/receipt-schema";
 
 /**
  * A question the kernel itself refuses to ask: a path outside the workspace or
@@ -340,6 +340,10 @@ const httpResourceMatches: Built<"http_resource_matches"> = {
       throw new Refusal("verification_probe_unavailable");
     }
     const url = interpolate(predicate.url, result);
+    // What the item names is stored in receipts, so without the query and
+    // userinfo a stored request drops too: either can carry a token. The
+    // request below still goes to `url` as declared.
+    const source = (redactStructuredValue({ url }).value as { url: string }).url;
     // Caught here so the item names the URL it could not read. A transport
     // failure is not the provider saying no: it is `inconclusive`, and that is
     // what lets an unreachable provider leave a mutation `recovery_required`
@@ -354,7 +358,7 @@ const httpResourceMatches: Built<"http_resource_matches"> = {
         passed: false,
         inconclusive: true,
         summary: `independent read unavailable: ${error instanceof Error ? error.message : String(error)}`,
-        source: url,
+        source,
       };
     }
     const cut = observed.truncated === true;
@@ -372,7 +376,7 @@ const httpResourceMatches: Built<"http_resource_matches"> = {
         passed: false,
         inconclusive: true,
         summary: `independent read unavailable: the provider answered ${status}`,
-        source: url,
+        source,
       };
     }
     // A body cut at the probe's size cap is not the provider saying no about
@@ -399,13 +403,13 @@ const httpResourceMatches: Built<"http_resource_matches"> = {
         passed: false,
         inconclusive: true,
         summary: "independent read unavailable: the response passed the size cap and was cut off",
-        source: url,
+        source,
       };
     }
     return {
       passed,
       summary: `independent read of ${predicate.path} ${passed ? "matched" : "did not match"} expected value`,
-      source: url,
+      source,
     };
   },
 };

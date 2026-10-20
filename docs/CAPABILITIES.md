@@ -427,9 +427,11 @@ rather than guessing either way, and a request that declared no reconciliation
 predicates stays parked for a human.
 
 `melra_execute` returns raw operation output directly to the connected client.
-Durable task state and receipts keep only centrally redacted input and output;
-file contents, browser text, terminal output, typed values, environment values,
-URL queries, and common secret formats are not retained there.
+Durable task state, receipts and certificates keep only centrally redacted
+input, output and evidence; file contents, browser text, terminal output, typed
+values, environment values, URL queries and userinfo, and common secret formats
+are not retained there. An `http_resource_matches` item names the URL it read
+without its query or userinfo; the request itself goes out as declared.
 
 Free-form task constraints fail closed because they cannot be enforced
 deterministically. `forbiddenEffects` accepts only `read`, `mutate`, and
