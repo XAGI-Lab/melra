@@ -2721,6 +2721,48 @@ describe("WorkflowController execution", () => {
     expect(next.run.nodes.second?.status).toBe("awaiting_approval");
     expect(kinds).toEqual(["system"]);
   });
+
+  for (const [mode, second] of [
+    ["developer", mutationRequest("second")],
+    ["enforced", request("second")],
+  ] as const) {
+    it(`offers no newly ready step beside a parked one denied since the last advance (${mode})`, async () => {
+      const kinds: string[] = [];
+      const { controller, tasks, store } = await setup(
+        async (operation) => {
+          kinds.push(operation.kind);
+          return { success: true, stored: true };
+        },
+        { mode },
+      );
+      const planned = controller.plan(
+        WorkflowDefinitionSchema.parse({
+          schemaVersion: "1.0.0",
+          id: definitionId,
+          version: 1,
+          name: "Gate denied beside a chain",
+          nodes: [
+            { id: "gate", type: "operation", request: mutationRequest("gate") },
+            { id: "first", type: "operation", request: request("first") },
+            { id: "second", type: "operation", dependsOn: ["first"], request: second },
+          ],
+        }),
+      );
+      const parked = await controller.advance(planned.id);
+      expect(parked.run.nodes.gate?.status).toBe("awaiting_approval");
+      // Denied out of band (`melra approve --deny`, the console's Deny): the
+      // run still records gate as awaiting until an advance reads its task.
+      tasks.cancel(parked.run.nodes.gate!.taskIds[0]!);
+
+      const next = await controller.advance(planned.id);
+      expect(next.run.status).toBe("failed");
+      // Neither challenged (developer) nor run (enforced, a read) on a run
+      // the denial fails.
+      expect(next.run.nodes.second?.status).toBe("pending");
+      expect(store.listTasks(100, "awaiting_approval")).toEqual([]);
+      expect(kinds).toEqual(["system"]);
+    });
+  }
 });
 
 describe("WorkflowController recovery", () => {

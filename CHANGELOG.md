@@ -156,7 +156,9 @@ All notable changes are documented here. The format follows
   do not depend on it. While any node waited, `melra_workflow_advance`
   offered only the waiting ones, so an independent branch stopped until the
   person answered. Each advance now offers the waiting nodes and the newly
-  ready ones together. (#247)
+  ready ones together, except one that finds a waiting step denied since the
+  last advance: it offers only the waiting nodes, so nothing new starts on a
+  run the denial fails. (#247)
 
 - A deny and an execute in different processes no longer both win. Starting a
   task, and cancelling one (`melra approve --deny`, the console's Deny,

@@ -395,7 +395,24 @@ export class WorkflowController {
       )
       .map((node) => node.id)
       .sort();
-    const nodeIds = rollback.length > 0 ? rollback : [...awaiting, ...readyNodeIds(graph, current.nodes)];
+    // Unless a parked task has settled since (an operator's Deny, a peer's
+    // execute): the run still reads it as waiting, so hasFailure cannot see a
+    // denial yet. Those nodes alone, then, so this wave records it before any
+    // newly ready step is challenged or run on a run it fails.
+    const parkedSettled = awaiting.some((nodeId) =>
+      current.nodes[nodeId]!.taskIds.some(
+        (taskId) =>
+          !["planned", "awaiting_approval", "verified_success"].includes(
+            this.store.getTask(taskId)?.status ?? "",
+          ),
+      ),
+    );
+    const nodeIds =
+      rollback.length > 0
+        ? rollback
+        : parkedSettled
+          ? awaiting
+          : [...awaiting, ...readyNodeIds(graph, current.nodes)];
     if (nodeIds.length === 0) {
       // Nothing to run, but a step's certificate the last advance could not
       // write may be written now, and a run with nothing left is complete.
