@@ -131,6 +131,15 @@ the GitHub release, the install smoke and then the container. A re-run uses the 
 at the tag, so this applies to tags cut after this change. A **brand-new** package cannot be trusted until it exists on the
 registry: publish its first version by hand as an owner, then run the script.
 
+**A prerelease left with no assets can be repaired.** From `main`, run
+`gh workflow run repair-release-assets.yml --ref main -f release_tag=<tag>`.
+It builds the release files and single executables from the tag's commit with
+today's release steps, checks their checksums, attests them and attaches them.
+It refuses a release that is not a prerelease or already has assets, and stops
+without uploading if the tag moves or an asset appears first. It never touches
+npm, dist-tags or the container image, and its attestations name
+`repair-release-assets.yml` rather than `release.yml`.
+
 Once a release has published this way, set each package to *Require two-factor
 authentication and disallow tokens* (Settings → Publishing access) and delete
 any remaining npm automation tokens.
