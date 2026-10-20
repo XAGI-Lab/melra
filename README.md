@@ -84,64 +84,6 @@ https://github.com/user-attachments/assets/e5cf895d-7ea6-4797-a1ef-e69cc5860d3f
 
 ---
 
-## What is MELRA?
-
-AI agents no longer just talk. They edit files, run commands, click through websites
-and call APIs on your behalf. Four questions come with that, and most agents answer
-them differently, or not at all:
-
-<table>
-<tr>
-<td width="25%" valign="top">
-
-### 🛡️ Is it allowed?
-
-Every action MELRA receives is checked against **your** policy, and checked again at
-the moment it runs. Risky changes wait for your exact approval.
-
-</td>
-<td width="25%" valign="top">
-
-### ✅ Did it really work?
-
-"No error" is not success. An action counts only when the **evidence you declared**
-holds: the file exists, the exit code is 0, the page says what it should.
-
-</td>
-<td width="25%" valign="top">
-
-### 🔁 What if it crashes?
-
-Every mutation MELRA dispatches is **recorded before it runs** and runs **at most
-once**. After a crash, MELRA settles it from its evidence or the provider; what it
-cannot settle waits in `recovery_required` and is never replayed.
-
-</td>
-<td width="25%" valign="top">
-
-### 🧾 What happened?
-
-Every action MELRA runs to an outcome leaves a **redacted, hash-linked receipt**, so
-you can audit what ran, who asked, and why it was allowed.
-
-</td>
-</tr>
-</table>
-
-MELRA answers those questions in one place for tool calls routed through it, across
-supported agents. It sits underneath your agent for those calls, the way an operating
-system sits underneath your apps:
-
-<p align="center">
-  <img src="docs/assets/readme/layers.svg" alt="Where MELRA sits: the model reasons, your agent runs the loop, MELRA governs tool calls routed through it, and effect adapters do the work on your systems. Other agent tools remain outside MELRA's control." width="100%" />
-</p>
-
-> **The LLM reasons. The harness manages the loop. MELRA governs the effect lifecycle
-> for calls routed through it.** Swap the model or the agent; MELRA's policies,
-> approvals, credentials, history and receipts can stay in place.
-
----
-
 ## Quick start
 
 You need **Node.js 22.13 or newer, or 23.4 or newer**. From the project the agent
@@ -218,6 +160,64 @@ agent builders can find it. Trying it in Cursor or another client? Share the cli
 and its version, your OS, and your MELRA version (`npx @melra/cli@alpha version`) in
 [issue #184](https://github.com/XAGI-Lab/melra/issues/184); partial test results are
 useful too.
+
+---
+
+## What is MELRA?
+
+AI agents no longer just talk. They edit files, run commands, click through websites
+and call APIs on your behalf. Four questions come with that, and most agents answer
+them differently, or not at all:
+
+<table>
+<tr>
+<td width="25%" valign="top">
+
+### 🛡️ Is it allowed?
+
+Every action MELRA receives is checked against **your** policy, and checked again at
+the moment it runs. Risky changes wait for your exact approval.
+
+</td>
+<td width="25%" valign="top">
+
+### ✅ Did it really work?
+
+"No error" is not success. An action counts only when the **evidence you declared**
+holds: the file exists, the exit code is 0, the page says what it should.
+
+</td>
+<td width="25%" valign="top">
+
+### 🔁 What if it crashes?
+
+Every mutation MELRA dispatches is **recorded before it runs** and runs **at most
+once**. After a crash, MELRA settles it from its evidence or the provider; what it
+cannot settle waits in `recovery_required` and is never replayed.
+
+</td>
+<td width="25%" valign="top">
+
+### 🧾 What happened?
+
+Every action MELRA runs to an outcome leaves a **redacted, hash-linked receipt**, so
+you can audit what ran, who asked, and why it was allowed.
+
+</td>
+</tr>
+</table>
+
+MELRA answers those questions in one place for tool calls routed through it, across
+supported agents. It sits underneath your agent for those calls, the way an operating
+system sits underneath your apps:
+
+<p align="center">
+  <img src="docs/assets/readme/layers.svg" alt="Where MELRA sits: the model reasons, your agent runs the loop, MELRA governs tool calls routed through it, and effect adapters do the work on your systems. Other agent tools remain outside MELRA's control." width="100%" />
+</p>
+
+> **The LLM reasons. The harness manages the loop. MELRA governs the effect lifecycle
+> for calls routed through it.** Swap the model or the agent; MELRA's policies,
+> approvals, credentials, history and receipts can stay in place.
 
 ---
 
