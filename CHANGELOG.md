@@ -791,6 +791,51 @@ All notable changes are documented here. The format follows
 
 ### Security
 
+- **Breaking:** the files the browser keeps its session in and credentials
+  are read from are reserved like the `MELRA_POLICY` file, wherever they lie
+  and in every mode: the browser profile (`MELRA_BROWSER_PROFILE`), both HTTP
+  archives (`MELRA_BROWSER_HAR_PATH`, `MELRA_BROWSER_HAR_REPLAY`) and every
+  credential's `source.file`. No file effect, verification or browser upload
+  may name them, nor a terminal argument as a path or a plain `@`/`<`
+  reference (`path_reserved`, `terminal_path_reserved`), approved or not; a
+  program reading files by means of its own stays the accepted residual of
+  approving it. Enforced mode now refuses to start in a workspace that holds
+  one, with `enforced_mode_refuses_secret_inside_workspace` naming which; move
+  it out of the workspace. A workspace inside the browser profile is refused at
+  startup in every mode (`workspace_inside_browser_profile`). The recording's
+  directory is made at startup rather than at the browser's first start.
+  `melra doctor` reports the layout on a new `secret-location` line, which
+  fails where the server would refuse to start and warns where a developer
+  mode workspace holds one.
+
+- **Breaking:** a bare program name in a terminal command is looked up only
+  in `PATH` entries outside the workspace, as written and through links.
+  Entries inside it, and empty or relative ones, which name the working
+  directory, are skipped, and the program's own `PATH` leaves them out too,
+  so a file left in the workspace is not run in place of an allowlisted
+  program. A tool found only in a project's `node_modules/.bin`
+  (`vitest`, `tsc`) now fails with `terminal_command_not_found`; run it
+  through `npx` or `pnpm exec`, or allowlist its path. A workspace that holds
+  tool directories, such as a home directory with `~/.local/bin` or a
+  version manager's, loses those programs the same way, which is one more
+  reason to narrow it. If no entry is left, as with a workspace at the
+  filesystem root, or `PATH` is not set at all, every command fails with
+  `terminal_path_empty_after_filter`, a path-qualified one too: a program
+  given an empty `PATH`, or none, may search the working directory.
+  `--unsafe-local` keeps `PATH` as given. On Windows, the program lookup
+  also skips relative `PATH` entries.
+
+- A terminal argument that names a file for the program to read as a plain
+  reference (`@file`, `-d@file`, `--data=@file`, `name=@file`, `name=<file`)
+  has that file judged too, as the one file it names: MELRA's own files are
+  refused in every mode (`terminal_path_reserved`), and enforced mode
+  refuses one spelled inside that leads out
+  (`terminal_path_outside_workspace`). Only these plain forms are judged; a
+  program's own other ways of naming a file stay the accepted residual of
+  approving that program. Text that only looks like a reference, as in
+  `rg "@/" src`, `rg "</div>" src` or `git show @~1`, runs as before, and so does approval: no command that runs without one reads a
+  reference, and one that does, such as `curl`, already needs it.
+
 - MELRA's data directory is reserved as a whole, by every adapter and by
   verification, in every mode. A file effect can no longer write into it,
   replace it, or move or remove it or any directory that holds it (`path_reserved`),
