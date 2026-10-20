@@ -614,7 +614,6 @@ export class WorkflowController {
       : this.store.listWorkflowRuns(RECOVERABLE);
     if (runs.length === 0) return [];
     const recovered: WorkflowRun[] = [];
-    const allTasks = this.store.listTasks(100_000);
     for (const stored of runs) {
       if (this.leased.has(stored.id)) continue;
       let definition: WorkflowDefinition;
@@ -629,12 +628,9 @@ export class WorkflowController {
       );
       // Skipped runs keep any abandoned lease, which is how the sweep finds
       // them again once that task settles.
-      const unsettled = allTasks.filter(
-        (task) =>
-          task.idempotencyKey !== undefined &&
-          keys.has(task.idempotencyKey) &&
-          (task.status === "running" || task.status === "verifying"),
-      );
+      const unsettled = [...keys]
+        .flatMap((key) => this.store.listTasksByKey(key))
+        .filter((task) => task.status === "running" || task.status === "verifying");
       if (unsettled.length > 0) {
         const failed = unsettled.find((task) => taskFailures.has(task.id));
         if (failed !== undefined) runFailures.set(stored.id, taskFailures.get(failed.id));
@@ -653,7 +649,7 @@ export class WorkflowController {
         // Changed since the listing, by an advance or by an operator's pause,
         // so the tasks read above may be stale.
         if (this.store.getWorkflowRun(stored.id)?.stateVersion === stored.stateVersion) {
-          recovered.push(this.recoverRun(stored, definition, allTasks));
+          recovered.push(this.recoverRun(stored, definition));
           repaired = true;
         }
       } catch (error) {
@@ -684,7 +680,6 @@ export class WorkflowController {
     runId: string,
     node: WorkflowNode,
     definition: WorkflowDefinition,
-    allTasks: TaskRecord[],
     recorded: WorkflowNodeState,
   ): { state: WorkflowNodeState; found: Array<TaskRecord | undefined> } {
     const keys = expectedTaskKeys(runId, node, definition);
@@ -710,7 +705,7 @@ export class WorkflowController {
             : first === undefined || !keys.includes(first)
               ? undefined
               : trueKeys.includes(first);
-      const all = keys.map((key) => preferredTask(allTasks, key));
+      const all = keys.map((key) => preferredTask(this.store.listTasksByKey(key), key));
       if (chosen === undefined) {
         // Nothing decided it. A conflict stands while a task in it may have
         // had an effect.
@@ -738,7 +733,7 @@ export class WorkflowController {
       for (const key of chosen ? keys.slice(node.whenTrue.length) : trueKeys) ignored.add(key);
     }
     const found = keys.map((key) =>
-      ignored.has(key) ? undefined : preferredTask(allTasks, key),
+      ignored.has(key) ? undefined : preferredTask(this.store.listTasksByKey(key), key),
     );
     let state = recoveredNodeState(
       node,
@@ -846,12 +841,11 @@ export class WorkflowController {
   private settleStopped(workflowId: string, definition: WorkflowDefinition): void {
     this.underLease(workflowId, (run) => {
       if (run.status !== "cancelled") return run;
-      const allTasks = this.store.listTasks(100_000);
       return this.transition(run, (draft, emit) => {
         for (const node of definition.nodes) {
           const recorded = draft.nodes[node.id]!;
           if (recorded.error !== "task_still_in_flight") continue;
-          const { state, found } = this.recoveredNode(run.id, node, definition, allTasks, recorded);
+          const { state, found } = this.recoveredNode(run.id, node, definition, recorded);
           if (found.some((task) => task !== undefined && ["running", "verifying"].includes(task.status))) continue;
           const settled: WorkflowNodeState = ["pending", "ready", "awaiting_approval"].includes(state.status)
             ? { ...state, status: "cancelled" }
@@ -883,9 +877,8 @@ export class WorkflowController {
       return recoveredNodeState(node, recorded as TaskRecord[], state).status !== "recovery_required";
     });
     if (parked.length === 0) return run;
-    const allTasks = this.store.listTasks(100_000);
     const changed = parked.flatMap((node) => {
-      const { state, found } = this.recoveredNode(run.id, node, definition, allTasks, run.nodes[node.id]!);
+      const { state, found } = this.recoveredNode(run.id, node, definition, run.nodes[node.id]!);
       if (found.some((task) => task !== undefined && ["running", "verifying"].includes(task.status))) return [];
       return canonicalJson(state) === canonicalJson(run.nodes[node.id]) ? [] : [{ nodeId: node.id, state }];
     });
@@ -947,7 +940,6 @@ export class WorkflowController {
   private recoverNodes(
     stored: WorkflowRun,
     definition: WorkflowDefinition,
-    allTasks: TaskRecord[],
     draft: WorkflowRun,
     emit: EmitEvent,
   ): string[] {
@@ -962,7 +954,7 @@ export class WorkflowController {
       // tasks differently from the live path and could take the run out of
       // failed: a branch awaiting approval beside a failed one reopened.
       if (stored.status === "failed" && node.type !== "compensation") continue;
-      const { state } = this.recoveredNode(stored.id, node, definition, allTasks, replayed.nodes[node.id]!);
+      const { state } = this.recoveredNode(stored.id, node, definition, replayed.nodes[node.id]!);
       if (canonicalJson(draft.nodes[node.id]) === canonicalJson(state)) {
         continue;
       }
@@ -980,13 +972,9 @@ export class WorkflowController {
     return found;
   }
 
-  private recoverRun(
-    stored: WorkflowRun,
-    definition: WorkflowDefinition,
-    allTasks: TaskRecord[],
-  ): WorkflowRun {
+  private recoverRun(stored: WorkflowRun, definition: WorkflowDefinition): WorkflowRun {
     return this.transition(stored, (draft, emit) => {
-      this.recoverNodes(stored, definition, allTasks, draft, emit);
+      this.recoverNodes(stored, definition, draft, emit);
       let status = this.deriveStatus(draft, definition);
       if (status === "verified_complete") {
         for (const node of definition.nodes) {
@@ -1109,7 +1097,7 @@ export class WorkflowController {
               // opens: refused, it could never end.
               if (definition !== undefined) {
                 try {
-                  stopped.push(...this.recoverNodes(current, definition, this.store.listTasks(100_000), draft, emit));
+                  stopped.push(...this.recoverNodes(current, definition, draft, emit));
                 } catch {
                   // Cancelled as recorded.
                 }

@@ -1608,4 +1608,42 @@ describe("a step's task looked up by its key", () => {
     // seconds per advance in a home with a long history.
     expect(listed).not.toHaveBeenCalled();
   });
+
+  it("does not read every task in the home to recover, settle or cancel a run", async () => {
+    const { controller, store, tasks, on } = await setup();
+    // Its provider can say whether it happened: here, that it did not.
+    const patch = TaskRequestSchema.parse({ ...put("patch"), reconciliation: [{ type: "file_exists", path: "patched" }] });
+    const planned = controller.plan(
+      workflow([
+        { id: "patch", type: "operation", request: patch },
+        { id: "par", type: "parallel", branches: [[put("p0")], [put("p1")]] },
+      ]),
+    );
+    let run = (await controller.advance(planned.id)).run;
+    const [p0, p1] = run.nodes.par!.taskIds;
+    const first = tasks.status(p0!).approval!;
+    on.put = (key) => {
+      if (key === "patch") throw outcomeUnknown("socket hang up");
+    };
+    // patch's reply is lost; one branch of par runs and the other still waits.
+    run = (
+      await controller.advance(planned.id, [
+        ...approvalsFor({ ...run, nodes: { patch: run.nodes.patch! } }),
+        { approvalId: first.approvalId, phrase: first.phrase! },
+      ])
+    ).run;
+    expect(run.status).toBe("recovery_required");
+    const listed = vi.spyOn(store, "listTasks");
+
+    await controller.recoverInterrupted();
+    run = controller.status(planned.id);
+    expect(run.nodes.par).toMatchObject({ status: "awaiting_approval", taskIds: [p0, p1] });
+    // Reconciled as never applied, the parked step settles on the next advance.
+    expect((await tasks.execute(run.nodes.patch!.taskIds[0]!)).task.status).toBe("failed");
+    expect((await controller.advance(planned.id)).run.nodes.patch?.status).toBe("failed");
+    expect(controller.cancel(planned.id).nodes.par).toMatchObject({ status: "cancelled", taskIds: [p0, p1] });
+    // Capped at the newest 100,000 tasks, a long history also dropped a
+    // step's task from the read, and a half-approved node read as complete.
+    expect(listed).not.toHaveBeenCalled();
+  });
 });
