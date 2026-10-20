@@ -21,11 +21,11 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-async function setup(policy: (root: string) => LocalPolicy = createDefaultPolicy) {
+async function setup(policy: (root: string) => LocalPolicy = createDefaultPolicy, file = ":memory:") {
   const root = await mkdtemp(join(tmpdir(), "melra-semantic-"));
   roots.push(root);
   await writeFile(join(root, "out.txt"), "written");
-  const store = new SqliteStore(":memory:");
+  const store = new SqliteStore(file);
   stores.push(store);
   const executor = { execute: vi.fn(async () => ({ success: true, path: "out.txt" })) };
   const resolved = policy(root);
@@ -225,6 +225,26 @@ describe("semantic evidence (#54)", () => {
     }
     expect(controller.plan(write([{ type: "file_exists", path: "out.txt" }, SEMANTIC])).status).toBe("policy_blocked");
     expect(executor.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("writes a wait with its certificate, so a peer's expiry cannot land between them", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "melra-semantic-db-"));
+    roots.push(dir);
+    const { controller, store } = await setup(createDefaultPolicy, join(dir, "melra.db"));
+    const peer = new SqliteStore(join(dir, "melra.db"));
+    stores.push(peer);
+    // Written apart, a peer's sweep here saw the wait, settled it, and then
+    // had it overwritten back to waiting_user by the certificate's save.
+    const save = store.saveCertificate.bind(store);
+    let seen: string | undefined;
+    vi.spyOn(store, "saveCertificate").mockImplementationOnce((certificate, options) => {
+      seen = peer.getTask(certificate.taskId)?.status;
+      return save(certificate, options);
+    });
+    const ran = await run(controller, write([{ type: "file_exists", path: "out.txt" }, SEMANTIC]));
+    expect(ran.task.status).toBe("waiting_user");
+    expect(seen).toBe("verifying");
+    expect(peer.getTask(ran.task.id)?.status).toBe("waiting_user");
   });
 
   it("meters a waiting effect, so a grant for one operation is spent by it", async () => {

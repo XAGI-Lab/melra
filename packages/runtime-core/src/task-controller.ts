@@ -626,6 +626,16 @@ export class TaskController {
         );
       }
       task.updatedAt = now();
+      // A wait lands with its certificate in one transaction: written apart, a
+      // peer's expiry between the two was overwritten by the second. Either
+      // failing writes neither, so `settled` stays unset for the catch.
+      if (task.status === "waiting_user") {
+        const certificate = this.store.transaction(() => {
+          this.store.saveTask(task);
+          return this.createAndSaveCertificate(task, evidence, true);
+        });
+        return { task, output: result, receipt, certificate };
+      }
       this.store.saveTask(task);
       settled = { task, output: result, receipt };
       const certificate = this.createAndSaveCertificate(task, evidence, true);
