@@ -204,6 +204,29 @@ describe("a parallel branch's steps, in order (#245)", () => {
     expect(run.status).toBe("verified_complete");
     expect([...done].sort()).toEqual(["a1", "a2", "b1"]);
   });
+
+  it("leaves a node pending, not complete, when a branch's next step fails to plan", async () => {
+    const { controller, tasks, done } = await setup({ policy: { unhinged: true } });
+    const planned = controller.plan(workflow([{ id: "fan", type: "parallel", branches: [[put("a1"), put("a2")], [put("b1")]] }]));
+    // A transient store error planning a2, once: a1 and b1 have run.
+    const plan = tasks.plan.bind(tasks);
+    let thrown = false;
+    vi.spyOn(tasks, "plan").mockImplementation((request, options) => {
+      if (!thrown && request.goal === "Put a2") {
+        thrown = true;
+        throw new Error("database is locked");
+      }
+      return plan(request, options);
+    });
+    await expect(controller.advance(planned.id)).rejects.toThrow("database is locked");
+    expect(controller.status(planned.id).nodes.fan?.status).toBe("pending");
+    expect([...done].sort()).toEqual(["a1", "b1"]);
+
+    const run = (await controller.advance(planned.id)).run;
+    expect(run.status).toBe("verified_complete");
+    // a2 runs once, the others not again.
+    expect([...done].sort()).toEqual(["a1", "a2", "b1"]);
+  });
 });
 
 describe("workflow decisions that have to stay made", () => {
