@@ -30,7 +30,9 @@ adding it here would make MELRA's guarantees depend on a model's judgement.
 
 Markdown-only contributions do not need Node.js or pnpm setup. Before opening
 the pull request, run `git diff --check`; GitHub Actions runs the repository
-checks for every pull request.
+checks for every pull request. Each commit still needs a sign-off, including
+one made in GitHub's web editor (see
+[Developer Certificate of Origin](#developer-certificate-of-origin)).
 
 ## Development setup
 
