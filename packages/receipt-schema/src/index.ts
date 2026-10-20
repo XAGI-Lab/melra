@@ -34,36 +34,48 @@ export const SECRET_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
   // npm, and Google API keys.
   [/\b(?:npm_[A-Za-z0-9]{36,}\b|AIza[A-Za-z0-9_-]{35})/g, "[REDACTED_API_KEY]"],
   [/\bBearer\s+[A-Za-z0-9._~+/-]+=*\b/gi, "Bearer [REDACTED_TOKEN]"],
-  // An authorization header under a known scheme (`Basic`, `token`,
-  // `Negotiate`), or a bare value with a digit, the shape an issued token has,
-  // so `Authorization: required` and `{ authorization: task.approval }` stay.
+  // An authorization header value. `Digest` and `AWS4-HMAC-SHA256` carry a
+  // parameter list, which goes to the end of the line once an `=` shows near
+  // its start. Under another known scheme (`Basic`, `token`, `Negotiate`) a
+  // value with a digit, an `=` or sixteen characters goes; bare, sixteen
+  // characters with a digit that are not a dotted name. So
+  // `Authorization: required`, `Basic credentials` and
+  // `{ authorization: process.env.API_TOKEN_V2 }` stay.
   [
-    /\b((?:proxy-)?authorization["']?\s*:\s*["']?)(?:(?:basic|bearer|digest|negotiate|ntlm|token|aws4-hmac-sha256)[ \t]+[A-Za-z0-9._~+/=-]{8,}|(?=[A-Za-z0-9._~+/=-]{0,63}\d)[A-Za-z0-9._~+/=-]{8,})/gi,
+    /\b((?:proxy-)?authorization["']?\s*:\s*["']?)(?:(?:digest|aws4-hmac-sha256)[ \t]+(?=[^\r\n=]{0,64}=)[^\r\n]+|(?:basic|bearer|negotiate|ntlm|token)[ \t]+(?=[A-Za-z0-9._~+/=-]{0,63}[\d=]|[A-Za-z0-9._~+/=-]{16})[A-Za-z0-9._~+/=-]{8,}|(?![A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+(?![\w.~+/=-]))(?=[A-Za-z0-9._~+/=-]{0,63}\d)[A-Za-z0-9._~+/=-]{16,})/gi,
     "$1[REDACTED_TOKEN]",
   ],
   // `password=x`, and the spellings that hide the word inside a longer name or
   // behind a quote: `DB_PASSWORD=x`, `AWS_SECRET_ACCESS_KEY: x`, `"password": "x"`.
+  // A name starts only where one can, and is read whole before its words are
+  // looked at, so a long run of `password_` costs one pass, not a minute.
   [
-    /(?<![A-Za-z0-9])((?:[A-Za-z0-9]+_)*(?:password|passwd|passphrase|secret)(?:_[A-Za-z0-9]+)*)(["']?)\s*[:=]\s*["']?[^\s"',;}]+/gi,
+    /(?<![A-Za-z0-9_])(?=(?:[A-Za-z0-9]*_)*(?:password|passwd|passphrase|secret)(?![A-Za-z0-9]))([A-Za-z0-9_]+)(["']?)\s*[:=]\s*["']?[^\s"',;}]+/gi,
     "$1$2=[REDACTED]",
   ],
   // A name ending in a token or key word: `access_token=x`, `x-api-key: x`,
-  // `"apiKey": "x"`. Only a value with a digit and eight characters, the shape
-  // an issued token has, so `max_tokens: 4096` and `token: string` stay. Read
-  // from the start of a name only, and the digit looked for only so far, so a
-  // long run of text costs one pass.
+  // `"apiKey": "x"`. Only a value of token characters, eight or more with a
+  // digit, the shape an issued token has, so `max_tokens: 4096`,
+  // `token: string`, `tokens[0]`, a CSS `#00ff00ab` and the host after
+  // `x-access-token:<token>@` stay. Read from the start of a name only, and
+  // the digit looked for only so far, so a long run of text costs one pass.
   [
-    /(?<![A-Za-z0-9_-])((?:[A-Za-z0-9]*[_-])*[A-Za-z0-9]*(?:token|api[_-]?key|access[_-]?key))(["']?\s*[:=]\s*["']?)(?=[^\s"',;}&]{0,63}\d)[^\s"',;}&]{8,}/gi,
+    /(?<![A-Za-z0-9_-])((?:[A-Za-z0-9]*[_-])*[A-Za-z0-9]*(?:token|api[_-]?key|access[_-]?key))(["']?\s*[:=]\s*["']?)(?=[A-Za-z0-9._~+/=%-]{0,63}\d)[A-Za-z0-9._~+/=%-]{8,}/gi,
     "$1$2[REDACTED]",
   ],
   // Userinfo in a URL or connection string anywhere in text: `postgres://app:pw@db`,
-  // a password holding `/`, brackets or braces, but not `host:8080/path@x` or
+  // a password holding `/`, brackets or braces, of any length (an RDS IAM
+  // token is the URL-encoded signed request), but not `host:8080/path@x` or
   // `host:3000?next=a@b`, which are ports. The user stops at a comma, quote,
   // bracket or brace, so a CSV row or JSON array of a URL and an address and an
-  // IPv6 host are kept; the password stops only at a quote or a `${` template,
-  // so it never runs on into the next JSON string.
+  // IPv6 host are kept, unless it is a whole `{user}` or `{{ user }}`
+  // template. The password stops at a quote or a `${` template, so it never
+  // runs on into the next JSON string, and a `{password}` template is kept.
+  // The scheme starts only where a run of scheme characters does, and the
+  // password stops at the next `://`, so no character is scanned from two
+  // starts and a long run of text costs one pass.
   [
-    /\b([a-z][a-z0-9+.-]*:\/\/)[^\s/?#@:"'<>{}\[\],]*:(?!\d+(?:[/?]|$))(?:(?!\$\{)[^\s@"']){1,256}@/gi,
+    /(?<![a-z0-9+.-])([a-z0-9+.-]+:\/\/)(?:[^\s/?#@:"'<>{}\[\],]*|\{\{?\s*[\w.]+\s*\}\}?):(?!\d+(?:[/?]|$))(?!\{\{?\s*[\w.]+\s*\}\}?@)(?:(?!\$\{|:\/\/)[^\s@"'])+@/gi,
     "$1[REDACTED_URL_CREDENTIALS]@",
   ],
   // A token standing alone as the user over http(s): `https://<token>@host`.
@@ -337,6 +349,10 @@ export function redactStructuredValue(value: unknown): {
   };
   const visit = (current: unknown, key?: string, parent?: Record<string, unknown>): unknown => {
     if (key !== undefined && SENSITIVE_KEY.test(key)) {
+      // No secret fits in a boolean or null, and a string in its place would
+      // change the record's shape: `isSecret: false`, `hasPassword: true`. A
+      // number may be a PIN, so it still goes.
+      if (typeof current === "boolean" || current === null) return current;
       // An exit status is a whole number no secret can hide in, so the stored
       // copy of a predicate keeps saying which status it expects.
       if (key === "value" && parent?.type === "exit_code" && Number.isInteger(current)) {

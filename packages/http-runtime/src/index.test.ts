@@ -36,7 +36,7 @@ beforeAll(async () => {
       }
       // An API that reflects the id it was asked for, as a "not found" error might.
       if (req.url?.startsWith("/customers/") === true) {
-        res.writeHead(404).end(`${NOT_FOUND}${req.url.slice("/customers/".length)}'`);
+        res.writeHead(404).end(`${NOT_FOUND}${decodeURIComponent(req.url.slice("/customers/".length))}'`);
         return;
       }
       if (req.url === "/teapot") {
@@ -242,7 +242,9 @@ describe("http runtime", () => {
       operation({ url: `${origin}/echo`, maxResponseBytes: body.indexOf(secret) + secret.length - 1 }),
     );
     expect(cut.truncated).toBe(true);
-    expect(cut.content).toBe(`${body.slice(0, body.indexOf(secret))}[REDACTED_CREDENTIAL]`);
+    // The end goes the full length of the longest secret, one character more
+    // than arrived of it here.
+    expect(cut.content).toBe(`${body.slice(0, body.indexOf(secret) - 1)}[REDACTED_CREDENTIAL]`);
   });
 
   it("ends a body cut at the size cap the same way whatever it held", async () => {
@@ -255,7 +257,10 @@ describe("http runtime", () => {
     // so the end of the body is whatever the caller chose.
     const reflected = async (text: string) => {
       const result = await brokered.execute(
-        operation({ url: `${origin}/customers/${text}`, maxResponseBytes: NOT_FOUND.length + text.length }),
+        operation({
+          url: `${origin}/customers/${encodeURIComponent(text)}`,
+          maxResponseBytes: NOT_FOUND.length + Buffer.byteLength(text),
+        }),
       );
       return { content: result.content, redactions: result.redactions };
     };
@@ -266,8 +271,28 @@ describe("http runtime", () => {
       const differs = `${begins.slice(0, -1)}${begins.endsWith("x") ? "y" : "x"}`;
       expect(await reflected(begins), begins).toEqual(await reflected(differs));
     }
+    // A credential that ends in a character of several bytes, cut inside it:
+    // the decoder leaves one replacement character where that character was,
+    // and nothing of the credential before it shows either.
+    const accented = "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p\u20ac";
+    const accentedBroker = new HttpRuntime({
+      allowedDomains: ["*"],
+      allowLocalhost: true,
+      credentials: {
+        headersFor: async () => ({ headers: {}, used: ["key"], secrets: [accented] }),
+      } as unknown as CredentialBroker,
+    });
+    const cut = await accentedBroker.execute(
+      operation({
+        url: `${origin}/customers/${encodeURIComponent(accented)}`,
+        maxResponseBytes: NOT_FOUND.length + Buffer.byteLength(accented) - 1,
+      }),
+    );
+    expect(cut.truncated).toBe(true);
+    expect(cut.content).toBe(`${NOT_FOUND}[REDACTED_CREDENTIAL]`);
+
     expect(await reflected("A")).toEqual({
-      content: `${`${NOT_FOUND}A`.slice(0, -(secret.length - 1))}[REDACTED_CREDENTIAL]`,
+      content: `${`${NOT_FOUND}A`.slice(0, -secret.length)}[REDACTED_CREDENTIAL]`,
       redactions: ["[REDACTED_CREDENTIAL]"],
     });
   });

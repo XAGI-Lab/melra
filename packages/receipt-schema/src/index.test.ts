@@ -262,6 +262,116 @@ describe("receipt and certificate primitives", () => {
     expect(redactStructuredValue(plain).value).toEqual(plain);
   });
 
+  it("redacts a URL password of any length, as an RDS IAM token is", () => {
+    const fill = (n: number) => "A1b2C3d4E5f6G7h8I9j0".repeat(30).slice(0, n);
+    const host = "db.cluster-abc.us-east-1.rds.amazonaws.com";
+    const long = fill(257);
+    expect(redactSecrets(`postgres://app:${long}@${host}:5432/app`).value).toBe(
+      `postgres://[REDACTED_URL_CREDENTIALS]@${host}:5432/app`,
+    );
+    // A generated IAM auth token is the URL-encoded signed request, well over
+    // 256 characters, and goes in as the password.
+    const signature = "0123456789abcdef".repeat(4);
+    const iam = [
+      `${host}%3A5432%2F%3FAction%3Dconnect%26DBUser%3Diam_user`,
+      `%26X-Amz-Algorithm%3DAWS4-HMAC-SHA256%26X-Amz-Credential%3D${"AKIA"}${"ABCDEFGHIJKLMNOP"}`,
+      "%252F20261020%252Fus-east-1%252Frds-db%252Faws4_request%26X-Amz-Date%3D20261020T101010Z",
+      `%26X-Amz-Expires%3D900%26X-Amz-SignedHeaders%3Dhost%26X-Amz-Signature%3D${signature}`,
+    ].join("");
+    expect(iam.length).toBeGreaterThan(256);
+    expect(redactSecrets(`postgresql://iam_user:${iam}@${host}:5432/app`).value).toBe(
+      `postgresql://[REDACTED_URL_CREDENTIALS]@${host}:5432/app`,
+    );
+  });
+
+  it("leaves code that names a token alone, and the host after one", () => {
+    for (const text of [
+      "OPENAI_API_KEY: z.string().min(1),",
+      "const token = tokens[0];",
+      "const token = parts[1].trim();",
+      "token = sys.argv[1]",
+      ":root { --color-token: #00ff00ab; }",
+    ]) {
+      expect(redactSecrets(text).value, text).toBe(text);
+    }
+    const token = "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6";
+    expect(redactSecrets(`https://x-access-token:${token}@github.com/o/r`).value).toBe(
+      "https://[REDACTED_URL_CREDENTIALS]@github.com/o/r",
+    );
+  });
+
+  it("takes linear time on text built to make a pattern backtrack", () => {
+    for (const text of [
+      "password_".repeat(2_300),
+      "a-".repeat(50_000),
+      "a_".repeat(50_000),
+      "a1_".repeat(33_000),
+      "npm_".repeat(25_000),
+      "authorization: digest ".repeat(5_000),
+    ]) {
+      const started = performance.now();
+      redactSecrets(text);
+      // Generous, so a loaded CI runner does not flake: these took seconds to
+      // a minute when a name or a URL scheme could start at every character.
+      expect(performance.now() - started, text.slice(0, 12)).toBeLessThan(250);
+    }
+  });
+
+  it("reads an authorization value only when it has the shape of one", () => {
+    for (const text of [
+      "const headers = { authorization: process.env.API_TOKEN_V2 };",
+      "fetch(url, { headers: { Authorization: cfg.auth.v2Token } })",
+      "Use Authorization: Basic credentials for the legacy API.",
+      "Authorization: OAuth2-based flows are documented below.",
+      "Authorization: Digest authentication is required",
+    ]) {
+      expect(redactSecrets(text).value, text).toBe(text);
+    }
+    // A parameter-list scheme goes to the end of the line, so neither the
+    // signature nor the digest response survives.
+    const hex = "0123456789abcdef".repeat(4);
+    expect(
+      redactSecrets(
+        `Authorization: AWS4-HMAC-SHA256 Credential=${"AKIA"}${"ABCDEFGHIJKLMNOP"}/20261020/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-date, Signature=${hex}\r\nHost: s3.amazonaws.com`,
+      ).value,
+    ).toBe("Authorization: [REDACTED_TOKEN]\r\nHost: s3.amazonaws.com");
+    expect(
+      redactSecrets(`Authorization: Digest username="u", realm="r", nonce="n", uri="/", response="${hex.slice(0, 32)}"`)
+        .value,
+    ).toBe("Authorization: [REDACTED_TOKEN]");
+  });
+
+  it("redacts a literal password after a template user, and keeps a template password", () => {
+    const secret = `Hunter2${"Secret"}`;
+    expect(redactSecrets(`f"postgresql://{user}:${secret}@{host}/db"`).value).toBe(
+      'f"postgresql://[REDACTED_URL_CREDENTIALS]@{host}/db"',
+    );
+    expect(redactSecrets(`postgresql://{{ db.user }}:${secret}@{{ host }}/db`).value).not.toContain(secret);
+    for (const text of [
+      'f"postgresql://{user}:{password}@{host}/db"',
+      "postgresql://{{ user }}:{{ password }}@{{ host }}/db",
+      "postgres://admin:{password}@db/app",
+    ]) {
+      expect(redactSecrets(text).value, text).toBe(text);
+    }
+  });
+
+  it("keeps a boolean or null under a credential name, which holds no secret", () => {
+    const flags = { isSecret: false, hasPassword: true, requiresPassword: false, token: null, password: null };
+    expect(redactStructuredValue(flags).value).toEqual(flags);
+    // A number may be a PIN, and any string may be the credential: a
+    // tokenizer's special tokens and a page token go too.
+    expect(
+      redactStructuredValue({ pin_password: 4321, eos_token: "</s>", pad_token: "<pad>", nextPageToken: "CiAKGjBp" })
+        .value,
+    ).toEqual({
+      pin_password: "[REDACTED_SENSITIVE_FIELD]",
+      eos_token: "[REDACTED_SENSITIVE_FIELD]",
+      pad_token: "[REDACTED_SENSITIVE_FIELD]",
+      nextPageToken: "[REDACTED_SENSITIVE_FIELD]",
+    });
+  });
+
   it("keeps an exit status, which carries no secret", () => {
     const stored = redactStructuredValue({
       requiredEvidence: [
