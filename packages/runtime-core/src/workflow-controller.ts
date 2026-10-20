@@ -382,7 +382,9 @@ export class WorkflowController {
     }
     // A node parked for a human — approval or supplied input — is no
     // longer `pending`, so `readyNodeIds` will not return it. Re-offer it here
-    // or the workflow would stall forever with the answer in hand.
+    // or the workflow would stall forever with the answer in hand. Beside the
+    // ready nodes, not instead of them: a branch that does not wait on it
+    // carries on (#247).
     const awaiting = [...graph.nodes.values()]
       .filter(
         (node) =>
@@ -393,12 +395,24 @@ export class WorkflowController {
       )
       .map((node) => node.id)
       .sort();
+    // Unless a parked task has settled since (an operator's Deny, a peer's
+    // execute): the run still reads it as waiting, so hasFailure cannot see a
+    // denial yet. Those nodes alone, then, so this wave records it before any
+    // newly ready step is challenged or run on a run it fails.
+    const parkedSettled = awaiting.some((nodeId) =>
+      current.nodes[nodeId]!.taskIds.some(
+        (taskId) =>
+          !["planned", "awaiting_approval", "verified_success"].includes(
+            this.store.getTask(taskId)?.status ?? "",
+          ),
+      ),
+    );
     const nodeIds =
       rollback.length > 0
         ? rollback
-        : awaiting.length > 0
-        ? awaiting
-        : readyNodeIds(graph, current.nodes);
+        : parkedSettled
+          ? awaiting
+          : [...awaiting, ...readyNodeIds(graph, current.nodes)];
     if (nodeIds.length === 0) {
       // Nothing to run, but a step's certificate the last advance could not
       // write may be written now, and a run with nothing left is complete.
@@ -1705,36 +1719,46 @@ export class WorkflowController {
     workflowId: string,
     nodeId: string,
   ): Promise<NodeAdvance> {
-    const requests = branches.flatMap((branch, branchIndex) =>
-      branch.map((request, requestIndex) => ({
-        request,
-        identity: { workflowId, nodeId, iteration: 0, branch: `${branchIndex}:${requestIndex}` },
-      })),
-    );
+    // Branches side by side, each one's steps in order (#245). A branch's
+    // slice of the node's tasks is only a hint: runSequential checks each
+    // against its step's key, so one shifted by a branch that stopped short
+    // is taken up by key instead.
+    let offset = 0;
     // Every branch finishes before one's refusal is reported. Rejecting at
     // the first throw left a sibling's adapter running and the node recorded
     // as it was, so a failure beside it unwound past whatever that sibling did.
     const settled = await Promise.allSettled(
-      requests.map((item, index) =>
-        this.runTask(item.request, state.taskIds[index], approvals, true, item.identity),
-      ),
+      branches.map((branch, index) => {
+        const taskIds = state.taskIds.slice(offset, offset + branch.length);
+        offset += branch.length;
+        return this.runSequential(branch, { ...state, taskIds }, approvals, {
+          workflowId,
+          nodeId,
+          iteration: 0,
+          branch: String(index),
+        });
+      }),
     );
     const refused = settled.find((outcome) => outcome.status === "rejected");
-    // A refused branch stays as the attempt it acted on stands, found by its
-    // key as runTask finds it: one planned in this call is not recorded yet,
+    // A refused branch stays as the attempts it acted on stand, found by key
+    // as runTask finds them: one planned in this call is not recorded yet,
     // and the run may still name a cancelled attempt that was asked again.
-    // One with no task at all cannot be placed among the others, so the
-    // refusal goes up alone.
-    const states = settled.map((outcome, index) => {
-      if (outcome.status === "fulfilled") return outcome.value.state;
-      const { request, identity } = requests[index]!;
-      const key = taskIdempotencyKey(identity, request);
-      const task = preferredTask(this.store.listTasksByKey(key), key);
-      return task === undefined ? undefined : nodeStateForTask(task, false);
+    // Read as runSequential reads it, up to the first step not complete; one
+    // it never reached leaves it pending, not complete.
+    const states = settled.flatMap((outcome, branchIndex) => {
+      if (outcome.status === "fulfilled") return [outcome.value.state];
+      const steps: WorkflowNodeState[] = [];
+      for (const [index, request] of branches[branchIndex]!.entries()) {
+        const key = taskIdempotencyKey({ workflowId, nodeId, iteration: 0, branch: `${branchIndex}:${index}` }, request);
+        const task = preferredTask(this.store.listTasksByKey(key), key);
+        const step: WorkflowNodeState = task === undefined ? { status: "pending", taskIds: [] } : nodeStateForTask(task, false);
+        steps.push(step);
+        if (step.status !== "verified_complete") break;
+      }
+      return steps;
     });
-    if (states.some((entry) => entry === undefined)) throw refused!.reason;
     const advance = {
-      state: aggregateNodeState(states as WorkflowNodeState[]),
+      state: aggregateNodeState(states),
       tasks: settled.flatMap((outcome) => (outcome.status === "fulfilled" ? outcome.value.tasks : [])),
     };
     if (refused !== undefined) throw new NodeRefused(refused.reason, advance);
@@ -2327,6 +2351,8 @@ function sequenceFinished(node: WorkflowNode, found: Array<TaskRecord | undefine
     // left for the loop itself to decide.
     return found.every(Boolean);
   }
+  // Every branch runs to its end, each step only after the one before it.
+  if (node.type === "parallel") return found.every(Boolean);
   return true;
 }
 
