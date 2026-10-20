@@ -1195,11 +1195,13 @@ export class TaskController {
       task.approvedBy?.approvalId ??
       (task.policyDecision.outcome === "confirm" ? task.approval?.approvalId : undefined);
     const sanitized = redactStructuredValue(result);
+    // A verifier's summary and source are stored text like any other.
+    const sanitizedEvidence = redactStructuredValue(evidence);
     const adapterRedactions = Array.isArray(result.redactions)
       ? result.redactions.filter((item): item is string => typeof item === "string")
       : [];
     const redactions = [
-      ...new Set([...adapterRedactions, ...sanitized.redactions]),
+      ...new Set([...adapterRedactions, ...sanitized.redactions, ...sanitizedEvidence.redactions]),
     ];
     return {
       schemaVersion: "1.0.0",
@@ -1236,7 +1238,7 @@ export class TaskController {
       endedAt: now(),
       success,
       observedEffect: sanitized.value as Record<string, unknown>,
-      evidence,
+      evidence: sanitizedEvidence.value as EvidenceItem[],
       redactions,
       ...(error === undefined ? {} : { error }),
     };
@@ -1312,7 +1314,10 @@ export class TaskController {
       result: certificateResult(task),
       policyVersion: task.policyDecision.policyVersion,
       receiptIds: task.receiptIds,
-      evidence,
+      // Redacted as a receipt's is, before the digest is taken. Redacting
+      // again changes nothing, so one written from a stored receipt's items
+      // (`certify`) says what one written from the verifier's would.
+      evidence: redactStructuredValue(evidence).value as EvidenceItem[],
       createdAt: now(),
       ...(mode === undefined ? {} : { mode }),
       ...(approvalChannel === undefined ? {} : { approvalChannel }),

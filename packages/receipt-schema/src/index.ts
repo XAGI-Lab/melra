@@ -3,8 +3,11 @@
 
 import { createHash, randomUUID } from "node:crypto";
 
+// The exact names, then any name that ends in a credential word:
+// `access_token`, `clientSecret`, `x-api-key`. Not `max_tokens` or
+// `token_type`, and not `credentials`, which lists names, never values.
 const SENSITIVE_KEY =
-  /^(?:arg|authorization|constraints|content|cookie|env|goal|headers?|input|pass(?:word|wd)?|secret|std(?:out|err)|text|token|api[_-]?key|values?)$/i;
+  /^(?:arg|authorization|constraints|content|cookie|env|goal|headers?|input|pass(?:word|wd)?|secret|std(?:out|err)|text|token|api[_-]?key|values?)$|(?:token|secret|pass(?:word|wd|phrase)|api[_-]?key|private[_-]?key)$/i;
 /**
  * Secret shapes redacted wherever MELRA persists free text: receipts and task
  * records here, memory values, and terminal output. One list, exported, because
@@ -17,25 +20,69 @@ const SENSITIVE_KEY =
  */
 export const SECRET_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
   // A whole PEM private key block, and a truncated one (output cut mid-key).
+  // PGP's armour says `PRIVATE KEY BLOCK`.
   [
-    /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----[\s\S]*?-----END (?:[A-Z0-9]+ )*PRIVATE KEY-----/g,
+    /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----[\s\S]*?-----END (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----/g,
     "[REDACTED_PRIVATE_KEY]",
   ],
-  [/-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----[\s\S]*/g, "[REDACTED_PRIVATE_KEY]"],
+  [/-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----[\s\S]*/g, "[REDACTED_PRIVATE_KEY]"],
   [/\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g, "[REDACTED_AWS_KEY_ID]"],
   [/\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, "[REDACTED_JWT]"],
-  [/\bxox[abposr]-[A-Za-z0-9-]{10,}\b/g, "[REDACTED_SLACK_TOKEN]"],
-  [/\bgh[opurs]_[A-Za-z0-9]{20,}\b/g, "[REDACTED_GITHUB_TOKEN]"],
-  [/\b(?:sk|pk|api)[-_][a-z0-9_-]{16,}\b/gi, "[REDACTED_API_KEY]"],
+  [/\b(?:xox[abposre]|xapp)-[A-Za-z0-9-]{10,}\b/g, "[REDACTED_SLACK_TOKEN]"],
+  [/\b(?:gh[opurs]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{22,})\b/g, "[REDACTED_GITHUB_TOKEN]"],
+  [/\b(?:sk|pk|rk|api|whsec)[-_][a-z0-9_-]{16,}\b/gi, "[REDACTED_API_KEY]"],
+  // npm, and Google API keys.
+  [/\b(?:npm_[A-Za-z0-9]{36,}\b|AIza[A-Za-z0-9_-]{35})/g, "[REDACTED_API_KEY]"],
   [/\bBearer\s+[A-Za-z0-9._~+/-]+=*\b/gi, "Bearer [REDACTED_TOKEN]"],
+  // An authorization header value. `Digest` and `AWS4-HMAC-SHA256` carry a
+  // parameter list, which goes to the end of the line once an `=` shows near
+  // its start. Under another known scheme (`Basic`, `token`, `Negotiate`) a
+  // value with a digit, an `=` or sixteen characters goes; bare, sixteen
+  // characters with a digit that are not a dotted name. So
+  // `Authorization: required`, `Basic credentials` and
+  // `{ authorization: process.env.API_TOKEN_V2 }` stay.
+  [
+    /\b((?:proxy-)?authorization["']?\s*:\s*["']?)(?:(?:digest|aws4-hmac-sha256)[ \t]+(?=[^\r\n=]{0,64}=)[^\r\n]+|(?:basic|bearer|negotiate|ntlm|token)[ \t]+(?=[A-Za-z0-9._~+/=-]{0,63}[\d=]|[A-Za-z0-9._~+/=-]{16})[A-Za-z0-9._~+/=-]{8,}|(?![A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+(?![\w.~+/=-]))(?=[A-Za-z0-9._~+/=-]{0,63}\d)[A-Za-z0-9._~+/=-]{16,})/gi,
+    "$1[REDACTED_TOKEN]",
+  ],
   // `password=x`, and the spellings that hide the word inside a longer name or
   // behind a quote: `DB_PASSWORD=x`, `AWS_SECRET_ACCESS_KEY: x`, `"password": "x"`.
+  // A name starts only where one can, and is read whole before its words are
+  // looked at, so a long run of `password_` costs one pass, not a minute.
   [
-    /(?<![A-Za-z0-9])((?:[A-Za-z0-9]+_)*(?:password|passwd|passphrase|secret)(?:_[A-Za-z0-9]+)*)(["']?)\s*[:=]\s*["']?[^\s"',;}]+/gi,
+    /(?<![A-Za-z0-9_])(?=(?:[A-Za-z0-9]*_)*(?:password|passwd|passphrase|secret)(?![A-Za-z0-9]))([A-Za-z0-9_]+)(["']?)\s*[:=]\s*["']?[^\s"',;}]+/gi,
     "$1$2=[REDACTED]",
   ],
-  // Userinfo in a URL or connection string anywhere in text: `postgres://app:pw@db`.
-  [/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@:]*:[^\s/@]+@/gi, "$1[REDACTED_URL_CREDENTIALS]@"],
+  // A name ending in a token or key word: `access_token=x`, `x-api-key: x`,
+  // `"apiKey": "x"`. Only a value of token characters, eight or more with a
+  // digit, the shape an issued token has, so `max_tokens: 4096`,
+  // `token: string`, `tokens[0]`, a CSS `#00ff00ab` and the host after
+  // `x-access-token:<token>@` stay. Read from the start of a name only, and
+  // the digit looked for only so far, so a long run of text costs one pass.
+  [
+    /(?<![A-Za-z0-9_-])((?:[A-Za-z0-9]*[_-])*[A-Za-z0-9]*(?:token|api[_-]?key|access[_-]?key))(["']?\s*[:=]\s*["']?)(?=[A-Za-z0-9._~+/=%-]{0,63}\d)[A-Za-z0-9._~+/=%-]{8,}/gi,
+    "$1$2[REDACTED]",
+  ],
+  // Userinfo in a URL or connection string anywhere in text: `postgres://app:pw@db`,
+  // a password holding `/`, brackets or braces, of any length (an RDS IAM
+  // token is the URL-encoded signed request), but not `host:8080/path@x` or
+  // `host:3000?next=a@b`, which are ports. The user stops at a comma, quote,
+  // bracket or brace, so a CSV row or JSON array of a URL and an address and an
+  // IPv6 host are kept, unless it is a whole `{user}`, `{{ user }}` or
+  // `${USER}` template. The password stops at a quote or a `${` template, so
+  // it never runs on into the next JSON string or reads a port such as
+  // `localhost:${port}/@vite` as one, and a `{password}` template is kept.
+  // The scheme starts only where a run of scheme characters does, and the
+  // password stops at the next `://`, so no character is scanned from two
+  // starts and a long run of text costs one pass.
+  [
+    /(?<![a-z0-9+.-])([a-z0-9+.-]+:\/\/)(?:[^\s/?#@:"'<>{}\[\],]*|\$?\{\{?\s*[\w.]+\s*\}\}?):(?!\d+(?:[/?]|$))(?!\{\{?\s*[\w.]+\s*\}\}?@)(?:(?!\$\{|:\/\/)[^\s@"'])+@/gi,
+    "$1[REDACTED_URL_CREDENTIALS]@",
+  ],
+  // A token standing alone as the user over http(s): `https://<token>@host`.
+  // Only a user with a digit and twenty URL-safe characters, the shape an issued
+  // token has, so `https://alice@host` and `git+https://git@host` stay.
+  [/\b(https?:\/\/)(?=[A-Za-z0-9._~%+-]*\d)[A-Za-z0-9._~%+-]{20,}@/gi, "$1[REDACTED_URL_CREDENTIALS]@"],
 ];
 
 /** Every SECRET_PATTERNS match in `text` replaced, and which kinds were found. */
@@ -303,6 +350,10 @@ export function redactStructuredValue(value: unknown): {
   };
   const visit = (current: unknown, key?: string, parent?: Record<string, unknown>): unknown => {
     if (key !== undefined && SENSITIVE_KEY.test(key)) {
+      // No secret fits in a boolean or null, and a string in its place would
+      // change the record's shape: `isSecret: false`, `hasPassword: true`. A
+      // number may be a PIN, so it still goes.
+      if (typeof current === "boolean" || current === null) return current;
       // An exit status is a whole number no secret can hide in, so the stored
       // copy of a predicate keeps saying which status it expects.
       if (key === "value" && parent?.type === "exit_code" && Number.isInteger(current)) {
