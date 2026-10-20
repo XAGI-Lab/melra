@@ -1197,6 +1197,19 @@ describe("http destinations", () => {
     }
   });
 
+  it("reaches a loopback name by default only in developer mode, and as the policy says in either", () => {
+    const reason = (fields: Partial<LocalPolicy>) =>
+      evaluatePolicy(taskId, request({ method: "GET", url: "http://localhost:8080/x" }), {
+        ...createDefaultPolicy(root),
+        ...fields,
+      }).decision.reason;
+    expect(reason({})).toBe("read_only_operation");
+    // Enforced mode refuses what the operator did not open.
+    expect(reason({ mode: "enforced" })).toBe("destination_domain_not_allowed");
+    expect(reason({ mode: "enforced", allowLocalhost: true })).toBe("read_only_operation");
+    expect(reason({ allowLocalhost: false })).toBe("destination_domain_not_allowed");
+  });
+
   it("classifies by method, not by kind", () => {
     expect(
       classifyOperation({

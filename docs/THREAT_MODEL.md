@@ -41,7 +41,8 @@ alternative has been removed, and MELRA cannot verify that from inside its own
 process — the isolation is the host's, brought as a container, a separate OS
 user, or a sandbox profile. What enforced mode contributes is closing every door
 MELRA itself owns: it refuses to start with `--unsafe-local`, refuses any bind
-outside loopback, serves no client-registration endpoint, and stamps `mode` on
+outside loopback, serves no client-registration endpoint, keeps HTTP and browser
+effects off loopback unless the policy file opens it, and stamps `mode` on
 every receipt so an auditor need not infer which deployment produced an effect.
 Loopback still admits every process on the machine up to the token; a
 [Unix socket](INSTALLATION.md#over-a-unix-socket) created mode `0600` narrows
@@ -63,7 +64,7 @@ The residual risk is the assertion itself. See
 | Path traversal | lexical and realpath confinement; symlink tests; terminal arguments: every path an argument or option value names is followed through links and refused if it is, is inside, or holds MELRA's data (by identity, every mode; `ls`, `where` and `pwd` print names, so only naming the files refuses them), as is a file a plain reference names for the program to read (`@file`, `<file`, alone or as an option's value) that is or is inside it, and enforced mode refuses one spelled inside that leads out; the policy file, the browser profile, the HTTP archives and every credential's `source.file` are refused the same way wherever they lie, and enforced mode refuses to start in a workspace that holds one of the last three | host race conditions outside the configured workspace model; in developer mode, a recursive reader given no path when the workspace holds the data directory or one of those files (`melra doctor` warns of the data directory and the last three); a recursive reader given a directory that holds one of those files, which only naming refuses (enforced mode shows a person one outside the workspace first); a file a program names by means of its own rather than a plain path or reference (see Shell injection); an approved `rg -L` |
 | Shell injection | direct process spawn; shell and privilege commands denied; a bare program name is looked up only in `PATH` entries outside the workspace, never an empty or relative one, and the program is given that `PATH`; the file capability never writes into a git directory, so a program named in a repository's config, attributes or hooks is one a person approved; a `git` read is also spawned with system and global config nulled and fsmonitor, hooks, signature verifiers, fetching of missing objects, external diff and textconv off | an allowed executable can interpret dangerous arguments; interpreters and approved programs can read files their arguments do not name; developer mode reads outside the workspace without approval; external diff and textconv are consequently not applied to git reads MELRA runs |
 | Process escape | cwd confinement, environment allowlist, time/output bounds | processes are not OS-sandboxed outside the container profile |
-| SSRF and metadata access | URL validation, DNS resolution, per-request interception | malicious public endpoints remain reachable when domains allow them |
+| SSRF and metadata access | URL validation, DNS resolution, per-request interception; loopback closed in enforced mode unless the policy opens it | malicious public endpoints remain reachable when domains allow them; loopback services are reachable in developer mode by default |
 | DNS rebinding | the checked answer is pinned: requests go through a loopback proxy that connects to the address validation accepted | an attached CDP browser and unsafe-local mode resolve names themselves, so the window stays open there |
 | Redirects in an attached browser | with an attached CDP browser there is no pinning proxy and Chromium follows redirect hops unseen, so a page or frame whose final address the guard refuses is blanked and never read back, and WebSockets are checked | the redirected request itself still reaches that address; use an owned browser where that matters |
 | Malicious downloads/uploads | path confinement and artifact hashes | file content is not malware-scanned |
@@ -175,7 +176,8 @@ that the agent cannot approve. What remains:
 
 Browser requests reject:
 
-- loopback unless explicitly enabled;
+- loopback, unless `allowLocalhost` enables it: left out of the policy file,
+  it is enabled in developer mode and not in enforced mode;
 - private, link-local, multicast, and unspecified addresses;
 - cloud metadata endpoints;
 - hostnames resolving to a disallowed address;

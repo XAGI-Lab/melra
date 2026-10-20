@@ -36,7 +36,6 @@
     "@melra/memory": "workspace:*",
     "@melra/policy-core": "workspace:*",
     "@melra/protocol": "workspace:*",
-    "@melra/receipt-schema": "workspace:*",
     "@melra/runtime-core": "workspace:*",
     "@melra/storage-sqlite": "workspace:*",
     "@melra/terminal-runtime": "workspace:*",
