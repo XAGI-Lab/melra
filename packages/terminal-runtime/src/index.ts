@@ -4,7 +4,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readlink, realpath } from "node:fs/promises";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { outcomeUnknown, terminalArgumentPaths, type TerminalOperation } from "@melra/protocol";
 import { redactSecrets } from "@melra/receipt-schema";
 import { resolveCommand } from "./resolve-command.js";
@@ -22,6 +22,14 @@ export interface TerminalRuntimeOptions {
   holdsReserved?: (path: string) => Promise<boolean>;
   /** Refuse an argument spelled inside the root that leads out: policy asked approval only for ones spelled outside. */
   confineArguments?: boolean;
+  /**
+   * The workspace no PATH entry may lead into, as spelled or through links: a
+   * program a bare name finds there is one an approved write may have left,
+   * run later by a read that needs no approval. Empty and relative entries,
+   * which name the working directory, are dropped too. Absent, PATH passes as
+   * given.
+   */
+  pathOutside?: string;
 }
 
 /**
@@ -124,6 +132,25 @@ async function climbedFrom(spelled: string): Promise<{ places: string[]; end: st
  * out of thousands would cost minutes; ordinary ones climb out of a few.
  */
 const MAX_CLIMBED_PLACES = 128;
+
+/**
+ * `path` without the entries a bare name may not be found through: empty and
+ * relative ones, and ones inside any of `protect`, as spelled or where they
+ * lead. ponytail: a spelling realpath does not fold (macOS's
+ * /System/Volumes/Data, a bind mount) is judged as written; compare
+ * identities, as the file runtime does, if a PATH ever spells it that way.
+ */
+async function searchPath(path: string, protect: string[]): Promise<string> {
+  const links = new Map<string, { to: string; there: boolean }>();
+  const kept: string[] = [];
+  for (const entry of path.split(delimiter)) {
+    if (!isAbsolute(entry)) continue;
+    const leads = await leadsTo((await climbedFrom(entry)).end, links);
+    if (protect.some((root) => inside(root, resolve(entry)) || inside(root, leads))) continue;
+    kept.push(entry);
+  }
+  return kept.join(delimiter);
+}
 
 /** The null device, so git's system/global config files resolve to nothing. */
 const GIT_NULL_CONFIG = process.platform === "win32" ? "NUL" : "/dev/null";
@@ -368,14 +395,18 @@ export class TerminalRuntime {
   private readonly reserved: (path: string) => Promise<boolean>;
   private readonly holdsReserved: (path: string) => Promise<boolean>;
   private readonly confineArguments: boolean;
+  /** The protected workspace, as spelled and resolved; absent, PATH is not filtered. */
+  private readonly pathOutside: string[] | undefined;
   private readonly jobs = new Map<string, BackgroundJob>();
   private closed = false;
 
   private constructor(
     options: TerminalRuntimeOptions,
     root: string,
+    pathOutside: string[] | undefined,
   ) {
     this.root = root;
+    this.pathOutside = pathOutside;
     this.allowedEnvironment = new Set(
       options.allowedEnvironment ?? ["CI", "LANG", "LC_ALL", "NO_COLOR", "TERM"],
     );
@@ -387,7 +418,12 @@ export class TerminalRuntime {
   }
 
   static async create(options: TerminalRuntimeOptions): Promise<TerminalRuntime> {
-    return new TerminalRuntime(options, await realpath(options.root));
+    const outside = options.pathOutside;
+    return new TerminalRuntime(
+      options,
+      await realpath(options.root),
+      outside === undefined ? undefined : [resolve(outside), await realpath(outside).catch(() => resolve(outside))],
+    );
   }
 
   private async resolveCwd(cwd: string | undefined): Promise<string> {
@@ -484,6 +520,16 @@ export class TerminalRuntime {
         throw new Error(`environment_variable_not_allowed:${name}`);
       }
       environment[name] = value;
+    }
+    if (this.pathOutside !== undefined) {
+      // Before the lookup, and for the spawn, so the program's own lookups get
+      // the same PATH, under every name Windows may spell it.
+      for (const name of Object.keys(environment).filter((key) => key.toUpperCase() === "PATH")) {
+        const kept = await searchPath(environment[name] ?? "", this.pathOutside);
+        // An empty PATH searches the working directory again.
+        if (kept === "") throw new Error(`terminal_command_not_found:${operation.command}`);
+        environment[name] = kept;
+      }
     }
     const resolved = await resolveCommand(operation.command, operation.args, {
       cwd,

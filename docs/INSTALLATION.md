@@ -370,6 +370,14 @@ mode, where an operator approves out of band; a value the policy file sets
 `policy.json` that `melra init` or `melra setup` wrote with an earlier release
 pins `"approvalTtlMs": 300000`; delete that key to get the mode's default.
 
+A bare name in `allowedCommands` runs the program `PATH` finds there, looked
+up only in `PATH` entries outside the workspace: an entry inside it (a
+project's `node_modules/.bin`, a `bin/` directory), or an empty or relative
+one, is skipped, and left out of the program's own `PATH` too. A tool
+installed only inside the workspace runs through `npx` or `pnpm exec`, or
+through a path-qualified entry in `allowedCommands` that names it. With
+`--unsafe-local`, `PATH` is used as given.
+
 `allowedCommands` matches on the program's basename, so it cannot tell `npm
 test` from `npm install left-pad`. `deniedTraits` is the axis that can. MELRA
 classifies what a command *reaches for* and refuses a request carrying a denied

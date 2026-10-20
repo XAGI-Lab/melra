@@ -55,6 +55,16 @@ describe("resolveCommand", () => {
     expect(resolved.windowsVerbatimArguments).toBe(false);
   });
 
+  it("searches no relative PATH entry, which would be read from the working directory", async () => {
+    const resolved = await resolveCommand("git", [], {
+      ...windows,
+      path: ".;bin;C:\\Git\\cmd",
+      exists: async (candidate) =>
+        ["c:\\workspace\\git.exe", "c:\\workspace\\bin\\git.exe", "c:\\git\\cmd\\git.exe"].includes(candidate.toLowerCase()),
+    });
+    expect(resolved.executable).toBe("C:\\Git\\cmd\\git.exe");
+  });
+
   it("prefers the .cmd shim over the extension-less POSIX script", async () => {
     // The deadlock in miniature: `npm` is what policy allowlists, `npm.cmd` is
     // what Windows can actually start, and `npm` (the sh script) is a trap.

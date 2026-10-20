@@ -407,6 +407,9 @@ export async function createMelraRuntime(
     reserved: (path) => files.isReserved(path),
     ...(holdsData ? {} : { holdsReserved: (path: string) => data.holdsReserved(path) }),
     confineArguments: mode === "enforced",
+    // MELRA's judgement about approved writes, so unsafe-local, which approves
+    // nothing, keeps the operator's PATH as given.
+    ...(unhinged ? {} : { pathOutside: policy.workspaceRoot }),
   });
   const browser = new BrowserRuntime({
     artifactDirectory: artifacts,

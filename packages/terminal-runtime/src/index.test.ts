@@ -3,9 +3,9 @@
 
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, sep } from "node:path";
+import { delimiter, join, sep } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TerminalOperationSchema } from "@melra/protocol";
 import { TerminalRuntime, hardenGitRead, redactTerminalOutput } from "./index.js";
@@ -417,6 +417,54 @@ describe("TerminalRuntime", () => {
     ).rejects.toThrow("terminal_job_not_interactive");
     await runtime.close();
   }, 30_000);
+
+  it.skipIf(process.platform === "win32")(
+    "finds a bare program only through PATH entries outside the protected workspace",
+    async () => {
+      const base = await realpath(await mkdtemp(join(tmpdir(), "melra-terminal-")));
+      roots.push(base);
+      const ws = join(base, "ws");
+      for (const dir of [ws, join(ws, "bin"), join(ws, "node_modules", ".bin")]) {
+        await mkdir(dir, { recursive: true });
+        await writeFile(join(dir, "ls"), "#!/bin/sh\necho SHADOWED\n", "utf8");
+        await chmod(join(dir, "ls"), 0o755);
+      }
+      await symlink(join(ws, "bin"), join(base, "linked"));
+      const ls = TerminalOperationSchema.parse({ kind: "terminal", action: "run", command: "ls", args: [] });
+      const system = process.env.PATH ?? "";
+      // Empty and relative entries are the working directory, always inside.
+      for (const entry of ["", ".", "bin", join(ws, "node_modules", ".bin"), join(base, "linked")]) {
+        const runtime = await TerminalRuntime.create({
+          root: ws,
+          pathOutside: ws,
+          baseEnvironment: { PATH: `${entry}${delimiter}${system}` },
+        });
+        expect(String((await runtime.execute(ls)).stdout), JSON.stringify(entry)).not.toContain("SHADOWED");
+      }
+      // The program's own lookups get the same PATH.
+      const printed = await (
+        await TerminalRuntime.create({
+          root: ws,
+          pathOutside: ws,
+          baseEnvironment: { PATH: ["", "bin", join(ws, "bin"), join(base, "linked"), "/usr/bin"].join(delimiter) },
+        })
+      ).execute(
+        TerminalOperationSchema.parse({
+          kind: "terminal",
+          action: "run",
+          command: process.execPath,
+          args: ["-e", "process.stdout.write(process.env.PATH)"],
+        }),
+      );
+      expect(printed.stdout).toBe("/usr/bin");
+      // None left is no PATH at all, never an empty one, which is the working directory again.
+      const none = await TerminalRuntime.create({ root: ws, pathOutside: ws, baseEnvironment: { PATH: "bin" } });
+      await expect(none.execute(ls)).rejects.toThrow("terminal_command_not_found:ls");
+      // Nothing to keep it out of: PATH as given.
+      const given = await TerminalRuntime.create({ root: ws, baseEnvironment: { PATH: `bin${delimiter}${system}` } });
+      expect((await given.execute(ls)).stdout).toContain("SHADOWED");
+    },
+  );
 
   it("names a missing program instead of surfacing a bare ENOENT", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-terminal-"));

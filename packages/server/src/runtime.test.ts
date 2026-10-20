@@ -3,10 +3,10 @@
 
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, parse, resolve } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { basename, delimiter, dirname, join, parse, resolve } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { deploymentMode, TaskRequestSchema, type TaskRequest } from "@melra/protocol";
 import { serveHttp } from "./http-server.js";
 import {
@@ -180,6 +180,33 @@ describe("unhinged runtime", () => {
     });
     expect(runtime.policy.unhinged).toBe(true);
   });
+
+  it.skipIf(process.platform === "win32")(
+    "finds a bare program only through PATH entries outside the workspace, unless unhinged",
+    async () => {
+      await mkdir(join(workspace, "bin"));
+      await writeFile(join(workspace, "bin", "ls"), "#!/bin/sh\necho SHADOWED\n", "utf8");
+      await chmod(join(workspace, "bin", "ls"), 0o755);
+      vi.stubEnv("PATH", `${join(workspace, "bin")}${delimiter}${process.env.PATH ?? ""}`);
+      try {
+        const ls = async () => {
+          const planned = runtime!.controller.plan(
+            request({ operation: { kind: "terminal", action: "run", command: "ls", args: [] } }),
+          );
+          const output = ((await runtime!.controller.execute(planned.id)).output ?? {}) as Record<string, unknown>;
+          return String(output.stdout ?? "");
+        };
+        runtime = await createMelraRuntime({ workspaceRoot: workspace, dataDirectory: data, environment: {} });
+        expect(await ls()).toContain("bin");
+        await runtime.close();
+        // Unsafe-local keeps the operator's PATH as given: nothing there is approved.
+        runtime = await createMelraRuntime({ workspaceRoot: workspace, dataDirectory: data, environment: {}, unhinged: true });
+        expect(await ls()).toContain("SHADOWED");
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    },
+  );
 });
 
 describe("deploymentMode", () => {

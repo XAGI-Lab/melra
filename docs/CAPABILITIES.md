@@ -94,6 +94,11 @@ Actions: `list`, `read`, `stat`, `hash`, `write`, `move`, `delete`, `mkdir`.
 Actions: `run`, `start`, `status`, `output`, `stop`, `send`.
 
 - Commands are spawned directly, never through a shell.
+- A bare program name is found only through `PATH` entries outside the
+  workspace, as written and through links. Entries inside it, and empty or
+  relative ones, which name the working directory, are left out of the search
+  and of the `PATH` the program itself sees. `--unsafe-local` keeps `PATH` as
+  given.
 - Shell interpreters, privilege escalation, and platform scripting shells are
   denied even if accidentally added to the normal allowlist.
 - Command, arguments, working directory, environment, duration, and output are

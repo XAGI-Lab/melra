@@ -791,6 +791,19 @@ All notable changes are documented here. The format follows
 
 ### Security
 
+- **Breaking:** a bare program name in a terminal command is looked up only
+  in `PATH` entries outside the workspace, as written and through links.
+  Entries inside it, and empty or relative ones, which name the working
+  directory, are skipped, and the program's own `PATH` leaves them out too,
+  so a program an approved write left in the workspace never runs under an
+  allowlisted name. A tool found only in a project's `node_modules/.bin`
+  (`vitest`, `tsc`) now fails with `terminal_command_not_found`; run it
+  through `npx` or `pnpm exec`, or allowlist its path. A workspace that holds
+  tool directories, such as a home directory with `~/.local/bin` or a
+  version manager's, loses those programs the same way, which is one more
+  reason to narrow it. `--unsafe-local` keeps `PATH` as given. On Windows,
+  the program lookup also skips relative `PATH` entries.
+
 - A terminal argument that names a file for the program to read as a
   reference (`@file`, `-d@file`, `--data=@file`, `name=@file`, `name=<file`)
   has that file judged like any other path an argument names: MELRA's own
