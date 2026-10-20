@@ -259,7 +259,10 @@ verifier gone since planning, a reserved path) is refused again of the same
 result, so a `condition` or `delegation` fails
 (`workflow_check_unresolvable:<node>`) and the run unwinds. A loop's `until`
 asks of each iteration's new result, so it reads such a check as a no and runs
-the next iteration, up to `maxIterations`.
+the next iteration, up to `maxIterations`. Either way the call fails, but a
+`condition` under which an advance that lost its commit already ran a step
+whose outcome is unknown neither waits nor fails: it halts on that step
+(`recovery_required`, as after a restart), so nothing unwinds past it.
 
 A `condition` takes one branch, once. A branch with a committed step is the
 one taken, even when the advance that took it lost its commit (a pause landed
