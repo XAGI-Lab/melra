@@ -536,6 +536,69 @@ describe("approval console", () => {
     expect(text).not.toMatch(/melra workflow advance|--deny/);
   }, 60_000);
 
+  it("tells a step approved in time on a paused run that it waits for its run, resumed first", async () => {
+    const run = oneStep("decided-paused");
+    await runtime.workflows.advance(run.id);
+    const taskId = Object.values(runtime.workflows.status(run.id).nodes).flatMap((node) => node.taskIds)[0]!;
+    runtime.controller.decide(taskId, runtime.controller.approvalView(taskId).renderDigest, "console:test");
+    runtime.workflows.pause(run.id);
+    // No agent runs it: only an advance does, and a paused run refuses one.
+    await expect(runtime.workflows.advance(run.id)).rejects.toThrow("workflow_halted:paused");
+    const text = await callouts(taskId);
+    if (text === undefined) return;
+    expect(text).toContain("waits for its run to advance");
+    expect(text).toContain(`melra workflow resume ${run.id}`);
+    expect(text).not.toContain("Waiting for the agent");
+  }, 60_000);
+
+  it("tells a step spent in band that its run asks again only once the challenge expires", async () => {
+    const run = oneStep("spent-step");
+    await runtime.workflows.advance(run.id);
+    const taskId = Object.values(runtime.workflows.status(run.id).nodes).flatMap((node) => node.taskIds)[0]!;
+    const task = runtime.controller.status(taskId);
+    runtime.store.recordApprovalDecision({
+      approvalId: task.approval!.approvalId,
+      taskId,
+      renderDigest: runtime.controller.approvalView(taskId).renderDigest,
+      channel: "in_band",
+      approver: "cli:developer",
+      decidedAt: new Date().toISOString(),
+    });
+    // Before the challenge expires, an advance leaves the step on it.
+    await runtime.workflows.advance(run.id);
+    expect(Object.values(runtime.workflows.status(run.id).nodes).flatMap((node) => node.taskIds)).toEqual([taskId]);
+    const text = await callouts(taskId);
+    if (text === undefined) return;
+    expect(text).toContain(`melra workflow inspect ${run.id}`);
+    expect(text).toMatch(/asks again once this challenge expires in \d+m/);
+    expect(text).not.toMatch(/next advance asks again|melra workflow advance|--deny/);
+  }, 60_000);
+
+  it("points an older duplicate under a run's key at inspect, since advancing never takes it up", async () => {
+    const run = oneStep("duplicate-step");
+    await runtime.workflows.advance(run.id);
+    const named = runtime.controller.status(Object.values(runtime.workflows.status(run.id).nodes).flatMap((node) => node.taskIds)[0]!);
+    // An earlier challenge under the step's key, as a lost commit then a
+    // fresh plan leaves it: the run names the other one.
+    const orphan = randomUUID();
+    runtime.store.saveTask({
+      ...named,
+      id: orphan,
+      createdAt: new Date(Date.parse(named.createdAt) - 1_000).toISOString(),
+      approval: { ...named.approval!, approvalId: randomUUID() },
+    });
+    expire(orphan);
+    await runtime.workflows.advance(run.id);
+    expect(runtime.controller.status(orphan).status).toBe("awaiting_approval");
+    const text = await callouts(orphan);
+    if (text !== undefined) {
+      expect(text).toContain(`melra workflow inspect ${run.id}`);
+      expect(text).not.toMatch(/melra workflow advance|--deny/);
+    }
+    const state = await call(agent, `/api/tasks/${orphan}/approval-state`, { token: "agent-token" });
+    expect(state.body).toMatchObject({ step: true, workflowId: run.id, named: false });
+  }, 60_000);
+
   it("reads an in-band decision in enforced mode as no answer, as execute and the CLI do", async () => {
     const task = pending("Write in-band.txt");
     const view = runtime.controller.approvalView(task.id);

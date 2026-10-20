@@ -608,7 +608,9 @@ export async function serveHttp(
    * now: whether a decision row spent its challenge without being usable (in
    * enforced mode an in-band one, or one past its window), whether it is a
    * workflow's step, which is never told to deny, and the run naming it, if
-   * one does yet, with that run's status, since only some runs can advance.
+   * one does yet, with that run's status, since only some runs can advance,
+   * and whether the run names this very task: advancing never takes up an
+   * older duplicate under its key.
    */
   function approvalState(task: TaskRecord) {
     const decision = runtime.controller.approvalDecision(task);
@@ -624,7 +626,13 @@ export async function serveHttp(
       decision: decision ?? null,
       unusable: row !== undefined && decision === undefined,
       step,
-      ...(run === undefined ? {} : { workflowId: run.id, workflowStatus: run.status }),
+      ...(run === undefined
+        ? {}
+        : {
+            workflowId: run.id,
+            workflowStatus: run.status,
+            named: Object.values(run.nodes).some((node) => node.taskIds.includes(task.id)),
+          }),
     };
   }
 

@@ -793,7 +793,7 @@ one cannot be used to act under another client's name.
 | `/api/capabilities` | `GET` | The same payload `melra_capabilities` returns |
 | `/api/tasks?limit=<n>` | `GET` | Recent tasks, newest first; `approvalPendingIds`, those of them awaiting approval with no usable decision; `attentionCount`, every task needing attention |
 | `/api/tasks/:id` | `GET` | One task's status |
-| `/api/tasks/:id/approval-state` | `GET` | A pending task's usable decision, if any, whether its challenge is spent, and whether it is a workflow step, with the run naming it |
+| `/api/tasks/:id/approval-state` | `GET` | A pending task's usable decision, if any, whether its challenge is spent, and whether it is a workflow step, with its run and whether that run names this task |
 | `/api/tasks/:id/receipts` | `GET` | That task's receipts |
 | `/api/workflows` | `GET` | Every workflow run |
 | `/api/workflows/:id` | `GET` | One run's projection, node by node |

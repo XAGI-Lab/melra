@@ -147,11 +147,13 @@ All notable changes are documented here. The format follows
 - The web console advises on a task waiting for approval by the rule
   `melra tasks` and `melra status` use (#284), where it went by the
   challenge's expiry alone. A task approved in time and not yet run shows as
-  approved, waiting for its agent, not as closed. An expired workflow step is
-  never told to deny, which would fail its run: in a run waiting on approval
-  it points at `melra workflow advance <workflow-id>`, in a paused or
-  suspended run at `melra workflow resume` first, and otherwise, a step its run
-  does not name yet after a lost commit included, at `melra workflow inspect`.
+  approved, waiting for its agent or, for a workflow step, its run (resumed
+  first if paused or suspended), not as closed. An expired workflow step is
+  never told to deny, which would fail its run: one its run names points at
+  `melra workflow advance <workflow-id>` while that run is running or waiting
+  on approval, and at `melra workflow resume` first while it is paused or
+  suspended; otherwise, an older duplicate or a step a lost commit left
+  unnamed included, at `melra workflow inspect`.
   Only a task outside a workflow, or one whose run is cancelled or
   verified_complete, is told to plan again or clear it with
   `melra approve <task-id> --deny`, and in enforced mode that includes one
