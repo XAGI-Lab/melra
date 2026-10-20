@@ -8,6 +8,7 @@ import {
   open,
   readFile,
   readdir,
+  readlink,
   realpath,
   rename,
   rm,
@@ -70,10 +71,21 @@ async function sameEntry(left: string, right: string): Promise<boolean> {
   }
 }
 
-/** `path` with the deepest part of it that exists resolved through links, and the rest as written. */
-async function realSpelling(path: string): Promise<string> {
+/**
+ * More links than the kernel follows in one lookup (40 on Linux, 32 on
+ * macOS): a path that needs them opens nothing.
+ */
+const MAX_LINKS = 40;
+
+/**
+ * `real`: `path` with the deepest part of it that exists resolved through
+ * links, and the rest as written. `next`: when the first part that does not
+ * exist is a link, `path` with that link replaced by its target, where the
+ * kernel would go on.
+ */
+async function realSpelling(path: string): Promise<{ real: string; next?: string }> {
   const whole = await realpath(path).catch(() => undefined);
-  if (whole !== undefined) return whole;
+  if (whole !== undefined) return { real: whole };
   // A part resolves only if every part above it does, so the deepest one that
   // does is found by halving: about log2(depth) lookups, not one per part.
   // ponytail: each realpath still walks its whole prefix, so 100 arguments 300
@@ -85,15 +97,26 @@ async function realSpelling(path: string): Promise<string> {
     if (dirname(probe) === probe) break;
   }
   let real = path;
+  let parent: string | undefined;
   let [resolves, fails] = [-1, chain.length - 1];
   while (fails - resolves > 1) {
     const middle = (resolves + fails) >> 1;
     const probe = chain[middle] as string;
     const actual = await realpath(probe).catch(() => undefined);
     if (actual === undefined) fails = middle;
-    else [resolves, real] = [middle, join(actual, relative(probe, path))];
+    else [resolves, real, parent] = [middle, join(actual, relative(probe, path)), actual];
   }
-  return real;
+  if (parent === undefined) return { real };
+  // By its bare name in its resolved directory: a trailing separator would
+  // follow the link instead of naming it.
+  const link = chain[fails] as string;
+  const at = join(parent, basename(link));
+  if ((await lstat(at).catch(() => undefined))?.isSymbolicLink() !== true) return { real };
+  const target = await readlink(at).catch(() => undefined);
+  if (target === undefined) return { real };
+  // Joined as written, not normalised: the kernel takes a `..` in it after
+  // following the links before it.
+  return { real, next: `${isAbsolute(target) ? target : `${parent}${sep}${target}`}${path.slice(link.length)}` };
 }
 
 /**
@@ -173,7 +196,8 @@ export class FileRuntime {
       throw new Error("path_outside_workspace");
     }
     // Before following links, so every reserved name gets the same answer,
-    // wherever a link inside it leads; `isReserved` follows them itself.
+    // wherever a link inside it leads. `isReserved` follows them itself, the
+    // same way as below, so the path found there needs no second judgement.
     if (await this.isReserved(lexical, !changing)) throw new Error("path_reserved");
 
     let probe = lexical;
@@ -195,7 +219,6 @@ export class FileRuntime {
         probe = parent;
       }
     }
-    if (await this.isReserved(real, !changing)) throw new Error("path_reserved");
     // A directory holding reserved data takes it along when it is moved or
     // removed, so neither may happen to it. Making it again changes nothing,
     // and nothing can be renamed onto it while it holds anything.
@@ -227,13 +250,25 @@ export class FileRuntime {
    * judged only below that directory, where a link to reserved data is still
    * refused. Judged as spelled and again with the part that exists resolved
    * through links: a link may lead below a reserved directory, where neither
-   * the names nor the identities compared here would recognise the path.
+   * the names nor the identities compared here would recognise the path. A
+   * link whose target does not exist is followed too, so a link to a missing
+   * reserved name is refused like one to a present name.
    */
   async isReserved(path: string, reading = false): Promise<boolean> {
     const spelled = resolve(path);
     if (await this.reservedAsSpelled(spelled, reading)) return true;
-    const real = await realSpelling(spelled);
-    return real !== spelled && (await this.reservedAsSpelled(real, reading));
+    const seen = new Set<string>();
+    for (let next: string | undefined = spelled; next !== undefined && !seen.has(next); ) {
+      // No lookup follows a chain this long, but the answer would still tell
+      // where it ends: refused, whatever is there.
+      if (seen.size > MAX_LINKS) return true;
+      seen.add(next);
+      const step = await realSpelling(next);
+      if (step.real !== spelled && (await this.reservedAsSpelled(step.real, reading))) return true;
+      next = step.next;
+    }
+    // Every spelling on the way judged, or a loop, which opens nothing.
+    return false;
   }
 
   private async reservedAsSpelled(path: string, reading: boolean): Promise<boolean> {
@@ -292,7 +327,7 @@ export class FileRuntime {
     for (const holder of new Set(this.reserved.map((entry) => dirname(entry)))) {
       // Lexically and through links, so a holder under a symlinked home is
       // still found, even before the holder itself exists.
-      const real = await realSpelling(holder);
+      const { real } = await realSpelling(holder);
       // macOS also mounts the data volume whole at /System/Volumes/Data, so a
       // directory there, or above it, holds what a firmlinked directory such as
       // /Users or /private holds, though no `..` from those leads to it. For

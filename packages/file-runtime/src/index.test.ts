@@ -9,8 +9,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { FileOperationSchema } from "@melra/protocol";
 import { FileRuntime } from "./index.js";
 
-// Counts the runtime's link lookups; each still does the real one.
-const lookups = vi.hoisted(() => ({ realpath: 0 }));
+// Counts the runtime's link and identity lookups; each still does the real one.
+const lookups = vi.hoisted(() => ({ realpath: 0, stat: 0 }));
 vi.mock("node:fs/promises", async (actual) => {
   const fs = await actual<typeof import("node:fs/promises")>();
   return {
@@ -18,6 +18,10 @@ vi.mock("node:fs/promises", async (actual) => {
     realpath: (...args: Parameters<typeof fs.realpath>) => {
       lookups.realpath += 1;
       return fs.realpath(...args);
+    },
+    stat: (...args: Parameters<typeof fs.stat>) => {
+      lookups.stat += 1;
+      return fs.stat(...args);
     },
   };
 });
@@ -171,6 +175,56 @@ describe("FileRuntime", () => {
       await expect(run({ action: "write", path, content: "x" }), path).rejects.toThrow("path_reserved");
     }
     expect(await readdir(join(base, "outside"))).toEqual(["f"]);
+  });
+
+  it.skipIf(process.platform === "win32")("answers the same for a link to a reserved name, whether that name exists or not", async () => {
+    // A link to a missing name used to be judged by its own name and get an
+    // ordinary answer, where one to a present name was refused.
+    const base = await realpath(await mkdtemp(join(tmpdir(), "melra-file-")));
+    roots.push(base);
+    for (const [root, data] of [
+      [join(base, "in"), join(base, "in", ".melra")],
+      [join(base, "out"), join(base, "out-data")],
+    ] as const) {
+      await mkdir(data, { recursive: true });
+      await mkdir(root, { recursive: true });
+      await writeFile(join(data, "melra.db"), "db");
+      await writeFile(join(root, "plain.txt"), "plain");
+      const runtime = await FileRuntime.create({ root, reserved: [data, join(data, "melra.db")] });
+      const run = (operation: Record<string, unknown>) =>
+        runtime.execute(FileOperationSchema.parse({ kind: "file", ...operation }));
+      const paths: string[] = [];
+      for (const name of ["missing", "melra.db"]) {
+        await symlink(join(data, name), join(root, `to-${name}`));
+        // Through another link, relative, with a trailing separator, and
+        // climbing back out: each followed as the kernel would.
+        await symlink(`./to-${name}/`, join(root, `via-${name}`));
+        await symlink(join("..", basename(root), `to-${name}`), join(root, `up-${name}`));
+        // Longer than the kernel follows: refused without telling where it ends.
+        for (let hop = 40; hop >= 0; hop -= 1) {
+          await symlink(hop === 40 ? join(data, name) : `chain-${name}-${hop + 1}`, join(root, `chain-${name}-${hop}`));
+        }
+        paths.push(`to-${name}`, `to-${name}/x`, `via-${name}`, `up-${name}`, `chain-${name}-0`);
+      }
+      for (const path of paths) {
+        for (const operation of [
+          { action: "stat", path },
+          { action: "read", path },
+          { action: "write", path, content: "x" },
+          { action: "mkdir", path, recursive: true },
+          { action: "delete", path },
+          { action: "move", path: "plain.txt", destination: path },
+        ]) {
+          await expect(run(operation), JSON.stringify(operation)).rejects.toThrow("path_reserved");
+        }
+      }
+      expect(await readdir(data)).toEqual(["melra.db"]);
+      // A loop leads nowhere reserved, and stays an ordinary path.
+      await symlink("loop-b", join(root, "loop-a"));
+      await symlink("loop-a", join(root, "loop-b"));
+      await expect(run({ action: "stat", path: "loop-a" })).resolves.toMatchObject({ type: "symlink" });
+      await expect(run({ action: "delete", path: "loop-a" })).resolves.toMatchObject({ deleted: true });
+    }
   });
 
   it("lets a directory holding a reserved file be made again, and never replaced", async () => {
@@ -393,6 +447,21 @@ describe("FileRuntime", () => {
     expect(await runtime.isReserved(join(deep, "missing", "x"))).toBe(false);
     // One per part was 600 here, and quadratic in the depth.
     expect(lookups.realpath - before).toBeLessThan(40);
+  });
+
+  it("judges a deep path once", async () => {
+    // Judging it again after resolving its links repeated the first judgement,
+    // one identity lookup per part, twice.
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-file-")));
+    roots.push(root);
+    await mkdir(join(root, ".melra"));
+    const deep = join(...Array.from({ length: 300 }, () => "d"));
+    await mkdir(join(root, deep), { recursive: true });
+    await writeFile(join(root, deep, "f"), "x");
+    const runtime = await FileRuntime.create({ root, reserved: [join(root, ".melra")] });
+    const before = lookups.stat;
+    await runtime.execute(FileOperationSchema.parse({ kind: "file", action: "stat", path: join(deep, "f") }));
+    expect(lookups.stat - before).toBeLessThan(450);
   });
 
   it("knows a directory holds a reserved file before that file's directory exists", async () => {

@@ -638,8 +638,11 @@ All notable changes are documented here. The format follows
   replace it, or move or remove it or any directory that holds it (`path_reserved`),
   and the files there are no longer read through the file adapter or named in
   a terminal command. A path is judged both as written and with links
-  resolved. Artifacts (screenshots and downloads) are the exception for
-  reading: the file adapter's `list`, `read`, `stat` and `hash`, file
+  resolved, a link whose target does not exist included, so a link to a
+  reserved name gets the same refusal whether or not that name exists; a
+  chain of more links than the system follows is refused too. Artifacts
+  (screenshots and downloads) are the exception for reading: the file
+  adapter's `list`, `read`, `stat` and `hash`, file
   verification, and the browser's upload and `file:` loads still reach them
   where they did before, but nothing may change them. The browser no longer
   uploads other reserved files or loads them through a `file:` URL, which only
