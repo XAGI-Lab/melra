@@ -144,8 +144,8 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
-- A browser tab action no longer fails because some other tab does not
-  answer. Every tab action lists the tabs after its effect, and that list
+- A browser tab action no longer fails in the tab list it returns because some
+  other tab does not answer. Every tab action lists the tabs after its effect, and that list
   waited for each tab's title, so one stuck tab (a page in a long script) or
   one closing meanwhile failed `tab_new` and `tab_switch` after they had run,
   which the controller retried as reads, opening another tab each time, and

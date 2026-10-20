@@ -262,6 +262,11 @@ describe("browser tabs", () => {
       closeWhenListed(two!);
       const opened = await runtime.execute(op({ action: "tab_new", url: `${url}/one` }));
       expect((opened.tabs as Tab[])[opened.index as number]).toMatchObject({ url: `${url}/one`, active: true });
+      // Its own tab closing during the listing is no tab to report, not a success with no index.
+      const pages = (runtime as unknown as { context: BrowserContext }).context.pages();
+      const mine = pages.findIndex((page) => page.url() === `${url}/three`);
+      closeWhenListed(pages[mine]!);
+      await expect(runtime.execute(op({ action: "tab_switch", tabIndex: mine }))).rejects.toThrow("browser_tab_not_found");
     } finally {
       await runtime.close();
     }

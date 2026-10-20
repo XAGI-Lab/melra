@@ -216,7 +216,8 @@ Actions: `navigate`, `back`, `forward`, `reload`, `inspect`, `wait`, `click`,
   list, because opening, switching, and closing all shift the indices. A tab
   whose page does not answer within a second (or the action's `timeoutMs`, if
   shorter), as a page stuck in a script does, is listed with `title: null`, so
-  one stuck tab never fails an action on another.
+  the listing itself never fails an action on another tab (an attached browser
+  still refuses `close` and `tab_switch` while a tab does not answer, as above).
 - `wait` takes exactly one condition: a `target` reaching a `state`
   (`visible`, `hidden`, `attached`, `detached`), a `urlContains` substring, or a
   `value` substring of the page text. It is the supported way to handle a slow

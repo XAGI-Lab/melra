@@ -2511,7 +2511,10 @@ export class BrowserRuntime {
           }
         }
         const { pages, tabs } = await this.describeTabs(context);
-        return { opened: true, index: pages.indexOf(opened), tabs };
+        const index = pages.indexOf(opened);
+        // Its own tab closed during the listing: there is no tab to report.
+        if (index === -1) throw new Error("browser_tab_not_found");
+        return { opened: true, index, tabs };
       }
       case "tab_switch": {
         const context = await this.ensureContext();
@@ -2527,7 +2530,9 @@ export class BrowserRuntime {
         await this.call(target.bringToFront(), "bring_to_front");
         this.activate(target);
         const { pages, tabs } = await this.describeTabs(context);
-        return { switched: true, index: pages.indexOf(target), url: target.url(), tabs };
+        const index = pages.indexOf(target);
+        if (index === -1) throw new Error("browser_tab_not_found");
+        return { switched: true, index, url: target.url(), tabs };
       }
       case "close": {
         const context = await this.ensureContext();
