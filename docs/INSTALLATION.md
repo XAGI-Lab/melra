@@ -867,8 +867,8 @@ closing every door it owns:
   and runs only once an operator approves it. Developer mode lets those reads
   through, as before.
 - **An argument that only looks inside the workspace is refused if it links
-  out**, on its way or where it ends, with `terminal_path_outside_workspace`,
-  approved or not.
+  out**, on its way, where it ends, or where a program that folds `..` as text
+  lands, with `terminal_path_outside_workspace`, approved or not.
 - **A browser action that drives a page names it.** `click`, `type`,
   `fill_form`, `select`, `press`, `upload`, `download`, `close` and
   `tab_switch` without a `url` are refused at planning with

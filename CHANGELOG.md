@@ -702,8 +702,9 @@ All notable changes are documented here. The format follows
 - In enforced mode, a terminal argument spelled inside the workspace is
   judged at each directory it climbs out of and where it ends, with its links
   followed (a link to a name not there yet included), also past a `..` or
-  parts not there yet, so one that leads out, even on its way back in, is
-  refused (`terminal_path_outside_workspace`).
+  parts not there yet, and where a program that folds `..` as text would
+  land from its working directory, so one that leads out, even on its way
+  back in, is refused (`terminal_path_outside_workspace`).
 
 - A workspace that is the data directory, or sits inside it, including through
   a link, is refused at startup in every mode with

@@ -1,6 +1,7 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
+import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -8,6 +9,23 @@ import { join, sep } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TerminalOperationSchema } from "@melra/protocol";
 import { TerminalRuntime, hardenGitRead, redactTerminalOutput } from "./index.js";
+
+// Counts link lookups; each still does the real one.
+const lookups = vi.hoisted(() => ({ count: 0 }));
+vi.mock("node:fs/promises", async (actual) => {
+  const fs = await actual<typeof import("node:fs/promises")>();
+  return {
+    ...fs,
+    realpath: (...args: Parameters<typeof fs.realpath>) => {
+      lookups.count += 1;
+      return fs.realpath(...args);
+    },
+    readlink: (...args: Parameters<typeof fs.readlink>) => {
+      lookups.count += 1;
+      return fs.readlink(...args);
+    },
+  };
+});
 
 const roots: string[] = [];
 
@@ -721,6 +739,57 @@ describe("arguments", () => {
       }
     }
     await expect(inProj("node_modules/pkg/../../ok.txt")).resolves.toMatchObject({ success: true });
+  });
+
+  it.skipIf(process.platform === "win32")("in enforced mode, judges where `..` folded as text lands from a cwd through a link", async () => {
+    // The workspace sits in an enclosing repository, and its cwd `a/up` is the
+    // workspace itself, a level shallower than spelled: git, folding
+    // `l3/../..` as text, reads the repository's missing/y.
+    const repo = await realpath(await mkdtemp(join(tmpdir(), "melra-terminal-")));
+    roots.push(repo);
+    const ws = join(repo, "ws");
+    await mkdir(join(ws, "sub", "deep"), { recursive: true });
+    await mkdir(join(ws, "a"));
+    await mkdir(join(repo, "missing"));
+    await writeFile(join(repo, "missing", "y"), "committed\n");
+    for (const args of [["init", "-q"], ["add", "."], ["commit", "-qm", "x"]]) {
+      spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], { cwd: repo });
+    }
+    await writeFile(join(repo, "missing", "y"), "edited\n");
+    await symlink("..", join(ws, "a", "up"));
+    await symlink(join("sub", "deep"), join(ws, "l3"));
+    const confined = await TerminalRuntime.create({ root: ws, confineArguments: true });
+    const git = (...args: string[]) =>
+      confined.execute(TerminalOperationSchema.parse({ kind: "terminal", action: "run", command: "git", args, cwd: "a/up" }));
+    for (const action of ["diff", "checkout"]) {
+      await expect(git(action, "--", "l3/../../missing/y"), action).rejects.toThrow(/terminal_path_outside_workspace/);
+    }
+    expect(await readFile(join(repo, "missing", "y"), "utf8")).toBe("edited\n");
+    await expect(git("diff", "--", "l3/../deep")).resolves.toMatchObject({ success: true });
+  });
+
+  it.skipIf(process.platform === "win32")("follows a link to a missing name once per command, and not around a loop", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-terminal-")));
+    roots.push(root);
+    await mkdir(join(root, "d"));
+    // Each step along these links costs a lookup per `..` in its target.
+    const climb = "d/../".repeat(50);
+    await symlink(`${climb}loop2`, join(root, "loop1"));
+    await symlink(`${climb}loop1`, join(root, "loop2"));
+    for (let n = 0; n < 20; n++) await symlink(`${climb}chain${n + 1}`, join(root, `chain${n}`));
+    await symlink(`${climb}missing`, join(root, "chain20"));
+    const runtime = await TerminalRuntime.create({ root, confineArguments: true });
+    // Each argument also climbs out of a place through the same link.
+    const cost = async (into: string, count: number) => {
+      const before = lookups.count;
+      const args = ["-e", "", "--", ...Array.from({ length: count }, (_, n) => `${into}/${n}/../x`)];
+      await runtime.execute(TerminalOperationSchema.parse({ kind: "terminal", action: "run", command: process.execPath, args }));
+      return lookups.count - before;
+    };
+    // Fewer than one step around the loop per argument.
+    expect(await cost("loop1", 20)).toBeLessThan(20 * 50);
+    // Twenty arguments through the chain cost little more than one.
+    expect(await cost("chain0", 20)).toBeLessThan(2 * (await cost("chain0", 1)));
   });
 
   it("bounds how many places one command may climb out of", async () => {

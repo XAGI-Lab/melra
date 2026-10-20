@@ -45,10 +45,17 @@ export function redactTerminalOutput(value: string): string {
 /**
  * Where a path with no `..` in it leads: its deepest part that is there,
  * through every link, then the rest as written, which `mkdir -p` would make
- * there, however many parts that is.
+ * there, however many parts that is. `links` keeps where each link to a name
+ * not there yet leads, so one check follows it once, however many arguments
+ * and places go through it.
  */
-async function leadsTo(spelled: string, hops = 0): Promise<string> {
-  const whole = await realpath(spelled).catch(() => undefined);
+async function leadsTo(spelled: string, links: Map<string, { to: string; there: boolean }>, hops = 0): Promise<string> {
+  let code: unknown;
+  const failed = (error: NodeJS.ErrnoException) => {
+    code = error.code;
+    return undefined;
+  };
+  const whole = await realpath(spelled).catch(failed);
   if (whole !== undefined) return whole;
   const chain: string[] = [];
   for (let at = spelled; ; at = dirname(at)) {
@@ -62,18 +69,27 @@ async function leadsTo(spelled: string, hops = 0): Promise<string> {
   while (fails - resolves > 1) {
     const middle = (resolves + fails) >> 1;
     const at = chain[middle] as string;
-    const real = await realpath(at).catch(() => undefined);
+    const real = await realpath(at).catch(failed);
     if (real === undefined) fails = middle;
     else [resolves, leads, parent] = [middle, join(real, relative(at, spelled)), real];
   }
   // A link to a name not there yet: `touch link` makes its target, so it
-  // leads where the link points, as the file adapter follows one. Past the
-  // links one lookup follows, the lookup fails and makes nothing.
-  const link = chain[fails] as string;
-  const target = hops < 40 ? await readlink(join(parent, basename(link))).catch(() => undefined) : undefined;
-  if (target === undefined) return leads;
-  const next = `${isAbsolute(target) ? target : `${parent}${sep}${target}`}${spelled.slice(link.length)}`;
-  return await leadsTo((await climbedFrom(next)).end, hops + 1);
+  // leads where the link points, as the file adapter follows one. A loop, or
+  // more links than one lookup follows, fails the lookup and makes nothing.
+  if (code === "ELOOP" || hops >= 40) return leads;
+  const link = join(parent, basename(chain[fails] as string));
+  let known = links.get(link);
+  if (known === undefined) {
+    const target = await readlink(link).catch(() => undefined);
+    if (target === undefined) return leads;
+    const to = await leadsTo((await climbedFrom(isAbsolute(target) ? target : `${parent}${sep}${target}`)).end, links, hops + 1);
+    known = { to, there: await realpath(to).then(() => true, () => false) };
+    links.set(link, known);
+  }
+  // Nothing is below a name that is not there, so the rest is as written;
+  // below one that is, it is looked up.
+  const rest = spelled.slice((chain[fails] as string).length);
+  return known.there && rest !== "" ? await leadsTo(`${known.to}${rest}`, links, hops + 1) : `${known.to}${rest}`;
 }
 
 /**
@@ -400,6 +416,7 @@ export class TerminalRuntime {
       NAME_LISTERS.has(command.toLowerCase().replace(/\.(exe|cmd|bat|com|ps1)$/, ""));
     const climbed = new Set<string>();
     const confined = new Set<string>();
+    const links = new Map<string, { to: string; there: boolean }>();
     // ponytail: a program's own path syntax (git's `:/x`, `:(top)x`) is judged as a plain path.
     for (const path of [".", ...terminalArgumentPaths(operation.args)]) {
       // Unnormalised: the program resolves `link/..` through the link.
@@ -411,10 +428,11 @@ export class TerminalRuntime {
         if (climbed.size > MAX_CLIMBED_PLACES) throw new Error("terminal_path_too_complex");
         if (await this.reserved(place)) throw new Error("terminal_path_reserved");
       }
-      const real = await leadsTo(end);
+      const real = await leadsTo(end, links);
       // Some programs fold `..` as text first (git pathspecs, path.resolve),
       // so the argument is judged where that leads too.
-      for (const at of new Set([real, resolve(cwd, path)])) {
+      const folded = resolve(cwd, path);
+      for (const at of new Set([real, folded])) {
         // findstr and where expand their own wildcards, reading the directory.
         for (const probe of /[*?]/.test(path) ? [at, dirname(at)] : [at]) {
           if ((await this.reserved(probe)) || (!listsNames && (await this.holdsReserved(probe)))) {
@@ -428,9 +446,14 @@ export class TerminalRuntime {
       for (const place of places) {
         if (confined.has(place)) continue;
         confined.add(place);
-        if (!inside(this.root, await leadsTo(place))) throw new Error("terminal_path_outside_workspace");
+        if (!inside(this.root, await leadsTo(place, links))) throw new Error("terminal_path_outside_workspace");
       }
       if (!inside(this.root, real)) throw new Error("terminal_path_outside_workspace");
+      // Folded as text from where it runs, too: a cwd through a link can stand
+      // at another depth than the one it is spelled at.
+      if (folded !== end && !inside(this.root, await leadsTo(folded, links))) {
+        throw new Error("terminal_path_outside_workspace");
+      }
     }
   }
 
