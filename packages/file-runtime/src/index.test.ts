@@ -464,6 +464,25 @@ describe("FileRuntime", () => {
     expect(lookups.stat - before).toBeLessThan(450);
   });
 
+  it.skipIf(process.platform === "win32")("judges a deep chain of links with each part looked up once", async () => {
+    // Each link on the way was judged from scratch: every part looked up again,
+    // and the rest of the chain followed again, once per link.
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-file-")));
+    roots.push(root);
+    await mkdir(join(root, ".melra"));
+    await writeFile(join(root, ".melra", "melra.db"), "db");
+    const deep = join(root, ...Array.from({ length: 300 }, () => "d"));
+    await mkdir(deep, { recursive: true });
+    for (let hop = 39; hop >= 0; hop -= 1) {
+      await symlink(join(deep, hop === 39 ? "missing" : `link-${hop + 1}`), join(deep, `link-${hop}`));
+    }
+    const runtime = await FileRuntime.create({ root, reserved: [join(root, ".melra"), join(root, ".melra", "melra.db")] });
+    const [stats, links] = [lookups.stat, lookups.realpath];
+    expect(await runtime.isReserved(join(deep, "link-0", "x"))).toBe(false);
+    expect(lookups.stat - stats).toBeLessThan(1_000);
+    expect(lookups.realpath - links).toBeLessThan(100);
+  });
+
   it("knows a directory holds a reserved file before that file's directory exists", async () => {
     // As `melra doctor` asks it, before the first start: a link spells the way there.
     const base = await realpath(await mkdtemp(join(tmpdir(), "melra-file-")));

@@ -48,6 +48,34 @@ async function leadsTo(spelled: string): Promise<string> {
     join(await realpath(dirname(spelled)).catch(() => resolve(dirname(spelled))), basename(spelled)));
 }
 
+/**
+ * Where a lookup of `spelled` stands at each `..` in it, its links followed as
+ * the kernel follows them. Every part before a `..` is looked up, so whether
+ * it is there is an answer, though folding the path drops it. Windows folds
+ * `..` away before any lookup.
+ *
+ * ponytail: one judgement per distinct place, so arguments climbing out of
+ * thousands of different existing directories cost seconds. Batch the
+ * judgements if that ever shows up.
+ */
+async function climbedFrom(spelled: string): Promise<string[]> {
+  if (process.platform === "win32") return [];
+  const places: string[] = [];
+  let at: string = sep;
+  for (const part of spelled.split(sep)) {
+    if (part !== "..") {
+      at = join(at, part);
+      continue;
+    }
+    places.push(at);
+    // A part that is not there ends the lookup.
+    const real = await realpath(at).catch(() => undefined);
+    if (real === undefined) break;
+    at = dirname(real);
+  }
+  return places;
+}
+
 /** The null device, so git's system/global config files resolve to nothing. */
 const GIT_NULL_CONFIG = process.platform === "win32" ? "NUL" : "/dev/null";
 
@@ -337,9 +365,16 @@ export class TerminalRuntime {
     const listsNames =
       !/[\\/]/.test(command) &&
       NAME_LISTERS.has(command.toLowerCase().replace(/\.(exe|cmd|bat|com|ps1)$/, ""));
+    const climbed = new Set<string>();
     for (const path of [".", ...terminalArgumentPaths(operation.args)]) {
       // Unnormalised: the program resolves `link/..` through the link.
-      const real = await leadsTo(isAbsolute(path) ? path : `${cwd}${sep}${path}`);
+      const spelled = isAbsolute(path) ? path : `${cwd}${sep}${path}`;
+      for (const place of await climbedFrom(spelled)) {
+        if (climbed.has(place)) continue;
+        climbed.add(place);
+        if (await this.reserved(place)) throw new Error("terminal_path_reserved");
+      }
+      const real = await leadsTo(spelled);
       // findstr and where expand their own wildcards, reading the directory.
       for (const probe of /[*?]/.test(path) ? [real, dirname(real)] : [real]) {
         if ((await this.reserved(probe)) || (!listsNames && (await this.holdsReserved(probe)))) {

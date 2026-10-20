@@ -576,6 +576,34 @@ describe("arguments", () => {
     await expect(run(runtime, "ok.txt")).resolves.toMatchObject({ success: true });
   });
 
+  it.skipIf(process.platform === "win32")("answers the same for a path that passes a reserved name and climbs back out", async () => {
+    // Folded, such a path names nothing reserved, but the program looks up
+    // every part before a `..`, and whether that part is there is an answer.
+    const base = await realpath(await mkdtemp(join(tmpdir(), "melra-terminal-")));
+    roots.push(base);
+    const ws = join(base, "ws");
+    const data = join(base, "data");
+    await mkdir(join(ws, "sub"), { recursive: true });
+    await mkdir(join(base, "elsewhere"));
+    await mkdir(data);
+    await writeFile(join(data, "payload.key"), "secret");
+    await writeFile(join(ws, "ok.txt"), "ok");
+    // A link is climbed out of from where it leads, not from where it sits.
+    await symlink(join(base, "elsewhere"), join(ws, "l"));
+    const runtime = await TerminalRuntime.create({
+      root: ws,
+      reserved: async (path) => path === data || path.startsWith(`${data}${sep}`),
+    });
+    for (const name of ["payload.key", "missing"]) {
+      for (const spelling of [`${data}/${name}/../../ws/ok.txt`, `../data/${name}/../../ws/ok.txt`, `l/../data/${name}/../ws/ok.txt`]) {
+        await expect(run(runtime, spelling), spelling).rejects.toThrow(/terminal_path_reserved/);
+      }
+    }
+    for (const spelling of ["../ws/ok.txt", "sub/../ok.txt", "l/../ws/ok.txt"]) {
+      await expect(run(runtime, spelling), spelling).resolves.toMatchObject({ success: true });
+    }
+  });
+
   it("answers the same for a reserved working directory, present or absent", async () => {
     const root = await realpath(await mkdtemp(join(tmpdir(), "melra-terminal-")));
     roots.push(root);

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createHash, randomBytes } from "node:crypto";
+import type { BigIntStats } from "node:fs";
 import {
   lstat,
   mkdir,
@@ -71,6 +72,15 @@ async function sameEntry(left: string, right: string): Promise<boolean> {
   }
 }
 
+/** `look`, asked once per path for as long as `answers` is kept. */
+function remembered<T>(answers: Map<string, Promise<T>>, look: (at: string) => Promise<T>): (at: string) => Promise<T> {
+  return (at) => {
+    const answer = answers.get(at) ?? look(at);
+    answers.set(at, answer);
+    return answer;
+  };
+}
+
 /**
  * More links than the kernel follows in one lookup (40 on Linux, 32 on
  * macOS): a path that needs them opens nothing.
@@ -81,11 +91,16 @@ const MAX_LINKS = 40;
  * `real`: `path` with the deepest part of it that exists resolved through
  * links, and the rest as written. `next`: when the first part that does not
  * exist is a link, `path` with that link replaced by its target, where the
- * kernel would go on.
+ * kernel would go on. `resolved` keeps each lookup's answer, or why it failed,
+ * for the next spelling of a chain.
  */
-async function realSpelling(path: string): Promise<{ real: string; next?: string }> {
-  const whole = await realpath(path).catch(() => undefined);
-  if (whole !== undefined) return { real: whole };
+async function realSpelling(
+  path: string,
+  resolved = new Map<string, Promise<string | NodeJS.ErrnoException>>(),
+): Promise<{ real: string; next?: string }> {
+  const resolveLinks = remembered(resolved, (at) => realpath(at).catch((error: NodeJS.ErrnoException) => error));
+  const whole = await resolveLinks(path);
+  if (typeof whole === "string") return { real: whole };
   // A part resolves only if every part above it does, so the deepest one that
   // does is found by halving: about log2(depth) lookups, not one per part.
   // ponytail: each realpath still walks its whole prefix, so 100 arguments 300
@@ -102,8 +117,8 @@ async function realSpelling(path: string): Promise<{ real: string; next?: string
   while (fails - resolves > 1) {
     const middle = (resolves + fails) >> 1;
     const probe = chain[middle] as string;
-    const actual = await realpath(probe).catch(() => undefined);
-    if (actual === undefined) fails = middle;
+    const actual = await resolveLinks(probe);
+    if (typeof actual !== "string") fails = middle;
     else [resolves, real, parent] = [middle, join(actual, relative(probe, path)), actual];
   }
   if (parent === undefined) return { real };
@@ -115,8 +130,25 @@ async function realSpelling(path: string): Promise<{ real: string; next?: string
   const target = await readlink(at).catch(() => undefined);
   if (target === undefined) return { real };
   // Joined as written, not normalised: the kernel takes a `..` in it after
-  // following the links before it.
-  return { real, next: `${isAbsolute(target) ? target : `${parent}${sep}${target}`}${path.slice(link.length)}` };
+  // following the links before it. ponytail: judged where it leads, not at
+  // each part it passes on the way; judge those as the terminal judges its
+  // arguments (`climbedFrom`) to answer the same there too.
+  const joined = isAbsolute(target) ? target : `${parent}${sep}${target}`;
+  const next = `${joined}${path.slice(link.length)}`;
+  // Nothing through a part that does not resolve does, so the next spelling
+  // need not ask again; each ask follows the rest of the chain. The target of
+  // a link to a missing name is missing too; after too many links, one fewer
+  // may resolve, so that is asked once.
+  const failure = await resolveLinks(link);
+  const missing = typeof failure !== "string" && (failure.code === "ENOENT" || failure.code === "ENOTDIR");
+  const onward = missing ? failure : await resolveLinks(joined);
+  if (typeof onward !== "string") {
+    for (let through = next; through.length >= joined.length; through = dirname(through)) {
+      resolved.set(through, Promise.resolve(onward));
+      if (dirname(through) === through) break;
+    }
+  }
+  return { real, next };
 }
 
 /**
@@ -256,22 +288,50 @@ export class FileRuntime {
    */
   async isReserved(path: string, reading = false): Promise<boolean> {
     const spelled = resolve(path);
-    if (await this.reservedAsSpelled(spelled, reading)) return true;
+    // Each part looked up once per call: the spellings a chain of links
+    // passes through share most of their parts.
+    const lookup = remembered(new Map<string, Promise<BigIntStats | undefined>>(), (at) =>
+      stat(at, { bigint: true }).catch(() => undefined),
+    );
+    const resolved = new Map<string, Promise<string | NodeJS.ErrnoException>>();
+    // The same thing under another name, a hard link: so the target and each
+    // directory above it are compared by identity with every reserved entry
+    // and every file inside a reserved directory.
+    const identities = new Set<string>();
+    for (const entry of this.reserved) {
+      const held = await lookup(entry);
+      if (held === undefined) continue;
+      identities.add(identity(held));
+      if (!held.isDirectory()) continue;
+      for (const name of await readdir(entry).catch(() => [])) {
+        const file = await lookup(join(entry, name));
+        if (file !== undefined) identities.add(identity(file));
+      }
+    }
+    const judge = (at: string) => this.reservedAsSpelled(at, reading, identities, lookup);
+    if (await judge(spelled)) return true;
     const seen = new Set<string>();
     for (let next: string | undefined = spelled; next !== undefined && !seen.has(next); ) {
       // No lookup follows a chain this long, but the answer would still tell
-      // where it ends: refused, whatever is there.
+      // where it ends: refused, whatever is there. ponytail: deleting or moving
+      // the link itself is refused too; allowing that needs a chain to a
+      // present name refused at the same length first.
       if (seen.size > MAX_LINKS) return true;
       seen.add(next);
-      const step = await realSpelling(next);
-      if (step.real !== spelled && (await this.reservedAsSpelled(step.real, reading))) return true;
+      const step = await realSpelling(next, resolved);
+      if (step.real !== spelled && (await judge(step.real))) return true;
       next = step.next;
     }
     // Every spelling on the way judged, or a loop, which opens nothing.
     return false;
   }
 
-  private async reservedAsSpelled(path: string, reading: boolean): Promise<boolean> {
+  private async reservedAsSpelled(
+    path: string,
+    reading: boolean,
+    identities: Set<string>,
+    lookup: (at: string) => Promise<BigIntStats | undefined>,
+  ): Promise<boolean> {
     // A descriptor path names whatever this process has open, MELRA's locked
     // files included, and on macOS realpath leaves it under /dev/fd.
     if (process.platform !== "win32" && inside("/dev/fd", resolve(path))) return true;
@@ -290,20 +350,6 @@ export class FileRuntime {
       if (await this.named(current, this.reserved)) return true;
       if (dirname(current) === current) break;
     }
-    // The same thing under another name, a hard link: so the target and each
-    // directory above it are compared by identity with every reserved entry
-    // and every file inside a reserved directory.
-    const identities = new Set<string>();
-    for (const entry of this.reserved) {
-      const found = await stat(entry, { bigint: true }).catch(() => undefined);
-      if (found === undefined) continue;
-      identities.add(identity(found));
-      if (!found.isDirectory()) continue;
-      for (const name of await readdir(entry).catch(() => [])) {
-        const file = await stat(join(entry, name), { bigint: true }).catch(() => undefined);
-        if (file !== undefined) identities.add(identity(file));
-      }
-    }
     if (identities.size === 0) return false;
     // Root first, stopping at the first missing directory: nothing below it
     // exists, and a 4 KB argument would otherwise cost thousands of failed stats.
@@ -313,7 +359,7 @@ export class FileRuntime {
       if (dirname(current) === current) break;
     }
     for (const current of chain) {
-      const found = await stat(current, { bigint: true }).catch(() => undefined);
+      const found = await lookup(current);
       if (found !== undefined && identities.has(identity(found))) return true;
       if (found === undefined) return false;
     }
