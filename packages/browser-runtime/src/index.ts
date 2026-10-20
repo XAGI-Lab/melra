@@ -1271,21 +1271,24 @@ export class BrowserRuntime {
    * listing that failed made a tab opened or closed read as nothing done. A
    * tab that does not answer within a second is listed with `title: null`;
    * one closed meanwhile is left out, and the indices are the ones after it.
+   * `pages` is the list they index, for an action to report its own tab's.
    */
   private async describeTabs(
     context: BrowserContext,
-  ): Promise<Record<string, unknown>[]> {
+  ): Promise<{ pages: Page[]; tabs: Record<string, unknown>[] }> {
     const titles = new Map(
       await Promise.all(
         context.pages().map(async (item) => [item, await bounded(item.title(), 1_000, "title").catch(() => null)] as const),
       ),
     );
-    return context.pages().map((item, index) => ({
+    const pages = context.pages();
+    const tabs = pages.map((item, index) => ({
       index,
       url: item.url(),
       title: titles.get(item) ?? null,
       active: item === this.activePage,
     }));
+    return { pages, tabs };
   }
 
   /**
@@ -2481,7 +2484,7 @@ export class BrowserRuntime {
       }
       case "tabs": {
         const context = await this.ensureContext();
-        return { tabs: await this.describeTabs(context) };
+        return { tabs: (await this.describeTabs(context)).tabs };
       }
       case "tab_new": {
         const context = await this.ensureContext();
@@ -2494,11 +2497,8 @@ export class BrowserRuntime {
             timeout: operation.timeoutMs,
           });
         }
-        return {
-          opened: true,
-          index: context.pages().indexOf(opened),
-          tabs: await this.describeTabs(context),
-        };
+        const { pages, tabs } = await this.describeTabs(context);
+        return { opened: true, index: pages.indexOf(opened), tabs };
       }
       case "tab_switch": {
         const context = await this.ensureContext();
@@ -2513,12 +2513,8 @@ export class BrowserRuntime {
         // focus behaviour differ.
         await this.call(target.bringToFront(), "bring_to_front");
         this.activate(target);
-        return {
-          switched: true,
-          index: (await this.ensureContext()).pages().indexOf(target),
-          url: target.url(),
-          tabs: await this.describeTabs(context),
-        };
+        const { pages, tabs } = await this.describeTabs(context);
+        return { switched: true, index: pages.indexOf(target), url: target.url(), tabs };
       }
       case "close": {
         const context = await this.ensureContext();
@@ -2532,7 +2528,7 @@ export class BrowserRuntime {
         this.dispatched = true;
         await this.call(target.close(), "close");
         this.activate(context.pages().at(-1));
-        return { closed: true, url, tabs: await this.describeTabs(context) };
+        return { closed: true, url, tabs: (await this.describeTabs(context)).tabs };
       }
     }
   }

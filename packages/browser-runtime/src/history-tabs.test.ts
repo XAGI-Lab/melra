@@ -5,7 +5,7 @@ import { createServer, type Server } from "node:http";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Page } from "playwright-core";
+import type { BrowserContext, Page } from "playwright-core";
 import { BrowserOperationSchema } from "@melra/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { BrowserRuntime, detectBrowserExecutable } from "./index.js";
@@ -193,11 +193,42 @@ describe("browser tabs", () => {
       // an unknown outcome.
       const opened = await runtime.execute(op({ action: "tab_new", url: `${url}/two`, timeoutMs: 3_000 }));
       expect(opened.index).toBe(1);
+      expect(opened.index).toBe((opened.tabs as Tab[]).find((tab) => tab.active)?.index);
       expect((opened.tabs as Tab[]).map((tab) => tab.title)).toEqual([null, "two"]);
       const closed = await runtime.execute(op({ action: "close", tabIndex: 1, timeoutMs: 3_000 }));
       expect(closed.closed).toBe(true);
       expect(closed.tabs).toMatchObject([{ index: 0, title: null, active: true }]);
       await stalled;
+    } finally {
+      await runtime.close();
+    }
+  }, 120_000);
+
+  it("reports the index its tab has in the list it returns when a tab closes during the listing", async () => {
+    const context = await fixture();
+    if (context === undefined) return;
+    const { runtime, url } = context;
+    // The tab closes while the listing waits for its title, as one closed by
+    // its page or by the operator can.
+    const closeWhenListed = (page: Page) => {
+      page.title = async () => {
+        await page.close();
+        return "";
+      };
+    };
+    try {
+      await runtime.execute(op({ action: "navigate", url: `${url}/one` }));
+      await runtime.execute(op({ action: "tab_new", url: `${url}/two` }));
+      await runtime.execute(op({ action: "tab_new", url: `${url}/three` }));
+      const [one, two] = (runtime as unknown as { context: BrowserContext }).context.pages();
+      // The index was taken before the listing and the list after it, so they
+      // disagreed, and a `close` by that index closed the tab after this one.
+      closeWhenListed(one!);
+      const switched = await runtime.execute(op({ action: "tab_switch", tabIndex: 1 }));
+      expect((switched.tabs as Tab[])[switched.index as number]).toMatchObject({ url: `${url}/two`, active: true });
+      closeWhenListed(two!);
+      const opened = await runtime.execute(op({ action: "tab_new", url: `${url}/one` }));
+      expect((opened.tabs as Tab[])[opened.index as number]).toMatchObject({ url: `${url}/one`, active: true });
     } finally {
       await runtime.close();
     }
