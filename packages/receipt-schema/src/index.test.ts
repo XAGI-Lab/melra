@@ -212,6 +212,16 @@ describe("receipt and certificate primitives", () => {
       "http://localhost:3000?next=a@b",
       "ssh://git@github.com/org/repo.git",
       "git@github.com:org/repo.git",
+      // A plain user name is not a credential, and a URL ends where a field,
+      // a cell or an IPv6 bracket begins.
+      "origin\thttps://myorg@dev.azure.com/myorg/proj/_git/repo (fetch)",
+      "pip install git+https://git@github.com/org/repo.git",
+      "Acme,https://acme.com,sales@acme.com",
+      '["https://a.com","ops@b.com"]',
+      '{"website":"https://acme.com","logo":"https://cdn.acme.com/logo.png","email":"ops@acme.com"}',
+      '{"url":"https://x.com","a":"b@c"}',
+      '{"url":"https://x.com:","a":"b@c"}',
+      "http://[::1]:4873/@melra%2fcli",
     ]) {
       expect(redactSecrets(text).value, text).toBe(text);
     }

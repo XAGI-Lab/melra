@@ -999,13 +999,16 @@ All notable changes are documented here. The format follows
   more kinds of Slack token, PGP private key blocks, every scheme in an
   `Authorization` or `Proxy-Authorization` header, token and API-key headers
   and assignments (`x-api-key: ...`, `access_token=...`, `"apiKey": "..."`),
-  and URL userinfo that is a token alone or a password holding `/`. A stored
-  field whose name ends in a credential word (`access_token`, `clientSecret`,
-  `x-api-key`) is redacted whole. Counts and kinds (`max_tokens`,
-  `token_type`), the `credentials` list of names, and values without the
-  shape of an issued token (`token: string`) are kept, and a URL whose port is
-  followed by an `@` later in its path or query is no longer read as carrying
-  credentials.
+  and URL userinfo with a password holding `/`, or with an http(s) user alone
+  of twenty or more URL-safe characters including a digit, the shape of an
+  issued token. A stored field whose name ends in a credential word
+  (`access_token`, `clientSecret`, `x-api-key`) is redacted whole. Counts and
+  kinds (`max_tokens`, `token_type`), the `credentials` list of names, values
+  without the shape of an issued token (`token: string`), and a plain user
+  name such as `https://alice@host` are kept. A URL whose port is followed by
+  an `@` later in its path or query is no longer read as carrying
+  credentials, and a match for a URL's userinfo stops at a quote, bracket or
+  brace, so compact JSON and IPv6 hosts stay as they were.
 
 - Evidence is redacted before it is stored in a receipt or certificate, as
   the rest of a receipt already was. An `http_resource_matches` item names the

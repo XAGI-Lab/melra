@@ -55,14 +55,17 @@ export const SECRET_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
     "$1$2[REDACTED]",
   ],
   // Userinfo in a URL or connection string anywhere in text: `postgres://app:pw@db`,
-  // a password holding `/`, but not `host:8080/path@x`, which is a port.
+  // a password holding `/`, but not `host:8080/path@x`, which is a port. Neither
+  // part runs past a character a URL cannot hold unescaped, so a match ends with
+  // its JSON string, CSV cell or IPv6 host.
   [
-    /\b([a-z][a-z0-9+.-]*:\/\/)[^\s/?#@:]*:(?!\d+(?:[/?#]|$))[^\s@]{1,256}@/gi,
+    /\b([a-z][a-z0-9+.-]*:\/\/)[^\s/?#@:"'<>{}\[\],]*:(?!\d+(?:[/?#]|$))[^\s@"'<>{}\[\]]{1,256}@/gi,
     "$1[REDACTED_URL_CREDENTIALS]@",
   ],
   // A token standing alone as the user over http(s): `https://<token>@host`.
-  // Not `ssh://git@host`, where the user is only a name.
-  [/\b(https?:\/\/)[^\s/?#@:]+@/gi, "$1[REDACTED_URL_CREDENTIALS]@"],
+  // Only a user with a digit and twenty URL-safe characters, the shape an issued
+  // token has, so `https://alice@host` and `git+https://git@host` stay.
+  [/\b(https?:\/\/)(?=[A-Za-z0-9._~%+-]*\d)[A-Za-z0-9._~%+-]{20,}@/gi, "$1[REDACTED_URL_CREDENTIALS]@"],
 ];
 
 /** Every SECRET_PATTERNS match in `text` replaced, and which kinds were found. */
