@@ -326,7 +326,9 @@ recorded on the cancelled run, and a task still running there is cancelled as
 the run's own. Its step is recorded as still in flight (`recovery_required`,
 `task_still_in_flight`), not as cancelled: in another process, or one that
 died mid-effect, the effect may still land. One running in this process is
-recorded as it ended (cancelled, or done all the same) once it stops. The
+recorded as it ended (cancelled, or done all the same) once it stops, unless
+another holder has the run's lease at that moment: then it keeps reading in
+flight, which errs towards unknown. The
 public schema also reserves `partially_complete`, which no command enters
 today.
 

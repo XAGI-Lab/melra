@@ -194,7 +194,8 @@ All notable changes are documented here. The format follows
   That step is recorded as still in flight (`recovery_required`,
   `task_still_in_flight`) rather than as cancelled, since in another process,
   or one that died mid-effect, its effect may still land; one running in the
-  cancelling process is recorded as it ended once it stops. (#244)
+  cancelling process is recorded as it ended once it stops, unless something
+  else holds the run's lease just then, when it keeps reading in flight. (#244)
 
 - `workflow cancel` (`melra_workflow_cancel`) cancels a run's tasks only once
   the run's own cancel is recorded. It cancelled the challenges on the run's
@@ -232,7 +233,7 @@ All notable changes are documented here. The format follows
   step's task could be missed: a `parallel` step with one branch run and
   another still waiting for approval was recorded as complete. And each read
   scanned the whole listing once per step key: recovering a 100-iteration
-  loop of 50 steps in a home of 100,000 tasks took about 10 s per run, and
+  loop of 50 steps in a home of 100,000 tasks took 15-20 s per run, and
   now takes about 0.1 s. `workflow cancel`, which now recovers the run first
   (above), reads its steps the same way and never the whole history.
 
