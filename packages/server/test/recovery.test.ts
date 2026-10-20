@@ -19,9 +19,12 @@ const runtimes: MelraRuntime[] = [];
 
 afterEach(async () => {
   vi.useRealTimers();
-  for (const runtime of runtimes.splice(0)) await runtime.close().catch(() => undefined);
-  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
-});
+  // Both taken before anything is awaited: a close that outlasted the hook
+  // went on to take, and remove, the next test's root.
+  const [closing, removing] = [runtimes.splice(0), roots.splice(0)];
+  for (const runtime of closing) await runtime.close().catch(() => undefined);
+  await Promise.all(removing.map((root) => rm(root, { recursive: true, force: true })));
+}, 60_000);
 
 /** A custom check that holds the task in `verifying` until released. */
 function heldCheck() {

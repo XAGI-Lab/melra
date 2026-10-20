@@ -2024,6 +2024,9 @@ export class BrowserRuntime {
   }
 
   private async run(operation: BrowserOperation): Promise<Record<string, unknown>> {
+    // Before a browser is started, so a refused upload never starts one.
+    const files =
+      operation.action === "upload" && operation.filePaths !== undefined ? await this.uploadPaths(operation.filePaths) : [];
     const page = await this.page();
     this.actingOn = page;
     // What it opens while this action navigates it or sends it input is the
@@ -2042,13 +2045,18 @@ export class BrowserRuntime {
         }
       : undefined;
     try {
-      return await this.act(operation, page, pin);
+      return await this.act(operation, page, pin, files);
     } finally {
       void pin?.document.dispose().catch(() => undefined);
     }
   }
 
-  private async act(operation: BrowserOperation, page: Page, pin: Pin | undefined): Promise<Record<string, unknown>> {
+  private async act(
+    operation: BrowserOperation,
+    page: Page,
+    pin: Pin | undefined,
+    files: string[],
+  ): Promise<Record<string, unknown>> {
     // Anywhere but on the way to it, a url names the page the action acts on:
     // the active page, or for `close` and `tab_switch` the tab they name.
     // Policy shows it to the approver as the target and matches grants against
@@ -2380,7 +2388,6 @@ export class BrowserRuntime {
         if (operation.filePaths === undefined) {
           throw new Error("browser_upload_requires_file_paths");
         }
-        const files = await this.uploadPaths(operation.filePaths);
         await this.actOn(pin!, await this.locator(page, operation.target), operation.timeoutMs, (element, timeout) =>
           element.setInputFiles(files, { timeout }),
         );

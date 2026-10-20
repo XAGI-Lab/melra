@@ -685,8 +685,9 @@ All notable changes are documented here. The format follows
   where they did before, but nothing may change them. The browser no longer
   uploads other reserved files or loads them through a `file:` URL, which only
   `--unsafe-local` allows (`browser_path_reserved`), whether or not the file
-  exists; a download refused that way is still an unknown outcome, since the
-  click went out, and now names `browser_path_reserved`. `file_exists`,
+  exists, and refuses such an upload before it starts a browser; a download
+  refused that way is still an unknown outcome, since the click went out, and
+  now names `browser_path_reserved`. `file_exists`,
   `file_absent` and registered verifiers get no answer about a reserved path,
   whether or not it exists (`verification_path_reserved`), and a path a link
   leads out of the workspace gets the same refusal present or absent. On
