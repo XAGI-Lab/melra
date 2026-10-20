@@ -1269,7 +1269,8 @@ export class BrowserRuntime {
    *
    * Never throws: it follows the effect of every tab action but `tabs`, and a
    * listing that failed made a tab opened or closed read as nothing done. A
-   * tab that does not answer within a second is listed with `title: null`;
+   * tab that does not answer within a second, or the action's timeout if
+   * shorter, or before a cancel, is listed with `title: null`;
    * one closed meanwhile is left out, and the indices are the ones after it.
    * `pages` is the list they index, for an action to report its own tab's.
    */
@@ -1278,7 +1279,9 @@ export class BrowserRuntime {
   ): Promise<{ pages: Page[]; tabs: Record<string, unknown>[] }> {
     const titles = new Map(
       await Promise.all(
-        context.pages().map(async (item) => [item, await bounded(item.title(), 1_000, "title").catch(() => null)] as const),
+        context
+          .pages()
+          .map(async (item) => [item, await this.call(item.title(), "title", Math.min(1_000, this.callMs)).catch(() => null)] as const),
       ),
     );
     const pages = context.pages();

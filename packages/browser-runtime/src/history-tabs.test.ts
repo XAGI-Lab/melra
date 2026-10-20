@@ -204,6 +204,39 @@ describe("browser tabs", () => {
     }
   }, 120_000);
 
+  it("waits for a tab's title no longer than the action's timeout or its cancel", async () => {
+    const context = await fixture();
+    if (context === undefined) return;
+    const { runtime, url } = context;
+    try {
+      await runtime.execute(op({ action: "navigate", url: `${url.replace("127.0.0.1", "localhost")}/one` }));
+      const stalled = (runtime as unknown as { activePage: Page }).activePage
+        .evaluate(() => {
+          const end = Date.now() + 4_000;
+          while (Date.now() < end) {
+            // Spin: the page answers nothing until it ends.
+          }
+        })
+        .catch(() => undefined);
+      // Each title had a second of its own, whatever the action's timeout,
+      // and a cancel did not end the wait.
+      let started = Date.now();
+      const listed = await runtime.execute(op({ action: "tabs", timeoutMs: 100 }));
+      expect(Date.now() - started).toBeLessThan(600);
+      expect(listed.tabs).toMatchObject([{ index: 0, title: null, active: true }]);
+      const cancel = new AbortController();
+      setTimeout(() => cancel.abort(new Error("task_cancelled")), 50);
+      started = Date.now();
+      await expect(runtime.execute(op({ action: "tabs", timeoutMs: 30_000 }), cancel.signal)).rejects.toThrow(
+        "task_cancelled",
+      );
+      expect(Date.now() - started).toBeLessThan(600);
+      await stalled;
+    } finally {
+      await runtime.close();
+    }
+  }, 120_000);
+
   it("reports the index its tab has in the list it returns when a tab closes during the listing", async () => {
     const context = await fixture();
     if (context === undefined) return;
