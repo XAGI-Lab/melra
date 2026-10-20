@@ -990,7 +990,10 @@ export class TaskController {
     }
     if (asksSemantic(request)) {
       // Settled already, it is left as it stands rather than certified again.
-      if (task.error === "semantic_judgement_expired") return { task };
+      // Asked of the stored row: a peer may have settled it since `task` was
+      // read, and its status says `recovery_required` either way.
+      const stored = this.status(task.id);
+      if (stored.error === "semantic_judgement_expired") return { task: stored };
       // Cut off before it reached `waiting_user`, maybe before its draw too.
       this.drawGrant(task, request, classified);
       return this.settleUnanswered(task);

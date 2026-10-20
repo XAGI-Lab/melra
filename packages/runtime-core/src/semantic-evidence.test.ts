@@ -254,6 +254,33 @@ describe("semantic evidence (#54)", () => {
     ]);
   });
 
+  it("leaves a change a peer settled since it was read as the peer settled it", async () => {
+    const { controller, store } = await setup();
+    vi.spyOn(store, "saveCertificate").mockImplementationOnce(() => {
+      throw new Error("database is locked");
+    });
+    const parked = await run(controller, write([{ type: "file_exists", path: "out.txt" }, SEMANTIC]), {
+      idempotencyKey: "f".repeat(64),
+      attempt: 1,
+    });
+    expect(parked.task.status).toBe("recovery_required");
+    // A peer's reconcile settles it between this one's read and its transaction.
+    let peer: ReturnType<TaskController["execute"]> | undefined;
+    const transaction = store.transaction.bind(store);
+    vi.spyOn(store, "transaction").mockImplementationOnce((action) => {
+      peer = controller.execute(parked.task.id);
+      return transaction(action);
+    });
+    const late = await controller.execute(parked.task.id);
+    const first = await peer!;
+    expect(first.certificate).toBeDefined();
+    expect(late.certificate).toBeUndefined();
+    expect(late.task.error).toBe("semantic_judgement_expired");
+    expect(controller.receipts({ taskId: parked.task.id }).certificate?.certificateId).toBe(
+      first.certificate?.certificateId,
+    );
+  });
+
   it("writes a wait with its certificate, so a peer's expiry cannot land between them", async () => {
     const dir = await mkdtemp(join(tmpdir(), "melra-semantic-db-"));
     roots.push(dir);
