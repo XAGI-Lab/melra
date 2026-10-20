@@ -1266,18 +1266,26 @@ export class BrowserRuntime {
    * Returned by every tab action rather than only by `tabs`, because opening,
    * switching, and closing all renumber the list — a caller that had to issue a
    * separate `tabs` call after each one would be acting on a stale index.
+   *
+   * Never throws: it follows the effect of every tab action but `tabs`, and a
+   * listing that failed made a tab opened or closed read as nothing done. A
+   * tab that does not answer within a second is listed with `title: null`;
+   * one closed meanwhile is left out, and the indices are the ones after it.
    */
   private async describeTabs(
     context: BrowserContext,
   ): Promise<Record<string, unknown>[]> {
-    return await Promise.all(
-      context.pages().map(async (item, index) => ({
-        index,
-        url: item.url(),
-        title: await this.call(item.title(), "title"),
-        active: item === this.activePage,
-      })),
+    const titles = new Map(
+      await Promise.all(
+        context.pages().map(async (item) => [item, await bounded(item.title(), 1_000, "title").catch(() => null)] as const),
+      ),
     );
+    return context.pages().map((item, index) => ({
+      index,
+      url: item.url(),
+      title: titles.get(item) ?? null,
+      active: item === this.activePage,
+    }));
   }
 
   /**

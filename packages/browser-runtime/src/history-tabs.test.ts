@@ -5,6 +5,7 @@ import { createServer, type Server } from "node:http";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { Page } from "playwright-core";
 import { BrowserOperationSchema } from "@melra/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { BrowserRuntime, detectBrowserExecutable } from "./index.js";
@@ -35,7 +36,7 @@ afterEach(async () => {
 interface Tab {
   index: number;
   url: string;
-  title: string;
+  title: string | null;
   active: boolean;
 }
 
@@ -70,7 +71,7 @@ async function fixture(): Promise<{ runtime: BrowserRuntime; url: string } | und
       workspaceRoot: root,
       artifactDirectory: join(root, "artifacts"),
       executablePath,
-      allowedDomains: ["127.0.0.1"],
+      allowedDomains: ["127.0.0.1", "localhost"],
       allowLocalhost: true,
     }),
     url: `http://127.0.0.1:${address.port}`,
@@ -165,6 +166,38 @@ describe("browser tabs", () => {
 
       const closed = await runtime.execute(op({ action: "close", tabIndex: 1 }));
       expect((closed.tabs as Tab[]).length).toBe(1);
+    } finally {
+      await runtime.close();
+    }
+  }, 120_000);
+
+  it("reports tab_new and close as done while another tab cannot say its title", async () => {
+    const context = await fixture();
+    if (context === undefined) return;
+    const { runtime, url } = context;
+    try {
+      // Another site than the tab opened below, so its own renderer: the
+      // stall holds this tab and nothing else, as a wedged page would.
+      await runtime.execute(op({ action: "navigate", url: `${url.replace("127.0.0.1", "localhost")}/one` }));
+      const stalled = (runtime as unknown as { activePage: Page }).activePage
+        .evaluate(() => {
+          const end = Date.now() + 10_000;
+          while (Date.now() < end) {
+            // Spin: the page answers nothing until it ends.
+          }
+        })
+        .catch(() => undefined);
+      // The listing after each effect named that tab's title, and waiting for
+      // it failed an action that had already happened: `tab_new` was retried
+      // as a read, opening another tab each time, and `close` was parked as
+      // an unknown outcome.
+      const opened = await runtime.execute(op({ action: "tab_new", url: `${url}/two`, timeoutMs: 3_000 }));
+      expect(opened.index).toBe(1);
+      expect((opened.tabs as Tab[]).map((tab) => tab.title)).toEqual([null, "two"]);
+      const closed = await runtime.execute(op({ action: "close", tabIndex: 1, timeoutMs: 3_000 }));
+      expect(closed.closed).toBe(true);
+      expect(closed.tabs).toMatchObject([{ index: 0, title: null, active: true }]);
+      await stalled;
     } finally {
       await runtime.close();
     }
