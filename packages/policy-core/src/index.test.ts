@@ -725,6 +725,17 @@ describe("enforced-mode reads that leave the workspace", () => {
       ["git", ["diff", "HEAD~1..HEAD", "--stat"]],
       ["head", ["-n", "1", "fixture.txt"]],
       ["rg", ["foo.*", "src"]],
+      // An @ that is not a file reference still names something inside.
+      ["git", ["show", "@~1"]],
+      ["git", ["log", "@{u}"]],
+      // No read here takes `@x` or `<x` as a file to read, so these are
+      // patterns and names inside (`./@/x`); the runtime judges references.
+      ["rg", ["-n", "</div>", "src"]],
+      ["rg", ["-n", "@/components/Button", "src"]],
+      ["rg", ["-F", "</script>", "index.html"]],
+      ["rg", ["-e", "@/lib/utils", "src"]],
+      ["cat", [`@${outside}`]],
+      ["rg", ["-F", `--file=@${outside}`]],
     ] as const) {
       expect(read(command, [...args]).decision.reason, `${command} ${args.join(" ")}`).toBe("read_only_operation");
     }

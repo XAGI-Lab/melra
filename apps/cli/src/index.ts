@@ -29,6 +29,8 @@ import {
   createMelraRuntime,
   dataLocationAdvice,
   narrowWorkspaceAdvice,
+  secretFiles,
+  secretInsideWorkspace,
   serveHttp,
   OAuthProvider,
   clientPrincipal,
@@ -652,10 +654,11 @@ async function doctor(env: CliEnvironment): Promise<{
       ? `${computer.adapter}: screenshot=${computer.screenshot}, pointer=${computer.pointer}, keyboard=${computer.keyboard}, scroll=${computer.scroll}`
       : computer.limitations.join("; "),
   });
+  let credentials: LocalPolicy["credentials"] = {};
   try {
     const path = await existingPolicyPath(env);
     // The server's own parser, so a bad `mode` or grant fails here too.
-    if (path !== undefined) await loadPolicy(path, env.workspaceRoot);
+    if (path !== undefined) ({ credentials } = await loadPolicy(path, env.workspaceRoot));
     checks.push({
       name: "policy",
       status: "pass",
@@ -667,6 +670,44 @@ async function doctor(env: CliEnvironment): Promise<{
       status: "fail",
       detail: error instanceof Error ? error.message : String(error),
     });
+  }
+  // Where the browser's and the credential broker's secret files lie, judged as
+  // the server judges them before it starts. Only once the workspace exists:
+  // the check would create it.
+  const secrets = secretFiles(env, credentials);
+  if (secrets.size > 0 && checks.some((check) => check.name === "workspace" && check.status === "pass")) {
+    try {
+      const profile = secrets.get("MELRA_BROWSER_PROFILE");
+      if (profile !== undefined && (await workspaceInsideData(env.workspaceRoot, profile))) {
+        checks.push({
+          name: "secret-location",
+          // The server refuses to start this way in every mode.
+          status: "fail",
+          detail: `workspace_inside_browser_profile: ${env.workspaceRoot} is inside ${profile}`,
+          next: "point MELRA_WORKSPACE at the project, outside MELRA_BROWSER_PROFILE",
+        });
+      } else if (!env.unhinged) {
+        // Not in unsafe-local, as for the data directory.
+        const held = await secretInsideWorkspace(env.workspaceRoot, secrets);
+        checks.push(
+          held === undefined
+            ? { name: "secret-location", status: "pass", detail: "outside the workspace" }
+            : {
+                name: "secret-location",
+                // The server refuses to start this way in enforced mode.
+                status: env.mode === "enforced" ? "fail" : "warn",
+                detail: `${held} names ${secrets.get(held)}, inside the workspace, where a recursive read reaches it without naming it`,
+                next: `move ${secrets.get(held)} out of the workspace`,
+              },
+        );
+      }
+    } catch (error) {
+      checks.push({
+        name: "secret-location",
+        status: "fail",
+        detail: `could not resolve the workspace: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
   }
   if (env.socketPath !== undefined) checks.push(await socketCheck(env.socketPath));
   checks.push(isolationCheck(await detectIsolation(), env.mode));

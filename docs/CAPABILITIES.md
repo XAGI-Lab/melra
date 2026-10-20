@@ -94,6 +94,11 @@ Actions: `list`, `read`, `stat`, `hash`, `write`, `move`, `delete`, `mkdir`.
 Actions: `run`, `start`, `status`, `output`, `stop`, `send`.
 
 - Commands are spawned directly, never through a shell.
+- A bare program name is found only through `PATH` entries outside the
+  workspace, as written and through links. Entries inside it, and empty or
+  relative ones, which name the working directory, are left out of the search
+  and of the `PATH` the program itself sees. `--unsafe-local` keeps `PATH` as
+  given.
 - Shell interpreters, privilege escalation, and platform scripting shells are
   denied even if accidentally added to the normal allowlist.
 - Command, arguments, working directory, environment, duration, and output are
@@ -241,7 +246,8 @@ Actions: `navigate`, `back`, `forward`, `reload`, `inspect`, `wait`, `click`,
 - Blocks private, link-local, multicast, unspecified, and cloud-metadata
   addresses. Localhost is opt-in.
 - Confines uploaded files to the workspace, never MELRA's own data directory
-  except its artifacts, and downloaded files to the artifact directory.
+  except its artifacts, nor the browser profile, an HTTP archive or a
+  credential's file, and downloaded files to the artifact directory.
 
 - `MELRA_BROWSER_PROFILE` names a directory to keep, so a site logged into once
   stays logged in across runs. Unset, every run gets a throwaway profile.

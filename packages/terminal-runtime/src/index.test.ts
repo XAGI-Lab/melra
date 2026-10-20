@@ -3,9 +3,9 @@
 
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, sep } from "node:path";
+import { delimiter, join, sep } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TerminalOperationSchema } from "@melra/protocol";
 import { TerminalRuntime, hardenGitRead, redactTerminalOutput } from "./index.js";
@@ -418,6 +418,62 @@ describe("TerminalRuntime", () => {
     await runtime.close();
   }, 30_000);
 
+  it.skipIf(process.platform === "win32")(
+    "finds a bare program only through PATH entries outside the protected workspace",
+    async () => {
+      const base = await realpath(await mkdtemp(join(tmpdir(), "melra-terminal-")));
+      roots.push(base);
+      const ws = join(base, "ws");
+      for (const dir of [ws, join(ws, "bin"), join(ws, "node_modules", ".bin")]) {
+        await mkdir(dir, { recursive: true });
+        await writeFile(join(dir, "ls"), "#!/bin/sh\necho SHADOWED\n", "utf8");
+        await chmod(join(dir, "ls"), 0o755);
+      }
+      await symlink(join(ws, "bin"), join(base, "linked"));
+      const ls = TerminalOperationSchema.parse({ kind: "terminal", action: "run", command: "ls", args: [] });
+      const system = process.env.PATH ?? "";
+      // Empty and relative entries are the working directory, always inside.
+      for (const entry of ["", ".", "bin", join(ws, "node_modules", ".bin"), join(base, "linked")]) {
+        const runtime = await TerminalRuntime.create({
+          root: ws,
+          pathOutside: ws,
+          baseEnvironment: { PATH: `${entry}${delimiter}${system}` },
+        });
+        expect(String((await runtime.execute(ls)).stdout), JSON.stringify(entry)).not.toContain("SHADOWED");
+      }
+      // The program's own lookups get the same PATH.
+      const printed = await (
+        await TerminalRuntime.create({
+          root: ws,
+          pathOutside: ws,
+          baseEnvironment: { PATH: ["", "bin", join(ws, "bin"), join(base, "linked"), "/usr/bin"].join(delimiter) },
+        })
+      ).execute(
+        TerminalOperationSchema.parse({
+          kind: "terminal",
+          action: "run",
+          command: process.execPath,
+          args: ["-e", "process.stdout.write(process.env.PATH)"],
+        }),
+      );
+      expect(printed.stdout).toBe("/usr/bin");
+      // None left is refused, a path-qualified program too: an empty PATH is
+      // the working directory again, and a shell given none fills in a
+      // default that can end in it. So is none at all, for the same reason.
+      const none = await TerminalRuntime.create({ root: ws, pathOutside: ws, baseEnvironment: { PATH: "bin" } });
+      const absent = await TerminalRuntime.create({ root: ws, pathOutside: ws, baseEnvironment: {} });
+      const node = TerminalOperationSchema.parse({ kind: "terminal", action: "run", command: process.execPath, args: ["-e", ""] });
+      for (const runtime of [none, absent]) {
+        for (const operation of [node, ls]) {
+          await expect(runtime.execute(operation), operation.command).rejects.toThrow("terminal_path_empty_after_filter");
+        }
+      }
+      // Nothing to keep it out of: PATH as given.
+      const given = await TerminalRuntime.create({ root: ws, baseEnvironment: { PATH: `bin${delimiter}${system}` } });
+      expect((await given.execute(ls)).stdout).toContain("SHADOWED");
+    },
+  );
+
   it("names a missing program instead of surfacing a bare ENOENT", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-terminal-"));
     roots.push(root);
@@ -583,6 +639,8 @@ describe("arguments", () => {
     });
     const key = join(data, "payload.key");
     const spellings = [key, join("..", "data", "payload.key"), `--file=${key}`, `-f${key}`, join(data, "payload.*")];
+    // A file reference a program reads the named file for (curl, gh, response files).
+    spellings.push(`@${key}`, `-d@${key}`, `--data-binary=@${key}`, `f=<${key}`);
     if (process.platform !== "win32") {
       // The program resolves `l/..` through the link, to data/, not to ws/.
       await symlink(join(data, "sub"), join(ws, "l"));
@@ -592,6 +650,29 @@ describe("arguments", () => {
       await expect(run(runtime, spelling), spelling).rejects.toThrow(/terminal_path_reserved/);
     }
     await expect(run(runtime, "ok.txt")).resolves.toMatchObject({ success: true });
+  });
+
+  it("judges a file reference as the one file it names, never as a directory a reader walks", async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), "melra-terminal-")));
+    roots.push(base);
+    const ws = join(base, "ws");
+    const data = join(base, "data");
+    await mkdir(ws);
+    await mkdir(data);
+    const runtime = await TerminalRuntime.create({
+      root: ws,
+      reserved: async (path) => path === data || path.startsWith(`${data}${sep}`),
+      // As the server answers: every directory above the data holds it.
+      holdsReserved: async (path) => data.startsWith(path.endsWith(sep) ? path : `${path}${sep}`),
+    });
+    // Search patterns, as in `rg "@/" src` and `rg "</" page.html`.
+    for (const spelling of ["@/", "</", "-e</", "@..", "<.."]) {
+      await expect(run(runtime, spelling), spelling).resolves.toMatchObject({ success: true });
+    }
+    // Named plainly, a directory holding the data is still refused, and so is the data however named.
+    for (const spelling of [sep, "..", `@${data}`, `@${join("..", "data", "x")}`]) {
+      await expect(run(runtime, spelling), spelling).rejects.toThrow(/terminal_path_reserved/);
+    }
   });
 
   it.skipIf(process.platform === "win32")("answers the same for a path that passes a reserved name and climbs back out", async () => {
@@ -842,7 +923,7 @@ describe("arguments", () => {
     // Spelled outside, policy already asked a person; spelled inside, it did not.
     const confined = await TerminalRuntime.create({ root: ws, confineArguments: true });
     // However many parts past the link are not there yet: `mkdir -p` makes them all.
-    for (const spelling of [join("out", "f"), join("out", "new", "f")]) {
+    for (const spelling of [join("out", "f"), join("out", "new", "f"), `@${join("out", "f")}`, `-d@${join("out", "f")}`]) {
       await expect(run(confined, spelling), spelling).rejects.toThrow(/terminal_path_outside_workspace/);
     }
     await expect(run(confined, join(base, "outside", "f"))).resolves.toMatchObject({ success: true });

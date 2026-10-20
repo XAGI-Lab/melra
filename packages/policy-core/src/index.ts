@@ -461,7 +461,11 @@ function rgRunsOrDecompresses(arg: string): boolean {
   return /^-[^-]/.test(arg) && /[zL]/.test(arg.slice(1));
 }
 
-/** Whether a terminal command names a path outside the workspace, by spelling. Links are the runtime's half. */
+/**
+ * Whether a terminal command names a path outside the workspace, by spelling.
+ * Links are the runtime's half, and so are file references (`@x`): no read
+ * this judges takes one, and a program that does is not a read.
+ */
 function namesPathOutside(operation: Operation, root: string): boolean {
   if (operation.kind !== "terminal") return false;
   const cwd = resolve(root, operation.cwd ?? ".");

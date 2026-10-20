@@ -909,6 +909,48 @@ describe("melra CLI", () => {
     expect(file.checks.filter((check) => check.status === "fail").map((check) => check.name)).toEqual(["workspace"]);
   });
 
+  it("warns, or in enforced mode fails, when the workspace holds a secret file, and fails when the profile holds it", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-cli-")));
+    roots.push(root);
+    await mkdir(join(root, "ws"));
+    const doctorWith = async (extra: Record<string, string>) => {
+      const result = await execute(process.execPath, [entry, "doctor"], {
+        cwd: root,
+        env: { ...process.env, MELRA_WORKSPACE: join(root, "ws"), MELRA_HOME: join(root, "data"), MELRA_POLICY: "", ...extra },
+      }).catch((error: { stdout: string }) => error);
+      const report = JSON.parse(result.stdout) as { ready: boolean; checks: Array<{ name: string; status: string }> };
+      return { ready: report.ready, secret: report.checks.find((check) => check.name === "secret-location")?.status };
+    };
+    // Nothing configured, nothing said.
+    expect((await doctorWith({})).secret).toBeUndefined();
+    expect((await doctorWith({ MELRA_BROWSER_PROFILE: join(root, "profile") })).secret).toBe("pass");
+    expect((await doctorWith({ MELRA_BROWSER_PROFILE: join(root, "ws", "profile") })).secret).toBe("warn");
+    // Its directory not there yet still counts.
+    expect(
+      await doctorWith({ MELRA_BROWSER_HAR_PATH: join(root, "ws", "har", "session.har"), MELRA_MODE: "enforced" }),
+    ).toEqual({ ready: false, secret: "fail" });
+    // A credential's file, named in the policy file.
+    await writeFile(
+      join(root, "policy.json"),
+      JSON.stringify({
+        credentials: {
+          billing: {
+            source: { file: join(root, "ws", "billing.key") },
+            inject: { header: "Authorization" },
+            hosts: ["api.example.com"],
+            capability: "http.post:*",
+          },
+        },
+      }),
+    );
+    expect((await doctorWith({ MELRA_POLICY: join(root, "policy.json"), MELRA_MODE: "enforced" })).secret).toBe("fail");
+    // Inside the profile every path is refused, which the server refuses in every mode.
+    await mkdir(join(root, "profile", "ws"), { recursive: true });
+    expect(
+      await doctorWith({ MELRA_WORKSPACE: join(root, "profile", "ws"), MELRA_BROWSER_PROFILE: join(root, "profile") }),
+    ).toEqual({ ready: false, secret: "fail" });
+  });
+
   it("reports local readiness through doctor", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-cli-"));
     roots.push(root);
