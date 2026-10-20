@@ -26,6 +26,12 @@ No — prompt optimization, model selection, conversation memory, a planner,
 agent personality, subagent reasoning. It belongs to the harness above, and
 adding it here would make MELRA's guarantees depend on a model's judgement.
 
+## Documentation-only changes
+
+Markdown-only contributions do not need Node.js or pnpm setup. Before opening
+the pull request, run `git diff --check`; GitHub Actions runs the repository
+checks for every pull request.
+
 ## Development setup
 
 ```bash
