@@ -407,7 +407,7 @@ Content-Security-Policy.
 | ✍️ | **Changes need two things:** declared evidence *and* an exact, expiring, task-scoped approval: a phrase in developer mode, an operator's `melra approve` in enforced mode. |
 | 📁 | **Paths stay inside your workspace**, including terminal working directories; symlink escapes are refused. |
 | 🚫 | **Shells, `sudo`/`su` and arbitrary desktop key names are denied.** Terminal commands must be on the allowlist by name. |
-| 🌐 | **Private, link-local, loopback and cloud-metadata addresses are blocked** by the browser and HTTP adapters themselves, after DNS resolution, before any allowlist is consulted. |
+| 🌐 | **Private, link-local and cloud-metadata addresses are blocked** by the browser and HTTP adapters themselves, after DNS resolution, before any allowlist is consulted; loopback too in enforced mode, unless the policy opens it. |
 | ⚠️ | **Web page content is marked untrusted** and can never change policy. |
 | 🔑 | **Secrets are redacted** before anything is stored, and agents get capabilities, never your raw credentials. |
 | ⏱️ | **Every call is bounded** by a budget and a cancel signal; a stalled browser fails with a clear error instead of hanging. |

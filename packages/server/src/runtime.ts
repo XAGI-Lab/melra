@@ -27,6 +27,7 @@ import {
   createDefaultPolicy,
   CredentialBroker,
   loadPolicy,
+  localhostAllowed,
   type LocalPolicy,
 } from "@melra/policy-core";
 import {
@@ -384,9 +385,13 @@ export async function createMelraRuntime(
       ? "enforced"
       : "developer";
   assertEnforceable(mode, unhinged);
+  // Decided once, in the resolved mode, so what `melra_capabilities` publishes
+  // is what both network adapters apply.
+  const allowLocalhost = localhostAllowed({ ...loaded, mode });
   const policy: LocalPolicy = {
     ...loaded,
     workspaceRoot: confinedRoot(workspaceRoot, loaded.workspaceRoot),
+    allowLocalhost,
     unhinged,
     mode,
   };
@@ -482,7 +487,7 @@ export async function createMelraRuntime(
     artifactDirectory: artifacts,
     workspaceRoot: runtimeRoot,
     allowedDomains: policy.allowedDomains,
-    allowLocalhost: policy.allowLocalhost,
+    allowLocalhost,
     popups: policy.popups,
     unhinged,
     // Upload and file: loads only read, so its own artifacts stay usable.
@@ -518,7 +523,7 @@ export async function createMelraRuntime(
   });
   const http = new HttpRuntime({
     allowedDomains: policy.allowedDomains,
-    allowLocalhost: policy.allowLocalhost,
+    allowLocalhost,
     unhinged,
     // Host and capability scoping stay on under `unhinged`. That flag lifts the
     // guardrails MELRA imposes on the caller; a credential's scope is the
