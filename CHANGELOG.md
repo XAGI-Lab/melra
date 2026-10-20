@@ -20,9 +20,9 @@ All notable changes are documented here. The format follows
   recovery sweep, or as soon as one cut off after committing its idempotency
   key is recovered. A destructive effect whose evidence has a `semantic`
   predicate but nothing at the state or independent level is refused at
-  planning (`semantic_only_destructive`). `semantic` is refused beside
-  `reconciliation` (`semantic_evidence_not_reconcilable`), which cannot settle
-  a question about meaning, and in any workflow node
+  planning outside unsafe-local mode (`semantic_only_destructive`). `semantic`
+  is refused beside `reconciliation` (`semantic_evidence_not_reconcilable`),
+  which cannot settle a question about meaning, and in any workflow node
   (`workflow_semantic_evidence_unsupported:<node>`) until a workflow can wait on a
   verdict. `pnpm evals` has two new scenarios (54).
 

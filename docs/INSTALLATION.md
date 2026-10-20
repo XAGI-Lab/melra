@@ -1163,6 +1163,10 @@ What stays on, and why:
 
 - Limits you declare on your own request. `forbiddenEffects` and `constraints`
   are your bound on your own task, not MELRA's guardrail, so they still deny.
+- Checks on the request's own shape. `semantic` evidence beside
+  `reconciliation` (`semantic_evidence_not_reconcilable`), or in a workflow
+  node (`workflow_semantic_evidence_unsupported`), is a contract nothing could
+  keep, so it is still refused.
 - `maxFileBytes` and the duration budget. An unbounded read is a way to crash
   the host, not a restriction on what you are allowed to touch.
 - Receipts and certificates. A destructive operation is still recorded as

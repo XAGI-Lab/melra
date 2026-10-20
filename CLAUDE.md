@@ -139,7 +139,9 @@ defaults that trip people up:
 `MELRA_UNHINGED=1`) short-circuits
 `evaluatePolicy` to `allow` — but *after* the `forbiddenEffects` and `constraints`
 checks, because those are the caller bounding its own task rather than a guardrail
-MELRA imposes. Confinement is lifted by rooting the file runtime, terminal
+MELRA imposes, and after `semantic_evidence_not_reconcilable`, a check on the
+request's own shape; so is a workflow's `workflow_semantic_evidence_unsupported`,
+refused in every mode. Confinement is lifted by rooting the file runtime, terminal
 runtime, and verifier at `unconfinedRoot()` instead of the workspace, never by a
 bypass branch inside the confinement code, so that code keeps exactly one
 behaviour. `createMelraRuntime` resolves the flag once and `runtime.policy.unhinged`
