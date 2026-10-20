@@ -232,7 +232,7 @@ MELRA uses these environment variables:
 |---|---|---|
 | `MELRA_WORKSPACE` | Hard boundary for file and process operations; a policy file's `workspaceRoot` can only narrow it to a directory inside. `setup` and `init` write it into the client config, and ask before making home, a directory holding it, or a filesystem root the workspace unless it is set | the `workspaceRoot` of a `MELRA_POLICY` file, else the current directory |
 | `MELRA_HOME` | SQLite database and browser artifacts. It must not be the workspace or hold it: a workspace inside it, even through a link, is refused at startup with `workspace_inside_data_directory`. On a case-sensitive filesystem a sibling whose name differs from it only in case is reserved too | `~/.melra` |
-| `MELRA_POLICY` | Optional local policy JSON. Every start reads it again, so wherever it lies it is reserved like `MELRA_HOME`: no file effect, verification, browser upload or terminal argument may name it, and no file effect removes or moves a directory holding it. A workspace holding it is still an ordinary one | safe built-in policy |
+| `MELRA_POLICY` | Optional local policy JSON. Every start reads it again, so wherever it lies it is reserved like `MELRA_HOME`: no file effect, verification or browser upload may name it, nor a terminal argument as a path or a plain `@`/`<` reference, and no file effect removes or moves a directory holding it. A workspace holding it is still an ordinary one | safe built-in policy |
 | `MELRA_BROWSER` | Chrome, Chromium, or Edge executable | auto-detected |
 | `MELRA_PAYLOAD_KEY` | Optional canonical base64url 256-bit payload key | private `<MELRA_HOME>/payload.key` |
 | `MELRA_UNHINGED` | Set to `1` to remove every guardrail — see below | unset (all guardrails on) |
@@ -255,17 +255,21 @@ unset for normal use, which keeps the default isolated browser behavior:
 |---|---|---|
 | `MELRA_BROWSER_CDP_ENDPOINT` | Attach to an already-running browser over CDP instead of launching one. Must be an `http`/`https` URL with no credentials, query, or fragment. | unset (MELRA launches its own browser) |
 | `MELRA_BROWSER_CDP_CONTEXT_INDEX` | Which existing browser context to use, or `-1` for the default context. Requires `MELRA_BROWSER_CDP_ENDPOINT`. | unset |
-| `MELRA_BROWSER_HAR_PATH` | Absolute path for an HTTP archive recording of the session, response bodies included so the recording can later be replayed. Treat the file as the session itself, not a log about it. | unset (no recording) |
-| `MELRA_BROWSER_HAR_REPLAY` | Absolute path to a recorded archive to serve every request from. Nothing reaches the network, and a request the archive does not contain is aborted rather than fetched. Cannot be combined with recording or CDP. | unset (live network) |
+| `MELRA_BROWSER_HAR_PATH` | Absolute path for an HTTP archive recording of the session, response bodies included so the recording can later be replayed. Treat the file as the session itself, not a log about it: it is reserved like `MELRA_POLICY`, and its directory is made at startup | unset (no recording) |
+| `MELRA_BROWSER_HAR_REPLAY` | Absolute path to a recorded archive to serve every request from. Nothing reaches the network, and a request the archive does not contain is aborted rather than fetched. Cannot be combined with recording or CDP. Reserved like `MELRA_POLICY` | unset (live network) |
 
 A browser profile is separate, and useful outside benchmarks:
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `MELRA_BROWSER_PROFILE` | Absolute directory keeping cookies, storage, and profile state between runs, so a site logged into once stays logged in. | unset (a fresh throwaway profile per run) |
+| `MELRA_BROWSER_PROFILE` | Absolute directory keeping cookies, storage, and profile state between runs, so a site logged into once stays logged in. Reserved like `MELRA_POLICY`; a workspace inside it is refused at startup with `workspace_inside_browser_profile` | unset (a fresh throwaway profile per run) |
 
 Treat that directory as a credential store: it holds live session cookies for
-every site the browser visited. It cannot be combined with
+every site the browser visited. So does MELRA: no file effect, verification
+or browser upload may name it or anything in it, nor a terminal argument as a
+path or a plain `@`/`<` reference, in any mode, and enforced mode refuses to
+start in a workspace that holds it, or either HTTP archive
+(`enforced_mode_refuses_secret_inside_workspace`). It cannot be combined with
 `MELRA_BROWSER_CDP_ENDPOINT` — an attached browser already has the profile it
 was started with, so a second one would silently do nothing.
 
@@ -369,6 +373,18 @@ mode, where an operator approves out of band; a value the policy file sets
 (a whole number of milliseconds, at most 24 hours) applies in either mode. A
 `policy.json` that `melra init` or `melra setup` wrote with an earlier release
 pins `"approvalTtlMs": 300000`; delete that key to get the mode's default.
+
+A bare name in `allowedCommands` runs the program `PATH` finds there, looked
+up only in `PATH` entries outside the workspace: an entry inside it (a
+project's `node_modules/.bin`, a `bin/` directory), or an empty or relative
+one, is skipped, and left out of the program's own `PATH` too. A tool
+installed only inside the workspace runs through `npx` or `pnpm exec`, or
+through a path-qualified entry in `allowedCommands` that names it. If no
+entry is left, as with a workspace at the filesystem root, or `PATH` is not
+set at all, every command is refused with `terminal_path_empty_after_filter`,
+a path-qualified one too, because a program given an empty `PATH`, or none,
+may search the working directory; narrow the workspace. With `--unsafe-local`, `PATH` is used as
+given.
 
 `allowedCommands` matches on the program's basename, so it cannot tell `npm
 test` from `npm install left-pad`. `deniedTraits` is the axis that can. MELRA
@@ -497,10 +513,16 @@ agent never receives it, and the effect still goes out.
 
 `source` is either `{ "env": "NAME" }` or `{ "file": "/path" }`. A file must be
 a regular file, not a symlink, and mode `0600` or tighter — a secret any other
-user can read is one the agent could have read for itself. The value (a file's
-with surrounding whitespace trimmed) must be printable ASCII; one holding any
-other character is refused with `credential_source_invalid:<name>`, so a copy
-echoed back is matched byte for byte.
+user can read is one the agent could have read for itself. Wherever it lies,
+the file is reserved like `MELRA_POLICY`: no file effect, verification or
+browser upload may name it, nor a terminal argument as a path or a plain
+`@`/`<` reference, and enforced mode refuses to start in a workspace that
+holds it (`enforced_mode_refuses_secret_inside_workspace`). A program that
+reads files by means of its own is not covered, which is what approving that
+program accepts. Keep it outside the workspace. The value (a file's with
+surrounding whitespace trimmed) must be printable ASCII; one holding any other
+character is refused with `credential_source_invalid:<name>`, so a copy echoed
+back is matched byte for byte.
 
 The two lists are scoped differently on purpose, and the difference is the
 whole feature:
@@ -892,6 +914,11 @@ closing every door it owns:
   and approvals in the old one are orphaned. Only a `MELRA_HOME` you put
   inside the project itself moves: out of the workspace, with everything in
   it, and `MELRA_HOME` set to its new place.
+- **Secrets sit outside `MELRA_WORKSPACE` too.** A workspace holding the
+  browser profile, an HTTP archive (`MELRA_BROWSER_HAR_PATH`,
+  `MELRA_BROWSER_HAR_REPLAY`) or a credential's `source.file` is refused at
+  startup with `enforced_mode_refuses_secret_inside_workspace`, naming which
+  one, for the same reason. Move it out of the workspace.
 - **Only an operator approves.** A challenge carries no phrase, so the agent
   is handed nothing to echo, and `melra_execute` refuses any approval it is
   sent with `approval_in_band_refused`. A mutation runs only on a decision an

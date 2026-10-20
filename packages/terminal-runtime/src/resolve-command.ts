@@ -117,6 +117,7 @@ async function findExecutable(
   // The current directory is deliberately not searched for a bare command.
   // Windows `CreateProcess` does search it, which would let a `git.cmd` dropped
   // in the workspace shadow the real `git` that policy actually allowlisted.
+  // Nor is a relative PATH entry, which is read from that directory.
   //
   // `win32` rather than the ambient path module: these are Windows paths whether
   // or not the host is Windows, and pinning it is what lets the win32 branch be
@@ -125,7 +126,7 @@ async function findExecutable(
     ? [win32.resolve(options.cwd, win32.dirname(command))]
     : (options.path ?? "")
         .split(win32.delimiter)
-        .filter((item) => item.length > 0);
+        .filter((item) => win32.isAbsolute(item));
   const name = directoryQualified ? win32.basename(command) : command;
   for (const directory of directories) {
     for (const spelling of spellings(name, options.pathExt ?? DEFAULT_PATHEXT)) {
