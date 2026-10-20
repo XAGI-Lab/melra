@@ -1,18 +1,21 @@
 # Project Status
 
-Last updated: 2026-10-14
+Last updated: 2026-10-20
 
-Version: `0.3.0-alpha.12`
+Version: `0.3.0-alpha.14`
+
+The CLI's npm `alpha` tag resolves to `0.3.0-alpha.14`; `latest` still resolves
+to `0.3.0-alpha.12`. Use `@melra/cli@alpha` for the current alpha release.
 
 ## Engineering Complete
 
-- ✅ **Test suites green on `main`**: 515 Vitest cases pass (6 platform-skipped) and 6 Python SDK pytest cases on Vitest 4, with every Node job (ubuntu, macOS, Windows × Node 22, 24) green in the CI run for #134, whose tree is `main` at `09e43f5`
+- ✅ **Latest main checks green**: the latest observed runs for CI, CodeQL, dependency audit, container, deployment recipes, and single executable all passed on `main` at `755b7a3` ([CI run](https://github.com/XAGI-Lab/melra/actions/runs/39448802552))
 - ✅ **Versions consistent** across the root manifest, every `apps/*` and `packages/*` manifest, the protocol constant, sdk-py, and both uv locks (`pnpm versions:check`)
 - ✅ **Gate green at the `v0.3.0-alpha.12` tag**: `pnpm check`, `pnpm e2e`, `pnpm security:audit`, `pnpm evals`, the publishable durable-core evaluation, and `pnpm pack:check` all passed in the release workflow
 - ✅ **Conformance L3 verified effects**: `melra conformance` reports 14/14 checks against this build's own stdio server, and L1 under `MELRA_UNHINGED=1` — both asserted in CI. Levels and their limits: [CONFORMANCE.md](CONFORMANCE.md)
 - ✅ **Install paths documented**: npm, container, release tarball, source
 - ✅ **Registry install verified end to end**: the `installed` job on ubuntu, macOS and Windows installs the just-published `@melra/cli` from npm, passes `melra doctor`, and drives a real stdio session to `verified_success`; `npx -y @melra/cli@alpha conformance` in an empty directory earns level 3 (14/14)
-- ✅ **Release artifacts published**: GitHub release v0.3.0-alpha.12 with 6 assets, container at `ghcr.io/xagi-lab/melra:alpha` and `:v0.3.0-alpha.12` (linux/amd64 + linux/arm64), all 15 npm packages on the `alpha` and `latest` dist-tags, registry-signed but **without** npm provenance (pnpm's publish dropped `--provenance`; trusted publishing attaches it from the next release)
+- ✅ **Latest release published**: GitHub release [v0.3.0-alpha.14](https://github.com/XAGI-Lab/melra/releases/tag/v0.3.0-alpha.14) has 12 assets; the `@melra/cli` npm `alpha` tag resolves to this version. The npm `latest` tag remains at `0.3.0-alpha.12`, so untagged `npx @melra/cli` commands install the older release.
 
 `0.3.0-alpha.7` is the one gap in that history: its container image built, but
 the `artifacts` job failed on a stale `uv.lock` before reaching the registry, so
@@ -33,7 +36,7 @@ leaving it for a tag push to discover.
 
 **Current state:** Automated compatibility claim is the official MCP SDK (TypeScript + Python) over stdio, loopback HTTP, and the Unix socket. `melra setup --client` writes the config for 25 named clients, checked against each client's documentation or source and round-tripped by the CLI tests — a claim about the file, not about the client. Named graphical clients remain release-gated until manually exercised.
 
-**Action:** Install `npx @melra/cli@alpha` or download the `v0.3.0-alpha.12` release artifact, configure each client per docs/INSTALLATION.md, verify discovery/plan/execute/receipt cycle.
+**Action:** Install `npx @melra/cli@alpha` or download a `v0.3.0-alpha.14` release artifact, configure each client per docs/INSTALLATION.md, verify discovery/plan/execute/receipt cycle.
 
 ### Independent Security Review
 

@@ -6,9 +6,9 @@ a conformance level means, how to earn one, and — as important — what a leve
 does not tell you.
 
 ```bash
-npx -y @melra/cli conformance                        # spawn a local stdio server and check it
-npx -y @melra/cli conformance --url http://127.0.0.1:7457/mcp --token "$MELRA_HTTP_TOKEN"
-npx -y @melra/cli conformance --level 2              # claim L2; exit 0 if the endpoint reaches it
+npx -y @melra/cli@alpha conformance                        # spawn a local stdio server and check it
+npx -y @melra/cli@alpha conformance --url http://127.0.0.1:7457/mcp --token "$MELRA_HTTP_TOKEN"
+npx -y @melra/cli@alpha conformance --level 2              # claim L2; exit 0 if the endpoint reaches it
 ```
 
 The suite is a black-box client. It connects over a real transport, drives one
