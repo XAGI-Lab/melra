@@ -951,6 +951,32 @@ describe("melra CLI", () => {
     ).toEqual({ ready: false, secret: "fail" });
   });
 
+  it("says when a policy file opens loopback destinations in enforced mode", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-cli-")));
+    roots.push(root);
+    await mkdir(join(root, "ws"));
+    const loopback = async (policy: Record<string, unknown>, extra: Record<string, string>) => {
+      await writeFile(join(root, "policy.json"), JSON.stringify(policy));
+      const result = await execute(process.execPath, [entry, "doctor"], {
+        cwd: root,
+        env: {
+          ...process.env,
+          MELRA_WORKSPACE: join(root, "ws"),
+          MELRA_HOME: join(root, "data"),
+          MELRA_POLICY: join(root, "policy.json"),
+          ...extra,
+        },
+      }).catch((error: { stdout: string }) => error);
+      const report = JSON.parse(result.stdout) as { checks: Array<{ name: string; status: string }> };
+      return report.checks.find((check) => check.name === "loopback")?.status;
+    };
+    expect(await loopback({ allowLocalhost: true }, { MELRA_MODE: "enforced" })).toBe("warn");
+    expect(await loopback({ allowLocalhost: true, mode: "enforced" }, {})).toBe("warn");
+    // Closed, or developer mode, where it is the default: nothing to say.
+    expect(await loopback({}, { MELRA_MODE: "enforced" })).toBeUndefined();
+    expect(await loopback({ allowLocalhost: true }, {})).toBeUndefined();
+  });
+
   it("reports local readiness through doctor", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-cli-"));
     roots.push(root);
@@ -1542,9 +1568,10 @@ describe("melra CLI", () => {
     // Mutations stay approval-gated. Browsing is usable out of the box —
     // localhost is the developer's own machine, and the network guard still
     // blocks private ranges, cloud metadata, and non-HTTP schemes regardless of
-    // what the allowlist says.
+    // what the allowlist says. Localhost is left to the mode, so the file does
+    // not open it for an enforced server that later reads it.
     expect(policy.mutations).toBe("confirm");
-    expect(policy.allowLocalhost).toBe(true);
+    expect(policy).not.toHaveProperty("allowLocalhost");
     expect(policy.allowedDomains).toContain("*");
   });
 
@@ -1579,6 +1606,7 @@ describe("melra CLI", () => {
     const strict = await init(join(root, "strict"), ["--mode", "enforced"]);
     expect(strict.config.mcpServers.melra.env.MELRA_MODE).toBe("enforced");
     expect(JSON.parse(await readFile(strict.policyPath, "utf8")).mode).toBe("enforced");
+    expect(JSON.parse(await readFile(strict.policyPath, "utf8")).allowLocalhost).not.toBe(true);
     expect(await modeFrom(strict.config.mcpServers.melra.env)).toBe("enforced");
 
     // A policy that already exists is the operator's and is left alone; the

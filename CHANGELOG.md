@@ -800,6 +800,21 @@ All notable changes are documented here. The format follows
 
 ### Security
 
+- **Breaking:** in enforced mode, HTTP and browser effects no longer reach
+  this machine's loopback names and addresses unless the policy file sets
+  `"allowLocalhost": true`. Left out, `allowLocalhost` now follows the mode:
+  open in developer mode, as before, and closed in enforced mode, which grants
+  nothing the operator did not write down. `melra init` and `melra setup` no
+  longer write the key, `melra_capabilities` publishes the value in force, and
+  `melra doctor` warns on a new `loopback` line when an enforced deployment's
+  policy opens it. `LocalPolicy.allowLocalhost` in `@melra/policy-core` is
+  optional, and `localhostAllowed` resolves it. THREAT_MODEL said loopback
+  was refused unless explicitly enabled; it now gives each mode's default.
+  Upgrading: a `policy.json` that `melra init` or `melra setup` wrote with an
+  earlier release sets `"allowLocalhost": true`, which keeps loopback open in
+  enforced mode; delete that key unless a task needs a service on this
+  machine.
+
 - **Breaking:** the files the browser keeps its session in and credentials
   are read from are reserved like the `MELRA_POLICY` file, wherever they lie
   and in every mode: the browser profile (`MELRA_BROWSER_PROFILE`), both HTTP
