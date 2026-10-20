@@ -1122,6 +1122,11 @@ All notable changes are documented here. The format follows
   with `credential_source_invalid:<name>`. `bytes` still counts what arrived.
   Only a copy as sent is recognised, not one the provider encoded or altered.
 
+- Development dependency: Vite, which Vitest runs on, is held at 7.3.7 or
+  later (GHSA-587h-7wmj-h5pm, GHSA-r825-w8mm-5pxw, GHSA-698v-4r3x-3vcv, all in
+  the editor launcher its dev server bundles). It does not ship in a published
+  package.
+
 ## [0.3.0-alpha.14] - 2026-10-16
 
 ### Fixed
