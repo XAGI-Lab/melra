@@ -126,6 +126,13 @@ export class CredentialBroker {
       if (secret === undefined || secret === "") {
         throw new Error(`credential_source_missing:${name}`);
       }
+      // Printable ASCII only: one byte per character, so a copy the far end
+      // echoes back is matched exactly and a cut body is masked the same way
+      // whatever the value holds. A control character could also split the
+      // header it is sent in.
+      if (/[^\x20-\x7e]/.test(secret)) {
+        throw new Error(`credential_source_invalid:${name}`);
+      }
       headers[definition.inject.header.toLowerCase()] =
         definition.inject.scheme === undefined
           ? secret

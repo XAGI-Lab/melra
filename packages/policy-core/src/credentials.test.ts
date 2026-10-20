@@ -117,6 +117,20 @@ describe("credential broker", () => {
     ).rejects.toThrow("credential_source_missing:stripe");
   });
 
+  it("refuses a secret holding anything outside printable ASCII", async () => {
+    // One byte per character, so a copy the far end echoes back is matched
+    // byte for byte and a cut body is masked the same way whatever it holds.
+    for (const value of ["sk_live_s\u00e9cret", "sk_live_secret\r\nx-evil: 1", "sk_live\tsecret"]) {
+      await expect(
+        broker(stripe, { MELRA_TEST_STRIPE_KEY: value }).headersFor({
+          host: "api.stripe.com",
+          capability: "http.post",
+          target: "https://api.stripe.com/v1/refunds",
+        }),
+      ).rejects.toThrow("credential_source_invalid:stripe");
+    }
+  });
+
   it("rejects an unknown field in a definition", () => {
     expect(() =>
       CredentialsSchema.parse({

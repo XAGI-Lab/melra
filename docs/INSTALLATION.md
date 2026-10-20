@@ -497,7 +497,10 @@ agent never receives it, and the effect still goes out.
 
 `source` is either `{ "env": "NAME" }` or `{ "file": "/path" }`. A file must be
 a regular file, not a symlink, and mode `0600` or tighter — a secret any other
-user can read is one the agent could have read for itself.
+user can read is one the agent could have read for itself. The value (a file's
+with surrounding whitespace trimmed) must be printable ASCII; one holding any
+other character is refused with `credential_source_invalid:<name>`, so a copy
+echoed back is matched byte for byte.
 
 The two lists are scoped differently on purpose, and the difference is the
 whole feature:

@@ -68,14 +68,15 @@ export const SECRET_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
   // token is the URL-encoded signed request), but not `host:8080/path@x` or
   // `host:3000?next=a@b`, which are ports. The user stops at a comma, quote,
   // bracket or brace, so a CSV row or JSON array of a URL and an address and an
-  // IPv6 host are kept, unless it is a whole `{user}` or `{{ user }}`
-  // template. The password stops at a quote or a `${` template, so it never
-  // runs on into the next JSON string, and a `{password}` template is kept.
+  // IPv6 host are kept, unless it is a whole `{user}`, `{{ user }}` or
+  // `${USER}` template. The password stops at a quote or a `${` template, so
+  // it never runs on into the next JSON string or reads a port such as
+  // `localhost:${port}/@vite` as one, and a `{password}` template is kept.
   // The scheme starts only where a run of scheme characters does, and the
   // password stops at the next `://`, so no character is scanned from two
   // starts and a long run of text costs one pass.
   [
-    /(?<![a-z0-9+.-])([a-z0-9+.-]+:\/\/)(?:[^\s/?#@:"'<>{}\[\],]*|\{\{?\s*[\w.]+\s*\}\}?):(?!\d+(?:[/?]|$))(?!\{\{?\s*[\w.]+\s*\}\}?@)(?:(?!\$\{|:\/\/)[^\s@"'])+@/gi,
+    /(?<![a-z0-9+.-])([a-z0-9+.-]+:\/\/)(?:[^\s/?#@:"'<>{}\[\],]*|\$?\{\{?\s*[\w.]+\s*\}\}?):(?!\d+(?:[/?]|$))(?!\{\{?\s*[\w.]+\s*\}\}?@)(?:(?!\$\{|:\/\/)[^\s@"'])+@/gi,
     "$1[REDACTED_URL_CREDENTIALS]@",
   ],
   // A token standing alone as the user over http(s): `https://<token>@host`.

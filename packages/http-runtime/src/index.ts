@@ -30,8 +30,7 @@ function scrubbed(text: string, { headers, secrets }: BrokeredHeaders, cut: bool
   // A body cut at the size cap can end partway through a secret, so its end
   // goes whatever it holds. Deciding by whether it looks like the start of one
   // would tell the caller something about the secret. The whole length of the
-  // longest, not one less: a secret cut inside its last character, when that
-  // takes several bytes, decodes to all but that character and a U+FFFD.
+  // longest; the broker passes only printable ASCII, so a character is a byte.
   const tail = Math.max(...secrets.map((secret) => secret.length));
   return `${out.slice(0, Math.max(0, out.length - tail))}${REDACTED_CREDENTIAL}`;
 }

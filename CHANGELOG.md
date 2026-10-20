@@ -1006,9 +1006,9 @@ All notable changes are documented here. The format follows
   `"apiKey": "..."`) whose value is eight or more token characters with a
   digit, and URL userinfo: a password of any length (an RDS IAM token is
   hundreds of characters) holding `/`, brackets or braces, a literal password
-  after a `{user}` or `{{ user }}` template, and an http(s) user alone of
-  twenty or more URL-safe characters with a digit, the shape of an issued
-  token. A stored field whose name ends in a credential word (`access_token`,
+  after a `{user}`, `{{ user }}` or `${USER}` template, and an http(s) user
+  alone of twenty or more URL-safe characters with a digit, the shape of an
+  issued token. A stored field whose name ends in a credential word (`access_token`,
   `clientSecret`, `x-api-key`) is redacted whole unless it holds a boolean or
   null, so `isSecret: false` keeps its type; a number or any string there
   still goes, a tokenizer's `eos_token` and a `nextPageToken` included.
@@ -1021,8 +1021,8 @@ All notable changes are documented here. The format follows
   template. Limits: a URL whose port is followed by an `@` later in its path
   or query is not read as carrying credentials, so a password of digits
   followed by a raw `?` is read as a port and kept; a URL's user name stops at
-  a comma, quote, bracket or brace and its password at a quote, a space or
-  `://`, so a password holding one of those is not recognised; a scheme value
+  a comma, quote, bracket or brace and its password at a quote, a space, `${`
+  or `://`, so a password holding one of those is not recognised; a scheme value
   under sixteen characters with no digit or `=` is kept; an assigned token is
   redacted only up to the first character outside the token set; and the rest
   of a line after a `Digest` or `AWS4-HMAC-SHA256` header goes with it. A
@@ -1047,9 +1047,11 @@ All notable changes are documented here. The format follows
   sees it, and the result lists that marker under `redactions`. A body cut at
   the size cap on such a call always ends in the marker in place of as many
   of its last characters as the longest brokered value has, whatever they
-  held, so neither a value cut partway, even inside a character of several
-  bytes, nor the cut itself says anything about it. `bytes` still counts what arrived. Only a
-  copy as sent is recognised, not one the provider encoded or altered.
+  held, so neither a value cut partway nor the cut itself says anything about
+  it. A brokered value must be printable ASCII, so each character is one byte
+  and an echo is matched byte for byte; one holding anything else is refused
+  with `credential_source_invalid:<name>`. `bytes` still counts what arrived.
+  Only a copy as sent is recognised, not one the provider encoded or altered.
 
 ## [0.3.0-alpha.14] - 2026-10-16
 

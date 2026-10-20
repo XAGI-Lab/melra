@@ -347,10 +347,16 @@ describe("receipt and certificate primitives", () => {
       'f"postgresql://[REDACTED_URL_CREDENTIALS]@{host}/db"',
     );
     expect(redactSecrets(`postgresql://{{ db.user }}:${secret}@{{ host }}/db`).value).not.toContain(secret);
+    // A shell or JavaScript `${USER}` is a template user too.
+    expect(redactSecrets("postgres://${POSTGRES_USER}:" + secret + "@db/app").value).toBe(
+      "postgres://[REDACTED_URL_CREDENTIALS]@db/app",
+    );
     for (const text of [
       'f"postgresql://{user}:{password}@{host}/db"',
       "postgresql://{{ user }}:{{ password }}@{{ host }}/db",
       "postgres://admin:{password}@db/app",
+      "postgres://${DB_USER}:${DB_PASS}@db/app",
+      "http://localhost:${port}/@vite/client",
     ]) {
       expect(redactSecrets(text).value, text).toBe(text);
     }

@@ -271,26 +271,6 @@ describe("http runtime", () => {
       const differs = `${begins.slice(0, -1)}${begins.endsWith("x") ? "y" : "x"}`;
       expect(await reflected(begins), begins).toEqual(await reflected(differs));
     }
-    // A credential that ends in a character of several bytes, cut inside it:
-    // the decoder leaves one replacement character where that character was,
-    // and nothing of the credential before it shows either.
-    const accented = "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p\u20ac";
-    const accentedBroker = new HttpRuntime({
-      allowedDomains: ["*"],
-      allowLocalhost: true,
-      credentials: {
-        headersFor: async () => ({ headers: {}, used: ["key"], secrets: [accented] }),
-      } as unknown as CredentialBroker,
-    });
-    const cut = await accentedBroker.execute(
-      operation({
-        url: `${origin}/customers/${encodeURIComponent(accented)}`,
-        maxResponseBytes: NOT_FOUND.length + Buffer.byteLength(accented) - 1,
-      }),
-    );
-    expect(cut.truncated).toBe(true);
-    expect(cut.content).toBe(`${NOT_FOUND}[REDACTED_CREDENTIAL]`);
-
     expect(await reflected("A")).toEqual({
       content: `${`${NOT_FOUND}A`.slice(0, -secret.length)}[REDACTED_CREDENTIAL]`,
       redactions: ["[REDACTED_CREDENTIAL]"],
