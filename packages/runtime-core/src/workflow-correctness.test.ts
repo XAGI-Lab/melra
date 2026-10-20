@@ -1,7 +1,7 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
-import { mkdtemp, rm, unlink, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -17,7 +17,7 @@ import {
 import { createDefaultPolicy, type LocalPolicy } from "@melra/policy-core";
 import { sha256 } from "@melra/receipt-schema";
 import { SqliteStore } from "@melra/storage-sqlite";
-import { Verifier } from "@melra/verifier-core";
+import { Verifier, type EvidenceProbe } from "@melra/verifier-core";
 import { PayloadCipher } from "./payload-cipher.js";
 import { TaskController } from "./task-controller.js";
 import { WorkflowController } from "./workflow-controller.js";
@@ -39,7 +39,7 @@ afterEach(async () => {
 });
 
 /** Every memory `put` the adapter performed, by key, in order. */
-async function setup(options: { delayMs?: number; policy?: Partial<LocalPolicy> } = {}) {
+async function setup(options: { delayMs?: number; policy?: Partial<LocalPolicy>; probe?: EvidenceProbe } = {}) {
   const root = await mkdtemp(join(tmpdir(), "melra-workflow-correctness-"));
   roots.push(root);
   const store = new SqliteStore(":memory:");
@@ -60,7 +60,7 @@ async function setup(options: { delayMs?: number; policy?: Partial<LocalPolicy> 
     store,
     { ...createDefaultPolicy(root), ...options.policy },
     { execute },
-    await Verifier.create(root),
+    await Verifier.create(root, options.probe === undefined ? {} : { probe: options.probe }),
     cipher,
   );
   return { root, store, cipher, tasks, done, on, controller: new WorkflowController(store, tasks, cipher) };
@@ -808,7 +808,7 @@ describe("a condition's branch not taken (#268)", () => {
 
 describe("a condition step a lost advance left unknown (#270)", () => {
   // Pay, then a branch beside a step that fails; refunding pays back.
-  const definition = () =>
+  const definition = (predicate: unknown = { type: "file_exists", path: "flag" }) =>
     workflow([
       { id: "pay", type: "operation", request: put("pay") },
       {
@@ -816,7 +816,7 @@ describe("a condition step a lost advance left unknown (#270)", () => {
         type: "condition",
         dependsOn: ["pay"],
         sourceNodeId: "pay",
-        predicate: { type: "file_exists", path: "flag" },
+        predicate,
         whenTrue: [put("ship")],
         whenFalse: [put("other")],
       },
@@ -852,6 +852,66 @@ describe("a condition step a lost advance left unknown (#270)", () => {
     expect(run.status).toBe("recovery_required");
     expect(done).toEqual(["pay", "x"]);
   });
+
+  // A commit lost without a takeover (a locked database) leaves no lease, so
+  // the next advance decides the condition live, not recovery (#318).
+  it.each(["inconclusive", "unresolvable"] as const)(
+    "halts rather than unwind past it when its commit was lost and the condition's check is %s",
+    async (how) => {
+      // The payments provider answers the first check, then is down (503).
+      let answer = { success: true, status: 200, content: JSON.stringify({ status: "applied" }) };
+      const { controller, root, store, done, on } = await setup({
+        policy: { unhinged: true },
+        probe: async () => answer,
+      });
+      await writeFile(join(root, "flag"), "on");
+      const planned = controller.plan(
+        definition(
+          how === "inconclusive"
+            ? {
+                type: "http_resource_matches",
+                url: "https://payments.example.test/charges/1",
+                method: "GET",
+                path: "json.status",
+                value: "applied",
+              }
+            : undefined,
+        ),
+      );
+      await controller.advance(planned.id);
+      on.put = (key) => {
+        if (key === "ship") throw outcomeUnknown("socket hang up");
+      };
+      vi.spyOn(store, "transitionWorkflow").mockImplementationOnce(() => {
+        throw new Error("database is locked");
+      });
+      await expect(controller.advance(planned.id)).rejects.toThrow("database is locked");
+      delete on.put;
+      const [ship] = store.listTasks(10, "recovery_required");
+      expect(controller.status(planned.id).nodes.choose).toMatchObject({ status: "pending", taskIds: [] });
+      if (how === "inconclusive") answer = { success: true, status: 503, content: "{}" };
+      else {
+        // The kernel refuses to ask: the flag now leads outside the workspace.
+        const outside = await mkdtemp(join(tmpdir(), "melra-workflow-correctness-"));
+        roots.push(outside);
+        await writeFile(join(outside, "flag"), "on");
+        await unlink(join(root, "flag"));
+        await symlink(join(outside, "flag"), join(root, "flag"));
+      }
+
+      // The condition waited (or failed) naming nothing, x's failure was read
+      // as the run's, and refund ran while ship may have shipped.
+      await expect(controller.advance(planned.id)).rejects.toThrow(`workflow_check_${how}:choose`);
+      expect(done).toEqual(["pay", "x"]);
+      expect(controller.status(planned.id).nodes.choose).toMatchObject({
+        status: "recovery_required",
+        taskIds: [ship!.id],
+      });
+      const run = (await controller.advance(planned.id)).run;
+      expect(run.status).toBe("recovery_required");
+      expect(done).toEqual(["pay", "x"]);
+    },
+  );
 
   it("halts after a crash rather than unwind past it", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-workflow-correctness-"));

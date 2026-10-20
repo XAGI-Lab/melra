@@ -1236,6 +1236,81 @@ describe("workflow recovery across processes", () => {
     );
   });
 
+  it("records how a stopped step ended once another holder lets go of the run's lease (#325)", async () => {
+    const at = await home();
+    const entered = gate();
+    const release = gate();
+    const a = await side(at, async (_operation?: Operation, signal?: AbortSignal) => {
+      entered.open();
+      // Ends on its abort, but only once told to, so the test places the end.
+      await new Promise<void>((_resolve, reject) => {
+        signal?.addEventListener("abort", () => void release.opened.then(() => reject(signal.reason)));
+      });
+      return { success: true, stored: true };
+    });
+    const b = await side(at);
+    const run = a.workflows.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Ownership",
+        nodes: [{ id: "write", type: "operation", request: put("write") }],
+      }),
+    );
+    const waiting = (await a.workflows.advance(run.id)).run;
+    const taskId = waiting.nodes.write!.taskIds[0]!;
+    const executing = a.tasks.execute(taskId, approvalsFor(waiting)[0]);
+    await entered.opened;
+    await a.workflows.advance(run.id);
+    a.workflows.cancel(run.id);
+    // B holds the run's lease when the task ends (its own advance or cancel of the run).
+    const now = Date.now();
+    expect(
+      b.store.acquireWorkflowLease(run.id, "b", new Date(now).toISOString(), new Date(now + 60_000).toISOString()),
+    ).toBe(true);
+    release.open();
+    expect((await executing).task.status).toBe("cancelled");
+    await a.tasks.settled(taskId);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(a.workflows.status(run.id).nodes.write?.error).toBe("task_still_in_flight");
+
+    // Tried once and dropped, it read in flight for good.
+    b.store.releaseWorkflowLease(run.id, "b");
+    await vi.waitFor(() =>
+      expect(a.workflows.status(run.id).nodes.write).toEqual({ status: "cancelled", taskIds: [taskId] }),
+    );
+  });
+
+  it("records a stopped step that ended in another process when the run is cancelled again (#325)", async () => {
+    const at = await home();
+    const adapter = held();
+    const a = await side(at);
+    const b = await side(at, adapter.execute);
+    const run = a.workflows.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Ownership",
+        nodes: [{ id: "write", type: "operation", request: put("write") }],
+      }),
+    );
+    const waiting = (await a.workflows.advance(run.id)).run;
+    const taskId = waiting.nodes.write!.taskIds[0]!;
+    const executing = b.tasks.execute(taskId, approvalsFor(waiting)[0]);
+    await adapter.entered.opened;
+    await a.workflows.advance(run.id);
+    expect(a.workflows.cancel(run.id).nodes.write?.error).toBe("task_still_in_flight");
+    adapter.release.open();
+    expect((await executing).task.status).toBe("verified_success");
+
+    // Nothing in A learns how it ended; cancelling again kept it in flight.
+    const again = a.workflows.cancel(run.id);
+    expect(again.status).toBe("cancelled");
+    expect(again.nodes.write).toEqual({ status: "verified_complete", taskIds: [taskId] });
+  });
+
   it("cancels a run without calling a step cancelled whose process died mid-effect", async () => {
     const at = await home();
     const adapter = held();
