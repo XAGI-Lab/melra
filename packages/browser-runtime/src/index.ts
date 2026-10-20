@@ -1263,18 +1263,32 @@ export class BrowserRuntime {
    * Returned by every tab action rather than only by `tabs`, because opening,
    * switching, and closing all renumber the list — a caller that had to issue a
    * separate `tabs` call after each one would be acting on a stale index.
+   *
+   * Never throws: it follows the effect of every tab action but `tabs`, and a
+   * listing that failed made a tab opened or closed read as nothing done. A
+   * tab that does not answer within a second, or the action's timeout if
+   * shorter, or before a cancel, is listed with `title: null`;
+   * one closed meanwhile is left out, and the indices are the ones after it.
+   * `pages` is the list they index, for an action to report its own tab's.
    */
   private async describeTabs(
     context: BrowserContext,
-  ): Promise<Record<string, unknown>[]> {
-    return await Promise.all(
-      context.pages().map(async (item, index) => ({
-        index,
-        url: item.url(),
-        title: await this.call(item.title(), "title"),
-        active: item === this.activePage,
-      })),
+  ): Promise<{ pages: Page[]; tabs: Record<string, unknown>[] }> {
+    const titles = new Map(
+      await Promise.all(
+        context
+          .pages()
+          .map(async (item) => [item, await this.call(item.title(), "title", Math.min(1_000, this.callMs)).catch(() => null)] as const),
+      ),
     );
+    const pages = context.pages();
+    const tabs = pages.map((item, index) => ({
+      index,
+      url: item.url(),
+      title: titles.get(item) ?? null,
+      active: item === this.activePage,
+    }));
+    return { pages, tabs };
   }
 
   /**
@@ -2470,24 +2484,34 @@ export class BrowserRuntime {
       }
       case "tabs": {
         const context = await this.ensureContext();
-        return { tabs: await this.describeTabs(context) };
+        return { tabs: (await this.describeTabs(context)).tabs };
       }
       case "tab_new": {
         const context = await this.ensureContext();
+        // Checked before the tab opens, and the tab closed again when its page
+        // fails to load: `tab_new` is a read, so it is retried, and every run
+        // that failed with its tab open left one more tab.
+        if (operation.url !== undefined) await this.assertAllowed(operation.url);
+        const previous = this.activePage;
         const opened = await this.openPage(context);
         this.activate(opened);
         if (operation.url !== undefined) {
-          await this.assertAllowed(operation.url);
-          await opened.goto(operation.url, {
-            waitUntil: "domcontentloaded",
-            timeout: operation.timeoutMs,
-          });
+          try {
+            await opened.goto(operation.url, {
+              waitUntil: "domcontentloaded",
+              timeout: operation.timeoutMs,
+            });
+          } catch (error) {
+            await this.call(opened.close(), "close").catch(() => undefined);
+            this.activate(previous?.isClosed() === false ? previous : context.pages().at(-1));
+            throw error;
+          }
         }
-        return {
-          opened: true,
-          index: context.pages().indexOf(opened),
-          tabs: await this.describeTabs(context),
-        };
+        const { pages, tabs } = await this.describeTabs(context);
+        const index = pages.indexOf(opened);
+        // Its own tab closed during the listing: there is no tab to report.
+        if (index === -1) throw new Error("browser_tab_not_found");
+        return { opened: true, index, tabs };
       }
       case "tab_switch": {
         const context = await this.ensureContext();
@@ -2502,12 +2526,10 @@ export class BrowserRuntime {
         // focus behaviour differ.
         await this.call(target.bringToFront(), "bring_to_front");
         this.activate(target);
-        return {
-          switched: true,
-          index: (await this.ensureContext()).pages().indexOf(target),
-          url: target.url(),
-          tabs: await this.describeTabs(context),
-        };
+        const { pages, tabs } = await this.describeTabs(context);
+        const index = pages.indexOf(target);
+        if (index === -1) throw new Error("browser_tab_not_found");
+        return { switched: true, index, url: target.url(), tabs };
       }
       case "close": {
         const context = await this.ensureContext();
@@ -2521,7 +2543,7 @@ export class BrowserRuntime {
         this.dispatched = true;
         await this.call(target.close(), "close");
         this.activate(context.pages().at(-1));
-        return { closed: true, url, tabs: await this.describeTabs(context) };
+        return { closed: true, url, tabs: (await this.describeTabs(context)).tabs };
       }
     }
   }

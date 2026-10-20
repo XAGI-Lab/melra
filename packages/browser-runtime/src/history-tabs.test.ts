@@ -5,6 +5,7 @@ import { createServer, type Server } from "node:http";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { BrowserContext, Page } from "playwright-core";
 import { BrowserOperationSchema } from "@melra/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { BrowserRuntime, detectBrowserExecutable } from "./index.js";
@@ -35,7 +36,7 @@ afterEach(async () => {
 interface Tab {
   index: number;
   url: string;
-  title: string;
+  title: string | null;
   active: boolean;
 }
 
@@ -70,7 +71,7 @@ async function fixture(): Promise<{ runtime: BrowserRuntime; url: string } | und
       workspaceRoot: root,
       artifactDirectory: join(root, "artifacts"),
       executablePath,
-      allowedDomains: ["127.0.0.1"],
+      allowedDomains: ["127.0.0.1", "localhost"],
       allowLocalhost: true,
     }),
     url: `http://127.0.0.1:${address.port}`,
@@ -170,6 +171,107 @@ describe("browser tabs", () => {
     }
   }, 120_000);
 
+  it("reports tab_new and close as done while another tab cannot say its title", async () => {
+    const context = await fixture();
+    if (context === undefined) return;
+    const { runtime, url } = context;
+    try {
+      // Another site than the tab opened below, so its own renderer: the
+      // stall holds this tab and nothing else, as a wedged page would.
+      await runtime.execute(op({ action: "navigate", url: `${url.replace("127.0.0.1", "localhost")}/one` }));
+      const stalled = (runtime as unknown as { activePage: Page }).activePage
+        .evaluate(() => {
+          const end = Date.now() + 10_000;
+          while (Date.now() < end) {
+            // Spin: the page answers nothing until it ends.
+          }
+        })
+        .catch(() => undefined);
+      // The listing after each effect named that tab's title, and waiting for
+      // it failed an action that had already happened: `tab_new` was retried
+      // as a read, opening another tab each time, and `close` was parked as
+      // an unknown outcome.
+      const opened = await runtime.execute(op({ action: "tab_new", url: `${url}/two`, timeoutMs: 3_000 }));
+      expect(opened.index).toBe(1);
+      expect(opened.index).toBe((opened.tabs as Tab[]).find((tab) => tab.active)?.index);
+      expect((opened.tabs as Tab[]).map((tab) => tab.title)).toEqual([null, "two"]);
+      const closed = await runtime.execute(op({ action: "close", tabIndex: 1, timeoutMs: 3_000 }));
+      expect(closed.closed).toBe(true);
+      expect(closed.tabs).toMatchObject([{ index: 0, title: null, active: true }]);
+      await stalled;
+    } finally {
+      await runtime.close();
+    }
+  }, 120_000);
+
+  it("waits for a tab's title no longer than the action's timeout or its cancel", async () => {
+    const context = await fixture();
+    if (context === undefined) return;
+    const { runtime, url } = context;
+    try {
+      await runtime.execute(op({ action: "navigate", url: `${url.replace("127.0.0.1", "localhost")}/one` }));
+      const stalled = (runtime as unknown as { activePage: Page }).activePage
+        .evaluate(() => {
+          const end = Date.now() + 4_000;
+          while (Date.now() < end) {
+            // Spin: the page answers nothing until it ends.
+          }
+        })
+        .catch(() => undefined);
+      // Each title had a second of its own, whatever the action's timeout,
+      // and a cancel did not end the wait.
+      let started = Date.now();
+      const listed = await runtime.execute(op({ action: "tabs", timeoutMs: 100 }));
+      expect(Date.now() - started).toBeLessThan(600);
+      expect(listed.tabs).toMatchObject([{ index: 0, title: null, active: true }]);
+      const cancel = new AbortController();
+      setTimeout(() => cancel.abort(new Error("task_cancelled")), 50);
+      started = Date.now();
+      await expect(runtime.execute(op({ action: "tabs", timeoutMs: 30_000 }), cancel.signal)).rejects.toThrow(
+        "task_cancelled",
+      );
+      expect(Date.now() - started).toBeLessThan(600);
+      await stalled;
+    } finally {
+      await runtime.close();
+    }
+  }, 120_000);
+
+  it("reports the index its tab has in the list it returns when a tab closes during the listing", async () => {
+    const context = await fixture();
+    if (context === undefined) return;
+    const { runtime, url } = context;
+    // The tab closes while the listing waits for its title, as one closed by
+    // its page or by the operator can.
+    const closeWhenListed = (page: Page) => {
+      page.title = async () => {
+        await page.close();
+        return "";
+      };
+    };
+    try {
+      await runtime.execute(op({ action: "navigate", url: `${url}/one` }));
+      await runtime.execute(op({ action: "tab_new", url: `${url}/two` }));
+      await runtime.execute(op({ action: "tab_new", url: `${url}/three` }));
+      const [one, two] = (runtime as unknown as { context: BrowserContext }).context.pages();
+      // The index was taken before the listing and the list after it, so they
+      // disagreed, and a `close` by that index closed the tab after this one.
+      closeWhenListed(one!);
+      const switched = await runtime.execute(op({ action: "tab_switch", tabIndex: 1 }));
+      expect((switched.tabs as Tab[])[switched.index as number]).toMatchObject({ url: `${url}/two`, active: true });
+      closeWhenListed(two!);
+      const opened = await runtime.execute(op({ action: "tab_new", url: `${url}/one` }));
+      expect((opened.tabs as Tab[])[opened.index as number]).toMatchObject({ url: `${url}/one`, active: true });
+      // Its own tab closing during the listing is no tab to report, not a success with no index.
+      const pages = (runtime as unknown as { context: BrowserContext }).context.pages();
+      const mine = pages.findIndex((page) => page.url() === `${url}/three`);
+      closeWhenListed(pages[mine]!);
+      await expect(runtime.execute(op({ action: "tab_switch", tabIndex: mine }))).rejects.toThrow("browser_tab_not_found");
+    } finally {
+      await runtime.close();
+    }
+  }, 120_000);
+
   it("refuses a tab index that does not exist", async () => {
     const context = await fixture();
     if (context === undefined) return;
@@ -198,6 +300,32 @@ describe("browser tabs", () => {
       await expect(
         runtime.execute(op({ action: "tab_new", url: "http://169.254.169.254/latest" })),
       ).rejects.toThrow();
+      // Refused before a tab is opened: a failed `tab_new` leaves none behind.
+      expect((await runtime.execute(op({ action: "tabs" }))).tabs).toMatchObject([{ index: 0, title: "one", active: true }]);
+    } finally {
+      await runtime.close();
+    }
+  }, 120_000);
+
+  it("closes the tab tab_new opened when its page fails to load, so a retry leaves no more", async () => {
+    const context = await fixture();
+    if (context === undefined) return;
+    const { runtime, url } = context;
+    // A port nothing listens on any more: the connection is refused.
+    const gone = createServer();
+    await new Promise<void>((done) => gone.listen(0, "127.0.0.1", done));
+    const { port } = gone.address() as { port: number };
+    await new Promise<void>((done) => gone.close(() => done()));
+    try {
+      await runtime.execute(op({ action: "navigate", url: `${url}/one` }));
+      // `tab_new` is a read, so the controller retries it, and each run that
+      // opened its tab and then failed left that tab open.
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        await expect(
+          runtime.execute(op({ action: "tab_new", url: `http://127.0.0.1:${port}/`, timeoutMs: 5_000 })),
+        ).rejects.toThrow();
+      }
+      expect((await runtime.execute(op({ action: "tabs" }))).tabs).toMatchObject([{ index: 0, title: "one", active: true }]);
     } finally {
       await runtime.close();
     }

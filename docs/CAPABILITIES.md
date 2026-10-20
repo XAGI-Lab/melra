@@ -210,8 +210,14 @@ Actions: `navigate`, `back`, `forward`, `reload`, `inspect`, `wait`, `click`,
   uses. An input action is held to the document checked, with the same limits
   as the `url` check above.
 - `tab_new` accepts an optional `url` and runs the same destination checks
-  `navigate` does. Every tab action returns the renumbered tab list, because
-  opening, switching, and closing all shift the indices.
+  `navigate` does, before it opens the tab, so a refused destination opens
+  none; a tab whose page then fails to load is closed again, so a retried
+  `tab_new` leaves no tabs behind. Every tab action returns the renumbered tab
+  list, because opening, switching, and closing all shift the indices. A tab
+  whose page does not answer within a second (or the action's `timeoutMs`, if
+  shorter), as a page stuck in a script does, is listed with `title: null`, so
+  the listing itself never fails an action on another tab (an attached browser
+  still refuses `close` and `tab_switch` while a tab does not answer, as above).
 - `wait` takes exactly one condition: a `target` reaching a `state`
   (`visible`, `hidden`, `attached`, `detached`), a `urlContains` substring, or a
   `value` substring of the page text. It is the supported way to handle a slow
