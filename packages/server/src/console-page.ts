@@ -279,7 +279,7 @@ if (approvals) {
   addEventListener("scroll", unsettle, true);
   unsettle();
 }
-const state = { caps: null, tasks: [], workflows: [], filter: "all", query: "", stream: null, streamId: null, events: [], sig: "" };
+const state = { caps: null, tasks: [], workflows: [], approvalPendingIds: new Set(), attentionCount: 0, filter: "all", query: "", stream: null, streamId: null, events: [], sig: "" };
 
 const TASK_TONE = {
   verified_success: "ok", partial: "warn", awaiting_approval: "info", waiting_user: "info",
@@ -293,7 +293,8 @@ const RUN_TONE = {
 };
 const FILTERS = [
   ["all", "All", () => true],
-  ["attention", "Needs attention", (t) => ["awaiting_approval", "waiting_user", "recovery_required", "partial"].includes(t.status)],
+  ["attention", "Needs attention", (t) => t.status === "awaiting_approval"
+    ? state.approvalPendingIds.has(t.id) : ["waiting_user", "recovery_required", "partial"].includes(t.status)],
   ["verified", "Verified", (t) => t.status === "verified_success"],
   ["blocked", "Blocked or failed", (t) => ["policy_blocked", "failed", "budget_exhausted"].includes(t.status)],
   ["active", "In flight", (t) => ["planned", "running", "verifying"].includes(t.status)],
@@ -385,6 +386,7 @@ async function refresh() {
   try {
     const [caps, tasks, runs] = await Promise.all([get("/api/capabilities"), get("/api/tasks?limit=500"), get("/api/workflows")]);
     state.caps = caps; state.tasks = tasks.tasks; state.workflows = runs.workflows;
+    state.approvalPendingIds = new Set(tasks.approvalPendingIds); state.attentionCount = tasks.attentionCount;
     setLive(true, "Live · updated " + new Date().toLocaleTimeString() + (paired.pairedAt ? " · paired at " + clock(paired.pairedAt) : ""));
     document.getElementById("version").textContent = "v" + caps.version + " · " + caps.policy.mode + " mode";
     document.getElementById("count-tasks").textContent = String(state.tasks.length || "");
@@ -464,7 +466,7 @@ function renderOverview() {
   const tiles = el("div", { class: "grid tiles" },
     tile(t.length, "Tasks recorded", "all"),
     tile(count((x) => x.status === "verified_success"), "Verified by evidence", "verified", "ok"),
-    tile(count(FILTERS[1][2]), "Need attention", "attention", "warn"),
+    tile(state.attentionCount, "Need attention", "attention", "warn"),
     tile(count(FILTERS[3][2]), "Blocked or failed", "blocked", "bad"),
   );
   const posture = el("div", { class: "card" }, el("h2", { text: "Posture" }), kv([
@@ -542,10 +544,15 @@ async function renderTaskDetail(id, into) {
   ];
   if (task.status === "awaiting_approval") {
     const left = task.approval?.expiresAt ? until(task.approval.expiresAt) : undefined;
-    if (approvals && left !== "expired") parts.push(await approvalPanel(task.id));
-    else parts.push(el("div", { class: "callout" }, left === "expired"
-      ? "The approval window for this task has closed. Plan it again to get a fresh challenge."
-      : ["Waiting for an approval" + (left ? " — expires in " + left : "") + ". Approve it with ",
+    const pending = await get("/api/tasks/" + encodeURIComponent(id) + (approvals ? "/approval" : "/approval-state")).catch(() => null);
+    if (pending?.decision) parts.push(el("div", { class: "callout" }, "Approved by ", pending.decision.approver, " ", when(pending.decision.decidedAt), ". Waiting for the agent to run it."));
+    else if (left === "expired") {
+      parts.push(el("div", { class: "callout" }, pending?.workflowId
+        ? ["This workflow step's approval has expired. Advance it with ", el("code", { text: "melra workflow advance " + pending.workflowId }), "."]
+        : ["The approval window for this task has closed. Plan it again or clear it with ",
+          el("code", { text: "melra approve " + task.id + " --deny" }), "."]));
+    } else if (approvals) parts.push(await approvalPanel(task.id, pending));
+    else parts.push(el("div", { class: "callout" }, ["Waiting for an approval" + (left ? " — expires in " + left : "") + ". Approve it with ",
         el("code", { text: "melra approve " + task.id }), " or in ", el("code", { text: "melra console" }),
         ", in a terminal. This console is read-only and never shows the phrase."]));
   }
@@ -594,11 +601,9 @@ async function renderTaskDetail(id, into) {
  * them, so a request that changed since is refused, not approved unseen, and
  * nothing selected since can take the click.
  */
-async function approvalPanel(id) {
+async function approvalPanel(id, pending) {
+  if (!pending) return el("div", { class: "callout bad", text: "Could not load what this task would do." });
   const path = "/api/tasks/" + encodeURIComponent(id) + "/";
-  let pending;
-  try { pending = await get(path + "approval"); }
-  catch { return el("div", { class: "callout bad", text: "Could not load what this task would do." }); }
   const drawn = { taskId: id, renderDigest: pending.renderDigest };
   const drawnAt = performance.now();
   const status = el("p", { role: "status" });

@@ -577,6 +577,16 @@ export async function serveHttp(
     return true;
   }
 
+  function workflowForApproval(task: ReturnType<typeof runtime.controller.status>): string | undefined {
+    if (task.idempotencyKey === undefined) return undefined;
+    const taskIds = new Set(runtime.store.listTasksByKey(task.idempotencyKey).map((item) => item.id));
+    const runs = runtime.store.listWorkflowRuns();
+    const namesTask = (run: (typeof runs)[number]) =>
+      Object.values(run.nodes).some((node) => node.taskIds.some((id) => taskIds.has(id)));
+    if (runs.some((run) => ["cancelled", "verified_complete"].includes(run.status) && namesTask(run))) return undefined;
+    return runs.find((run) => !["cancelled", "verified_complete"].includes(run.status) && namesTask(run))?.id;
+  }
+
   /**
    * The approval console's whole surface: the page, pairing and unpairing,
    * the read-only API, and one read and two writes per pending task. Every route answers
@@ -664,6 +674,7 @@ export async function serveHttp(
         contract: printable(JSON.stringify(view.contract, null, 2), true),
         summary: approvalSummary(view),
         decision: runtime.controller.approvalDecision(view.task) ?? null,
+        workflowId: workflowForApproval(view.task),
       });
       return;
     }
@@ -799,10 +810,19 @@ export async function serveHttp(
     }
     if (path === "/api/tasks") {
       const limit = Number(url.searchParams.get("limit") ?? "50");
+      const tasks = runtime.store.listTasks(
+        Number.isFinite(limit) ? Math.min(Math.max(limit, 1), 500) : 50,
+      );
+      const awaiting = runtime.store.listTasks(100_000, "awaiting_approval");
+      const approvalPendingIds = awaiting
+        .filter((task) => runtime.controller.approvalDecision(task) === undefined)
+        .map((task) => task.id);
+      const pageIds = new Set(tasks.map((task) => task.id));
+      const counts = runtime.store.taskStatusCounts();
       json(response, 200, {
-        tasks: runtime.store.listTasks(
-          Number.isFinite(limit) ? Math.min(Math.max(limit, 1), 500) : 50,
-        ),
+        tasks,
+        approvalPendingIds: approvalPendingIds.filter((id) => pageIds.has(id)),
+        attentionCount: (counts.waiting_user ?? 0) + (counts.recovery_required ?? 0) + (counts.partial ?? 0) + approvalPendingIds.length,
       });
       return;
     }
@@ -825,6 +845,16 @@ export async function serveHttp(
     const workflow = /^\/api\/workflows\/([^/]+)$/.exec(path);
     if (workflow?.[1] !== undefined) {
       json(response, 200, runtime.workflows.status(workflow[1]));
+      return;
+    }
+    const approvalState = /^\/api\/tasks\/([^/]+)\/approval-state$/.exec(path);
+    if (approvalState?.[1] !== undefined) {
+      const task = runtime.controller.status(approvalState[1]);
+      json(response, 200, {
+        expiresAt: task.approval?.expiresAt,
+        decision: runtime.controller.approvalDecision(task) ?? null,
+        workflowId: workflowForApproval(task),
+      });
       return;
     }
     const receipts = /^\/api\/tasks\/([^/]+)\/receipts$/.exec(path);

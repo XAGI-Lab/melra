@@ -366,6 +366,102 @@ describe("approval console", () => {
     }
   }, 60_000);
 
+  it("keeps an in-time approval usable after the challenge expires", async () => {
+    const executablePath = await detectBrowserExecutable();
+    if (executablePath === undefined) return;
+    const task = pending("Write approved.txt");
+    const view = runtime.controller.approvalView(task.id);
+    const expiresAt = new Date(Date.now() - 5_000).toISOString();
+    runtime.store.saveTask({ ...task, approval: { ...task.approval!, expiresAt } });
+    runtime.store.recordApprovalDecision({
+      approvalId: task.approval!.approvalId,
+      taskId: task.id,
+      renderDigest: view.renderDigest,
+      channel: "out_of_band",
+      approver: "console:test",
+      decidedAt: new Date(Date.parse(expiresAt) - 1_000).toISOString(),
+    });
+    const browser = await chromium.launch({ executablePath, headless: true });
+    try {
+      const page = await browser.newPage();
+      await page.goto(`http://127.0.0.1:${agent.port}/?token=agent-token#/tasks/${task.id}`);
+      await page.getByText(/Approved by console:test/).waitFor();
+      expect(await page.getByText(/approval window for this task has closed/i).count()).toBe(0);
+    } finally {
+      await browser.close();
+    }
+  }, 60_000);
+
+  it("points an expired workflow approval to advancing its run", async () => {
+    const executablePath = await detectBrowserExecutable();
+    if (executablePath === undefined) return;
+    const run = runtime.workflows.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: randomUUID(),
+        version: 1,
+        name: "expired-console-step",
+        nodes: [{
+          id: "write",
+          type: "operation",
+          request: TaskRequestSchema.parse({
+            goal: "Write retry.txt",
+            operation: { kind: "file", action: "write", path: "retry.txt", content: "x" },
+            requiredEvidence: [{ type: "file_exists", path: "retry.txt" }],
+          }),
+        }],
+      }),
+    );
+    await runtime.workflows.advance(run.id);
+    const taskId = Object.values(runtime.workflows.status(run.id).nodes).flatMap((node) => node.taskIds)[0]!;
+    const task = runtime.controller.status(taskId);
+    runtime.store.saveTask({ ...task, approval: { ...task.approval!, expiresAt: new Date(Date.now() - 1_000).toISOString() } });
+    const browser = await chromium.launch({ executablePath, headless: true });
+    try {
+      const page = await browser.newPage();
+      await page.goto(`http://127.0.0.1:${agent.port}/?token=agent-token#/tasks/${taskId}`);
+      await page.getByText(`melra workflow advance ${run.id}`).waitFor();
+      expect(await page.getByText(/Plan it again/).count()).toBe(0);
+    } finally {
+      await browser.close();
+    }
+  }, 60_000);
+
+  it("offers to replan or clear an expired standalone approval", async () => {
+    const executablePath = await detectBrowserExecutable();
+    if (executablePath === undefined) return;
+    const task = pending("Write standalone.txt");
+    runtime.store.saveTask({ ...task, approval: { ...task.approval!, expiresAt: new Date(Date.now() - 1_000).toISOString() } });
+    const browser = await chromium.launch({ executablePath, headless: true });
+    try {
+      const page = await browser.newPage();
+      await page.goto(`http://127.0.0.1:${agent.port}/?token=agent-token#/tasks/${task.id}`);
+      await page.getByText(/Plan it again or clear it with/).waitFor();
+      expect(await page.getByText(`melra approve ${task.id} --deny`).count()).toBe(1);
+    } finally {
+      await browser.close();
+    }
+  }, 60_000);
+
+  it("excludes a usable approval from the overview attention count", async () => {
+    const before = await call(agent, "/api/tasks?limit=500", { token: "agent-token" });
+    expect(before.body.attentionCount).toEqual(expect.any(Number));
+    const task = pending("Write counted.txt");
+    const view = runtime.controller.approvalView(task.id);
+    const expiresAt = new Date(Date.now() - 5_000).toISOString();
+    runtime.store.saveTask({ ...task, approval: { ...task.approval!, expiresAt } });
+    runtime.store.recordApprovalDecision({
+      approvalId: task.approval!.approvalId,
+      taskId: task.id,
+      renderDigest: view.renderDigest,
+      channel: "out_of_band",
+      approver: "console:test",
+      decidedAt: new Date(Date.parse(expiresAt) - 1_000).toISOString(),
+    });
+    const after = await call(agent, "/api/tasks?limit=500", { token: "agent-token" });
+    expect(after.body.attentionCount).toBe(before.body.attentionCount);
+  });
+
   it("draws MELRA's summary right above the buttons, and the agent's text as text", async () => {
     const executablePath = await detectBrowserExecutable();
     if (executablePath === undefined) return;
