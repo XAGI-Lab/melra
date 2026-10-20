@@ -1014,6 +1014,14 @@ All notable changes are documented here. The format follows
   patterns, so a token in a verification URL or in a provider's error text no
   longer reaches either record. Records written earlier keep what they stored.
 
+- A credential the kernel brokered into an `http` request no longer comes back
+  in the result when the far end echoes it. Each copy of the value in the
+  reason phrase, a response header or the body, including a body cut at the
+  size cap partway through it, is replaced with `[REDACTED_CREDENTIAL]` before
+  the caller, the verifier or any stored record sees it, and the result lists
+  that marker under `redactions`. `bytes` still counts what arrived. Only a
+  copy as sent is recognised, not one the provider encoded or altered.
+
 ## [0.3.0-alpha.14] - 2026-10-16
 
 ### Fixed

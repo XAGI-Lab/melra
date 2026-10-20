@@ -514,7 +514,10 @@ whole feature:
 Nothing else changes: the call is still classified, still policy-checked, still
 approval-gated, still verified. The caller's receipt records which credential
 authorised the effect by name; the value reaches the socket and nowhere else —
-not the plan, not the result, not the receipt, not the database. `melra_capabilities`
+not the plan, not the result, not the receipt, not the database. A provider
+that echoes the value back, in its reason phrase, a header or the body, has it
+replaced with `[REDACTED_CREDENTIAL]` before the result reaches anyone; only a
+copy as sent is recognised, not one the provider encoded or altered. `melra_capabilities`
 publishes the names so a caller knows not to go looking for a key it will never
 be given.
 

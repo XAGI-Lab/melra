@@ -364,7 +364,9 @@ Action: `request`. Fields: `method`, `url`, `headers`, `content`,
   send time when both the destination and the operation are covered — see
   [INSTALLATION.md](INSTALLATION.md#credentials). The result reports which ones
   by name under `credentials`, never their values, and a caller-supplied header
-  cannot shadow one.
+  cannot shadow one. A value the far end echoes back in the reason phrase, a
+  header or the body is replaced with `[REDACTED_CREDENTIAL]` and listed under
+  `redactions`; `bytes` still counts what arrived.
 - `spend` declares what the call moves — `{ provider, account?, amount, currency }`,
   the amount in minor units. It is optional and means nothing until a grant with
   a `provider` block exists; from then on that grant covers declared spends only.

@@ -24,6 +24,14 @@ beforeAll(async () => {
         headers: req.headers as Record<string, unknown>,
         body: Buffer.concat(chunks).toString("utf8"),
       };
+      // An API that reflects the credential it was sent, as an error might.
+      if (req.url === "/echo") {
+        const key = String(req.headers.authorization);
+        res.writeHead(401, `rejected ${key}`, { "x-debug-key": key, "set-cookie": [`seen=${key}`] });
+        // Padded so a cap, which is at least 1,000 bytes, can fall inside it.
+        res.end(JSON.stringify({ padding: "x".repeat(1_000), error: `invalid credential ${key}` }));
+        return;
+      }
       if (req.url === "/teapot") {
         res.writeHead(418).end("no coffee");
         return;
@@ -202,6 +210,32 @@ describe("http runtime", () => {
     ).rejects.toThrow("task_cancelled");
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(seen).toBe(before);
+  });
+
+  it("takes a brokered credential the far end echoes back out of the result", async () => {
+    const secret = "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6";
+    const credentials = {
+      headersFor: async () => ({ headers: { authorization: `Bearer ${secret}` }, used: ["key"], secrets: [secret] }),
+    } as unknown as CredentialBroker;
+    const brokered = new HttpRuntime({ allowedDomains: ["*"], allowLocalhost: true, credentials });
+    const result = await brokered.execute(operation({ url: `${origin}/echo` }));
+    // It went out, and the name of what went out comes back.
+    expect(seen.headers.authorization).toBe(`Bearer ${secret}`);
+    expect(result.credentials).toEqual(["key"]);
+    expect(result.status).toBe(401);
+    expect(JSON.stringify(result)).not.toContain(secret);
+    expect(result.statusText).toBe("rejected [REDACTED_CREDENTIAL]");
+    expect((result.headers as Record<string, unknown>)["x-debug-key"]).toBe("[REDACTED_CREDENTIAL]");
+    expect(result.content).toContain("invalid credential [REDACTED_CREDENTIAL]");
+    expect(result.redactions).toEqual(["[REDACTED_CREDENTIAL]"]);
+
+    // Cut at the size cap partway through the value: what arrived of it goes too.
+    const body = JSON.stringify({ padding: "x".repeat(1_000), error: `invalid credential Bearer ${secret}` });
+    const cut = await brokered.execute(
+      operation({ url: `${origin}/echo`, maxResponseBytes: body.indexOf(secret) + secret.length - 1 }),
+    );
+    expect(cut.truncated).toBe(true);
+    expect(cut.content).toBe(`${body.slice(0, body.indexOf(secret))}[REDACTED_CREDENTIAL]`);
   });
 
   it("reports a plain failure when the request never left the machine", async () => {

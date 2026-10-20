@@ -40,7 +40,7 @@ const broker = (
 
 describe("credential broker", () => {
   it("injects the secret for an operation the delegation covers", async () => {
-    const { headers, used } = await broker().headersFor({
+    const { headers, used, secrets } = await broker().headersFor({
       host: "api.stripe.com",
       capability: "http.post",
       target: "https://api.stripe.com/v1/refunds",
@@ -48,6 +48,8 @@ describe("credential broker", () => {
     expect(headers.authorization).toBe("Bearer sk_live_secret");
     // The names are what a caller may see. The values are what it may not.
     expect(used).toEqual(["stripe"]);
+    // The bare value too, for the adapter to take back out of a response.
+    expect(secrets).toEqual(["sk_live_secret"]);
   });
 
   it("sends a request to another host unauthenticated rather than refusing it", async () => {

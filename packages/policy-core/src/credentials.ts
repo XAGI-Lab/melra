@@ -10,6 +10,11 @@ export interface BrokeredHeaders {
   headers: Record<string, string>;
   /** Names of the credentials that were injected — never their values. */
   used: string[];
+  /**
+   * The bare secret values, only so the adapter can take a copy the far end
+   * echoes back out of its result. Never logged, returned, or stored.
+   */
+  secrets: string[];
 }
 
 function patternMatches(pattern: string, value: string): boolean {
@@ -97,6 +102,7 @@ export class CredentialBroker {
   }): Promise<BrokeredHeaders> {
     const headers: Record<string, string> = {};
     const used: string[] = [];
+    const secrets: string[] = [];
     const operation = `${request.capability}:${request.target}`;
     const host = request.host.toLowerCase();
 
@@ -125,7 +131,8 @@ export class CredentialBroker {
           ? secret
           : `${definition.inject.scheme} ${secret}`;
       used.push(name);
+      secrets.push(secret);
     }
-    return { headers, used };
+    return { headers, used, secrets };
   }
 }

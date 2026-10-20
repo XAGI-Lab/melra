@@ -9,9 +9,35 @@ import { outcomeUnknown } from "@melra/protocol";
 import {
   assertSafeDestination,
   classifyOperation,
+  type BrokeredHeaders,
   type CredentialBroker,
   type NetworkPolicy,
 } from "@melra/policy-core";
+
+const REDACTED_CREDENTIAL = "[REDACTED_CREDENTIAL]";
+
+/**
+ * `text` with every brokered value the far end echoed replaced. Exact matches
+ * only: a credential echoed transformed (encoded, masked, split) is not caught.
+ */
+function scrubbed(text: string, { headers, secrets }: BrokeredHeaders, cut: boolean): string {
+  let out = text;
+  // Longest first, so a whole header value goes as one marker.
+  for (const value of [...Object.values(headers), ...secrets].sort((a, b) => b.length - a.length)) {
+    out = out.replaceAll(value, REDACTED_CREDENTIAL);
+  }
+  if (!cut) return out;
+  // A body cut at the size cap can end partway through a secret.
+  for (const secret of secrets) {
+    for (let length = secret.length - 1; length > 0; length -= 1) {
+      if (out.endsWith(secret.slice(0, length))) {
+        out = `${out.slice(0, -length)}${REDACTED_CREDENTIAL}`;
+        break;
+      }
+    }
+  }
+  return out;
+}
 
 export interface HttpRuntimeOptions extends NetworkPolicy {
   /**
@@ -133,6 +159,23 @@ export class HttpRuntime {
               return;
             }
             const status = response.statusCode ?? 0;
+            // A provider can echo the credential it was sent, in an error, a
+            // debug header or the reason phrase. The caller, the verifier and
+            // every stored copy get what follows, so it goes here, once.
+            let echoed = false;
+            const scrub = (text: string, cut = false): string => {
+              const out = brokered === undefined ? text : scrubbed(text, brokered, cut);
+              if (out !== text) echoed = true;
+              return out;
+            };
+            const statusText = scrub(response.statusMessage ?? "");
+            const headers = Object.fromEntries(
+              Object.entries(response.headers).map(([name, value]) => [
+                name,
+                Array.isArray(value) ? value.map((item) => scrub(item)) : typeof value === "string" ? scrub(value) : value,
+              ]),
+            );
+            const content = scrub(Buffer.concat(chunks).toString("utf8"), truncated);
             resolve({
               // The far end's own word, which is all HTTP can offer. A caller
               // who needs more declares an independent re-read as evidence.
@@ -144,9 +187,10 @@ export class HttpRuntime {
               // a second governed request to wherever it points.
               success: status >= 200 && status < 300,
               status,
-              statusText: response.statusMessage ?? "",
-              headers: response.headers as Record<string, unknown>,
-              content: Buffer.concat(chunks).toString("utf8"),
+              statusText,
+              headers,
+              content,
+              // As received, so it can still be checked against the cap.
               bytes,
               truncated,
               url: url.toString(),
@@ -155,6 +199,7 @@ export class HttpRuntime {
               // receipt should record; its value is the one thing that must not
               // leave this function.
               credentials: brokered?.used ?? [],
+              ...(echoed ? { redactions: [REDACTED_CREDENTIAL] } : {}),
               // Echoed back so a reconciliation predicate can be written
               // against the one fact that was true *before* the call. After a
               // request that went unanswered there is no response to read, so
