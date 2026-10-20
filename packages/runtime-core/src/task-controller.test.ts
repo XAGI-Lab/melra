@@ -11,6 +11,7 @@ import {
   type Operation,
 } from "@melra/protocol";
 import { createDefaultPolicy } from "@melra/policy-core";
+import { sha256 } from "@melra/receipt-schema";
 import { SqliteStore } from "@melra/storage-sqlite";
 import { Verifier, type EvidenceProbe } from "@melra/verifier-core";
 import { CircuitBreaker } from "./circuit-breaker.js";
@@ -696,6 +697,40 @@ describe("TaskController", () => {
     expect(result.output?.output).toBe("password=hunter2");
     expect(result.receipt?.redactions.length).toBeGreaterThan(0);
     expect(JSON.stringify(store.getTask(task.id))).not.toContain("hunter2");
+  });
+
+  it("redacts evidence before it is stored in the receipt and certificate", async () => {
+    // Built at run time so no literal here reads as a leaked credential.
+    const secret = `${"ghp"}_${"A1b2C3d4E5".repeat(4)}`;
+    const { controller, store } = await setup(
+      {
+        async execute() {
+          return { success: true, status: 200 };
+        },
+      },
+      async () => {
+        // A provider's error text is evidence too, and can carry anything.
+        throw new Error(`upstream rejected ${secret}`);
+      },
+    );
+    const task = controller.plan(
+      TaskRequestSchema.parse({
+        goal: "Confirm the provider's state",
+        operation: { kind: "system", action: "info" },
+        requiredEvidence: [
+          { type: "http_resource_matches", url: "https://api.example.com/state", path: "status", value: 200 },
+        ],
+      }),
+    );
+    const result = await controller.execute(task.id);
+    expect(result.receipt?.evidence[0]?.summary).toContain("upstream rejected");
+    expect(JSON.stringify(store.getReceiptsForTask(task.id))).not.toContain(secret);
+    expect(JSON.stringify(store.getCertificateForTask(task.id))).not.toContain(secret);
+    expect(result.receipt?.redactions).toContain("[REDACTED_GITHUB_TOKEN]");
+    // The certificate carries the same items, and its digest covers them.
+    const { digest, ...unsigned } = store.getCertificateForTask(task.id)!;
+    expect(unsigned.evidence).toEqual(result.receipt?.evidence);
+    expect(digest).toBe(sha256(unsigned));
   });
 
   it("keeps a URL's userinfo out of the stored task and the receipt target", async () => {

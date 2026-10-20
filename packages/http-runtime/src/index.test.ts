@@ -12,6 +12,8 @@ let server: Server;
 let origin: string;
 /** Last request the fixture saw, so header and body handling is assertable. */
 let seen: { method: string; url: string; headers: Record<string, unknown>; body: string };
+/** What `/customers/<id>` answers before the id; padded past the smallest cap. */
+const NOT_FOUND = `${"x".repeat(1_000)} no such customer: '`;
 
 beforeAll(async () => {
   server = createServer((req, res) => {
@@ -24,6 +26,19 @@ beforeAll(async () => {
         headers: req.headers as Record<string, unknown>,
         body: Buffer.concat(chunks).toString("utf8"),
       };
+      // An API that reflects the credential it was sent, as an error might.
+      if (req.url === "/echo") {
+        const key = String(req.headers.authorization);
+        res.writeHead(401, `rejected ${key}`, { "x-debug-key": key, "set-cookie": [`seen=${key}`] });
+        // Padded so a cap, which is at least 1,000 bytes, can fall inside it.
+        res.end(JSON.stringify({ padding: "x".repeat(1_000), error: `invalid credential ${key}` }));
+        return;
+      }
+      // An API that reflects the id it was asked for, as a "not found" error might.
+      if (req.url?.startsWith("/customers/") === true) {
+        res.writeHead(404).end(`${NOT_FOUND}${decodeURIComponent(req.url.slice("/customers/".length))}'`);
+        return;
+      }
       if (req.url === "/teapot") {
         res.writeHead(418).end("no coffee");
         return;
@@ -202,6 +217,64 @@ describe("http runtime", () => {
     ).rejects.toThrow("task_cancelled");
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(seen).toBe(before);
+  });
+
+  it("takes a brokered credential the far end echoes back out of the result", async () => {
+    const secret = "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6";
+    const credentials = {
+      headersFor: async () => ({ headers: { authorization: `Bearer ${secret}` }, used: ["key"], secrets: [secret] }),
+    } as unknown as CredentialBroker;
+    const brokered = new HttpRuntime({ allowedDomains: ["*"], allowLocalhost: true, credentials });
+    const result = await brokered.execute(operation({ url: `${origin}/echo` }));
+    // It went out, and the name of what went out comes back.
+    expect(seen.headers.authorization).toBe(`Bearer ${secret}`);
+    expect(result.credentials).toEqual(["key"]);
+    expect(result.status).toBe(401);
+    expect(JSON.stringify(result)).not.toContain(secret);
+    expect(result.statusText).toBe("rejected [REDACTED_CREDENTIAL]");
+    expect((result.headers as Record<string, unknown>)["x-debug-key"]).toBe("[REDACTED_CREDENTIAL]");
+    expect(result.content).toContain("invalid credential [REDACTED_CREDENTIAL]");
+    expect(result.redactions).toEqual(["[REDACTED_CREDENTIAL]"]);
+
+    // Cut at the size cap partway through the value: what arrived of it goes too.
+    const body = JSON.stringify({ padding: "x".repeat(1_000), error: `invalid credential Bearer ${secret}` });
+    const cut = await brokered.execute(
+      operation({ url: `${origin}/echo`, maxResponseBytes: body.indexOf(secret) + secret.length - 1 }),
+    );
+    expect(cut.truncated).toBe(true);
+    // The end goes the full length of the longest secret, one character more
+    // than arrived of it here.
+    expect(cut.content).toBe(`${body.slice(0, body.indexOf(secret) - 1)}[REDACTED_CREDENTIAL]`);
+  });
+
+  it("ends a body cut at the size cap the same way whatever it held", async () => {
+    const secret = "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6";
+    const credentials = {
+      headersFor: async () => ({ headers: { authorization: `Bearer ${secret}` }, used: ["key"], secrets: [secret] }),
+    } as unknown as CredentialBroker;
+    const brokered = new HttpRuntime({ allowedDomains: ["*"], allowLocalhost: true, credentials });
+    // The far end reflects the caller's text and the cap falls right after it,
+    // so the end of the body is whatever the caller chose.
+    const reflected = async (text: string) => {
+      const result = await brokered.execute(
+        operation({
+          url: `${origin}/customers/${encodeURIComponent(text)}`,
+          maxResponseBytes: NOT_FOUND.length + Buffer.byteLength(text),
+        }),
+      );
+      return { content: result.content, redactions: result.redactions };
+    };
+    // Text that begins the credential and text that does not, a character
+    // apart, come back alike, down to a single character.
+    for (let length = 1; length < secret.length; length += 1) {
+      const begins = secret.slice(0, length);
+      const differs = `${begins.slice(0, -1)}${begins.endsWith("x") ? "y" : "x"}`;
+      expect(await reflected(begins), begins).toEqual(await reflected(differs));
+    }
+    expect(await reflected("A")).toEqual({
+      content: `${`${NOT_FOUND}A`.slice(0, -secret.length)}[REDACTED_CREDENTIAL]`,
+      redactions: ["[REDACTED_CREDENTIAL]"],
+    });
   });
 
   it("reports a plain failure when the request never left the machine", async () => {

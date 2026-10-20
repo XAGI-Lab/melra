@@ -269,9 +269,10 @@ Scopes: `session`, `task`, `project`, `workspace`, `user`, `procedural`.
 
 - Stored records include source, confidence, timestamps, and optional speaker,
   episode ID, and sequence metadata.
-- PEM private keys, AWS access key IDs, JWTs, Slack and GitHub tokens, common
-  API keys, bearer tokens, and password/secret assignments are redacted — the
-  same `SECRET_PATTERNS` list receipts and terminal output use.
+- PEM and PGP private keys, AWS access key IDs, JWTs, Slack, GitHub and npm
+  tokens, common API keys, authorization headers, URL credentials, and
+  password, secret, token and API-key assignments are redacted — the same
+  `SECRET_PATTERNS` list receipts and terminal output use.
 - Search is local and scoped with BM25-style lexical evidence, exact phrases,
   explicit speaker matching, bounded adjacent episode context, confidence,
   freshness, and bounded head diversity.
@@ -370,7 +371,11 @@ Action: `request`. Fields: `method`, `url`, `headers`, `content`,
   send time when both the destination and the operation are covered — see
   [INSTALLATION.md](INSTALLATION.md#credentials). The result reports which ones
   by name under `credentials`, never their values, and a caller-supplied header
-  cannot shadow one.
+  cannot shadow one. A value the far end echoes back in the reason phrase, a
+  header or the body is replaced with `[REDACTED_CREDENTIAL]` and listed under
+  `redactions`; `bytes` still counts what arrived. A body cut at the size cap
+  on such a call always ends in the marker in place of its last few
+  characters, whatever they held, and lists it too.
 - `spend` declares what the call moves — `{ provider, account?, amount, currency }`,
   the amount in minor units. It is optional and means nothing until a grant with
   a `provider` block exists; from then on that grant covers declared spends only.
@@ -433,9 +438,11 @@ rather than guessing either way, and a request that declared no reconciliation
 predicates stays parked for a human.
 
 `melra_execute` returns raw operation output directly to the connected client.
-Durable task state and receipts keep only centrally redacted input and output;
-file contents, browser text, terminal output, typed values, environment values,
-URL queries, and common secret formats are not retained there.
+Durable task state, receipts and certificates keep only centrally redacted
+input, output and evidence; file contents, browser text, terminal output, typed
+values, environment values, URL queries and userinfo, and common secret formats
+are not retained there. An `http_resource_matches` item names the URL it read
+without its query or userinfo; the request itself goes out as declared.
 
 Free-form task constraints fail closed because they cannot be enforced
 deterministically. `forbiddenEffects` accepts only `read`, `mutate`, and

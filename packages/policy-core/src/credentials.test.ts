@@ -40,7 +40,7 @@ const broker = (
 
 describe("credential broker", () => {
   it("injects the secret for an operation the delegation covers", async () => {
-    const { headers, used } = await broker().headersFor({
+    const { headers, used, secrets } = await broker().headersFor({
       host: "api.stripe.com",
       capability: "http.post",
       target: "https://api.stripe.com/v1/refunds",
@@ -48,6 +48,8 @@ describe("credential broker", () => {
     expect(headers.authorization).toBe("Bearer sk_live_secret");
     // The names are what a caller may see. The values are what it may not.
     expect(used).toEqual(["stripe"]);
+    // The bare value too, for the adapter to take back out of a response.
+    expect(secrets).toEqual(["sk_live_secret"]);
   });
 
   it("sends a request to another host unauthenticated rather than refusing it", async () => {
@@ -113,6 +115,20 @@ describe("credential broker", () => {
         target: "https://api.stripe.com/v1/refunds",
       }),
     ).rejects.toThrow("credential_source_missing:stripe");
+  });
+
+  it("refuses a secret holding anything outside printable ASCII", async () => {
+    // One byte per character, so a copy the far end echoes back is matched
+    // byte for byte and a cut body is masked the same way whatever it holds.
+    for (const value of ["sk_live_s\u00e9cret", "sk_live_secret\r\nx-evil: 1", "sk_live\tsecret"]) {
+      await expect(
+        broker(stripe, { MELRA_TEST_STRIPE_KEY: value }).headersFor({
+          host: "api.stripe.com",
+          capability: "http.post",
+          target: "https://api.stripe.com/v1/refunds",
+        }),
+      ).rejects.toThrow("credential_source_invalid:stripe");
+    }
   });
 
   it("rejects an unknown field in a definition", () => {
