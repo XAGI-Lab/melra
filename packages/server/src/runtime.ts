@@ -476,8 +476,8 @@ export async function createMelraRuntime(
   }
   const terminal = await TerminalRuntime.create({
     root: runtimeRoot,
-    reserved: (path) => files.isReserved(path),
-    ...(holdsData ? {} : { holdsReserved: (path: string) => data.holdsReserved(path) }),
+    reserved: (path, call) => files.isReserved(path, false, call),
+    ...(holdsData ? {} : { holdsReserved: (path: string, call?: object) => data.holdsReserved(path, call) }),
     confineArguments: mode === "enforced",
     // MELRA's judgement about approved writes, so unsafe-local, which approves
     // nothing, keeps the operator's PATH as given.
@@ -541,7 +541,7 @@ export async function createMelraRuntime(
   );
   const verifier = await Verifier.create(runtimeRoot, {
       // Reads only, so artifacts can be checked.
-      reserved: (path) => files.isReserved(path, true),
+      reserved: (path, call) => files.isReserved(path, true, call),
       ...(options.evidenceVerifiers === undefined ? {} : { verifiers: options.evidenceVerifiers }),
       // The same adapter the effects go through, so a verification request is
       // checked against the destination boundary, the allowlist, and the

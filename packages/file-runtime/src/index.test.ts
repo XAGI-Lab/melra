@@ -386,6 +386,31 @@ describe("FileRuntime", () => {
     }
   });
 
+  it("looks at the reserved files again on each call, so one made or replaced since is caught", async () => {
+    // One look serves every check in a call; a cached look would let these by.
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-file-")));
+    roots.push(root);
+    const data = join(root, "home", ".melra");
+    const db = join(data, "melra.sqlite");
+    const runtime = await FileRuntime.create({ root, reserved: [data, db] });
+    const run = (operation: Record<string, unknown>) =>
+      runtime.execute(FileOperationSchema.parse({ kind: "file", ...operation }));
+    // Each kind of look taken before the data directory, or its holder, exists.
+    await mkdir(join(root, "empty"));
+    await run({ action: "delete", path: "empty", recursive: true });
+    await run({ action: "write", path: "early.txt", content: "x" });
+    await mkdir(data, { recursive: true });
+    await writeFile(db, "db");
+    await link(db, join(root, "made.db"));
+    await expect(run({ action: "hash", path: "made.db" })).rejects.toThrow("path_reserved");
+    await expect(run({ action: "write", path: "home/.MELRA/x", content: "x" })).rejects.toThrow("path_reserved");
+    await expect(run({ action: "delete", path: "home", recursive: true })).rejects.toThrow("path_reserved");
+    await rm(db);
+    await writeFile(db, "replaced");
+    await link(db, join(root, "replaced.db"));
+    await expect(run({ action: "hash", path: "replaced.db" })).rejects.toThrow("path_reserved");
+  });
+
   it("folds a reserved name the way a case-insensitive disk does", async () => {
     const root = await realpath(await mkdtemp(join(tmpdir(), "melra-file-")));
     roots.push(root);

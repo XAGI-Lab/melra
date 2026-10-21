@@ -63,15 +63,6 @@ function identity(entry: { dev: bigint; ino: bigint }): string {
   return `${entry.dev}:${entry.ino}`;
 }
 
-async function sameEntry(left: string, right: string): Promise<boolean> {
-  try {
-    const [a, b] = await Promise.all([stat(left, { bigint: true }), stat(right, { bigint: true })]);
-    return a.dev === b.dev && a.ino === b.ino;
-  } catch {
-    return false;
-  }
-}
-
 /** `look`, asked once per path for as long as `answers` is kept. */
 function remembered<T>(answers: Map<string, Promise<T>>, look: (at: string) => Promise<T>): (at: string) => Promise<T> {
   return (at) => {
@@ -82,10 +73,31 @@ function remembered<T>(answers: Map<string, Promise<T>>, look: (at: string) => P
 }
 
 /**
+ * `look`, asked once for every check made with the same `call` and again for
+ * a new one; without one, every time. A caller makes a new object per call
+ * and drops it when the call ends, so an answer lives no longer than that.
+ */
+function perCall<T>(answers: WeakMap<object, Promise<T>>, call: object | undefined, look: () => Promise<T>): Promise<T> {
+  if (call === undefined) return look();
+  const answer = answers.get(call) ?? look();
+  answers.set(call, answer);
+  return answer;
+}
+
+/** What a path is compared with: see `reservedIdentities`. */
+interface ReservedIdentities {
+  entries: Set<string>;
+  look: (at: string) => Promise<BigIntStats | undefined>;
+}
+
+/**
  * More links than the kernel follows in one lookup (40 on Linux, 32 on
  * macOS): a path that needs them opens nothing.
  */
 const MAX_LINKS = 40;
+
+/** How many parts of a path the identity walk looks up together: most paths are no deeper. */
+const CHAIN_STEP = 16;
 
 /**
  * `real`: `path` with the deepest part of it that exists resolved through
@@ -177,6 +189,8 @@ export class FileRuntime {
   private readonly lexicalRoot: string;
   private readonly reserved: string[];
   private readonly readable: string[];
+  private readonly identities = new WeakMap<object, Promise<ReservedIdentities>>();
+  private readonly holding = new WeakMap<object, Promise<Set<string>>>();
 
   private constructor(options: FileRuntimeOptions, root: string) {
     this.root = root;
@@ -218,8 +232,16 @@ export class FileRuntime {
    *
    * ponytail: by name, so an NTFS stream spelling of `.git` is not caught; the
    * reserved-file check has the same Windows follow-up.
+   *
+   * `call`, as `isReserved` takes it.
    */
-  async resolvePath(input: string, allowRoot = false, creating = false, changing = creating): Promise<string> {
+  async resolvePath(
+    input: string,
+    allowRoot = false,
+    creating = false,
+    changing = creating,
+    call?: object,
+  ): Promise<string> {
     const lexical = resolve(this.root, input);
     // "Is it the root" asked the way `inside` asks "is it within": through
     // `relative`, which ignores case on Windows. A string compare let `..\\WS`
@@ -230,7 +252,7 @@ export class FileRuntime {
     // Before following links, so every reserved name gets the same answer,
     // wherever a link inside it leads. `isReserved` follows them itself, the
     // same way as below, so the path found there needs no second judgement.
-    if (await this.isReserved(lexical, !changing)) throw new Error("path_reserved");
+    if (await this.isReserved(lexical, !changing, call)) throw new Error("path_reserved");
 
     let probe = lexical;
     let real = lexical;
@@ -254,7 +276,7 @@ export class FileRuntime {
     // A directory holding reserved data takes it along when it is moved or
     // removed, so neither may happen to it. Making it again changes nothing,
     // and nothing can be renamed onto it while it holds anything.
-    if (changing && !creating && (await this.holdsReserved(real))) throw new Error("path_reserved");
+    if (changing && !creating && (await this.holdsReserved(real, call))) throw new Error("path_reserved");
     if (creating && relative(this.root, real).split(sep).some((part) => spelling(part) === ".git")) {
       throw new Error("path_git_metadata");
     }
@@ -267,13 +289,42 @@ export class FileRuntime {
    * sibling whose name differs from an entry only in case, such as a twin of
    * the data directory, is matched too; that refuses more, never less.
    */
-  private async named(path: string, entries: string[]): Promise<boolean> {
+  private async named(
+    path: string,
+    entries: string[],
+    known: ReservedIdentities,
+    lookup: (at: string) => Promise<BigIntStats | undefined>,
+  ): Promise<boolean> {
     const name = spelling(basename(path));
     for (const entry of entries) {
       // Only a matching name costs a stat, so ordinary paths cost nothing.
-      if (spelling(basename(entry)) === name && (await sameEntry(dirname(path), dirname(entry)))) return true;
+      if (spelling(basename(entry)) !== name) continue;
+      const [a, b] = await Promise.all([lookup(dirname(path)), known.look(dirname(entry))]);
+      if (a !== undefined && b !== undefined && identity(a) === identity(b)) return true;
     }
     return false;
+  }
+
+  /**
+   * What `isReserved` compares a path with, as the filesystem has it now.
+   * `entries`: each reserved entry and each file in a reserved directory, by
+   * identity, which a hard link shares; each looked up independently of the
+   * others, so all together. `look`: the same lookup, each path asked once,
+   * for the directories holding them when a name matches.
+   */
+  private async reservedIdentities(): Promise<ReservedIdentities> {
+    const look = remembered(new Map<string, Promise<BigIntStats | undefined>>(), (at) =>
+      stat(at, { bigint: true }).catch(() => undefined),
+    );
+    const held = await Promise.all(
+      this.reserved.map(async (entry) => {
+        const found = await look(entry);
+        if (found?.isDirectory() !== true) return [found];
+        const names = await readdir(entry).catch(() => []);
+        return [found, ...(await Promise.all(names.map((name) => look(join(entry, name)))))];
+      }),
+    );
+    return { entries: new Set(held.flat().flatMap((found) => (found === undefined ? [] : [identity(found)]))), look };
   }
 
   /**
@@ -285,8 +336,13 @@ export class FileRuntime {
    * the names nor the identities compared here would recognise the path. A
    * link whose target does not exist is followed too, so a link to a missing
    * reserved name is refused like one to a present name.
+   *
+   * `call`: every check made with the same object compares with one look at
+   * the reserved entries, taken at the first; a new object takes a new look,
+   * so a reserved file made or replaced since is caught there. Each call
+   * makes its own and drops it when it ends. Without one, each check looks.
    */
-  async isReserved(path: string, reading = false): Promise<boolean> {
+  async isReserved(path: string, reading = false, call?: object): Promise<boolean> {
     const spelled = resolve(path);
     // Each part looked up once per call: the spellings a chain of links
     // passes through share most of their parts.
@@ -297,18 +353,8 @@ export class FileRuntime {
     // The same thing under another name, a hard link: so the target and each
     // directory above it are compared by identity with every reserved entry
     // and every file inside a reserved directory.
-    const identities = new Set<string>();
-    for (const entry of this.reserved) {
-      const held = await lookup(entry);
-      if (held === undefined) continue;
-      identities.add(identity(held));
-      if (!held.isDirectory()) continue;
-      for (const name of await readdir(entry).catch(() => [])) {
-        const file = await lookup(join(entry, name));
-        if (file !== undefined) identities.add(identity(file));
-      }
-    }
-    const judge = (at: string) => this.reservedAsSpelled(at, reading, identities, lookup);
+    const known = await perCall(this.identities, call, () => this.reservedIdentities());
+    const judge = (at: string) => this.reservedAsSpelled(at, reading, known, lookup);
     if (await judge(spelled)) return true;
     const seen = new Set<string>();
     for (let next: string | undefined = spelled; next !== undefined && !seen.has(next); ) {
@@ -329,7 +375,7 @@ export class FileRuntime {
   private async reservedAsSpelled(
     path: string,
     reading: boolean,
-    identities: Set<string>,
+    known: ReservedIdentities,
     lookup: (at: string) => Promise<BigIntStats | undefined>,
   ): Promise<boolean> {
     // A descriptor path names whatever this process has open, MELRA's locked
@@ -340,36 +386,48 @@ export class FileRuntime {
     if (process.platform === "darwin" && inside("/.vol", resolve(path))) return true;
     let above: string | undefined;
     for (let current = resolve(path); reading && above === undefined; current = dirname(current)) {
-      if (await this.named(current, this.readable)) above = current;
+      if (await this.named(current, this.readable, known, lookup)) above = current;
       if (dirname(current) === current) break;
     }
-    // ponytail: one stat per name match, so `payload.key/` repeated 340 times
-    // across 100 arguments still costs about 0.9 s. Cache the reserved
-    // identities if that ever shows up.
+    // ponytail: one stat of the path's own side per name match, so
+    // `payload.key/` repeated 340 times across 98 arguments still costs about
+    // 0.7 s. Ask the matches together if that ever shows up.
     for (let current = resolve(path); current !== above; current = dirname(current)) {
-      if (await this.named(current, this.reserved)) return true;
+      if (await this.named(current, this.reserved, known, lookup)) return true;
       if (dirname(current) === current) break;
     }
-    if (identities.size === 0) return false;
+    if (known.entries.size === 0) return false;
     // Root first, stopping at the first missing directory: nothing below it
-    // exists, and a 4 KB argument would otherwise cost thousands of failed stats.
+    // exists, and a 4 KB argument would otherwise cost thousands of failed
+    // stats. A few at a time, together, which costs at most that many more.
     const chain: string[] = [];
     for (let current = resolve(path); current !== above; current = dirname(current)) {
       chain.unshift(current);
       if (dirname(current) === current) break;
     }
-    for (const current of chain) {
-      const found = await lookup(current);
-      if (found !== undefined && identities.has(identity(found))) return true;
-      if (found === undefined) return false;
+    for (let start = 0; start < chain.length; start += CHAIN_STEP) {
+      for (const found of await Promise.all(chain.slice(start, start + CHAIN_STEP).map((at) => lookup(at)))) {
+        if (found !== undefined && known.entries.has(identity(found))) return true;
+        if (found === undefined) return false;
+      }
     }
     return false;
   }
 
-  /** Whether `path` is a directory holding a reserved entry at any depth: a recursive reader given it reaches them unnamed. */
-  async holdsReserved(path: string): Promise<boolean> {
+  /**
+   * Whether `path` is a directory holding a reserved entry at any depth: a
+   * recursive reader given it reaches them unnamed. `call`, as `isReserved`
+   * takes it.
+   */
+  async holdsReserved(path: string, call?: object): Promise<boolean> {
     const target = await stat(path, { bigint: true }).catch(() => undefined);
     if (target?.isDirectory() !== true) return false;
+    return (await perCall(this.holding, call, () => this.holdingReserved())).has(identity(target));
+  }
+
+  /** The identity of each directory holding a reserved entry and of each directory above one. */
+  private async holdingReserved(): Promise<Set<string>> {
+    const places = new Set<string>();
     for (const holder of new Set(this.reserved.map((entry) => dirname(entry)))) {
       // Lexically and through links, so a holder under a symlinked home is
       // still found, even before the holder itself exists.
@@ -384,16 +442,20 @@ export class FileRuntime {
       // is on none of these chains; reading the mount table would find it.
       for (const start of new Set([holder, real, ...firmlinked])) {
         for (let current = start; ; current = dirname(current)) {
-          const found = await stat(current, { bigint: true }).catch(() => undefined);
-          if (found !== undefined && identity(found) === identity(target)) return true;
+          places.add(current);
           if (dirname(current) === current) break;
         }
       }
     }
-    return false;
+    // Each place once, and all of them together: no answer depends on another.
+    const found = await Promise.all([...places].map((place) => stat(place, { bigint: true }).catch(() => undefined)));
+    return new Set(found.flatMap((entry) => (entry === undefined ? [] : [identity(entry)])));
   }
 
   async execute(operation: FileOperation): Promise<Record<string, unknown>> {
+    // Every check below is made before anything changes, so one look at the
+    // reserved entries serves them all.
+    const call = {};
     const path = await this.resolvePath(
       this.inputPath(operation.path),
       // The root however it is spelled ("./", its absolute path), not only
@@ -401,6 +463,7 @@ export class FileRuntime {
       operation.action === "list",
       operation.action === "write" || operation.action === "mkdir",
       !["list", "read", "stat", "hash"].includes(operation.action),
+      call,
     );
     switch (operation.action) {
       case "list": {
@@ -481,7 +544,7 @@ export class FileRuntime {
         // Checked again as it is now, not as resolvePath found it: the link may
         // have changed since. The rename below replaces whatever is at the
         // checked target without following it.
-        if (target !== path) await this.resolvePath(target, false, true);
+        if (target !== path) await this.resolvePath(target, false, true, true, call);
         await mkdir(dirname(target), { recursive: true });
         // A short name beside it, not one built from it: the target's own name
         // may already be as long as the file system allows.
@@ -524,7 +587,7 @@ export class FileRuntime {
         if (operation.destination === undefined) {
           throw new Error("file_move_requires_destination");
         }
-        const destination = await this.resolvePath(this.inputPath(operation.destination), false, true);
+        const destination = await this.resolvePath(this.inputPath(operation.destination), false, true, true, call);
         await mkdir(dirname(destination), { recursive: true });
         await rename(path, destination);
         return {
