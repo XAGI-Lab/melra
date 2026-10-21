@@ -865,6 +865,29 @@ describe("melra CLI", () => {
     expect(result.stdout.trim()).toBe(PRODUCT_VERSION);
   });
 
+  // `registerHooks` is from Node 22.15; the engines range starts at 22.13.
+  it.skipIf(process.getBuiltinModule("node:module").registerHooks === undefined)(
+    "starts version and doctor without the MCP SDK or Playwright (#368)",
+    async () => {
+      const root = await realpath(await mkdtemp(join(tmpdir(), "melra-cli-")));
+      roots.push(root);
+      // Prints the URL of every module the run loads.
+      const hook = `data:text/javascript,${encodeURIComponent(
+        'import { registerHooks } from "node:module";' +
+          "registerHooks({ load: (url, context, next) => (process.stderr.write(`${url}\\n`), next(url, context)) });",
+      )}`;
+      for (const command of ["version", "doctor"]) {
+        // doctor exits 1 on a machine with no browser; what it loaded is the point.
+        const { stderr } = (await execute(process.execPath, ["--import", hook, entry, command], {
+          cwd: root,
+          env: { ...process.env, MELRA_HOME: join(root, "data"), MELRA_WORKSPACE: root },
+        }).catch((error: unknown) => error)) as { stderr: string };
+        expect(stderr).toMatch(/apps\/cli\/dist\/index\.js/);
+        expect(stderr).not.toMatch(/@modelcontextprotocol|playwright-core/);
+      }
+    },
+  );
+
   it("warns, or in enforced mode fails, when the workspace holds the data directory, and fails when the data holds it", async () => {
     const root = await realpath(await mkdtemp(join(tmpdir(), "melra-cli-")));
     roots.push(root);
