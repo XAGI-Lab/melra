@@ -4,6 +4,8 @@
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, delimiter, dirname, join, parse, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -328,6 +330,46 @@ describe("enforced mode", () => {
       expect(refused.status).toBe(401);
     } finally {
       await endpoint.close();
+    }
+  });
+
+  it("keeps loopback destinations closed unless the policy file opens them", async () => {
+    let hits = 0;
+    const server = createServer((_request, response) => {
+      hits += 1;
+      response.end("local service");
+    });
+    await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+    const { port } = server.address() as AddressInfo;
+    const status = async (host: string) => {
+      const task = runtime!.controller.plan(
+        request({
+          operation: { kind: "http", action: "request", method: "GET", url: `http://${host}:${port}/`, timeoutMs: 2_000 },
+          budget: { maxRetries: 0 },
+        }),
+      );
+      return (await runtime!.controller.execute(task.id)).task.status;
+    };
+    try {
+      runtime = await createMelraRuntime({ workspaceRoot: workspace, dataDirectory: data, environment: { MELRA_MODE: "enforced" } });
+      for (const host of ["127.0.0.1", "localhost", "[::ffff:127.0.0.1]"]) {
+        expect(await status(host), host).not.toBe("verified_success");
+      }
+      expect(hits).toBe(0);
+      await runtime.close();
+      // The operator's own choice, in the file, is honoured.
+      const policyPath = join(base, "policy.json");
+      await writeFile(policyPath, JSON.stringify({ allowLocalhost: true }), "utf8");
+      runtime = await createMelraRuntime({
+        workspaceRoot: workspace,
+        dataDirectory: data,
+        environment: { MELRA_MODE: "enforced" },
+        policyPath,
+      });
+      expect(await status("127.0.0.1")).toBe("verified_success");
+      expect(hits).toBe(1);
+    } finally {
+      server.close();
     }
   });
 });

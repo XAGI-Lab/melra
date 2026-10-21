@@ -49,8 +49,6 @@ export interface EvaluationScenario {
   expectedExecutionGuarantee?: ExecutionGuarantee;
   approve?: boolean;
   cancel?: boolean;
-  wrongApproval?: boolean;
-  expectedError?: string;
 }
 
 export const scenarios: EvaluationScenario[] = [

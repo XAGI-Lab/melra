@@ -182,6 +182,21 @@ All notable changes are documented here. The format follows
   first, or its amount twice in a `dailyMax` window. A late draw now happens
   only when the task drew nothing.
 
+- A browser tab action no longer fails in the tab list it returns because some
+  other tab does not answer. Every tab action lists the tabs after its effect, and that list
+  waited for each tab's title, so one stuck tab (a page in a long script) or
+  one closing meanwhile failed `tab_new` and `tab_switch` after they had run,
+  which the controller retried as reads, opening another tab each time, and
+  turned a finished `close` into an unknown outcome. Each title now gets at
+  most a second, less when the action's `timeoutMs` is shorter, and none once
+  the action is cancelled, and is `null` when it does not come; a tab closed
+  during the listing is left out. `tabs` lists the same way.
+- A `tab_new` that fails no longer leaves a tab behind. It is a read, so it is
+  retried, and each run that failed with its tab open left one more: one whose
+  destination the browser runtime refused, and one whose page then failed to
+  load (a refused connection, a timeout, a redirect the runtime refuses). The
+  destination is now checked before the tab opens, and a tab whose page fails
+  to load is closed before the action fails.
 - A `browser` wait now ends within about its `timeoutMs` instead of running
   several times longer on a busy page or one with many frames: calls get the
   time left, with a 500 ms floor capped at the requested timeout, and retain
@@ -838,6 +853,21 @@ All notable changes are documented here. The format follows
 
 ### Security
 
+- **Breaking:** in enforced mode, HTTP and browser effects no longer reach
+  this machine's loopback names and addresses unless the policy file sets
+  `"allowLocalhost": true`. Left out, `allowLocalhost` now follows the mode:
+  open in developer mode, as before, and closed in enforced mode, which grants
+  nothing the operator did not write down. `melra init` and `melra setup` no
+  longer write the key, `melra_capabilities` publishes the value in force, and
+  `melra doctor` warns on a new `loopback` line when an enforced deployment's
+  policy opens it. `LocalPolicy.allowLocalhost` in `@melra/policy-core` is
+  optional, and `localhostAllowed` resolves it. THREAT_MODEL said loopback
+  was refused unless explicitly enabled; it now gives each mode's default.
+  Upgrading: a `policy.json` that `melra init` or `melra setup` wrote with an
+  earlier release sets `"allowLocalhost": true`, which keeps loopback open in
+  enforced mode; delete that key unless a task needs a service on this
+  machine.
+
 - **Breaking:** the files the browser keeps its session in and credentials
   are read from are reserved like the `MELRA_POLICY` file, wherever they lie
   and in every mode: the browser profile (`MELRA_BROWSER_PROFILE`), both HTTP
@@ -1144,6 +1174,11 @@ All notable changes are documented here. The format follows
   and an echo is matched byte for byte; one holding anything else is refused
   with `credential_source_invalid:<name>`. `bytes` still counts what arrived.
   Only a copy as sent is recognised, not one the provider encoded or altered.
+
+- Development dependency: Vite, which Vitest runs on, is held at 7.3.7 or
+  later (GHSA-587h-7wmj-h5pm, GHSA-r825-w8mm-5pxw, GHSA-698v-4r3x-3vcv, all in
+  the editor launcher its dev server bundles). It does not ship in a published
+  package.
 
 ## [0.3.0-alpha.14] - 2026-10-16
 

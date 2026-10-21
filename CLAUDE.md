@@ -132,7 +132,7 @@ defaults that trip people up:
 - Any non-`read` effect with empty `requiredEvidence` is denied (`mutation_requires_evidence`).
 - A `destructive` effect whose `requiredEvidence` has a `semantic` predicate but no `state` or `independent` one is denied (`semantic_only_destructive`): a judgement about meaning is never the deciding vote (#54).
 - Terminal commands must be in `allowedCommands` by basename; shells and `sudo`/`su` are denied unconditionally. `git`'s effect is `read` only for a small read-only subcommand set; `npm`/`npx`/`pnpm` are high-risk mutations.
-- Browser destinations default to `allowedDomains: ["*"]` with `allowLocalhost: true`, so browsing works without a policy JSON. The allowlist is a narrowing control; `assertSafeUrl` in `browser-runtime` is the actual boundary and independently rejects non-http(s) protocols, URL credentials, private/link-local ranges, and cloud metadata, resolving DNS first so a public name cannot be rebound.
+- Browser destinations default to `allowedDomains: ["*"]`, and an absent `allowLocalhost` follows the mode (`localhostAllowed`: open in developer mode, closed in enforced), so browsing works without a policy JSON. The allowlist is a narrowing control; `assertSafeUrl` in `browser-runtime` is the actual boundary and independently rejects non-http(s) protocols, URL credentials, private/link-local ranges, and cloud metadata, resolving DNS first so a public name cannot be rebound.
 - Effect/risk classification lives in one place, `classifyOperation`. Adding an action without updating it silently mis-classifies (usually as a mutation).
 
 `policy.unhinged` (from `--unsafe-local`, the deprecated `--unhinged`, or
@@ -155,7 +155,8 @@ strictest of the three winning. Enforced mode is the operator asserting the
 harness has no second path; MELRA cannot verify that, so it closes the doors it
 owns — `assertEnforceable` refuses `--unsafe-local`, `serveHttp` refuses a
 non-loopback bind (a mode-`0600` Unix socket via `socketPath` / `--socket` is
-allowed) and serves no OAuth registration, and `mode` is stamped on
+allowed) and serves no OAuth registration, HTTP and browser effects stay off
+loopback unless the policy file sets `allowLocalhost`, and `mode` is stamped on
 every receipt. It never grants anything, so a new feature only needs to ask
 whether enforced mode should *refuse* it.
 

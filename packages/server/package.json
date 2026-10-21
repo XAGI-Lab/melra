@@ -36,12 +36,11 @@
     "@melra/memory": "workspace:*",
     "@melra/policy-core": "workspace:*",
     "@melra/protocol": "workspace:*",
-    "@melra/receipt-schema": "workspace:*",
     "@melra/runtime-core": "workspace:*",
     "@melra/storage-sqlite": "workspace:*",
     "@melra/terminal-runtime": "workspace:*",
     "@melra/verifier-core": "workspace:*",
     "@modelcontextprotocol/sdk": "1.32.1",
-    "zod": "4.6.6"
+    "zod": "4.6.7"
   }
 }

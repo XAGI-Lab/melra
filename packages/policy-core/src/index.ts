@@ -36,7 +36,13 @@ export interface LocalPolicy {
   workspaceRoot: string;
   allowedCommands: string[];
   allowedDomains: string[];
-  allowLocalhost: boolean;
+  /**
+   * Whether HTTP and browser effects may reach this machine's loopback names
+   * and addresses. Absent, it follows the mode (`localhostAllowed`): open in
+   * developer mode, closed in enforced mode, which grants nothing the operator
+   * did not write down.
+   */
+  allowLocalhost?: boolean;
   /**
    * What to do with a window a page opens by itself.
    *
@@ -568,7 +574,6 @@ export function createDefaultPolicy(workspaceRoot: string): LocalPolicy {
       "where",
     ],
     allowedDomains: ["*"],
-    allowLocalhost: true,
     popups: "block",
     mutations: "confirm",
     maxFileBytes: 10 * 1024 * 1024,
@@ -585,6 +590,11 @@ export function createDefaultPolicy(workspaceRoot: string): LocalPolicy {
 /** The approval window a policy gives: its own, or 5 minutes in developer mode and 30 in enforced. */
 export function approvalTtl(policy: Pick<LocalPolicy, "approvalTtlMs" | "mode">): number {
   return policy.approvalTtlMs ?? (policy.mode === "enforced" ? 30 * 60_000 : 5 * 60_000);
+}
+
+/** Whether loopback destinations are open: as the policy says, or only in developer mode. */
+export function localhostAllowed(policy: Pick<LocalPolicy, "allowLocalhost" | "mode">): boolean {
+  return policy.allowLocalhost ?? policy.mode !== "enforced";
 }
 
 export async function loadPolicy(
@@ -956,7 +966,7 @@ function domainAllowed(operation: Operation, policy: LocalPolicy): boolean {
   const url = new URL(raw);
   if (!["http:", "https:"].includes(url.protocol)) return false;
   const host = hostOf(url);
-  if (host === "localhost" || host.endsWith(".localhost")) return policy.allowLocalhost;
+  if (host === "localhost" || host.endsWith(".localhost")) return localhostAllowed(policy);
   return policy.allowedDomains.some(
     (domain) =>
       domain === "*" ||
