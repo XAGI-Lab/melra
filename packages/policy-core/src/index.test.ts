@@ -1165,6 +1165,8 @@ describe("capability traits", () => {
       ["node", ["-r\\\\h\\s\\x.js"]],
       ["cat", ["\\??\\UNC\\h\\s\\x"]],
       ["tar", ["-xf//h/s/a.tar"]],
+      ["cat", ["\\\\\\h\\s\\x"]],
+      ["cat", ["///x"]],
       ["git", ["commit", "-aF\\\\h\\s\\msg"]],
     ] as const) {
       expect(classifyCommand(command, [...args]).traits, `${command} ${args.join(" ")}`).toEqual([
@@ -1180,7 +1182,7 @@ describe("capability traits", () => {
       expect(classifyCommand("git", args).traits, `git ${args.join(" ")}`).toEqual([]);
     }
     // Nor is a code-comment pattern, or a separator with no host after it.
-    for (const args of [["// TODO", "src"], ["-e", "//"], ["///x"]]) {
+    for (const args of [["// TODO", "src"], ["-e", "//"], ["/// doc"]]) {
       expect(classifyCommand("rg", args).traits, `rg ${args.join(" ")}`).toEqual([]);
     }
   });

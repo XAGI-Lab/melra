@@ -420,12 +420,12 @@ function namesNetworkPath(arg: string): boolean {
 /**
  * The narrower test behind the `network` trait: a network path where a
  * program would open it, as the whole argument or as the value after `=`, a
- * switch (`/G:`, `-f`, `-xf`) or `@`, naming a host right after the two
+ * switch (`/G:`, `-f`, `-xf`) or `@`, with a host named after the
  * separators. Any program given one connects to that host, while a URL in a
  * message or a pattern such as `// TODO` is not a path and adds no trait.
  */
 function opensNetworkPath(arg: string): boolean {
-  return /^(?:[^=]*=|[-/]\w+:|-\w+|@)?(?:[\\/]{2}(?=[^\s\\/])|\\\?\?\\)/.test(arg);
+  return /^(?:[^=]*=|[-/]\w+:|-\w+|@)?(?:[\\/]{2}(?=[\\/]*[^\s\\/])|\\\?\?\\)/.test(arg);
 }
 
 /**
