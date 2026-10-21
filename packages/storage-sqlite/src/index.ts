@@ -910,11 +910,13 @@ export class SqliteStore {
         );
   }
 
+  /** With `snapshot`, that snapshot is saved in the same transaction. */
   transitionWorkflow(
     id: string,
     expectedStateVersion: number,
     run: WorkflowRun,
     events: WorkflowEvent[],
+    snapshot?: WorkflowSnapshot,
   ): void {
     const projection = WorkflowRunSchema.parse(run);
     const parsedEvents = events.map((item) => WorkflowEventSchema.parse(item));
@@ -967,6 +969,7 @@ export class SqliteStore {
       if (Number(updated.changes) !== 1) {
         throw new Error("workflow_state_conflict");
       }
+      if (snapshot !== undefined) this.saveWorkflowSnapshot(snapshot);
     });
   }
 

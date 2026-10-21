@@ -8,6 +8,10 @@ All notable changes are documented here. The format follows
 
 ### Changed
 
+- A workflow `checkpoint` node is recorded in the same commit as the advance
+  that reached it, instead of in a commit of its own, so a workflow that
+  checkpoints after each step runs about 9% faster. (#354)
+
 - Secret redaction runs three to six times faster, so recording a large
   terminal output costs much less. The password-name, token-name and
   URL-userinfo patterns in `SECRET_PATTERNS` now start each match at their

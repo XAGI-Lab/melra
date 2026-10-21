@@ -3217,3 +3217,27 @@ describe("WorkflowController leases", () => {
     expect(store.getWorkflowLease(planned.id)).toBeUndefined();
   });
 });
+
+describe("WorkflowController checkpoints", () => {
+  it("writes a checkpoint's event and snapshot in the commit of the advance that reached it", async () => {
+    const { controller, store } = await setup();
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Checkpointed",
+        nodes: [{ id: "checkpoint", type: "checkpoint" }],
+      }),
+    );
+    const commit = vi.spyOn(store, "transitionWorkflow");
+    const { run } = await controller.advance(planned.id);
+    expect(commit).toHaveBeenCalledTimes(1);
+    expect(store.listWorkflowEvents(planned.id, planned.stateVersion).map((event) => event.type)).toEqual([
+      "workflow.node_changed",
+      "workflow.status_changed",
+      "workflow.checkpoint_saved",
+    ]);
+    expect(store.getLatestWorkflowSnapshot(planned.id)).toMatchObject({ sequence: run.stateVersion, run });
+  });
+});

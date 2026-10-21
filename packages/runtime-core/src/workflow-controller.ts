@@ -544,7 +544,8 @@ export class WorkflowController {
       }
     }
     this.assertAdvanceLease(workflowId);
-    let run = this.transition(current, (draft, emit) => {
+    const checkpoint = results.some(({ result }) => result.checkpoint === true);
+    const run = this.transition(current, (draft, emit) => {
       for (const { nodeId, result } of results) {
         // A node offered again and still waiting (an approval nobody has
         // answered) did not change. Recorded anyway, every poll bumped the
@@ -559,23 +560,7 @@ export class WorkflowController {
         });
       }
       this.settleStatus(draft, definition, emit);
-    });
-    if (results.some(({ result }) => result.checkpoint === true)) {
-      run = this.transition(run, (draft, emit) => {
-        emit("workflow.checkpoint_saved", {
-          sequence: draft.stateVersion + 1,
-        });
-      });
-      this.store.saveWorkflowSnapshot(
-        WorkflowSnapshotSchema.parse({
-          schemaVersion: "1.0.0",
-          workflowId: run.id,
-          sequence: run.stateVersion,
-          run,
-          createdAt: run.updatedAt,
-        }),
-      );
-    }
+    }, checkpoint);
     if (refused !== undefined) throw refused.reason;
     return {
       run,
@@ -1238,9 +1223,15 @@ export class WorkflowController {
     }
   }
 
+  /**
+   * Commits what `mutate` emits as one transaction. With `checkpoint`, a
+   * `workflow.checkpoint_saved` event closes the list and the snapshot it
+   * names is written in that same transaction.
+   */
   private transition(
     current: WorkflowRun,
     mutate: (draft: WorkflowRun, emit: EmitEvent) => void,
+    checkpoint = false,
   ): WorkflowRun {
     const draft = structuredClone(current);
     const events: WorkflowEvent[] = [];
@@ -1255,6 +1246,11 @@ export class WorkflowController {
       );
     };
     mutate(draft, emit);
+    if (checkpoint) {
+      emit("workflow.checkpoint_saved", {
+        sequence: current.stateVersion + events.length + 1,
+      });
+    }
     if (events.length === 0) return current;
     draft.stateVersion = current.stateVersion + events.length;
     draft.updatedAt = events.at(-1)!.occurredAt;
@@ -1269,6 +1265,15 @@ export class WorkflowController {
       current.stateVersion,
       rebuilt,
       events,
+      checkpoint
+        ? WorkflowSnapshotSchema.parse({
+            schemaVersion: "1.0.0",
+            workflowId: rebuilt.id,
+            sequence: rebuilt.stateVersion,
+            run: rebuilt,
+            createdAt: rebuilt.updatedAt,
+          })
+        : undefined,
     );
     return rebuilt;
   }
