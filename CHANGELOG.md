@@ -853,6 +853,17 @@ All notable changes are documented here. The format follows
 
 ### Security
 
+- **Breaking:** a browser action without a `url` now has the target
+  `element:` followed by its target's `selector` or `name` (`active-page`, as
+  before, when it has neither), in every mode. The selector or name used to be
+  the target as written, in the same namespace as page URLs, so a capability
+  grant scoped to one site's pages could also cover an action on whatever page
+  was active. A grant now covers such an action only if its target pattern
+  matches the `element:` form: a grant written for the selector or name alone
+  (`#submit`) becomes `element:#submit`. Enforced mode already required a
+  `url` on the actions that drive a page; this change also covers its
+  url-less reads of an element (`inspect`, `wait`, `scroll`, `screenshot`).
+
 - **Breaking:** in enforced mode, HTTP and browser effects no longer reach
   this machine's loopback names and addresses unless the policy file sets
   `"allowLocalhost": true`. Left out, `allowLocalhost` now follows the mode:

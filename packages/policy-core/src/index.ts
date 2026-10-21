@@ -768,11 +768,16 @@ export function classifyOperation(operation: Operation): {
         effect: read ? "read" : "mutate",
         risk: read ? "low" : "medium",
         capability: `browser.${operation.action}`,
+        // Without a url the action is on whatever page is active, so its
+        // element is the target, marked as one as the computer's are: a
+        // selector or name the caller chose must never read as a page that a
+        // grant scoped to pages would match.
         target:
           operation.url === undefined
-            ? operation.target?.selector ??
-              operation.target?.name ??
-              "active-page"
+            ? (() => {
+                const element = operation.target?.selector ?? operation.target?.name;
+                return element === undefined ? "active-page" : `element:${element}`;
+              })()
             : (() => {
                 const target = new URL(operation.url);
                 target.search = "";

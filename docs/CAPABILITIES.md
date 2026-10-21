@@ -168,7 +168,9 @@ Actions: `navigate`, `back`, `forward`, `reload`, `inspect`, `wait`, `click`,
   shows it as the action's target and matches grants against it, so the runtime
   refuses the action, before sending anything, when that page is elsewhere
   (`browser_page_not_at_url`). It is compared as policy shows it, without query
-  or fragment. An input action (`click`, `type`, `fill_form`, `select`,
+  or fragment. Without a `url`, the target is `element:` followed by the
+  target's `selector` or `name`, or `active-page`, so a grant scoped to pages
+  never matches it, however the element is spelled. An input action (`click`, `type`, `fill_form`, `select`,
   `press`, `upload`, `download`) is then held to the document this check read,
   and its target to the document it was found in, a frame's for a target in a
   frame: the input goes through that element, and the target is found again
