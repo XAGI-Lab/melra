@@ -478,7 +478,9 @@ work, whatever the evidence then says: a `partial` task or a change left
 `recovery_required` pays as a verified one does. An operation refused by
 policy, cancelled before the adapter ran, stopped by an adapter error saying
 nothing went out, or stopped as a duplicate before it ran costs nothing, and a
-restart does not refill the budget. See
+restart does not refill the budget. A workflow's compensations draw on the same
+grants, so size one for every forward step that may run plus the compensations
+that would undo them. See
 [CAPABILITIES.md](CAPABILITIES.md#identity-and-capability-grants) for the exact rule.
 
 A `provider` block makes the grant cover *only* operations that declare a

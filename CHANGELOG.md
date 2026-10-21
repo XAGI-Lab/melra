@@ -23,6 +23,12 @@ All notable changes are documented here. The format follows
   before the adapter ran, an adapter error saying nothing went out, and a
   duplicate stopped before it ran still cost nothing. Upgrading: a grant sized
   for verified effects alone may need a larger `maxOperations` or `dailyMax`.
+  A workflow's compensations draw on the same grants as its forward steps, so a
+  forward step that ends `partial` now spends what an unwind may need, and the
+  compensation is what gets refused, leaving the run `recovery_required` with
+  the effect it was to undo in place. Size a grant for every forward step that
+  may run plus its compensations, or cover compensations with a grant of their
+  own that the forward steps do not match.
 
 ## [0.3.0-alpha.15] - 2026-10-21
 

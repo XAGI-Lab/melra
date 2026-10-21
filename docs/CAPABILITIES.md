@@ -517,6 +517,14 @@ recovery parks it to run again; run again, it is the same task and draws nothing
 more, but its re-check counts that draw, so a read at its grant's limit is not
 run again.
 
+A workflow's compensations draw on the same grants as its forward steps, so a
+forward step that ends `partial` has already spent what an unwind may need. A
+compensation its grant can no longer fund is refused like any other effect, and
+the unwind stops there (`workflow_compensation_incomplete:<node>`), leaving the
+effect it was to undo in place. Size a grant for every forward step that may run
+plus its compensations, or cover compensations with a grant of their own that
+the forward steps do not match.
+
 Money bounds need the caller to say what the call moves, because MELRA cannot
 read an amount out of an arbitrary provider's payload. That direction is what
 makes taking its word safe: a grant carrying a `provider` block covers *only*
