@@ -255,30 +255,25 @@ export {
 } from "./credentials.js";
 
 /**
- * Subcommands that install, per package manager, and the ones that only read.
+ * Subcommands that install, per package manager.
  *
  * Anything unlisted falls in between: a mutation, but not an install — `npm
  * run build` writes to the workspace and reaches nothing.
  *
- * Only npm has reads. Every other manager checked has a way for a "read" to
- * run code or write, through its own options or a file a cloned repository
- * carries: pnpm runs .pnpmfile.cjs and yarn its `yarnPath` on every command;
- * go switches to the toolchain go.mod names and rustup to the one
+ * No manager has reads. Each has a way for a "read" to run code or write,
+ * through its own options or a file a cloned repository carries: npm takes
+ * settings from a workspace `.npmrc` that can send its log or cache anywhere;
+ * pnpm runs .pnpmfile.cjs and yarn its `yarnPath` on every command; go
+ * switches to the toolchain go.mod names and rustup to the one
  * rust-toolchain.toml names, downloading and running it; `pip --python` runs
  * that interpreter and `--log` writes anywhere; `gem --config-file` loads
  * plugins; `brew outdated` updates Homebrew; `apt -o` sets hooks that run shell
  * commands; uv and cargo write their lockfiles. A read skips approval, so it
- * has to be one for every argument and every repository.
+ * has to be one for every argument and every repository, and policy sees
+ * neither a repository's files nor what they configure.
  */
-const PACKAGE_MANAGERS: Record<
-  string,
-  { install: Set<string>; read?: Set<string> }
-> = {
-  npm: {
-    install: new Set(["install", "i", "add", "ci", "update", "up", "publish"]),
-    // `config` is a read only as `config get`/`config list`; see readOnlyCall.
-    read: new Set(["ls", "list", "view", "info", "outdated", "why", "config"]),
-  },
+const PACKAGE_MANAGERS: Record<string, { install: Set<string> }> = {
+  npm: { install: new Set(["install", "i", "add", "ci", "update", "up", "publish"]) },
   pnpm: { install: new Set(["install", "i", "add", "update", "up", "publish", "dlx"]) },
   yarn: { install: new Set(["install", "add", "up", "upgrade", "publish", "dlx"]) },
   pip: { install: new Set(["install", "download", "wheel"]) },
@@ -385,11 +380,6 @@ export function classifyCommand(
       traits.add("package-install");
       traits.add("network");
     }
-    if (manager.read?.has(subcommand) === true && readOnlyCall(command, name, subcommand, args)) {
-      // A read subcommand of a package manager still queries the registry in
-      // the general case, so it keeps `network` while dropping the mutation.
-      return { read: true, traits: [...traits, "network"] };
-    }
   }
 
   const READ_COMMANDS = new Set([
@@ -406,7 +396,7 @@ export function classifyCommand(
   ]);
   const read =
     (READ_COMMANDS.has(name) || name === "git") &&
-    readOnlyCall(command, name, subcommand, args);
+    readOnlyCall(command, name, args);
   return { read, traits: [...traits] };
 }
 
@@ -430,7 +420,6 @@ export function classifyCommand(
 function readOnlyCall(
   command: string,
   name: string,
-  subcommand: string | undefined,
   args: readonly string[],
 ): boolean {
   // A path-qualified program is whatever file sits at that path, which the
@@ -445,12 +434,6 @@ function readOnlyCall(
   if (name === "wc" && args.some((arg) => /^--files0-from(=|$)/.test(arg))) return false;
   // `/s <computer>` queries another machine, as the logged-on user.
   if (name === "tasklist") return !args.some((arg) => /^[-/][sup](:|$)/i.test(arg));
-  // `--logs-dir <path>` creates that directory and writes npm's log into it.
-  if (name === "npm" && args.some((arg) => /^--logs-dir(=|$)/i.test(arg))) return false;
-  if (subcommand === "config" && PACKAGE_MANAGERS[name] !== undefined) {
-    const action = args[args.findIndex((arg) => arg.toLowerCase() === "config") + 1];
-    return action !== undefined && ["get", "list", "ls"].includes(action.toLowerCase());
-  }
   return true;
 }
 

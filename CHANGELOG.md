@@ -853,6 +853,16 @@ All notable changes are documented here. The format follows
 
 ### Security
 
+- **Breaking:** no `npm` call is classified as a read any more, so none runs
+  without approval. `npm ls`, `npm view`, `npm outdated`, `npm why` and
+  `npm config get` were reads unless an argument redirected npm's log, but
+  npm also takes that setting, and others that make it write outside the
+  workspace, from `.npmrc` files in the workspace, which policy never sees.
+  They are now mutations like every other package manager's calls: they need
+  an approval and, like any mutation, declared evidence (an `exit_code`
+  predicate will do), or planning refuses them with
+  `mutation_requires_evidence`.
+
 - **Breaking:** the programs no allowlist entry can admit now match what
   `docs/CAPABILITIES.md` promised, and that page names each one. Besides
   `sh`, `bash`, `zsh`, `fish`, `cmd`, `powershell`, `pwsh`, `sudo`, `su` and

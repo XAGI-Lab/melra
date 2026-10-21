@@ -116,9 +116,11 @@ Actions: `run`, `start`, `status`, `output`, `stop`, `send`.
 - Command, arguments, working directory, environment, duration, and output are
   bounded.
 - Only a read runs without approval. A read is a read-only program (`cat`,
-  `head`, `rg`, `git status`/`log`/`diff`, listing `git branch`/`tag`,
-  `npm ls`, ...) called with arguments that all keep it one: no option that
-  runs a program, writes, or names another host, and no path-qualified command.
+  `head`, `rg`, `git status`/`log`/`diff`, listing `git branch`/`tag`, ...)
+  called with arguments that all keep it one: no option that runs a program,
+  writes, or names another host, and no path-qualified command. No package
+  manager call is a read, `npm ls` included: each takes settings from files in
+  the workspace that policy never sees, and they can make it write elsewhere.
   Everything else is a mutation and needs approval; `melra policy test` shows
   how a command is classified.
 - Background jobs are supervised only for the life of the server process.

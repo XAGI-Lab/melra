@@ -722,9 +722,27 @@ describe("Windows command spellings", () => {
       ["findstr", ["/S", "/C:x", "src\\*"]],
       ["git", ["show", "HEAD:README.md"]],
       ["rg", ["-n", "TODO", "src"]],
-      ["npm", ["config", "get", "registry"]],
     ] as const) {
       expect(classifyCommand(command, [...args]).read, `${command} ${args.join(" ")}`).toBe(true);
+    }
+  });
+
+  it("classifies no npm call as a read", () => {
+    // npm also takes its settings from `.npmrc` files in the workspace, which
+    // policy never sees, and a setting there can send its log or cache
+    // anywhere. No argument list can show that a call only reads.
+    for (const args of [
+      ["ls"],
+      ["list", "--depth", "0"],
+      ["view", "react"],
+      ["info", "react"],
+      ["outdated"],
+      ["why", "react"],
+      ["config", "get", "registry"],
+      ["config", "list"],
+    ]) {
+      expect(classifyCommand("npm", args).read, `npm ${args.join(" ")}`).toBe(false);
+      expect(plan("npm.cmd", args).effect, `npm.cmd ${args.join(" ")}`).toBe("mutate");
     }
   });
 
@@ -774,7 +792,6 @@ describe("enforced-mode reads that leave the workspace", () => {
     ["rg", [`--ignore-file=${outside}`, "y"]],
     ["rg", [`-f${outside}`, "y"]],
     ["head", ["../../x"], "src"],
-    ["npm", ["ls", "--prefix", outside]],
   ];
 
   it("shows a person a read that names a path outside the workspace, and no other", () => {
@@ -1037,9 +1054,8 @@ describe("capability traits", () => {
     } as never);
 
   it("tells a package manager's subcommands apart", () => {
-    // The old rule was the command's name alone, so all three of these were
-    // high-risk mutations — including the one that only reads.
-    expect(terminal("npm", ["ls"]).effect).toBe("read");
+    // The old rule was the command's name alone, so both of these were
+    // high-risk mutations, including the one that installs nothing.
     expect(terminal("npm", ["run", "build"])).toMatchObject({
       effect: "mutate",
       risk: "medium",
