@@ -655,19 +655,26 @@ describe("approval console", () => {
   it("redraws the attention tile when a decision is recorded, which leaves the task row as it was", async () => {
     const executablePath = await detectBrowserExecutable();
     if (executablePath === undefined) return;
-    const task = pending("Write decided-later.txt");
-    const attention = async () => (await call(agent, "/api/tasks?limit=500", { token: "agent-token" })).body.attentionCount;
-    const tileReads = (page: Page, n: unknown) =>
-      page.locator(".tile", { hasText: "Need attention" }).locator(".n", { hasText: new RegExp(`^${String(n)}$`) }).waitFor({ timeout: 15_000 });
+    // Its own runtime: the shared one's sweep may settle an earlier test's
+    // work while this waits, and move the count under it.
+    const dirs = [mkdtempSync(join(tmpdir(), "melra-redraw-ws-")), mkdtempSync(join(tmpdir(), "melra-redraw-home-"))];
+    const own = await createMelraRuntime({ workspaceRoot: dirs[0]!, dataDirectory: dirs[1]!, environment: { MELRA_MODE: "enforced" } });
+    const server = await serveHttp({ runtime: own, port: 0, token: "redraw-token", environment: {} });
+    const tileReads = (page: Page, n: number) =>
+      page.locator(".tile", { hasText: "Need attention" }).locator(".n", { hasText: new RegExp(`^${n}$`) }).waitFor({ timeout: 15_000 });
     const browser = await chromium.launch({ executablePath, headless: true });
     try {
+      const task = own.controller.plan(write("decided-later.txt"));
       const page = await browser.newPage();
-      await page.goto(`http://127.0.0.1:${agent.port}/?token=agent-token`);
-      await tileReads(page, await attention());
-      runtime.controller.decide(task.id, runtime.controller.approvalView(task.id).renderDigest, "console:test");
-      await tileReads(page, await attention());
+      await page.goto(`http://127.0.0.1:${server.port}/?token=redraw-token`);
+      await tileReads(page, 1);
+      own.controller.decide(task.id, own.controller.approvalView(task.id).renderDigest, "console:test");
+      await tileReads(page, 0);
     } finally {
       await browser.close();
+      await server.close();
+      await own.close();
+      for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
     }
   }, 60_000);
 
