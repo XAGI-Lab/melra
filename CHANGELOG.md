@@ -165,9 +165,9 @@ All notable changes are documented here. The format follows
   without notes fails its pull request rather than the tag release. The
   container takes the tags npm does: the version, the release channel
   (`:alpha`, `:beta`, `:rc`, or `:latest` for a stable version) and, before
-  1.0, `:latest` on every release, instead of always `:alpha`. The README and
-  `docs/INSTALLATION.md` now run `:latest`, which follows every release, while
-  `:alpha` stays on the last alpha once betas begin, as npm's `@alpha` does.
+  1.0, `:latest` on every release, instead of always `:alpha`. `:latest`
+  follows every release, while `:alpha` stays on the last alpha once betas
+  begin, as npm's `@alpha` does.
   `scripts/release-channel.mjs` picks the channel for the release and its dry
   run alike, and a prerelease id other than alpha, beta or rc fails
   `pnpm check` instead of publishing under `latest`. The release dry run also
@@ -630,8 +630,6 @@ All notable changes are documented here. The format follows
   compensation, which that unwind skipped, is offered again, also when the step
   ran under its `approval` node or when that unwind had stalled. (#270)
 
-
-
 - A workflow with an `exit_code` evidence predicate can be planned, and so can
   one with a node id, verifier name or URL that looks like an API key
   (`api-integration-tests`). Planning parsed the redacted copy it stores
@@ -937,7 +935,7 @@ All notable changes are documented here. The format follows
   `rg "@/" src`, `rg "</div>" src` or `git show @~1`, runs as before, and so does approval: no command that runs without one reads a
   reference, and one that does, such as `curl`, already needs it.
 
-- MELRA's data directory is reserved as a whole, by every adapter and by
+- **Breaking:** MELRA's data directory is reserved as a whole, by every adapter and by
   verification, in every mode. A file effect can no longer write into it,
   replace it, or move or remove it or any directory that holds it (`path_reserved`),
   and the files there are no longer read through the file adapter or named in
@@ -974,7 +972,7 @@ All notable changes are documented here. The format follows
   land from its working directory, so one that leads out, even on its way
   back in, is refused (`terminal_path_outside_workspace`).
 
-- A workspace that is the data directory, or sits inside it, including through
+- **Breaking:** a workspace that is the data directory, or sits inside it, including through
   a link, is refused at startup in every mode with
   `workspace_inside_data_directory`, and `melra doctor` fails its
   `data-location` check for it, rather than starting with every path refused.
@@ -1186,7 +1184,7 @@ All notable changes are documented here. The format follows
   patterns, so a token in a verification URL or in a provider's error text no
   longer reaches either record. Records written earlier keep what they stored.
 
-- A credential the kernel brokered into an `http` request no longer comes back
+- **Breaking:** a credential the kernel brokered into an `http` request no longer comes back
   in the result when the far end echoes it. Each copy of the value in the
   reason phrase, a response header or the body is replaced with
   `[REDACTED_CREDENTIAL]` before the caller, the verifier or any stored record
