@@ -6,6 +6,21 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+### Security
+
+- **Breaking:** a browser action without a `url` now has the target
+  `element:` followed by its target's `selector` or `name` (`active-page`, as
+  before, when it has neither), in every mode. The selector or name used to be
+  the target as written, in the same namespace as page URLs, so a capability
+  grant scoped to one site's pages could also cover an action on whatever page
+  was active. A grant now covers such an action only if its target pattern
+  matches the `element:` form: a grant written for the selector or name alone
+  (`#submit`) becomes `element:#submit`. Enforced mode already required a
+  `url` on the actions that drive a page; this change also covers its
+  url-less reads of an element (`inspect`, `wait`, `scroll`, `screenshot`).
+
+## [0.3.0-alpha.15] - 2026-10-21
+
 ### Added
 
 - A `semantic` evidence predicate (#54): a yes/no `question` about meaning,
@@ -163,9 +178,9 @@ All notable changes are documented here. The format follows
   without notes fails its pull request rather than the tag release. The
   container takes the tags npm does: the version, the release channel
   (`:alpha`, `:beta`, `:rc`, or `:latest` for a stable version) and, before
-  1.0, `:latest` on every release, instead of always `:alpha`. The README and
-  `docs/INSTALLATION.md` now run `:latest`, which follows every release, while
-  `:alpha` stays on the last alpha once betas begin, as npm's `@alpha` does.
+  1.0, `:latest` on every release, instead of always `:alpha`. `:latest`
+  follows every release, while `:alpha` stays on the last alpha once betas
+  begin, as npm's `@alpha` does.
   `scripts/release-channel.mjs` picks the channel for the release and its dry
   run alike, and a prerelease id other than alpha, beta or rc fails
   `pnpm check` instead of publishing under `latest`. The release dry run also
@@ -173,6 +188,28 @@ All notable changes are documented here. The format follows
   release only once its tag was cut.
 
 ### Fixed
+
+- The web console advises on a task waiting for approval by the rule
+  `melra tasks` and `melra status` use (#284), where it went by the
+  challenge's expiry alone. A task approved in time and not yet run shows as
+  approved, waiting for its agent or, for a workflow step its run names, its
+  run (resumed first if paused or suspended), not as closed; an older
+  duplicate the run does not name points at `melra workflow inspect`, since no
+  advance runs it. An expired workflow step is
+  never told to deny, which would fail its run: one its run names points at
+  `melra workflow advance <workflow-id>` while that run is running or waiting
+  on approval, and at `melra workflow resume` first while it is paused or
+  suspended; otherwise, an older duplicate or a step a lost commit left
+  unnamed included, at `melra workflow inspect`.
+  Only a task outside a workflow, or one whose run is cancelled or
+  verified_complete, is told to plan again or clear it with
+  `melra approve <task-id> --deny`, and in enforced mode that includes one
+  answered in band, which can no longer be approved. "Need attention" counts
+  what its filter lists, the newest 500 tasks, says how many more are older,
+  and redraws when a decision is recorded or lapses. `/api/tasks` adds
+  `approvalPendingIds` and `attentionCount`, `/api/tasks/<id>/approval-state`
+  is new, and `@melra/server` exports `workflowStepJudge`, the step rule the
+  CLI and the console share. (#303)
 
 - A task settled after the fact, by recovery or by `melra_execute`
   reconciling it, is no longer charged twice when its own draw had landed.
@@ -606,8 +643,6 @@ All notable changes are documented here. The format follows
   compensation, which that unwind skipped, is offered again, also when the step
   ran under its `approval` node or when that unwind had stalled. (#270)
 
-
-
 - A workflow with an `exit_code` evidence predicate can be planned, and so can
   one with a node id, verifier name or URL that looks like an API key
   (`api-integration-tests`). Planning parsed the redacted copy it stores
@@ -853,17 +888,6 @@ All notable changes are documented here. The format follows
 
 ### Security
 
-- **Breaking:** a browser action without a `url` now has the target
-  `element:` followed by its target's `selector` or `name` (`active-page`, as
-  before, when it has neither), in every mode. The selector or name used to be
-  the target as written, in the same namespace as page URLs, so a capability
-  grant scoped to one site's pages could also cover an action on whatever page
-  was active. A grant now covers such an action only if its target pattern
-  matches the `element:` form: a grant written for the selector or name alone
-  (`#submit`) becomes `element:#submit`. Enforced mode already required a
-  `url` on the actions that drive a page; this change also covers its
-  url-less reads of an element (`inspect`, `wait`, `scroll`, `screenshot`).
-
 - **Breaking:** in enforced mode, HTTP and browser effects no longer reach
   this machine's loopback names and addresses unless the policy file sets
   `"allowLocalhost": true`. Left out, `allowLocalhost` now follows the mode:
@@ -924,7 +948,7 @@ All notable changes are documented here. The format follows
   `rg "@/" src`, `rg "</div>" src` or `git show @~1`, runs as before, and so does approval: no command that runs without one reads a
   reference, and one that does, such as `curl`, already needs it.
 
-- MELRA's data directory is reserved as a whole, by every adapter and by
+- **Breaking:** MELRA's data directory is reserved as a whole, by every adapter and by
   verification, in every mode. A file effect can no longer write into it,
   replace it, or move or remove it or any directory that holds it (`path_reserved`),
   and the files there are no longer read through the file adapter or named in
@@ -961,7 +985,7 @@ All notable changes are documented here. The format follows
   land from its working directory, so one that leads out, even on its way
   back in, is refused (`terminal_path_outside_workspace`).
 
-- A workspace that is the data directory, or sits inside it, including through
+- **Breaking:** a workspace that is the data directory, or sits inside it, including through
   a link, is refused at startup in every mode with
   `workspace_inside_data_directory`, and `melra doctor` fails its
   `data-location` check for it, rather than starting with every path refused.
@@ -1173,7 +1197,7 @@ All notable changes are documented here. The format follows
   patterns, so a token in a verification URL or in a provider's error text no
   longer reaches either record. Records written earlier keep what they stored.
 
-- A credential the kernel brokered into an `http` request no longer comes back
+- **Breaking:** a credential the kernel brokered into an `http` request no longer comes back
   in the result when the far end echoes it. Each copy of the value in the
   reason phrase, a response header or the body is replaced with
   `[REDACTED_CREDENTIAL]` before the caller, the verifier or any stored record
@@ -3175,7 +3199,8 @@ All notable changes are documented here. The format follows
 - Cross-scope memory overwrite and deletion protection.
 - Patched transitive HTTP adapter enforced through a package override.
 
-[Unreleased]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.14...HEAD
+[Unreleased]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.15...HEAD
+[0.3.0-alpha.15]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.14...v0.3.0-alpha.15
 [0.3.0-alpha.14]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.13...v0.3.0-alpha.14
 [0.3.0-alpha.13]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.12...v0.3.0-alpha.13
 [0.3.0-alpha.12]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.11...v0.3.0-alpha.12

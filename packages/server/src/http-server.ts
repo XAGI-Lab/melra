@@ -15,8 +15,9 @@ import { isMainThread } from "node:worker_threads";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import type { Principal } from "@melra/protocol";
+import type { Principal, TaskRecord, WorkflowRun } from "@melra/protocol";
 import { principalRef } from "@melra/protocol";
+import type { SqliteStore } from "@melra/storage-sqlite";
 import { capabilitiesPayload, createMcpServer } from "./mcp-server.js";
 import type { MelraRuntime } from "./runtime.js";
 import { approvalSummary, printable } from "./approval-screen.js";
@@ -25,6 +26,31 @@ import { clientPrincipal, CONSENT_HEADERS, OAuthProvider, requestOf } from "./oa
 import { hold } from "./session-hold.js";
 
 export const DEFAULT_HTTP_PORT = 7457;
+
+/**
+ * Whether an awaiting task is a workflow's step, as `melra tasks`, `melra
+ * status` and the console all judge it (#299, #303). Only a workflow plans
+ * under an idempotency key, so a keyed task is one, unless a run that is over
+ * (it never advances again) names a task under that key: only a deny clears
+ * that one, and harmlessly. A run that does not name it yet, its commit lost
+ * (#319), leaves it a step: a deny would fail that run too.
+ */
+export function workflowStepJudge(
+  store: SqliteStore,
+  runs: () => WorkflowRun[] = () => store.listWorkflowRuns(),
+): (task: TaskRecord) => boolean {
+  let over: Set<string> | undefined;
+  return (task) => {
+    if (task.idempotencyKey === undefined) return false;
+    over ??= new Set(
+      runs()
+        .filter((run) => run.status === "cancelled" || run.status === "verified_complete")
+        .flatMap((run) => Object.values(run.nodes).flatMap((node) => node.taskIds))
+        .flatMap((taskId) => store.getTask(taskId)?.idempotencyKey ?? []),
+    );
+    return !over.has(task.idempotencyKey);
+  };
+}
 
 /**
  * MCP sessions kept before the least recently used idle one is ended. A client
@@ -578,6 +604,39 @@ export async function serveHttp(
   }
 
   /**
+   * What the console needs to say of an awaiting task that no one can approve
+   * now: whether a decision row spent its challenge without being usable (in
+   * enforced mode an in-band one, or one past its window), whether it is a
+   * workflow's step, which is never told to deny, and the run naming it, if
+   * one does yet, with that run's status, since only some runs can advance,
+   * and whether the run names this very task: advancing never takes up an
+   * older duplicate under its key.
+   */
+  function approvalState(task: TaskRecord) {
+    const decision = runtime.controller.approvalDecision(task);
+    const row = task.approval === undefined ? undefined : runtime.store.getApprovalDecision(task.approval.approvalId);
+    const runs = runtime.store.listWorkflowRuns();
+    const step = workflowStepJudge(runtime.store, () => runs)(task);
+    const keyed = new Set(step ? runtime.store.listTasksByKey(task.idempotencyKey!).map((item) => item.id) : []);
+    // A step's key is named by no run that is over, so any run naming it can still go on.
+    const run = runs.find((candidate) =>
+      Object.values(candidate.nodes).some((node) => node.taskIds.some((id) => keyed.has(id))),
+    );
+    return {
+      decision: decision ?? null,
+      unusable: row !== undefined && decision === undefined,
+      step,
+      ...(run === undefined
+        ? {}
+        : {
+            workflowId: run.id,
+            workflowStatus: run.status,
+            named: Object.values(run.nodes).some((node) => node.taskIds.includes(task.id)),
+          }),
+    };
+  }
+
+  /**
    * The approval console's whole surface: the page, pairing and unpairing,
    * the read-only API, and one read and two writes per pending task. Every route answers
    * only to a loopback name. The page is the same static text for anyone;
@@ -663,7 +722,7 @@ export async function serveHttp(
         // buttons, where the terminal shows it, and the dump anywhere else.
         contract: printable(JSON.stringify(view.contract, null, 2), true),
         summary: approvalSummary(view),
-        decision: runtime.controller.approvalDecision(view.task) ?? null,
+        ...approvalState(view.task),
       });
       return;
     }
@@ -799,10 +858,19 @@ export async function serveHttp(
     }
     if (path === "/api/tasks") {
       const limit = Number(url.searchParams.get("limit") ?? "50");
+      const tasks = runtime.store.listTasks(
+        Number.isFinite(limit) ? Math.min(Math.max(limit, 1), 500) : 50,
+      );
+      const awaiting = runtime.store.listTasks(100_000, "awaiting_approval");
+      const approvalPendingIds = awaiting
+        .filter((task) => runtime.controller.approvalDecision(task) === undefined)
+        .map((task) => task.id);
+      const pageIds = new Set(tasks.map((task) => task.id));
+      const counts = runtime.store.taskStatusCounts();
       json(response, 200, {
-        tasks: runtime.store.listTasks(
-          Number.isFinite(limit) ? Math.min(Math.max(limit, 1), 500) : 50,
-        ),
+        tasks,
+        approvalPendingIds: approvalPendingIds.filter((id) => pageIds.has(id)),
+        attentionCount: (counts.waiting_user ?? 0) + (counts.recovery_required ?? 0) + (counts.partial ?? 0) + approvalPendingIds.length,
       });
       return;
     }
@@ -825,6 +893,12 @@ export async function serveHttp(
     const workflow = /^\/api\/workflows\/([^/]+)$/.exec(path);
     if (workflow?.[1] !== undefined) {
       json(response, 200, runtime.workflows.status(workflow[1]));
+      return;
+    }
+    const stateRoute = /^\/api\/tasks\/([^/]+)\/approval-state$/.exec(path);
+    if (stateRoute?.[1] !== undefined) {
+      const task = runtime.controller.status(stateRoute[1]);
+      json(response, 200, { expiresAt: task.approval?.expiresAt, ...approvalState(task) });
       return;
     }
     const receipts = /^\/api\/tasks\/([^/]+)\/receipts$/.exec(path);
