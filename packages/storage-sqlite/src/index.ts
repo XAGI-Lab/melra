@@ -576,6 +576,25 @@ export class SqliteStore {
     return rows.map((row) => JSON.parse(row.data) as TaskRecord);
   }
 
+  /**
+   * Tasks waiting on a semantic judgement (#54) whose wait is over, oldest
+   * first, and only those: the sweep that settles them should neither parse
+   * every waiting row nor let newer ones crowd out the oldest. A task's
+   * judgements share one `expiresAt`, which the kernel writes as an ISO
+   * string, so the comparison is a string one; a row with none is due.
+   */
+  listExpiredJudgements(now: string): TaskRecord[] {
+    const rows = this.database
+      .prepare(`
+        SELECT data FROM tasks
+        WHERE json_extract(data, '$.status') = 'waiting_user'
+          AND coalesce(json_extract(data, '$.judgements[0].expiresAt'), '') <= ?
+        ORDER BY updated_at ASC
+      `)
+      .all(now) as unknown as JsonRow[];
+    return rows.map((row) => JSON.parse(row.data) as TaskRecord);
+  }
+
   /** Every task planned under one idempotency key, any status, found by its index. */
   listTasksByKey(idempotencyKey: string): TaskRecord[] {
     const rows = this.database
@@ -1140,6 +1159,20 @@ export class SqliteStore {
         VALUES (?, ?, ?, ?)
       `)
       .run(grantId, taskId, amount, at);
+  }
+
+  /**
+   * Whether a task has drawn any grant.
+   *
+   * ponytail: scans capability_usage, whose key leads with grant_id; asked
+   * only when settling a task after the fact. Index task_id if that changes.
+   */
+  hasCapabilityUse(taskId: string): boolean {
+    return (
+      this.database
+        .prepare("SELECT 1 FROM capability_usage WHERE task_id = ? LIMIT 1")
+        .get(taskId) !== undefined
+    );
   }
 
   /**

@@ -72,6 +72,11 @@ the runtime has it (`createMelraRuntime({ evidenceVerifiers })` in
 `@melra/server`). The evidence is stamped `custom:row_exists`, and `custom` can
 never name a built-in.
 
+`semantic` is built in and never passes here: it is a question about meaning
+for a judge outside MELRA, and the kernel runs no model. Its item fails as
+inconclusive (`semantic_judgement_unanswered`), and no verifier can be
+registered under that name.
+
 Requires Node.js 22 or newer. Full documentation:
 [github.com/XAGI-Lab/melra](https://github.com/XAGI-Lab/melra)
 

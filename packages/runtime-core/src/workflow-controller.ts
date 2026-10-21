@@ -120,6 +120,11 @@ export class WorkflowController {
     const parsed = WorkflowDefinitionSchema.parse(definition);
     const graph = validateWorkflow(parsed);
     for (const node of graph.nodes.values()) {
+      // No node state exists for a task waiting on a verdict: a waiting task
+      // would read as failed and have an effect that held compensated, and a
+      // condition, loop or delegation would read an unanswered question as
+      // false. Refused until workflows can wait on one (#54).
+      if (declaresSemantic(node)) throw new Error(`workflow_semantic_evidence_unsupported:${node.id}`);
       for (const request of requestsFor(node)) {
         if (this.tasks.preflight(request).outcome === "deny") {
           throw new Error(`workflow_policy_blocked:${node.id}`);
@@ -2115,6 +2120,16 @@ function requestsFor(node: WorkflowNode): TaskRequest[] {
     case "delegation":
       return [];
   }
+}
+
+/** Whether a node asks a semantic question anywhere (#54). */
+function declaresSemantic(node: WorkflowNode): boolean {
+  return [
+    ...requestsFor(node).flatMap((request) => [...request.requiredEvidence, ...request.reconciliation]),
+    ...(node.type === "condition" ? [node.predicate] : []),
+    ...(node.type === "bounded_loop" && node.until !== undefined ? [node.until] : []),
+    ...(node.type === "delegation" ? node.requiredEvidence : []),
+  ].some((predicate) => predicate.type === "semantic");
 }
 
 function nodeStateForTask(

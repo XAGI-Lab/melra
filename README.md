@@ -32,7 +32,7 @@ made through other tools remain outside MELRA's control.
 <a href="https://mcp.site/servers/melra"><img src="https://mcp.site/badge/melra" alt="Listed on mcp.site" /></a>
 <a href="https://smithery.ai/servers/xagi-labs/melra"><img src="https://img.shields.io/badge/Smithery-listed-F97316?style=flat-square" alt="MELRA on Smithery" /></a>
 <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-f97316?style=flat-square" alt="Apache-2.0 license" /></a>
-<img src="https://img.shields.io/badge/evals-52%2F52-22c55e?style=flat-square&logo=checkmarx&logoColor=white" alt="52 of 52 deterministic evaluation scenarios passing" />
+<img src="https://img.shields.io/badge/evals-54%2F54-22c55e?style=flat-square&logo=checkmarx&logoColor=white" alt="54 of 54 deterministic evaluation scenarios passing" />
 <img src="https://img.shields.io/badge/telemetry-off-0f172a?style=flat-square" alt="Telemetry off" />
 
 <!-- Platforms & stack -->
@@ -314,7 +314,8 @@ sequenceDiagram
 | 🟡 `partial` | It ran, but the evidence did not hold | Look at the evidence, then decide |
 | 🔴 `policy_blocked` | Refused before anything ran | Read the reason; the same request will be refused again |
 | 🔵 `awaiting_approval` | A change is waiting for your approval | Developer mode: approve it from the agent that planned it. Enforced mode: `melra approve <task-id>` |
-| 🟣 `recovery_required` | A change may or may not have happened | **Check the world first**; never re-run blindly |
+| ⏳ `waiting_user` | It ran and every check MELRA can make passed; a `semantic` question waits for an answer from outside | Nothing can answer it yet; it settles closed at expiry |
+| 🟣 `recovery_required` | A change may or may not have happened, or happened and its `semantic` question went unanswered | **Check the world first**; never re-run blindly |
 | ⚪ `failed` · `cancelled` · `budget_exhausted` | It did not complete | Safe to plan again |
 
 <details>
@@ -628,7 +629,7 @@ or that unlike benchmarks are comparable.
 
 | | What | Result | What it means |
 |:--:|---|---:|---|
-| ✅ | Safety and execution evals | **52/52** | Deterministic policy, capability-grant, credential-scope, traversal, terminal, memory, computer, HTTP, cancellation and verification scenarios |
+| ✅ | Safety and execution evals | **54/54** | Deterministic policy, capability-grant, credential-scope, traversal, terminal, memory, computer, HTTP, cancellation and verification scenarios |
 | 🔁 | Durable Core eval | **8/8** | 100% expected recovery, 0 duplicate execution, 0 false success, 100% event consistency |
 | 🛡️ | [GovBench](docs/research/GOVBENCH.md) (self-authored) | **312/312** safety, **50/50** utility | 362 model-free cases through the real runtime: containment, approval integrity, verification honesty, exactly-once, redaction, and false positives on legitimate work. Its first run found two real bugs (293/307), both fixed; governance adds about 0.5–1.4 ms per action |
 | 🧠 | LoCoMo retrieval | **0.7597** coverage@20 | 1,982 evidence-bearing questions with zero model, embedding or network calls; re-run on 2026-10-14 and identical on every metric |
