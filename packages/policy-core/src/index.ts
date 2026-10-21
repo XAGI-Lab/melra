@@ -183,15 +183,16 @@ const READ_ONLY_GIT_ACTIONS = new Set([
  * docs/CAPABILITIES.md lists them and has to stay in step.
  */
 const ALWAYS_DENIED_COMMANDS = new Set([
-  // POSIX shells, and the multi-call binaries that are one.
-  "ash", "bash", "busybox", "csh", "dash", "elvish", "fish", "ksh", "ksh93",
-  "mksh", "nu", "oksh", "pdksh", "rbash", "sh", "tcsh", "toybox", "xonsh",
-  "yash", "zsh",
+  // POSIX shells under the names they are installed as, and the multi-call
+  // binaries that are one.
+  "ash", "bash", "bsd-csh", "busybox", "csh", "dash", "elvish", "fish", "ksh",
+  "ksh93", "lksh", "mksh", "mksh-static", "nu", "oksh", "pdksh", "rbash",
+  "rlksh", "rmksh", "sh", "tcsh", "toybox", "xonsh", "yash", "zsh",
   // Windows shells, and WSL, which runs a Linux shell.
-  "cmd", "powershell", "powershell_ise", "pwsh", "wsl",
+  "cmd", "powershell", "powershell_ise", "pwsh", "pwsh-preview", "wsl",
   // Running a program as another user.
-  "doas", "gsudo", "pkexec", "run0", "runas", "runuser", "su", "sudo",
-  "sudoedit",
+  "doas", "gsudo", "ksu", "pfexec", "pkexec", "run0", "runas", "runuser", "su",
+  "su-rs", "sudo", "sudo-rs", "sudoedit",
   // Script hosts.
   "cscript", "mshta", "osascript", "wscript",
 ]);

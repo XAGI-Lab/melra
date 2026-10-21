@@ -866,18 +866,17 @@ All notable changes are documented here. The format follows
   neither: an npm package script (`npm run`, `npm test`, `npm start`, ...) or
   a local git subcommand (`status`, `diff`, `add`, `commit`, `switch`, ...;
   not `config`, `rebase` or `grep`, each of which can be told to run another
-  program). What a package script, a hook, or the repository's own git
-  configuration (a partial clone, an LFS filter) goes on to fetch is still not
-  classified.
-  `wget2`, `slogin`, `dbclient`, `rsync-ssl`, `netcat`, `nc.openbsd`,
-  `nc.traditional`, `inetutils-telnet`, `inetutils-ftp` and `tftp` carry
-  `network` too, as `curl`, `ssh` and the other network programs did, and a
-  `git` read must name its subcommand in that same spelling. Under a policy
-  that denies a trait, calls such as
-  `cargo build`, `go build`, `uv run`, `pnpm test`, `npm ls`, `git -C dir
-  status` and `git --version` are now refused; without one they need the
-  same approval as before, at high risk for a package manager. The traits
-  table in `docs/INSTALLATION.md` lists exactly what carries each.
+  program). `wget2`, `slogin`, `dbclient`, `rsync-ssl`, `netcat`,
+  `nc.openbsd`, `nc.traditional`, `inetutils-telnet`, `inetutils-ftp` and
+  `tftp` carry `network` too, as `curl`, `ssh` and the other network programs
+  did, and a `git` read must name its subcommand in that same spelling. Under
+  a policy that denies a trait, calls such as `cargo build`, `go build`, `uv
+  run`, `pnpm test`, `npm ls`, `git -C dir status`, `git rebase` and `git
+  --version` are now refused; without one they need the same approval as
+  before, at high risk for a package manager. What a package script, a hook,
+  or the repository's own git configuration (a partial clone, an LFS filter)
+  goes on to fetch is still not classified. The traits table in
+  `docs/INSTALLATION.md` lists exactly what carries each.
 
 - **Breaking:** a terminal call whose argument, or an option's value, is a
   Windows network path (`\\host\share`, `//host/share`) now carries the
@@ -901,9 +900,11 @@ All notable changes are documented here. The format follows
   `docs/CAPABILITIES.md` promised, and that page names each one. Besides
   `sh`, `bash`, `zsh`, `fish`, `cmd`, `powershell`, `pwsh`, `sudo`, `su` and
   `osascript`, the other common POSIX shells (`ash`, `dash`, `ksh`, `mksh`,
-  `csh`, `tcsh`, `yash`, ...), the `busybox` and `toybox` multi-call
-  binaries, `wsl` and `powershell_ise`, the programs that run another as a
-  different user (`doas`, `pkexec`, `run0`, `runuser`, `sudoedit`, `runas`,
+  `csh`, `tcsh`, `yash`, ..., and the names packages install them as, such
+  as `lksh`, `mksh-static` and `bsd-csh`), the `busybox` and `toybox`
+  multi-call binaries, `wsl`, `powershell_ise` and `pwsh-preview`, the
+  programs that run another as a different user (`doas`, `pkexec`, `run0`,
+  `runuser`, `sudoedit`, `sudo-rs`, `su-rs`, `ksu`, `pfexec`, `runas`,
   `gsudo`) and the Windows script hosts (`wscript`, `cscript`, `mshta`) are
   refused with `command_not_allowlisted` even when `allowedCommands` names
   them, where before they only needed an approval. Remove such an entry from

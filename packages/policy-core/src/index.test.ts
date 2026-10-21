@@ -320,7 +320,8 @@ describe("local policy", () => {
       "ash", "busybox", "csh", "dash", "elvish", "ksh", "ksh93", "mksh", "nu", "oksh",
       "pdksh", "rbash", "tcsh", "toybox", "xonsh", "yash", "powershell_ise.exe", "wsl.exe",
       "doas", "gsudo.exe", "pkexec", "run0", "runas.exe", "runuser", "sudoedit",
-      "cscript.exe", "mshta.exe", "WScript.exe",
+      "cscript.exe", "mshta.exe", "WScript.exe", "sudo-rs", "su-rs", "lksh", "rlksh",
+      "mksh-static", "rmksh", "bsd-csh", "ksu", "pfexec", "pwsh-preview.exe",
     ]) {
       const policy = createDefaultPolicy(root);
       policy.allowedCommands.push(command);
