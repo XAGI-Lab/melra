@@ -876,6 +876,14 @@ All notable changes are documented here. The format follows
   same approval as before, at high risk for a package manager. The traits
   table in `docs/INSTALLATION.md` lists exactly what carries each.
 
+- **Breaking:** a terminal call whose argument, or an option's value, is a
+  Windows network path (`\\host\share`, `//host/share`) now carries the
+  `network` trait, whatever the program. Opening such a path connects to that
+  host, but only reads were checked for one, so under a policy that denies
+  `network` any other call given one still ran once approved. It is now
+  refused there; without such a policy it needs the same approval as before,
+  with the trait shown.
+
 - **Breaking:** no `npm` call is classified as a read any more, so none runs
   without approval. `npm ls`, `npm view`, `npm outdated`, `npm why` and
   `npm config get` were reads unless an argument redirected npm's log, but

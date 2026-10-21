@@ -1154,6 +1154,28 @@ describe("capability traits", () => {
     ).toBe("trait_denied:network");
   });
 
+  it("gives the network trait to a call with a Windows network path argument", () => {
+    for (const [command, args] of [
+      ["git", ["init", "\\\\h\\s\\r"]],
+      ["npm", ["test", "--prefix", "\\\\h\\s"]],
+      ["npm", ["test", "--prefix=//h/s"]],
+      ["findstr", ["/G:\\\\h\\s\\x", "y"]],
+      ["node", ["-r\\\\h\\s\\x.js"]],
+      ["cat", ["\\??\\UNC\\h\\s\\x"]],
+    ] as const) {
+      expect(classifyCommand(command, [...args]).traits, `${command} ${args.join(" ")}`).toEqual([
+        "network",
+      ]);
+    }
+    // A URL in a message or an option's value is not a path the program opens.
+    for (const args of [
+      ["commit", "-m", "see https://example.com"],
+      ["commit", "--message=https://example.com"],
+    ]) {
+      expect(classifyCommand("git", args).traits, `git ${args.join(" ")}`).toEqual([]);
+    }
+  });
+
   it("knows the other names of the network programs it lists", () => {
     for (const command of ["netcat", "nc.openbsd", "wget2", "slogin"]) {
       expect(classifyCommand(command, []).traits, command).toEqual(["network"]);

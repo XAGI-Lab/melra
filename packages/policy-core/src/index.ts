@@ -339,6 +339,7 @@ export function classifyCommand(
       : NETWORK_COMMANDS.has(program)
         ? ["network"]
         : [];
+  if (!traits.includes("network") && args.some(opensNetworkPath)) traits.push("network");
 
   const READ_COMMANDS = new Set([
     "cat",
@@ -406,6 +407,16 @@ function readOnlyCall(
  */
 function namesNetworkPath(arg: string): boolean {
   return /[\\/]{2}/.test(arg) || arg.includes("\\??\\");
+}
+
+/**
+ * The narrower test behind the `network` trait: a network path where a
+ * program would open it, as the whole argument or as the value after `=`, a
+ * switch (`/G:`, `-f`) or `@`. Any program given one connects to that host,
+ * while a URL in a message or a pattern is not a path and adds no trait.
+ */
+function opensNetworkPath(arg: string): boolean {
+  return /^(?:[^=]*=|[-/]\w+:|-\w|@)?(?:[\\/]{2}|\\\?\?\\)/.test(arg);
 }
 
 /**
