@@ -3,7 +3,7 @@
   "name": "io.github.XAGI-Lab/melra",
   "title": "MELRA",
   "description": "Local MCP runtime for policy-governed, verified agent actions with durable receipts.",
-  "version": "0.3.0-alpha.15",
+  "version": "0.3.0-alpha.16",
   "websiteUrl": "https://xagilab.com/",
   "repository": {
     "url": "https://github.com/XAGI-Lab/melra",
@@ -14,7 +14,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@melra/cli",
-      "version": "0.3.0-alpha.15",
+      "version": "0.3.0-alpha.16",
       "runtimeHint": "npx",
       "runtimeArguments": [{ "type": "positional", "value": "-y" }],
       "packageArguments": [{ "type": "positional", "value": "serve" }],
