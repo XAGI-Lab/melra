@@ -1726,7 +1726,7 @@ describe("melra CLI", () => {
     );
     expect(pinned.stderr).not.toContain("run this from there");
     // Twelve CLI starts, each a fresh Node process; a slow Windows runner took ~3.6 s for one.
-  }, 60_000);
+  }, 90_000);
 
   it("tells doctor and approve what fixes a data directory in the workspace, by layout", async () => {
     const home = await realpath(await mkdtemp(join(tmpdir(), "melra-cli-home-")));
@@ -1860,7 +1860,7 @@ describe("melra CLI", () => {
     expect(initialized.config.mcpServers.melra.env.MELRA_WORKSPACE).toBe(second);
     expect(JSON.parse(await readFile(initialized.policyPath, "utf8"))).not.toHaveProperty("workspaceRoot");
     // Thirteen CLI starts, each a fresh Node process; a slow Windows runner took ~3.6 s for one.
-  }, 60_000);
+  }, 90_000);
 
   it("creates MELRA_HOME private, and says when one it finds is not", async () => {
     if (process.platform === "win32") return;
