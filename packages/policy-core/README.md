@@ -30,6 +30,10 @@ never reaches a runtime.
   so the honest answer is to refuse rather than pretend it was applied.
 - Any non-`read` effect with no `requiredEvidence` is denied. A mutation nobody
   can check is not a mutation worth running.
+- A destructive effect whose evidence has a `semantic` predicate but nothing at
+  the `state` or `independent` level is denied (`semantic_only_destructive`), and
+  `semantic` beside `reconciliation` is denied (`semantic_evidence_not_reconcilable`).
+  A judgement about meaning is never the deciding vote.
 - Terminal commands must be allowlisted by basename. Shell interpreters and
   `sudo`/`su` are denied unconditionally. `git` counts as a read only for a small
   read-only subcommand set; `npm`, `npx`, and `pnpm` are high-risk mutations.

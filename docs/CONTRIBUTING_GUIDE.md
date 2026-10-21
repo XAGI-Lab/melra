@@ -27,7 +27,7 @@ close your browser first — or run the pieces individually while iterating:
 ```bash
 pnpm --filter @melra/policy-core test          # one package
 pnpm --filter @melra/memory test -t "ranks exact phrases"   # one test
-pnpm evals                                     # 52 policy/execution scenarios
+pnpm evals                                     # 54 policy/execution scenarios
 pnpm e2e                                       # real MCP stdio session
 pnpm conformance                               # black-box level check
 ```
@@ -136,7 +136,7 @@ skips both is a data leak with a passing test suite.
 
 - [ ] `pnpm check` passes
 - [ ] new behaviour has a test that fails without your change
-- [ ] `pnpm evals` still reports 52/52 (or more, with your new scenario) if you touched policy or execution
+- [ ] `pnpm evals` still reports 54/54 (or more, with your new scenario) if you touched policy or execution
 - [ ] docs updated for any public contract
 - [ ] `CHANGELOG.md` entry under `## [Unreleased]` if a user would notice
 - [ ] commits signed off

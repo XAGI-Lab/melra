@@ -104,7 +104,7 @@ result.
   L3; they differ in a way this suite cannot see.
 - **Anything about effects the suite does not exercise.** It probes one file
   effect end to end. Browser, terminal, computer, and memory adapters are out
-  of scope.
+  of scope, and so is `semantic` evidence: no level claims it.
 
 `--unsafe-local` removes the guardrails by design, so an unsafe-local endpoint reaches
 L1 and stops there. That is the correct result, not a bug.

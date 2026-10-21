@@ -179,7 +179,10 @@ export type CertificateResult =
   | "WAITING_USER"
   | "POLICY_BLOCKED"
   | "BUDGET_EXHAUSTED"
-  /** The effect may or may not have happened. Neither claim is available yet. */
+  /**
+   * The effect may or may not have happened, or it happened and its semantic
+   * question went unanswered. Neither success nor failure can be claimed yet.
+   */
   | "RECOVERY_REQUIRED";
 
 /**
@@ -220,6 +223,8 @@ const STRONGER_THAN_EXECUTION: Record<string, EvidenceStrength> = {
 };
 
 export function evidenceStrength(type: string): EvidenceStrength {
+  // Its own label, not a rank: a judgement about meaning never borrows state or independent.
+  if (type === "semantic") return "semantic";
   return STRONGER_THAN_EXECUTION[type] ?? "execution";
 }
 

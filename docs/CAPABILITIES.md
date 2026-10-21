@@ -60,6 +60,9 @@ Node types: `operation`, `approval`, `condition`, `parallel`, `bounded_loop`,
   declares none. A denied compensation stops the unwind.
 - Definitions allow at most 500 nodes, 100 dependencies per node, 20 parallel
   branches, and 100 loop iterations.
+- A `semantic` predicate is refused in any node
+  (`workflow_semantic_evidence_unsupported:<node>`) until a workflow can wait on a
+  verdict.
 - Competing advances for the same workflow are serialized inside one process,
   and across processes by an expiring SQLite lease.
 
@@ -408,12 +411,14 @@ Action: `info`. Returns local runtime capability information without mutation.
 | `page_contains` | inspected page text |
 | `http_resource_matches` | a second `GET`/`HEAD` against the provider's own state |
 | `custom` | a verifier the operator registered with the runtime, by name, with flat scalar `params`; strength is always `execution` |
+| `semantic` | a yes/no `question` about meaning, with `artifacts` naming result paths, for a judge outside MELRA; strength is always `semantic`; nothing answers it in this release |
 
 URL globs are anchored and schema-bounded. A completed action with unmet
-required evidence returns `partial`, never `verified_success`. A `file_*` path
-that can only land outside the workspace or on its root is refused at planning
-(`evidence_path_outside_workspace`), since the verifier would refuse it every
-time it was asked.
+required evidence returns `partial`, never `verified_success`; one whose only
+unmet evidence is a `semantic` question waits in `waiting_user` instead (below).
+A `file_*` path that can only land outside the workspace or on its root is
+refused at planning (`evidence_path_outside_workspace`), since the verifier
+would refuse it every time it was asked.
 
 `custom` is for effects no built-in can confirm, such as a database row or a
 ticket in some SaaS. The verifier is code passed to `createMelraRuntime` as
@@ -422,6 +427,21 @@ registered names under `customEvidence`, and planning refuses any other name
 (`evidence_verifier_unavailable`) before anything can be approved. A `custom`
 predicate cannot name a built-in, and its evidence is stamped
 `custom:<name>` at the weakest strength, whatever the verifier returns.
+
+`semantic` asks a question MELRA never answers, because the kernel runs no
+model (#54). Once the effect has run and every other predicate has held, the
+task waits in `waiting_user`, its `judgements` naming each question and when it
+expires: the approval TTL (`approvalTtlMs`). Nothing can answer one yet, so at
+expiry the task settles closed: `recovery_required` for a change, whose effect
+did happen, and `partial` for a read, with the error
+`semantic_judgement_expired`. A task with a failing predicate beside it is
+`partial` without waiting. A destructive effect whose evidence has a `semantic`
+predicate but nothing the kernel re-reads (`file_exists`, `file_absent`,
+`file_hash`) or asks another channel (`http_resource_matches`) is refused at
+planning (`semantic_only_destructive`). A task cannot declare `semantic`
+beside `reconciliation` (`semantic_evidence_not_reconcilable`), and a workflow
+cannot declare it in any node (`workflow_semantic_evidence_unsupported:<node>`). The
+question is stored and shown as written, minus secret shapes.
 
 `http_resource_matches` is the only predicate whose answer does not come from
 the channel that acted. `POST /refunds` returning `201` is the client that made
@@ -482,9 +502,10 @@ to on disk: a symlink inside a granted directory reaches wherever it points.
 - `provider: { name, account?, amountMax?, dailyMax? }` bounds money. `amountMax`
   caps one call, `dailyMax` the declared amounts committed in the last 24 hours.
 
-A grant is drawn down at one point only: where a verified task commits its
-idempotency key. An operation that was refused, failed verification, was
-cancelled, or collapsed into a duplicate costs nothing.
+A grant is drawn down at one point only: where a task whose every kernel check
+held commits its idempotency key, either a verified task or one waiting on a
+semantic judgement, whose effect ran. An operation that was refused, failed a
+check, was cancelled, or collapsed into a duplicate costs nothing.
 
 Money bounds need the caller to say what the call moves, because MELRA cannot
 read an amount out of an arbitrary provider's payload. That direction is what

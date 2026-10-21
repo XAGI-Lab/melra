@@ -8,6 +8,25 @@ All notable changes are documented here. The format follows
 
 ### Added
 
+- A `semantic` evidence predicate (#54): a yes/no `question` about meaning,
+  with `artifacts` naming result paths, for a judge outside MELRA. The kernel
+  runs no model and never answers it; its item has strength `semantic` and
+  fails as inconclusive. Once the effect has run and every other predicate has
+  held, the task waits in `waiting_user`, its `judgements` saying what it waits
+  on and until when (`approvalTtlMs`). Nothing can answer a judgement in this
+  release, so at expiry the task settles closed: `recovery_required` for a
+  change, whose effect did happen, `partial` for a read, error
+  `semantic_judgement_expired`, settled by the startup pass and the 30 s
+  recovery sweep, or as soon as one cut off after its effect is recovered:
+  one that committed its idempotency key, or a change whose other evidence is
+  all `file_*` and still holds. A destructive effect whose evidence has a `semantic`
+  predicate but nothing at the state or independent level is refused at
+  planning outside unsafe-local mode (`semantic_only_destructive`). `semantic`
+  is refused beside `reconciliation` (`semantic_evidence_not_reconcilable`),
+  which cannot settle a question about meaning, and in any workflow node
+  (`workflow_semantic_evidence_unsupported:<node>`) until a workflow can wait on a
+  verdict. `pnpm evals` has two new scenarios (54).
+
 - `ComputerRuntimeOptions.ocrProgram` names the OCR program for a library
   embedder whose `tesseract` is outside its usual install paths; naming it
   makes reading the screen available wherever screenshots are. The server and
@@ -60,6 +79,17 @@ All notable changes are documented here. The format follows
   (`approval_console_loopback_only`) on every platform and in every mode.
 
 ### Changed
+
+- A grant is now drawn down, and an idempotency key committed, when a task's
+  every kernel check has held: when it is verified, as before, and also when
+  it enters `waiting_user` on a `semantic` question, since its effect ran. A
+  key that ran does not run again, and a grant does not fund a second effect
+  while the first waits. (#54)
+
+- **Breaking:** `semantic` is now a built-in verifier type, so
+  `createMelraRuntime` refuses an `evidenceVerifiers` entry of that type
+  (`verifier_type_taken:semantic`) and the runtime does not start. Rename such
+  a verifier, and the `custom` predicates that name it. (#54)
 
 - **Breaking:** `SqliteStore.getWorkflowDefinition` in `@melra/storage-sqlite`
   returns a `RedactedWorkflowDefinition`: the redacted copy kept for reading,
@@ -143,6 +173,14 @@ All notable changes are documented here. The format follows
   release only once its tag was cut.
 
 ### Fixed
+
+- A task settled after the fact, by recovery or by `melra_execute`
+  reconciling it, is no longer charged twice when its own draw had landed.
+  Settling asked policy for the paying grant as if nothing were drawn, which
+  names the first grant that matches, so a task execute charged to a later
+  grant, the first being spent, was charged to both: an operation more on the
+  first, or its amount twice in a `dailyMax` window. A late draw now happens
+  only when the task drew nothing.
 
 - A browser tab action no longer fails in the tab list it returns because some
   other tab does not answer. Every tab action lists the tabs after its effect, and that list

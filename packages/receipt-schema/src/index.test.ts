@@ -65,6 +65,11 @@ describe("receipt and certificate primitives", () => {
     expect(evidenceStrength("operation_completed")).toBe("execution");
   });
 
+  it("labels a judgement about meaning as such, and nothing else borrows the label", () => {
+    expect(evidenceStrength("semantic")).toBe("semantic");
+    expect(evidenceStrength("custom:semantic")).toBe("execution");
+  });
+
   it("reads an unknown evidence type as the weakest claim", () => {
     // A predicate added without a decision in the table, or a type from a
     // future version, must not inherit a strength it never earned.
