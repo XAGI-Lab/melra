@@ -400,10 +400,20 @@ test` from `npm install left-pad`. `deniedTraits` is the axis that can. MELRA
 classifies what a command *reaches for* and refuses a request carrying a denied
 trait before the allowlist is consulted:
 
-| Trait | Meaning | Examples |
+| Trait | Meaning | Carried by |
 |---|---|---|
-| `package-install` | Resolves and installs third-party code — the one terminal action that adds executable content nobody reviewed. | `npm i`, `pnpm add`, `pip install`, `cargo add`, `npx`, `uvx` |
-| `network` | Contacts a host outside this machine. | `curl`, `wget`, `ssh`, `git push`, `git clone`, every browser navigation |
+| `package-install` | Resolves and installs third-party code — the one terminal action that adds executable content nobody reviewed. | Every call to `npm`, `npx`, `pnpm`, `pnpx`, `yarn`, `corepack`, `pip` with or without a version (`pip3`, `pip3.12`, `pip-3.12`), `pipx`, `uv`, `uvx`, `cargo`, `go` and its golang.org/dl wrappers (`go1.22.0`, `go1.23rc1`, `gotip`), `gem`, `brew`, `apt` or `apt-get`, except an `npm` call that only runs a package script: `npm run`, `npm run-script`, `npm test`, `npm start`, `npm stop` or `npm restart`, as its first argument |
+| `network` | Contacts a host outside this machine. | Everything that carries `package-install`; `curl`, `wget`, `wget2`, `ssh`, `slogin`, `dbclient`, `scp`, `sftp`, `rsync`, `rsync-ssl`, `nc`, `ncat`, `netcat`, `nc.openbsd`, `nc.traditional`, `telnet`, `inetutils-telnet`, `telnet-ssl`, `ftp`, `inetutils-ftp`, `tnftp`, `tftp`, `plink`, `pscp` and `psftp`; every `git` call except one whose first argument is a local subcommand (`status`, `log`, `diff`, `add`, `commit`, `checkout`, `switch`, `merge`, `stash`, ...; not `config`, `rebase` or `grep`, each of which can be told to run another program); every command given a Windows network path (`\\host\share`, `//host/share`) as an argument or as an option's value; every browser navigation and HTTP call |
+
+The rule is closed: a call to one of these programs carries the trait unless
+it is positively known not to, so an alias, an abbreviation, a different
+casing, or an option before the subcommand (`npm --silent run build`,
+`git -C sub status`) carries it too. A trait describes what the call itself
+asks for: what a package script, a git hook, or the repository's own git
+configuration goes on to do is not classified (a partial clone fetches missing
+objects when a local subcommand needs them, and a filter such as Git LFS's can
+download content on checkout). Nor is a program the table does not name,
+such as `socat` or an interpreter like `node`, beyond a network path argument.
 
 ```json
 { "deniedTraits": ["package-install"] }

@@ -422,10 +422,10 @@ export const scenarios: EvaluationScenario[] = [
     expectedFinal: "failed",
   },
   {
-    // `npm` is on the default allowlist, and the name alone used to make every
-    // one of its subcommands a high-risk mutation. A subcommand that only reads
-    // must plan straight through with no approval and no declared evidence.
-    id: "terminal-package-manager-read",
+    // `npm` is on the default allowlist. Even a listing is not a read: npm takes
+    // settings from `.npmrc` files in the workspace that policy never sees, and
+    // they can make it write outside the workspace, so it waits for approval.
+    id: "terminal-package-manager-listing-needs-approval",
     category: "policy",
     request: {
       goal: "List installed packages",
@@ -440,9 +440,9 @@ export const scenarios: EvaluationScenario[] = [
       constraints: [],
       forbiddenEffects: [],
       budget: { maxSteps: 2, maxDurationMs: 10_000, maxRetries: 0 },
-      requiredEvidence: [],
+      requiredEvidence: [{ type: "exit_code", value: 0 }],
     },
-    expectedPlan: "planned",
+    expectedPlan: "awaiting_approval",
   },
   {
     // The same allowlisted command, refused for what it reaches rather than for

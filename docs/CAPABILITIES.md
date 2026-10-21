@@ -102,14 +102,31 @@ Actions: `run`, `start`, `status`, `output`, `stop`, `send`.
   relative ones, which name the working directory, are left out of the search
   and of the `PATH` the program itself sees. `--unsafe-local` keeps `PATH` as
   given.
-- Shell interpreters, privilege escalation, and platform scripting shells are
-  denied even if accidentally added to the normal allowlist.
+- These are denied even if added to the allowlist by mistake, by basename and
+  with any Windows executable suffix: the shells `sh`, `ash`, `bash`,
+  `bash-static`, `rbash`, `dash`, `ksh`, `ksh93`, `rksh93`, `mksh`,
+  `mksh-static`, `lksh`, `rlksh`, `rmksh`, `oksh`, `pdksh`, `zsh`,
+  `zsh-static`, `rzsh`, `yash`, `csh`, `bsd-csh`, `tcsh`, `fish`, `elvish`,
+  `nu` and `xonsh`; the multi-call binaries `busybox` and `toybox`; `cmd`,
+  `powershell`, `powershell_ise`, `pwsh`, `pwsh-lts`, `pwsh-preview` and
+  `wsl`; the programs that run another as a different user, `sudo`,
+  `sudoedit`, `sudo-rs`, `su`, `su-rs`, `doas`, `pkexec`, `run0`,
+  `systemd-run`, `runuser`, `ksu`, `pfexec`, `runas` and `gsudo`; and the
+  script hosts `osascript`, `wscript`, `cscript` and `mshta`. The list goes by
+  name: a copy of one of these under a name not listed here is not recognised,
+  so keep such programs out of `allowedCommands`. A program that starts other
+  programs can still start one of them or a shell of its own: `env`, `xargs`,
+  an interpreter such as `node`, `sg` with `-c`, or a WSL distribution's
+  launcher (`ubuntu.exe`). So allowlist one only if you would approve what it
+  runs.
 - Command, arguments, working directory, environment, duration, and output are
   bounded.
 - Only a read runs without approval. A read is a read-only program (`cat`,
-  `head`, `rg`, `git status`/`log`/`diff`, listing `git branch`/`tag`,
-  `npm ls`, ...) called with arguments that all keep it one: no option that
-  runs a program, writes, or names another host, and no path-qualified command.
+  `head`, `rg`, `git status`/`log`/`diff`, listing `git branch`/`tag`, ...)
+  called with arguments that all keep it one: no option that runs a program,
+  writes, or names another host, and no path-qualified command. No package
+  manager call is a read, `npm ls` included: each takes settings from files in
+  the workspace that policy never sees, and they can make it write elsewhere.
   Everything else is a mutation and needs approval; `melra policy test` shows
   how a command is classified.
 - Background jobs are supervised only for the life of the server process.
@@ -168,7 +185,9 @@ Actions: `navigate`, `back`, `forward`, `reload`, `inspect`, `wait`, `click`,
   shows it as the action's target and matches grants against it, so the runtime
   refuses the action, before sending anything, when that page is elsewhere
   (`browser_page_not_at_url`). It is compared as policy shows it, without query
-  or fragment. An input action (`click`, `type`, `fill_form`, `select`,
+  or fragment. Without a `url`, the target is `element:` followed by the
+  target's `selector` or `name`, or `active-page`, so a grant scoped to pages
+  never matches it, however the element is spelled. An input action (`click`, `type`, `fill_form`, `select`,
   `press`, `upload`, `download`) is then held to the document this check read,
   and its target to the document it was found in, a frame's for a target in a
   frame: the input goes through that element, and the target is found again

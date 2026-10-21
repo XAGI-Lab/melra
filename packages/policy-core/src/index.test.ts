@@ -315,6 +315,30 @@ describe("local policy", () => {
     ).toBe("command_not_allowlisted");
   });
 
+  it("denies every shell, privilege-escalation program and script host the docs name, even when allowlisted", () => {
+    for (const command of [
+      "ash", "busybox", "csh", "dash", "elvish", "ksh", "ksh93", "mksh", "nu", "oksh",
+      "pdksh", "rbash", "tcsh", "toybox", "xonsh", "yash", "powershell_ise.exe", "wsl.exe",
+      "doas", "gsudo.exe", "pkexec", "run0", "runas.exe", "runuser", "sudoedit",
+      "cscript.exe", "mshta.exe", "WScript.exe", "sudo-rs", "su-rs", "lksh", "rlksh",
+      "mksh-static", "rmksh", "bsd-csh", "ksu", "pfexec", "pwsh-preview.exe",
+      "bash-static", "zsh-static", "rzsh", "rksh93", "pwsh-lts", "systemd-run",
+    ]) {
+      const policy = createDefaultPolicy(root);
+      policy.allowedCommands.push(command);
+      const decision = evaluatePolicy(
+        "71942756-af2a-407d-806e-73d7bb4fe5d0",
+        TaskRequestSchema.parse({
+          goal: "Run an allowlisted program",
+          operation: { kind: "terminal", action: "run", command, args: [] },
+          requiredEvidence: [{ type: "exit_code", value: 0 }],
+        }),
+        policy,
+      ).decision;
+      expect(decision.reason, command).toBe("command_not_allowlisted");
+    }
+  });
+
   it("allows computer inspection but gates input behind evidence and approval", () => {
     const inspect = TaskRequestSchema.parse({
       goal: "Inspect local computer-use support",
@@ -643,6 +667,9 @@ describe("Windows command spellings", () => {
       ["git", ["tag", "--format", "--list", "v10"]],
       // Before git 2.20, `branch -l` was --create-reflog: this creates `new`.
       ["git", ["branch", "-l", "new", "HEAD~1"]],
+      // Another spelling is not the subcommand: git looks it up as an alias.
+      ["git", ["Status"]],
+      ["git.exe", ["LOG"]],
       // Another machine, as the logged-on user.
       ["tasklist", ["/S", "10.0.0.5", "/U", "u", "/P", "p"]],
       ["tasklist.exe", ["-s", "attacker.example"]],
@@ -700,9 +727,27 @@ describe("Windows command spellings", () => {
       ["findstr", ["/S", "/C:x", "src\\*"]],
       ["git", ["show", "HEAD:README.md"]],
       ["rg", ["-n", "TODO", "src"]],
-      ["npm", ["config", "get", "registry"]],
     ] as const) {
       expect(classifyCommand(command, [...args]).read, `${command} ${args.join(" ")}`).toBe(true);
+    }
+  });
+
+  it("classifies no npm call as a read", () => {
+    // npm also takes its settings from `.npmrc` files in the workspace, which
+    // policy never sees, and a setting there can send its log or cache
+    // anywhere. No argument list can show that a call only reads.
+    for (const args of [
+      ["ls"],
+      ["list", "--depth", "0"],
+      ["view", "react"],
+      ["info", "react"],
+      ["outdated"],
+      ["why", "react"],
+      ["config", "get", "registry"],
+      ["config", "list"],
+    ]) {
+      expect(classifyCommand("npm", args).read, `npm ${args.join(" ")}`).toBe(false);
+      expect(plan("npm.cmd", args).effect, `npm.cmd ${args.join(" ")}`).toBe("mutate");
     }
   });
 
@@ -752,7 +797,6 @@ describe("enforced-mode reads that leave the workspace", () => {
     ["rg", [`--ignore-file=${outside}`, "y"]],
     ["rg", [`-f${outside}`, "y"]],
     ["head", ["../../x"], "src"],
-    ["npm", ["ls", "--prefix", outside]],
   ];
 
   it("shows a person a read that names a path outside the workspace, and no other", () => {
@@ -866,6 +910,35 @@ describe("enforced-mode browser actions", () => {
     };
     expect(plan({ action: "click", target }, scoped)).toBe("browser_action_requires_url");
     expect(plan({ action: "click", target, url: "https://example.com/pay" }, scoped)).toBe("explicit_approval_required");
+  });
+
+  it("matches a grant scoped to pages against the page, never an element spelled like one", () => {
+    const grants = (target: string, policy: LocalPolicy) => ({
+      ...policy,
+      capabilities: [
+        { id: "g1", capability: "browser.*", effects: ["read", "mutate"], target, principal: "*" },
+      ] as never,
+    });
+    const developer = grants("https://example.com/*", createDefaultPolicy(root));
+    for (const element of [{ selector: "https://example.com/pay" }, { name: "https://example.com/pay" }]) {
+      expect(plan({ action: "click", target: element }, developer)).toBe("capability_not_granted:browser.click");
+      // A read needs no url in enforced mode either.
+      expect(plan({ action: "inspect", target: element }, grants("https://example.com/*", enforced))).toBe(
+        "capability_not_granted:browser.inspect",
+      );
+    }
+    // The page itself is still covered, and so is the element by a grant scoped to elements.
+    expect(plan({ action: "click", target, url: "https://example.com/pay" }, developer)).toBe(
+      "explicit_approval_required",
+    );
+    const { operation } = TaskRequestSchema.parse({
+      goal: "Click",
+      operation: { kind: "browser", action: "click", target: { name: "Pay" } },
+    });
+    expect(classifyOperation(operation).target).toBe("element:Pay");
+    expect(plan({ action: "click", target: { name: "Pay" } }, grants("element:*", createDefaultPolicy(root)))).toBe(
+      "explicit_approval_required",
+    );
   });
 
   it("takes the url of `close` and `tab_switch` for the tab, not a destination", () => {
@@ -1015,9 +1088,8 @@ describe("capability traits", () => {
     } as never);
 
   it("tells a package manager's subcommands apart", () => {
-    // The old rule was the command's name alone, so all three of these were
-    // high-risk mutations — including the one that only reads.
-    expect(terminal("npm", ["ls"]).effect).toBe("read");
+    // The old rule was the command's name alone, so both of these were
+    // high-risk mutations, including the one that installs nothing.
     expect(terminal("npm", ["run", "build"])).toMatchObject({
       effect: "mutate",
       risk: "medium",
@@ -1030,7 +1102,7 @@ describe("capability traits", () => {
     });
   });
 
-  it("reads past flags to find the subcommand", () => {
+  it("keeps the traits of a subcommand that follows an option", () => {
     expect(classifyCommand("npm", ["--silent", "install"]).traits).toContain(
       "package-install",
     );
@@ -1038,6 +1110,125 @@ describe("capability traits", () => {
       read: false,
       traits: ["network"],
     });
+  });
+
+  it("gives a package manager's call both traits unless it names a local subcommand first", () => {
+    // Aliases, abbreviations, options that take the next argument, and a
+    // repository's own settings all decide what a manager does, so only a call
+    // whose first argument is a known-local subcommand carries no trait.
+    for (const [command, args] of [
+      ["npm", ["isntall", "left-pad"]],
+      ["npm", ["it"]],
+      ["npm", ["exec", "cowsay"]],
+      ["npm", ["--loglevel", "silent", "install"]],
+      ["npm", ["--silent", "run", "build"]],
+      ["npm.cmd", ["ls"]],
+      ["pnpm", ["test"]],
+      ["yarn", []],
+      ["yarnpkg", ["add", "left-pad"]],
+      ["cargo", ["build"]],
+      ["go", ["build", "./..."]],
+      ["uv", ["run", "pytest"]],
+      ["pip3.12", ["install", "left-pad"]],
+      ["corepack", ["pnpm", "add", "left-pad"]],
+    ] as const) {
+      expect(classifyCommand(command, [...args]).traits, `${command} ${args.join(" ")}`).toEqual([
+        "package-install",
+        "network",
+      ]);
+    }
+    for (const args of [["run", "build"], ["run-script", "lint"], ["test"], ["start"]]) {
+      expect(classifyCommand("npm", args).traits, `npm ${args.join(" ")}`).toEqual([]);
+    }
+  });
+
+  it("gives git the network trait unless it names a local subcommand first", () => {
+    for (const args of [
+      ["remote", "update"],
+      ["archive", "--remote=origin", "HEAD"],
+      ["maintenance", "run"],
+      ["lfs", "pull"],
+      ["--git-dir", ".git", "fetch"],
+      ["-c", "core.pager=cat", "status"],
+      ["Status"],
+      ["--version"],
+    ]) {
+      expect(classifyCommand("git", args).traits, `git ${args.join(" ")}`).toEqual(["network"]);
+    }
+    for (const args of [["status"], ["add", "."], ["commit", "-m", "x"], ["switch", "-c", "x"]]) {
+      expect(classifyCommand("git.exe", args).traits, `git ${args.join(" ")}`).toEqual([]);
+    }
+  });
+
+  it("gives git config, rebase and grep the network trait", () => {
+    // Each can be told to run another program, so none is known to stay local.
+    for (const args of [
+      ["rebase", "-x", "c", "HEAD~1"],
+      ["rebase", "main"],
+      ["grep", "-Oc", "x"],
+      ["config", "core.fsmonitor", "c"],
+    ]) {
+      expect(classifyCommand("git", args).traits, `git ${args.join(" ")}`).toEqual(["network"]);
+    }
+    const policy = createDefaultPolicy(root);
+    policy.deniedTraits = ["network"];
+    expect(
+      evaluatePolicy(
+        "0b6f4a52-5d0e-4f43-9a0c-3f6d2f1c9e11",
+        TaskRequestSchema.parse({
+          goal: "Rebase",
+          operation: { kind: "terminal", action: "run", command: "git", args: ["rebase", "-x", "c", "HEAD~1"] },
+          requiredEvidence: [{ type: "exit_code", value: 0 }],
+        }),
+        policy,
+      ).decision.reason,
+    ).toBe("trait_denied:network");
+  });
+
+  it("gives the network trait to a call with a Windows network path argument", () => {
+    for (const [command, args] of [
+      ["git", ["init", "\\\\h\\s\\r"]],
+      ["npm", ["test", "--prefix", "\\\\h\\s"]],
+      ["npm", ["test", "--prefix=//h/s"]],
+      ["findstr", ["/G:\\\\h\\s\\x", "y"]],
+      ["node", ["-r\\\\h\\s\\x.js"]],
+      ["cat", ["\\??\\UNC\\h\\s\\x"]],
+      ["tar", ["-xf//h/s/a.tar"]],
+      ["cat", ["\\\\\\h\\s\\x"]],
+      ["cat", ["///x"]],
+      ["git", ["commit", "-aF\\\\h\\s\\msg"]],
+    ] as const) {
+      expect(classifyCommand(command, [...args]).traits, `${command} ${args.join(" ")}`).toEqual([
+        "network",
+      ]);
+    }
+    // A URL in a message or an option's value is not a path the program opens.
+    for (const args of [
+      ["commit", "-m", "see https://example.com"],
+      ["commit", "--message=https://example.com"],
+      ["commit", "-m", "// WIP"],
+    ]) {
+      expect(classifyCommand("git", args).traits, `git ${args.join(" ")}`).toEqual([]);
+    }
+    // Nor is a code-comment pattern, or a separator with no host after it.
+    for (const args of [["// TODO", "src"], ["-e", "//"], ["/// doc"]]) {
+      expect(classifyCommand("rg", args).traits, `rg ${args.join(" ")}`).toEqual([]);
+    }
+  });
+
+  it("knows the other names of the programs it lists", () => {
+    for (const command of [
+      "netcat", "nc.openbsd", "wget2", "slogin", "rsync-ssl", "inetutils-telnet",
+      "inetutils-ftp", "dbclient", "telnet-ssl", "tnftp", "plink", "pscp", "psftp",
+    ]) {
+      expect(classifyCommand(command, []).traits, command).toEqual(["network"]);
+    }
+    for (const command of ["pip3", "pip-3", "pip-3.15", "go1.22.0", "go1.23rc1", "gotip"]) {
+      expect(classifyCommand(command, ["install", "x"]).traits, command).toEqual([
+        "package-install",
+        "network",
+      ]);
+    }
   });
 
   it("marks commands that reach another host", () => {
