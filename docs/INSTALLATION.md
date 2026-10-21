@@ -400,10 +400,17 @@ test` from `npm install left-pad`. `deniedTraits` is the axis that can. MELRA
 classifies what a command *reaches for* and refuses a request carrying a denied
 trait before the allowlist is consulted:
 
-| Trait | Meaning | Examples |
+| Trait | Meaning | Carried by |
 |---|---|---|
-| `package-install` | Resolves and installs third-party code — the one terminal action that adds executable content nobody reviewed. | `npm i`, `pnpm add`, `pip install`, `cargo add`, `npx`, `uvx` |
-| `network` | Contacts a host outside this machine. | `curl`, `wget`, `ssh`, `git push`, `git clone`, every browser navigation |
+| `package-install` | Resolves and installs third-party code — the one terminal action that adds executable content nobody reviewed. | Every call to `npm`, `npx`, `pnpm`, `pnpx`, `yarn`, `corepack`, `pip` (`pip3`, `pip3.12`, ...), `pipx`, `uv`, `uvx`, `cargo`, `go`, `gem`, `brew`, `apt` or `apt-get`, except an `npm` call that only runs a package script: `npm run`, `npm run-script`, `npm test`, `npm start`, `npm stop` or `npm restart`, as its first argument |
+| `network` | Contacts a host outside this machine. | Everything that carries `package-install`; `curl`, `wget`, `ssh`, `scp`, `sftp`, `rsync`, `nc`, `telnet`, `ftp` and their other installed names; every `git` call except one whose first argument is a local subcommand (`status`, `log`, `diff`, `add`, `commit`, `checkout`, `switch`, `merge`, `rebase`, `stash`, ...); every browser navigation and HTTP call |
+
+The rule is closed: a call to one of these programs carries the trait unless
+it is positively known not to, so an alias, an abbreviation, a different
+casing, or an option before the subcommand (`npm --silent run build`,
+`git -C sub status`) carries it too. A trait describes what the program
+itself does: what a package script or a git hook goes on to run is not
+classified, and neither is an interpreter such as `node`.
 
 ```json
 { "deniedTraits": ["package-install"] }

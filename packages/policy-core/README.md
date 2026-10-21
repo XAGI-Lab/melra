@@ -37,8 +37,11 @@ never reaches a runtime.
 - Terminal commands must be allowlisted by basename. Shells, multi-call
   binaries, privilege-escalation programs and script hosts are denied
   unconditionally (the list is in `docs/CAPABILITIES.md`). `git` counts as a
-  read only for a small read-only subcommand set; `npm`, `npx`, and `pnpm` are
-  high-risk mutations.
+  read only for a small read-only subcommand set. A package manager call is
+  never a read, and it is a high-risk mutation carrying the `package-install`
+  and `network` traits unless it only runs an npm package script (`npm run`,
+  `npm test`, ...); a `git` call carries `network` unless its first argument
+  is a local subcommand.
 - Browser and HTTP destinations default to `allowedDomains: ["*"]` with localhost
   allowed, because the allowlist is a narrowing control, not the safety boundary
   — `assertSafeDestination`, exported from this package, is what blocks private

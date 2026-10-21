@@ -665,6 +665,9 @@ describe("Windows command spellings", () => {
       ["git", ["tag", "--format", "--list", "v10"]],
       // Before git 2.20, `branch -l` was --create-reflog: this creates `new`.
       ["git", ["branch", "-l", "new", "HEAD~1"]],
+      // Another spelling is not the subcommand: git looks it up as an alias.
+      ["git", ["Status"]],
+      ["git.exe", ["LOG"]],
       // Another machine, as the logged-on user.
       ["tasklist", ["/S", "10.0.0.5", "/U", "u", "/P", "p"]],
       ["tasklist.exe", ["-s", "attacker.example"]],
@@ -1068,7 +1071,7 @@ describe("capability traits", () => {
     });
   });
 
-  it("reads past flags to find the subcommand", () => {
+  it("keeps the traits of a subcommand that follows an option", () => {
     expect(classifyCommand("npm", ["--silent", "install"]).traits).toContain(
       "package-install",
     );
@@ -1076,6 +1079,60 @@ describe("capability traits", () => {
       read: false,
       traits: ["network"],
     });
+  });
+
+  it("gives a package manager's call both traits unless it names a local subcommand first", () => {
+    // Aliases, abbreviations, options that take the next argument, and a
+    // repository's own settings all decide what a manager does, so only a call
+    // whose first argument is a known-local subcommand carries no trait.
+    for (const [command, args] of [
+      ["npm", ["isntall", "left-pad"]],
+      ["npm", ["it"]],
+      ["npm", ["exec", "cowsay"]],
+      ["npm", ["--loglevel", "silent", "install"]],
+      ["npm", ["--silent", "run", "build"]],
+      ["npm.cmd", ["ls"]],
+      ["pnpm", ["test"]],
+      ["yarn", []],
+      ["yarnpkg", ["add", "left-pad"]],
+      ["cargo", ["build"]],
+      ["go", ["build", "./..."]],
+      ["uv", ["run", "pytest"]],
+      ["pip3.12", ["install", "left-pad"]],
+      ["corepack", ["pnpm", "add", "left-pad"]],
+    ] as const) {
+      expect(classifyCommand(command, [...args]).traits, `${command} ${args.join(" ")}`).toEqual([
+        "package-install",
+        "network",
+      ]);
+    }
+    for (const args of [["run", "build"], ["run-script", "lint"], ["test"], ["start"]]) {
+      expect(classifyCommand("npm", args).traits, `npm ${args.join(" ")}`).toEqual([]);
+    }
+  });
+
+  it("gives git the network trait unless it names a local subcommand first", () => {
+    for (const args of [
+      ["remote", "update"],
+      ["archive", "--remote=origin", "HEAD"],
+      ["maintenance", "run"],
+      ["lfs", "pull"],
+      ["--git-dir", ".git", "fetch"],
+      ["-c", "core.pager=cat", "status"],
+      ["Status"],
+      ["--version"],
+    ]) {
+      expect(classifyCommand("git", args).traits, `git ${args.join(" ")}`).toEqual(["network"]);
+    }
+    for (const args of [["status"], ["add", "."], ["commit", "-m", "x"], ["switch", "-c", "x"]]) {
+      expect(classifyCommand("git.exe", args).traits, `git ${args.join(" ")}`).toEqual([]);
+    }
+  });
+
+  it("knows the other names of the network programs it lists", () => {
+    for (const command of ["netcat", "nc.openbsd", "wget2", "slogin"]) {
+      expect(classifyCommand(command, []).traits, command).toEqual(["network"]);
+    }
   });
 
   it("marks commands that reach another host", () => {

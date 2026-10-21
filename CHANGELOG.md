@@ -853,6 +853,25 @@ All notable changes are documented here. The format follows
 
 ### Security
 
+- **Breaking:** `deniedTraits` now fails closed for package managers and
+  `git`. Traits were assigned only to the subcommand spellings policy
+  recognised, so other spellings of an install or a remote operation carried
+  no trait, escaped a `package-install` or `network` deny, and reached an
+  approver with no trait shown. Now every call to a package manager or
+  package runner (`npm`, `npx`, `pnpm`, `yarn`, `corepack`, `pip` under any
+  versioned name, `uv`, `cargo`, `go`, `gem`, `brew`, `apt`, ...) carries
+  `package-install` and `network`, and every `git` call carries `network`,
+  unless its first argument is, exactly as spelled, a subcommand known to do
+  neither: an npm package script (`npm run`, `npm test`, `npm start`, ...) or
+  a local git subcommand (`status`, `diff`, `add`, `commit`, `switch`, ...).
+  `wget2`, `netcat`, `slogin` and the other installed names of the network
+  programs carry `network` too, and a `git` read must name its subcommand in
+  that same spelling. Under a policy that denies a trait, calls such as
+  `cargo build`, `go build`, `uv run`, `pnpm test`, `npm ls`, `git -C dir
+  status` and `git --version` are now refused; without one they need the
+  same approval as before, at high risk for a package manager. The traits
+  table in `docs/INSTALLATION.md` lists exactly what carries each.
+
 - **Breaking:** no `npm` call is classified as a read any more, so none runs
   without approval. `npm ls`, `npm view`, `npm outdated`, `npm why` and
   `npm config get` were reads unless an argument redirected npm's log, but
