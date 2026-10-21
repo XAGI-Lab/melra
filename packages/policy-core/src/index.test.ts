@@ -315,6 +315,28 @@ describe("local policy", () => {
     ).toBe("command_not_allowlisted");
   });
 
+  it("denies every shell, privilege-escalation program and script host the docs name, even when allowlisted", () => {
+    for (const command of [
+      "ash", "busybox", "csh", "dash", "elvish", "ksh", "ksh93", "mksh", "nu", "oksh",
+      "pdksh", "rbash", "tcsh", "toybox", "xonsh", "yash", "powershell_ise.exe", "wsl.exe",
+      "doas", "gsudo.exe", "pkexec", "run0", "runas.exe", "runuser", "sudoedit",
+      "cscript.exe", "mshta.exe", "WScript.exe",
+    ]) {
+      const policy = createDefaultPolicy(root);
+      policy.allowedCommands.push(command);
+      const decision = evaluatePolicy(
+        "71942756-af2a-407d-806e-73d7bb4fe5d0",
+        TaskRequestSchema.parse({
+          goal: "Run an allowlisted program",
+          operation: { kind: "terminal", action: "run", command, args: [] },
+          requiredEvidence: [{ type: "exit_code", value: 0 }],
+        }),
+        policy,
+      ).decision;
+      expect(decision.reason, command).toBe("command_not_allowlisted");
+    }
+  });
+
   it("allows computer inspection but gates input behind evidence and approval", () => {
     const inspect = TaskRequestSchema.parse({
       goal: "Inspect local computer-use support",

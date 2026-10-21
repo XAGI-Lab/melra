@@ -175,17 +175,25 @@ const READ_ONLY_GIT_ACTIONS = new Set([
   "tag",
 ]);
 
+/**
+ * Programs no allowlist entry admits, matched by basename like the allowlist.
+ * Each turns one allowlisted name into any command at all: a shell, or a
+ * multi-call binary that contains one, runs whatever text it is given; an
+ * escalation program runs one as another user; a script host runs a script.
+ * docs/CAPABILITIES.md lists them and has to stay in step.
+ */
 const ALWAYS_DENIED_COMMANDS = new Set([
-  "bash",
-  "cmd",
-  "fish",
-  "osascript",
-  "powershell",
-  "pwsh",
-  "sh",
-  "sudo",
-  "su",
-  "zsh",
+  // POSIX shells, and the multi-call binaries that are one.
+  "ash", "bash", "busybox", "csh", "dash", "elvish", "fish", "ksh", "ksh93",
+  "mksh", "nu", "oksh", "pdksh", "rbash", "sh", "tcsh", "toybox", "xonsh",
+  "yash", "zsh",
+  // Windows shells, and WSL, which runs a Linux shell.
+  "cmd", "powershell", "powershell_ise", "pwsh", "wsl",
+  // Running a program as another user.
+  "doas", "gsudo", "pkexec", "run0", "runas", "runuser", "su", "sudo",
+  "sudoedit",
+  // Script hosts.
+  "cscript", "mshta", "osascript", "wscript",
 ]);
 
 /**

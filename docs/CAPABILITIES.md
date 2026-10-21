@@ -102,8 +102,17 @@ Actions: `run`, `start`, `status`, `output`, `stop`, `send`.
   relative ones, which name the working directory, are left out of the search
   and of the `PATH` the program itself sees. `--unsafe-local` keeps `PATH` as
   given.
-- Shell interpreters, privilege escalation, and platform scripting shells are
-  denied even if accidentally added to the normal allowlist.
+- These are denied even if added to the allowlist by mistake, by basename and
+  with any Windows executable suffix: the shells `sh`, `ash`, `bash`, `rbash`,
+  `dash`, `ksh`, `ksh93`, `mksh`, `oksh`, `pdksh`, `zsh`, `yash`, `csh`,
+  `tcsh`, `fish`, `elvish`, `nu` and `xonsh`; the multi-call binaries
+  `busybox` and `toybox`; `cmd`, `powershell`, `powershell_ise`, `pwsh` and
+  `wsl`; the programs that run another as a different user, `sudo`,
+  `sudoedit`, `su`, `doas`, `pkexec`, `run0`, `runuser`, `runas` and `gsudo`;
+  and the script hosts `osascript`, `wscript`, `cscript` and `mshta`. A
+  program that starts other programs (`env`, `xargs`, or an interpreter such
+  as `node`) can still start one of them, so allowlist one only if you would
+  approve what it runs.
 - Command, arguments, working directory, environment, duration, and output are
   bounded.
 - Only a read runs without approval. A read is a read-only program (`cat`,

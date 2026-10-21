@@ -853,6 +853,19 @@ All notable changes are documented here. The format follows
 
 ### Security
 
+- **Breaking:** the programs no allowlist entry can admit now match what
+  `docs/CAPABILITIES.md` promised, and that page names each one. Besides
+  `sh`, `bash`, `zsh`, `fish`, `cmd`, `powershell`, `pwsh`, `sudo`, `su` and
+  `osascript`, the other common POSIX shells (`ash`, `dash`, `ksh`, `mksh`,
+  `csh`, `tcsh`, `yash`, ...), the `busybox` and `toybox` multi-call
+  binaries, `wsl` and `powershell_ise`, the programs that run another as a
+  different user (`doas`, `pkexec`, `run0`, `runuser`, `sudoedit`, `runas`,
+  `gsudo`) and the Windows script hosts (`wscript`, `cscript`, `mshta`) are
+  refused with `command_not_allowlisted` even when `allowedCommands` names
+  them, where before they only needed an approval. Remove such an entry from
+  a policy; the request it allowed is no longer possible outside
+  `--unsafe-local`.
+
 - **Breaking:** in enforced mode, HTTP and browser effects no longer reach
   this machine's loopback names and addresses unless the policy file sets
   `"allowLocalhost": true`. Left out, `allowLocalhost` now follows the mode:
