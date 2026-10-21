@@ -488,7 +488,7 @@ export class TerminalRuntime {
           ...(listsNames || reference ? [] : [this.holdsReserved(probe, call)]),
         ]),
       );
-      if (answers.includes(true)) throw new Error("terminal_path_reserved");
+      if (answers.some(Boolean)) throw new Error("terminal_path_reserved");
       // After the reserved checks, so a reserved path gets that refusal.
       if (!this.confineArguments || !inside(this.lexicalRoot, resolve(lexicalCwd, path))) continue;
       // `mkdir -p` makes each place it climbs out of, not only where it ends.
