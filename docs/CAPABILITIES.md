@@ -515,7 +515,8 @@ adapter ran, stopped by an adapter error saying nothing went out, or stopped as
 a duplicate before it ran costs nothing. A read cut off mid-flight is drawn when
 recovery parks it to run again; run again, it is the same task and draws nothing
 more, but its re-check counts that draw, so a read at its grant's limit is not
-run again.
+run again. Below the limit, that second run goes uncounted, so each such
+interruption can let one read past the limit.
 
 A workflow's compensations draw on the same grants as its forward steps, so a
 forward step that ends `partial` has already spent what an unwind may need. A

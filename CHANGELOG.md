@@ -16,10 +16,12 @@ All notable changes are documented here. The format follows
   read cut off mid-flight or retried after an attempt whose outcome is unknown
   are each charged once, as a verified task or one waiting on a `semantic`
   question already was, reads included. `verified_success` stays the evidence
-  verdict only, and a grant's limits now bound every effect attempted under
-  it, not only the ones that verified. A charge stands if reconciliation later
-  finds the effect did not happen, and a read charged when recovery parks it is
-  not run again once its grant is at its limit. A policy refusal, a cancel
+  verdict only, and a grant now counts the effects that ran, not only the ones
+  that verified. A charge stands if reconciliation later finds the effect did
+  not happen, and a read charged when recovery parks it is not run again once
+  its grant is at its limit. One gap remains: running that same read again
+  draws nothing more, so each such interruption can let one read past the
+  limit. A policy refusal, a cancel
   before the adapter ran, an adapter error saying nothing went out, and a
   duplicate stopped before it ran still cost nothing. Upgrading: a grant sized
   for verified effects alone may need a larger `maxOperations` or `dailyMax`.
