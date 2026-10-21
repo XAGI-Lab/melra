@@ -16,10 +16,15 @@ export interface TerminalRuntimeOptions {
   root: string;
   allowedEnvironment?: string[];
   baseEnvironment?: NodeJS.ProcessEnv;
-  /** Whether a path is, or is inside, one of MELRA's own files, which no argument may reach in any mode. Absent, nothing is. */
-  reserved?: (path: string) => Promise<boolean>;
-  /** Whether a path is a directory holding one of them, which a recursive reader given it reaches unnamed. Absent, none is. */
-  holdsReserved?: (path: string) => Promise<boolean>;
+  /**
+   * Whether a path is, or is inside, one of MELRA's own files, which no
+   * argument may reach in any mode. Absent, nothing is. `call` is one object
+   * for every check one command makes and a new one for the next, so what the
+   * checks compare with may be looked up once per command.
+   */
+  reserved?: (path: string, call?: object) => Promise<boolean>;
+  /** Whether a path is a directory holding one of them, which a recursive reader given it reaches unnamed. Absent, none is. `call` as for `reserved`. */
+  holdsReserved?: (path: string, call?: object) => Promise<boolean>;
   /** Refuse an argument spelled inside the root that leads out: policy asked approval only for ones spelled outside. */
   confineArguments?: boolean;
   /**
@@ -392,8 +397,8 @@ export class TerminalRuntime {
   readonly baseEnvironment: NodeJS.ProcessEnv;
   /** The root as policy spelled it, which is what "spelled inside" is measured against. */
   private readonly lexicalRoot: string;
-  private readonly reserved: (path: string) => Promise<boolean>;
-  private readonly holdsReserved: (path: string) => Promise<boolean>;
+  private readonly reserved: (path: string, call?: object) => Promise<boolean>;
+  private readonly holdsReserved: (path: string, call?: object) => Promise<boolean>;
   private readonly confineArguments: boolean;
   /** The protected workspace, as spelled and resolved; absent, PATH is not filtered. */
   private readonly pathOutside: string[] | undefined;
@@ -426,7 +431,7 @@ export class TerminalRuntime {
     );
   }
 
-  private async resolveCwd(cwd: string | undefined): Promise<string> {
+  private async resolveCwd(cwd: string | undefined, call: object): Promise<string> {
     const spelled = cwd !== undefined && isAbsolute(cwd) ? resolve(cwd) : undefined;
     const input =
       spelled !== undefined && inside(this.lexicalRoot, spelled)
@@ -436,13 +441,13 @@ export class TerminalRuntime {
     if (!inside(this.root, candidate)) throw new Error("cwd_outside_workspace");
     // Before the lookup, so a reserved name gets the same answer whether it
     // exists or not.
-    if (await this.reserved(candidate)) throw new Error("terminal_path_reserved");
+    if (await this.reserved(candidate, call)) throw new Error("terminal_path_reserved");
     const actual = await realpath(candidate);
     if (!inside(this.root, actual)) throw new Error("cwd_outside_workspace");
     return actual;
   }
 
-  private async checkArguments(operation: TerminalOperation, cwd: string): Promise<void> {
+  private async checkArguments(operation: TerminalOperation, cwd: string, call: object): Promise<void> {
     const lexicalCwd = resolve(this.lexicalRoot, operation.cwd ?? ".");
     // A path-qualified program is whatever file sits at that path, so only a
     // bare name is taken at its word.
@@ -468,20 +473,22 @@ export class TerminalRuntime {
         if (climbed.has(place)) continue;
         climbed.add(place);
         if (climbed.size > MAX_CLIMBED_PLACES) throw new Error("terminal_path_too_complex");
-        if (await this.reserved(place)) throw new Error("terminal_path_reserved");
+        if (await this.reserved(place, call)) throw new Error("terminal_path_reserved");
       }
       const real = await leadsTo(end, links);
       // Some programs fold `..` as text first (git pathspecs, path.resolve),
       // so the argument is judged where that leads too.
       const folded = resolve(cwd, path);
-      for (const at of new Set([real, folded])) {
-        // findstr and where expand their own wildcards, reading the directory.
-        for (const probe of /[*?]/.test(path) ? [at, dirname(at)] : [at]) {
-          if ((await this.reserved(probe)) || (!listsNames && !reference && (await this.holdsReserved(probe)))) {
-            throw new Error("terminal_path_reserved");
-          }
-        }
-      }
+      // findstr and where expand their own wildcards, reading the directory.
+      const probes = [...new Set([real, folded])].flatMap((at) => (/[*?]/.test(path) ? [at, dirname(at)] : [at]));
+      // Each refuses the same way, so they are asked together.
+      const answers = await Promise.all(
+        probes.flatMap((probe) => [
+          this.reserved(probe, call),
+          ...(listsNames || reference ? [] : [this.holdsReserved(probe, call)]),
+        ]),
+      );
+      if (answers.some(Boolean)) throw new Error("terminal_path_reserved");
       // After the reserved checks, so a reserved path gets that refusal.
       if (!this.confineArguments || !inside(this.lexicalRoot, resolve(lexicalCwd, path))) continue;
       // `mkdir -p` makes each place it climbs out of, not only where it ends.
@@ -506,10 +513,12 @@ export class TerminalRuntime {
     if (operation.command.includes("\0") || operation.args.some((arg) => arg.includes("\0"))) {
       throw new Error("terminal_input_contains_null");
     }
-    const cwd = await this.resolveCwd(operation.cwd);
+    // One per command, for every check below and no later one: see `reserved`.
+    const call = {};
+    const cwd = await this.resolveCwd(operation.cwd, call);
     // Before the program is looked up, so a refusal never depends on whether
     // it is installed.
-    await this.checkArguments(operation, cwd);
+    await this.checkArguments(operation, cwd, call);
     const environment: NodeJS.ProcessEnv = {};
     for (const name of ["PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "COMSPEC"]) {
       if (this.baseEnvironment[name] !== undefined) {

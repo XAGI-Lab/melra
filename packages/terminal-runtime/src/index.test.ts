@@ -913,6 +913,27 @@ describe("arguments", () => {
     }
   });
 
+  it("asks every check of one command as one call, and the next command as another", async () => {
+    // What a check compares with may be looked up once per call, never longer.
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-terminal-")));
+    roots.push(root);
+    const calls: Array<object | undefined> = [];
+    const ask = async (_path: string, call?: object) => {
+      calls.push(call);
+      return false;
+    };
+    const runtime = await TerminalRuntime.create({ root, reserved: ask, holdsReserved: ask });
+    const command = async () => {
+      calls.length = 0;
+      await run(runtime, ".");
+      return new Set(calls);
+    };
+    const [first, second] = [await command(), await command()];
+    expect([first.size, second.size]).toEqual([1, 1]);
+    expect([...first][0]).toBeTypeOf("object");
+    expect([...first][0]).not.toBe([...second][0]);
+  });
+
   it("in enforced mode, refuses an argument spelled inside that leads out", async () => {
     const base = await mkdtemp(join(tmpdir(), "melra-terminal-"));
     roots.push(base);

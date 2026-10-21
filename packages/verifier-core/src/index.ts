@@ -456,8 +456,11 @@ export interface VerifierOptions {
    * Whether a path is one no predicate may open, even inside the root: the
    * files MELRA itself holds locked, since closing a descriptor to one drops
    * this process's lock. The runtime passes the file runtime's own check.
+   * `call` is one object for every check made for one predicate and a new
+   * one for the next, so what the checks compare with may be looked up once
+   * per predicate.
    */
-  reserved?: (path: string) => Promise<boolean>;
+  reserved?: (path: string, call?: object) => Promise<boolean>;
 }
 
 export class Verifier {
@@ -468,7 +471,7 @@ export class Verifier {
     private readonly lexicalRoot: string,
     private readonly probe: EvidenceProbe | undefined,
     extra: ReadonlyArray<RegisteredVerifier>,
-    private readonly reserved?: (path: string) => Promise<boolean>,
+    private readonly reserved?: (path: string, call?: object) => Promise<boolean>,
   ) {
     for (const verifier of BUILT_IN) this.verifiers.set(verifier.type, verifier);
     for (const verifier of extra) {
@@ -574,25 +577,25 @@ export class Verifier {
     return inside(this.root, candidate) && relative(this.root, candidate) !== "" ? candidate : undefined;
   }
 
-  private async filePath(input: string): Promise<string> {
+  private async filePath(input: string, call?: object): Promise<string> {
     // Where the path leads is decided before whether it is there, which is an
     // answer, so a refused path gets the same refusal present or absent.
-    const actual = await realpath(await this.potentiallyAbsentFilePath(input));
+    const actual = await realpath(await this.potentiallyAbsentFilePath(input, call));
     if (!inside(this.root, actual)) {
       throw new Refusal("verification_path_outside_workspace");
     }
-    if ((await this.reserved?.(actual)) === true) {
+    if ((await this.reserved?.(actual, call)) === true) {
       throw new Refusal("verification_path_reserved");
     }
     return actual;
   }
 
-  private async potentiallyAbsentFilePath(input: string): Promise<string> {
+  private async potentiallyAbsentFilePath(input: string, call?: object): Promise<string> {
     const candidate = this.spelled(input);
     if (candidate === undefined) throw new Refusal("verification_path_outside_workspace");
     // Before following links, so every reserved name gets the same answer,
     // wherever a link inside it leads; the runtime's check follows them itself.
-    if ((await this.reserved?.(candidate)) === true) throw new Refusal("verification_path_reserved");
+    if ((await this.reserved?.(candidate, call)) === true) throw new Refusal("verification_path_reserved");
     let probe = candidate;
     while (true) {
       try {
@@ -601,7 +604,7 @@ export class Verifier {
           throw new Refusal("verification_path_outside_workspace");
         }
         // Whether a reserved name is absent is no more answered than whether it exists.
-        if ((await this.reserved?.(join(actual, relative(probe, candidate)))) === true) {
+        if ((await this.reserved?.(join(actual, relative(probe, candidate)), call)) === true) {
           throw new Refusal("verification_path_reserved");
         }
         return candidate;
@@ -621,14 +624,19 @@ export class Verifier {
     predicates: ReadonlyArray<EvidencePredicate | { type: string; [field: string]: unknown }>,
     result: Record<string, unknown>,
   ): Promise<{ verified: boolean; evidence: EvidenceItem[] }> {
+    // One per predicate, so a slow one does not age what the next compares
+    // with, and none once this returns: a verifier that keeps the context and
+    // asks again later gets a check of its own.
+    let call: object | undefined;
     const context: VerificationContext = {
       workspacePath: (input, options) =>
-        options?.mayBeAbsent === true ? this.potentiallyAbsentFilePath(input) : this.filePath(input),
+        options?.mayBeAbsent === true ? this.potentiallyAbsentFilePath(input, call) : this.filePath(input, call),
       relative: (path) => relative(this.root, path),
       ...(this.probe === undefined ? {} : { probe: this.probe }),
     };
     const evidence: EvidenceItem[] = [];
     for (const predicate of predicates) {
+      call = {};
       const { verifier, type, input } = this.resolve(predicate);
       try {
         // An unregistered type is a question nobody here can answer: it fails.
@@ -652,6 +660,7 @@ export class Verifier {
         });
       }
     }
+    call = undefined;
     return {
       verified: evidence.every((item) => item.passed),
       // Stamped once here, after every verifier has run, and over whatever a

@@ -6,7 +6,7 @@ import { link, lstat, mkdir, mkdtemp, realpath, rename, rm, symlink, writeFile }
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { Verifier, type PredicateVerifier } from "./index.js";
+import { Verifier, type PredicateVerifier, type VerificationContext } from "./index.js";
 
 const roots: string[] = [];
 
@@ -104,6 +104,45 @@ describe("Verifier", () => {
     );
     expect(hashed.verified).toBe(false);
     expect(hashed.evidence[0]?.summary).toBe("verification_path_reserved");
+  });
+
+  it("asks every check of one predicate as one call, and none after it", async () => {
+    // What a check compares with may be looked up once per call, never longer.
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-verifier-")));
+    roots.push(root);
+    await writeFile(join(root, "a.txt"), "a");
+    const calls: Array<object | undefined> = [];
+    let kept: VerificationContext | undefined;
+    const keeps: PredicateVerifier<{ type: "keeps" }> = {
+      type: "keeps",
+      async check(_predicate, _result, context) {
+        kept = context;
+        return { passed: true, summary: "kept" };
+      },
+    };
+    const verifier = await Verifier.create(root, {
+      reserved: async (_path, call) => {
+        calls.push(call);
+        return false;
+      },
+      verifiers: [keeps],
+    });
+    const verification = async (...predicates: Parameters<Verifier["verify"]>[0]) => {
+      calls.length = 0;
+      await verifier.verify(predicates, {});
+      return [...new Set(calls)];
+    };
+    const hash = { type: "file_hash", path: "a.txt", sha256: "0".repeat(64) } as const;
+    const [first, second] = [await verification(hash), await verification(hash)];
+    expect([first.length, second.length]).toEqual([1, 1]);
+    expect(first[0]).toBeTypeOf("object");
+    expect(first[0]).not.toBe(second[0]);
+    expect(await verification(hash, { type: "file_absent", path: "b.txt" })).toHaveLength(2);
+    // A context kept past its verification asks on its own.
+    await verification({ type: "custom", verifier: "keeps", params: {} });
+    await kept?.workspacePath("a.txt");
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls.every((call) => call === undefined)).toBe(true);
   });
 
   it("gives no answer about a reserved name, present or absent", async () => {

@@ -14,6 +14,14 @@ All notable changes are documented here. The format follows
   keyword instead of trying every position. What they redact, and the
   redaction kinds a record lists, are unchanged byte for byte. (#353)
 
+- Governed file and terminal actions spend less time keeping MELRA's own files
+  out of reach: a `file.write` verified by `file_hash` takes 1.5 ms instead of
+  2.1 ms on a Mac, and a terminal command's checks about 0.7 ms less. The
+  identities of the reserved files are looked up once per file action,
+  terminal command or verification instead of once per path checked, and
+  lookups that do not depend on each other run together. A reserved file made
+  or replaced after one call is still caught by the next. (#352)
+
 - `melra version`, `doctor`, `init`, `setup`, `clients`, `policy test` and
   `help` start in about a third of the time they took (0.08 s against 0.21 s
   on a Mac): they no longer load the MCP SDK, the HTTP server or Playwright.
