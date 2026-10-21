@@ -6,6 +6,8 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0-alpha.16] - 2026-10-21
+
 ### Security
 
 - **Breaking:** a capability grant's `maxOperations` and `provider.dailyMax`
@@ -62,11 +64,11 @@ All notable changes are documented here. The format follows
   carry `network` too, as `curl`, `ssh` and the other network programs
   did, and a `git` read must name its subcommand in that same spelling. Under
   a policy that denies a trait, calls such as `cargo build`, `go build`, `uv
-  run`, `pnpm test`, `npm ls`, `git -C dir status`, `git rebase` and `git
+  run`, `pnpm test`, `git -C dir status`, `git rebase` and `git
   --version` are now refused; without one they need the same approval as
   before, at high risk for a package manager. What a package script, a hook,
-  or the repository's own git configuration (a partial clone, an LFS filter)
-  goes on to fetch is still not classified. The traits table in
+  or the repository's own git configuration goes on to fetch is still not
+  classified. The traits table in
   `docs/INSTALLATION.md` lists exactly what carries each.
 
 - **Breaking:** a terminal call whose argument, or an option's value, is a
@@ -3283,7 +3285,8 @@ All notable changes are documented here. The format follows
 - Cross-scope memory overwrite and deletion protection.
 - Patched transitive HTTP adapter enforced through a package override.
 
-[Unreleased]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.15...HEAD
+[Unreleased]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.16...HEAD
+[0.3.0-alpha.16]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.15...v0.3.0-alpha.16
 [0.3.0-alpha.15]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.14...v0.3.0-alpha.15
 [0.3.0-alpha.14]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.13...v0.3.0-alpha.14
 [0.3.0-alpha.13]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.12...v0.3.0-alpha.13
