@@ -159,8 +159,8 @@ Images are published for `linux/amd64` and `linux/arm64` with build
 provenance and an SBOM attested to the registry. `:alpha`, `:beta` and `:rc`
 follow only their own channel, like the npm dist-tags of the same name, so
 `:alpha` stays on the last alpha once betas begin. `:latest` follows every
-release before 1.0, as npm's `latest` does, from the first release after
-`0.3.0-alpha.14`; until that one ships it does not exist, so use `:alpha`. Or pin an exact tag such as `:v0.3.0-alpha.12`. See
+release before 1.0, as npm's `latest` does, from `0.3.0-alpha.15`. Or pin an
+exact tag such as `:v0.3.0-alpha.15`. See
 [Docker](#docker) below for the hardened `serve` invocation an MCP client
 should use.
 
@@ -805,8 +805,9 @@ one cannot be used to act under another client's name.
 | `/oauth/authorize` | `GET`/`POST` | The consent page, and your decision |
 | `/oauth/token` | `POST` | Authorization code exchange, PKCE S256 |
 | `/api/capabilities` | `GET` | The same payload `melra_capabilities` returns |
-| `/api/tasks?limit=<n>` | `GET` | Recent tasks, newest first |
+| `/api/tasks?limit=<n>` | `GET` | Recent tasks, newest first; `approvalPendingIds`, those of them awaiting approval with no usable decision; `attentionCount`, every task needing attention |
 | `/api/tasks/:id` | `GET` | One task's status |
+| `/api/tasks/:id/approval-state` | `GET` | A pending task's usable decision, if any, whether its challenge is spent, and whether it is a workflow step, with its run and whether that run names this task |
 | `/api/tasks/:id/receipts` | `GET` | That task's receipts |
 | `/api/workflows` | `GET` | Every workflow run |
 | `/api/workflows/:id` | `GET` | One run's projection, node by node |

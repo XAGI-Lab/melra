@@ -912,6 +912,35 @@ describe("enforced-mode browser actions", () => {
     expect(plan({ action: "click", target, url: "https://example.com/pay" }, scoped)).toBe("explicit_approval_required");
   });
 
+  it("matches a grant scoped to pages against the page, never an element spelled like one", () => {
+    const grants = (target: string, policy: LocalPolicy) => ({
+      ...policy,
+      capabilities: [
+        { id: "g1", capability: "browser.*", effects: ["read", "mutate"], target, principal: "*" },
+      ] as never,
+    });
+    const developer = grants("https://example.com/*", createDefaultPolicy(root));
+    for (const element of [{ selector: "https://example.com/pay" }, { name: "https://example.com/pay" }]) {
+      expect(plan({ action: "click", target: element }, developer)).toBe("capability_not_granted:browser.click");
+      // A read needs no url in enforced mode either.
+      expect(plan({ action: "inspect", target: element }, grants("https://example.com/*", enforced))).toBe(
+        "capability_not_granted:browser.inspect",
+      );
+    }
+    // The page itself is still covered, and so is the element by a grant scoped to elements.
+    expect(plan({ action: "click", target, url: "https://example.com/pay" }, developer)).toBe(
+      "explicit_approval_required",
+    );
+    const { operation } = TaskRequestSchema.parse({
+      goal: "Click",
+      operation: { kind: "browser", action: "click", target: { name: "Pay" } },
+    });
+    expect(classifyOperation(operation).target).toBe("element:Pay");
+    expect(plan({ action: "click", target: { name: "Pay" } }, grants("element:*", createDefaultPolicy(root)))).toBe(
+      "explicit_approval_required",
+    );
+  });
+
   it("takes the url of `close` and `tab_switch` for the tab, not a destination", () => {
     for (const action of ["close", "tab_switch"]) {
       for (const url of ["about:blank", "http://10.0.0.1/", "https://elsewhere.example/"]) {

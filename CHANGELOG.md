@@ -6,6 +6,81 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+### Security
+
+- **Breaking:** a browser action without a `url` now has the target
+  `element:` followed by its target's `selector` or `name` (`active-page`, as
+  before, when it has neither), in every mode. The selector or name used to be
+  the target as written, in the same namespace as page URLs, so a capability
+  grant scoped to one site's pages could also cover an action on whatever page
+  was active. A grant now covers such an action only if its target pattern
+  matches the `element:` form: a grant written for the selector or name alone
+  (`#submit`) becomes `element:#submit`. Enforced mode already required a
+  `url` on the actions that drive a page; this change also covers its
+  url-less reads of an element (`inspect`, `wait`, `scroll`, `screenshot`).
+
+- **Breaking:** `deniedTraits` now fails closed for package managers and
+  `git`. Traits were assigned only to the subcommand spellings policy
+  recognised, so other spellings of an install or a remote operation carried
+  no trait, escaped a `package-install` or `network` deny, and reached an
+  approver with no trait shown. Now every call to a package manager or
+  package runner (`npm`, `npx`, `pnpm`, `yarn`, `corepack`, `pip` with or
+  without a version such as `pip3.12` or `pip-3.12`, `uv`, `cargo`, `go` and
+  its `go1.22.0`-style and `gotip` wrappers, `gem`, `brew`, `apt`, ...) carries
+  `package-install` and `network`, and every `git` call carries `network`,
+  unless its first argument is, exactly as spelled, a subcommand known to do
+  neither: an npm package script (`npm run`, `npm test`, `npm start`, ...) or
+  a local git subcommand (`status`, `diff`, `add`, `commit`, `switch`, ...;
+  not `config`, `rebase` or `grep`, each of which can be told to run another
+  program). `wget2`, `slogin`, `dbclient`, `rsync-ssl`, `netcat`,
+  `nc.openbsd`, `nc.traditional`, `inetutils-telnet`, `telnet-ssl`,
+  `inetutils-ftp`, `tnftp`, `tftp` and PuTTY's `plink`, `pscp` and `psftp`
+  carry `network` too, as `curl`, `ssh` and the other network programs
+  did, and a `git` read must name its subcommand in that same spelling. Under
+  a policy that denies a trait, calls such as `cargo build`, `go build`, `uv
+  run`, `pnpm test`, `npm ls`, `git -C dir status`, `git rebase` and `git
+  --version` are now refused; without one they need the same approval as
+  before, at high risk for a package manager. What a package script, a hook,
+  or the repository's own git configuration (a partial clone, an LFS filter)
+  goes on to fetch is still not classified. The traits table in
+  `docs/INSTALLATION.md` lists exactly what carries each.
+
+- **Breaking:** a terminal call whose argument, or an option's value, is a
+  Windows network path (`\\host\share`, `//host/share`) now carries the
+  `network` trait, whatever the program. Opening such a path connects to that
+  host, but only reads were checked for one, so under a policy that denies
+  `network` any other call given one still ran once approved. It is now
+  refused there; without such a policy it needs the same approval as before,
+  with the trait shown.
+
+- **Breaking:** no `npm` call is classified as a read any more, so none runs
+  without approval. `npm ls`, `npm view`, `npm outdated`, `npm why` and
+  `npm config get` were reads unless an argument redirected npm's log, but
+  npm also takes that setting, and others that make it write outside the
+  workspace, from `.npmrc` files in the workspace, which policy never sees.
+  They are now mutations like every other package manager's calls: they need
+  an approval and, like any mutation, declared evidence (an `exit_code`
+  predicate will do), or planning refuses them with
+  `mutation_requires_evidence`.
+
+- **Breaking:** the programs no allowlist entry can admit now match what
+  `docs/CAPABILITIES.md` promised, and that page names each one. Besides
+  `sh`, `bash`, `zsh`, `fish`, `cmd`, `powershell`, `pwsh`, `sudo`, `su` and
+  `osascript`, the other common POSIX shells (`ash`, `dash`, `ksh`, `mksh`,
+  `csh`, `tcsh`, `yash`, ..., and the names packages install them as, such
+  as `lksh`, `mksh-static`, `bash-static`, `rzsh` and `bsd-csh`), the
+  `busybox` and `toybox` multi-call binaries, `wsl`, `powershell_ise`,
+  `pwsh-lts` and `pwsh-preview`, the programs that run another as a different
+  user (`doas`, `pkexec`, `run0`, `systemd-run`,
+  `runuser`, `sudoedit`, `sudo-rs`, `su-rs`, `ksu`, `pfexec`, `runas`,
+  `gsudo`) and the Windows script hosts (`wscript`, `cscript`, `mshta`) are
+  refused with `command_not_allowlisted` even when `allowedCommands` names
+  them, where before they only needed an approval. Remove such an entry from
+  a policy; the request it allowed is no longer possible outside
+  `--unsafe-local`.
+
+## [0.3.0-alpha.15] - 2026-10-21
+
 ### Added
 
 - A `semantic` evidence predicate (#54): a yes/no `question` about meaning,
@@ -163,9 +238,9 @@ All notable changes are documented here. The format follows
   without notes fails its pull request rather than the tag release. The
   container takes the tags npm does: the version, the release channel
   (`:alpha`, `:beta`, `:rc`, or `:latest` for a stable version) and, before
-  1.0, `:latest` on every release, instead of always `:alpha`. The README and
-  `docs/INSTALLATION.md` now run `:latest`, which follows every release, while
-  `:alpha` stays on the last alpha once betas begin, as npm's `@alpha` does.
+  1.0, `:latest` on every release, instead of always `:alpha`. `:latest`
+  follows every release, while `:alpha` stays on the last alpha once betas
+  begin, as npm's `@alpha` does.
   `scripts/release-channel.mjs` picks the channel for the release and its dry
   run alike, and a prerelease id other than alpha, beta or rc fails
   `pnpm check` instead of publishing under `latest`. The release dry run also
@@ -173,6 +248,28 @@ All notable changes are documented here. The format follows
   release only once its tag was cut.
 
 ### Fixed
+
+- The web console advises on a task waiting for approval by the rule
+  `melra tasks` and `melra status` use (#284), where it went by the
+  challenge's expiry alone. A task approved in time and not yet run shows as
+  approved, waiting for its agent or, for a workflow step its run names, its
+  run (resumed first if paused or suspended), not as closed; an older
+  duplicate the run does not name points at `melra workflow inspect`, since no
+  advance runs it. An expired workflow step is
+  never told to deny, which would fail its run: one its run names points at
+  `melra workflow advance <workflow-id>` while that run is running or waiting
+  on approval, and at `melra workflow resume` first while it is paused or
+  suspended; otherwise, an older duplicate or a step a lost commit left
+  unnamed included, at `melra workflow inspect`.
+  Only a task outside a workflow, or one whose run is cancelled or
+  verified_complete, is told to plan again or clear it with
+  `melra approve <task-id> --deny`, and in enforced mode that includes one
+  answered in band, which can no longer be approved. "Need attention" counts
+  what its filter lists, the newest 500 tasks, says how many more are older,
+  and redraws when a decision is recorded or lapses. `/api/tasks` adds
+  `approvalPendingIds` and `attentionCount`, `/api/tasks/<id>/approval-state`
+  is new, and `@melra/server` exports `workflowStepJudge`, the step rule the
+  CLI and the console share. (#303)
 
 - A task settled after the fact, by recovery or by `melra_execute`
   reconciling it, is no longer charged twice when its own draw had landed.
@@ -606,8 +703,6 @@ All notable changes are documented here. The format follows
   compensation, which that unwind skipped, is offered again, also when the step
   ran under its `approval` node or when that unwind had stalled. (#270)
 
-
-
 - A workflow with an `exit_code` evidence predicate can be planned, and so can
   one with a node id, verifier name or URL that looks like an API key
   (`api-integration-tests`). Planning parsed the redacted copy it stores
@@ -853,66 +948,6 @@ All notable changes are documented here. The format follows
 
 ### Security
 
-- **Breaking:** `deniedTraits` now fails closed for package managers and
-  `git`. Traits were assigned only to the subcommand spellings policy
-  recognised, so other spellings of an install or a remote operation carried
-  no trait, escaped a `package-install` or `network` deny, and reached an
-  approver with no trait shown. Now every call to a package manager or
-  package runner (`npm`, `npx`, `pnpm`, `yarn`, `corepack`, `pip` with or
-  without a version such as `pip3.12` or `pip-3.12`, `uv`, `cargo`, `go` and
-  its `go1.22.0`-style and `gotip` wrappers, `gem`, `brew`, `apt`, ...) carries
-  `package-install` and `network`, and every `git` call carries `network`,
-  unless its first argument is, exactly as spelled, a subcommand known to do
-  neither: an npm package script (`npm run`, `npm test`, `npm start`, ...) or
-  a local git subcommand (`status`, `diff`, `add`, `commit`, `switch`, ...;
-  not `config`, `rebase` or `grep`, each of which can be told to run another
-  program). `wget2`, `slogin`, `dbclient`, `rsync-ssl`, `netcat`,
-  `nc.openbsd`, `nc.traditional`, `inetutils-telnet`, `telnet-ssl`,
-  `inetutils-ftp`, `tnftp`, `tftp` and PuTTY's `plink`, `pscp` and `psftp`
-  carry `network` too, as `curl`, `ssh` and the other network programs
-  did, and a `git` read must name its subcommand in that same spelling. Under
-  a policy that denies a trait, calls such as `cargo build`, `go build`, `uv
-  run`, `pnpm test`, `npm ls`, `git -C dir status`, `git rebase` and `git
-  --version` are now refused; without one they need the same approval as
-  before, at high risk for a package manager. What a package script, a hook,
-  or the repository's own git configuration (a partial clone, an LFS filter)
-  goes on to fetch is still not classified. The traits table in
-  `docs/INSTALLATION.md` lists exactly what carries each.
-
-- **Breaking:** a terminal call whose argument, or an option's value, is a
-  Windows network path (`\\host\share`, `//host/share`) now carries the
-  `network` trait, whatever the program. Opening such a path connects to that
-  host, but only reads were checked for one, so under a policy that denies
-  `network` any other call given one still ran once approved. It is now
-  refused there; without such a policy it needs the same approval as before,
-  with the trait shown.
-
-- **Breaking:** no `npm` call is classified as a read any more, so none runs
-  without approval. `npm ls`, `npm view`, `npm outdated`, `npm why` and
-  `npm config get` were reads unless an argument redirected npm's log, but
-  npm also takes that setting, and others that make it write outside the
-  workspace, from `.npmrc` files in the workspace, which policy never sees.
-  They are now mutations like every other package manager's calls: they need
-  an approval and, like any mutation, declared evidence (an `exit_code`
-  predicate will do), or planning refuses them with
-  `mutation_requires_evidence`.
-
-- **Breaking:** the programs no allowlist entry can admit now match what
-  `docs/CAPABILITIES.md` promised, and that page names each one. Besides
-  `sh`, `bash`, `zsh`, `fish`, `cmd`, `powershell`, `pwsh`, `sudo`, `su` and
-  `osascript`, the other common POSIX shells (`ash`, `dash`, `ksh`, `mksh`,
-  `csh`, `tcsh`, `yash`, ..., and the names packages install them as, such
-  as `lksh`, `mksh-static`, `bash-static`, `rzsh` and `bsd-csh`), the
-  `busybox` and `toybox` multi-call binaries, `wsl`, `powershell_ise`,
-  `pwsh-lts` and `pwsh-preview`, the programs that run another as a different
-  user (`doas`, `pkexec`, `run0`, `systemd-run`,
-  `runuser`, `sudoedit`, `sudo-rs`, `su-rs`, `ksu`, `pfexec`, `runas`,
-  `gsudo`) and the Windows script hosts (`wscript`, `cscript`, `mshta`) are
-  refused with `command_not_allowlisted` even when `allowedCommands` names
-  them, where before they only needed an approval. Remove such an entry from
-  a policy; the request it allowed is no longer possible outside
-  `--unsafe-local`.
-
 - **Breaking:** in enforced mode, HTTP and browser effects no longer reach
   this machine's loopback names and addresses unless the policy file sets
   `"allowLocalhost": true`. Left out, `allowLocalhost` now follows the mode:
@@ -973,7 +1008,7 @@ All notable changes are documented here. The format follows
   `rg "@/" src`, `rg "</div>" src` or `git show @~1`, runs as before, and so does approval: no command that runs without one reads a
   reference, and one that does, such as `curl`, already needs it.
 
-- MELRA's data directory is reserved as a whole, by every adapter and by
+- **Breaking:** MELRA's data directory is reserved as a whole, by every adapter and by
   verification, in every mode. A file effect can no longer write into it,
   replace it, or move or remove it or any directory that holds it (`path_reserved`),
   and the files there are no longer read through the file adapter or named in
@@ -1010,7 +1045,7 @@ All notable changes are documented here. The format follows
   land from its working directory, so one that leads out, even on its way
   back in, is refused (`terminal_path_outside_workspace`).
 
-- A workspace that is the data directory, or sits inside it, including through
+- **Breaking:** a workspace that is the data directory, or sits inside it, including through
   a link, is refused at startup in every mode with
   `workspace_inside_data_directory`, and `melra doctor` fails its
   `data-location` check for it, rather than starting with every path refused.
@@ -1222,7 +1257,7 @@ All notable changes are documented here. The format follows
   patterns, so a token in a verification URL or in a provider's error text no
   longer reaches either record. Records written earlier keep what they stored.
 
-- A credential the kernel brokered into an `http` request no longer comes back
+- **Breaking:** a credential the kernel brokered into an `http` request no longer comes back
   in the result when the far end echoes it. Each copy of the value in the
   reason phrase, a response header or the body is replaced with
   `[REDACTED_CREDENTIAL]` before the caller, the verifier or any stored record
@@ -3224,7 +3259,8 @@ All notable changes are documented here. The format follows
 - Cross-scope memory overwrite and deletion protection.
 - Patched transitive HTTP adapter enforced through a package override.
 
-[Unreleased]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.14...HEAD
+[Unreleased]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.15...HEAD
+[0.3.0-alpha.15]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.14...v0.3.0-alpha.15
 [0.3.0-alpha.14]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.13...v0.3.0-alpha.14
 [0.3.0-alpha.13]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.12...v0.3.0-alpha.13
 [0.3.0-alpha.12]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.11...v0.3.0-alpha.12

@@ -9,10 +9,10 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { TaskRecord, WorkflowRun } from "@melra/protocol";
 import { SqliteStore } from "@melra/storage-sqlite";
-import { taskTarget } from "../src/activity.js";
+import { taskTarget, tasksCommand } from "../src/activity.js";
 
 const execute = promisify(execFile);
 // The approval case echoes a developer-mode phrase, whatever the shell says.
@@ -205,6 +205,54 @@ describe("melra tasks, status, and watch", { timeout: 60_000 }, () => {
     // A deny, as the expired hint advises for a single task, would fail the run.
     const status = await statusOf(options);
     expect([status.expiredApprovals, status.expiredWorkflowSteps]).toEqual([0, 1]);
+  });
+
+  it("tells a step spent in band that an advance asks again only once its challenge expires", async () => {
+    const { root, options } = await workspace();
+    const workflow = async (...args: string[]) =>
+      JSON.parse(
+        (
+          await execute(process.execPath, [entry, "workflow", ...args], options).catch(
+            (error: { stdout: string }) => error,
+          )
+        ).stdout,
+      ) as { id: string; run: WorkflowRun };
+    const { id } = await workflow("plan", "--definition", restartSafe);
+    await workflow("advance", id);
+    const { run } = await workflow("advance", id);
+    // Answered in band, read in enforced mode: spent, its challenge still open.
+    const store = new SqliteStore(join(root, ".melra", "melra.sqlite"));
+    try {
+      const task = store.getTask(run.nodes.write!.taskIds[0]!)!;
+      store.recordApprovalDecision({
+        approvalId: task.approval!.approvalId,
+        taskId: task.id,
+        renderDigest: task.approval!.actionDigest,
+        channel: "in_band",
+        approver: "operator",
+        decidedAt: new Date().toISOString(),
+      });
+    } finally {
+      store.close();
+    }
+    // The hints print only to a terminal.
+    const tty = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+    Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+    let printed = "";
+    const write = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => ((printed += String(chunk)), true));
+    try {
+      tasksCommand(
+        { workspaceRoot: root, dataDirectory: join(root, ".melra"), approver: "operator", unhinged: false, mode: "enforced" },
+        { limit: 10, json: false, window: { mode: "enforced" } },
+      );
+    } finally {
+      write.mockRestore();
+      if (tty === undefined) delete (process.stdout as { isTTY?: boolean }).isTTY;
+      else Object.defineProperty(process.stdout, "isTTY", tty);
+    }
+    expect(printed).toContain("1 workflow step(s)");
+    expect(printed).toContain("an advance after its challenge expires asks again");
+    expect(printed).not.toContain("next advance asks again");
   });
 
   it("counts an expired step of a run that is not over as a step, a failed one included", async () => {
