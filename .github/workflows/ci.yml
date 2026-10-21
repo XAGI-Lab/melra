@@ -39,6 +39,13 @@ jobs:
           python-version: "3.11"
           enable-cache: true
       - run: pnpm install --frozen-lockfile
+      # os.tmpdir() is on C:, the runner's OS disk, where every test's SQLite
+      # store and browser profile has stalled at once (#363). RUNNER_TEMP is on D:.
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          "TEMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
+          "TMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
       - run: pnpm check
 
   # The main matrix runs the Python SDK on 3.11 only, the floor `requires-python`
