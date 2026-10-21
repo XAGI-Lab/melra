@@ -1176,9 +1176,18 @@ describe("capability traits", () => {
     }
   });
 
-  it("knows the other names of the network programs it lists", () => {
-    for (const command of ["netcat", "nc.openbsd", "wget2", "slogin"]) {
+  it("knows the other names of the programs it lists", () => {
+    for (const command of [
+      "netcat", "nc.openbsd", "wget2", "slogin", "rsync-ssl", "inetutils-telnet",
+      "inetutils-ftp", "dbclient",
+    ]) {
       expect(classifyCommand(command, []).traits, command).toEqual(["network"]);
+    }
+    for (const command of ["pip3", "pip-3", "pip-3.15", "go1.22.0", "go1.23rc1", "gotip"]) {
+      expect(classifyCommand(command, ["install", "x"]).traits, command).toEqual([
+        "package-install",
+        "network",
+      ]);
     }
   });
 

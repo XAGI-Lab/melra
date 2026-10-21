@@ -257,7 +257,8 @@ export {
 /**
  * Package managers, and the runners that fetch a package to run it. A call to
  * one installs and reaches a registry unless `LOCAL_SUBCOMMANDS` spares it.
- * `corepack` fetches the manager it runs; `pip3.12` and the like are `pip`.
+ * `corepack` fetches the manager it runs. `pip3.12` and `pip-3.12` are `pip`,
+ * and the golang.org/dl wrappers (`go1.22.0`, `go1.23rc1`, `gotip`) are `go`.
  *
  * None of them has reads. Each has a way for a "read" to run code or write,
  * through its own options or a file a cloned repository carries: npm takes
@@ -281,9 +282,9 @@ const PACKAGE_MANAGERS = new Set([
  * and `git`, whose calls do unless `LOCAL_SUBCOMMANDS` spares them.
  */
 const NETWORK_COMMANDS = new Set([
-  "curl", "wget", "wget2", "scp", "sftp", "ssh", "slogin", "rsync", "nc",
-  "ncat", "netcat", "nc.openbsd", "nc.traditional", "telnet", "ftp", "tftp",
-  "git",
+  "curl", "wget", "wget2", "scp", "sftp", "ssh", "slogin", "dbclient", "rsync",
+  "rsync-ssl", "nc", "ncat", "netcat", "nc.openbsd", "nc.traditional", "telnet",
+  "inetutils-telnet", "ftp", "inetutils-ftp", "tftp", "git",
 ]);
 
 /**
@@ -329,7 +330,11 @@ export function classifyCommand(
   args: readonly string[],
 ): { read: boolean; traits: CapabilityTrait[] } {
   const name = normalizeCommandName(command);
-  const program = /^pip[\d.]*$/.test(name) ? "pip" : name;
+  const program = /^pip-?[\d.]*$/.test(name)
+    ? "pip"
+    : /^go(tip|\d[\d.]*((rc|beta)\d+)?)$/.test(name)
+      ? "go"
+      : name;
   const first = args[0];
   const local = first !== undefined && LOCAL_SUBCOMMANDS.get(program)?.has(first) === true;
   const traits: CapabilityTrait[] = local
@@ -690,8 +695,8 @@ export function classifyOperation(operation: Operation): {
       return {
         effect: read ? "read" : "mutate",
         // Installing third-party code is the high-risk case, not the package
-        // manager's name: `npm run build` is an ordinary mutation and `npm ls`
-        // is a read, which the old blanket rule called high-risk alongside it.
+        // manager's name: `npm run build` is an ordinary mutation, which the
+        // old blanket rule called high-risk alongside `npm install`.
         risk: traits.includes("package-install")
           ? "high"
           : read

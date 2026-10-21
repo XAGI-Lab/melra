@@ -858,8 +858,9 @@ All notable changes are documented here. The format follows
   recognised, so other spellings of an install or a remote operation carried
   no trait, escaped a `package-install` or `network` deny, and reached an
   approver with no trait shown. Now every call to a package manager or
-  package runner (`npm`, `npx`, `pnpm`, `yarn`, `corepack`, `pip` under any
-  versioned name, `uv`, `cargo`, `go`, `gem`, `brew`, `apt`, ...) carries
+  package runner (`npm`, `npx`, `pnpm`, `yarn`, `corepack`, `pip` with or
+  without a version such as `pip3.12` or `pip-3.12`, `uv`, `cargo`, `go` and
+  its `go1.22.0`-style and `gotip` wrappers, `gem`, `brew`, `apt`, ...) carries
   `package-install` and `network`, and every `git` call carries `network`,
   unless its first argument is, exactly as spelled, a subcommand known to do
   neither: an npm package script (`npm run`, `npm test`, `npm start`, ...) or
@@ -868,9 +869,11 @@ All notable changes are documented here. The format follows
   program). What a package script, a hook, or the repository's own git
   configuration (a partial clone, an LFS filter) goes on to fetch is still not
   classified.
-  `wget2`, `netcat`, `slogin` and the other installed names of the network
-  programs carry `network` too, and a `git` read must name its subcommand in
-  that same spelling. Under a policy that denies a trait, calls such as
+  `wget2`, `slogin`, `dbclient`, `rsync-ssl`, `netcat`, `nc.openbsd`,
+  `nc.traditional`, `inetutils-telnet`, `inetutils-ftp` and `tftp` carry
+  `network` too, as `curl`, `ssh` and the other network programs did, and a
+  `git` read must name its subcommand in that same spelling. Under a policy
+  that denies a trait, calls such as
   `cargo build`, `go build`, `uv run`, `pnpm test`, `npm ls`, `git -C dir
   status` and `git --version` are now refused; without one they need the
   same approval as before, at high risk for a package manager. The traits
