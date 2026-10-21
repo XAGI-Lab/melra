@@ -308,6 +308,9 @@ describe("receipt and certificate primitives", () => {
   it("takes linear time on text built to make a pattern backtrack", () => {
     for (const text of [
       "password_".repeat(2_300),
+      // One name made of many credential words, each a place a match can start.
+      "secret_".repeat(20_000),
+      "a://".repeat(50_000),
       "a-".repeat(50_000),
       "a_".repeat(50_000),
       "a1_".repeat(33_000),

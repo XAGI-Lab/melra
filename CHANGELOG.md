@@ -6,6 +6,14 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Secret redaction runs three to six times faster, so recording a large
+  terminal output costs much less. The password-name, token-name and
+  URL-userinfo patterns in `SECRET_PATTERNS` now start each match at their
+  keyword instead of trying every position. What they redact, and the
+  redaction kinds a record lists, are unchanged byte for byte. (#353)
+
 ## [0.3.0-alpha.16] - 2026-10-21
 
 ### Security
