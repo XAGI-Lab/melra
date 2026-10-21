@@ -1105,15 +1105,6 @@ export class SqliteStore {
       .get(key) as IdempotencyCommitRow | undefined;
   }
 
-  /**
-   * Draws one operation, and whatever it declared it moved, against a grant.
-   *
-   * Silent on a repeat: the key is `(grant, task)`, so recovery replaying a
-   * committed task or a receipt being rebuilt cannot spend the grant a second
-   * time. Called at the same point as `commitIdempotency` — after verification,
-   * never at plan time — so a refused, failed, or cancelled operation leaves
-   * the budget where it found it.
-   */
   /** False when a decision for this approval was already recorded. */
   recordApprovalDecision(decision: ApprovalDecision): boolean {
     const result = this.database
@@ -1145,6 +1136,17 @@ export class SqliteStore {
       .get(approvalId) as ApprovalDecision | undefined;
   }
 
+  /**
+   * Draws one operation, and whatever it declared it moved, against a grant.
+   *
+   * Silent on a repeat: the key is `(grant, task)`, so recovery replaying a
+   * task or a receipt being rebuilt cannot spend the grant a second time.
+   * Called once the adapter may have run (it returned, or threw an
+   * outcome-unknown error), whatever the evidence then says, and never at
+   * plan time: a refusal, a cancel before the adapter ran, an adapter error
+   * saying nothing went out, or a duplicate stopped before it ran leaves the
+   * budget where it found it.
+   */
   recordCapabilityUse(
     grantId: string,
     taskId: string,

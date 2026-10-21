@@ -521,10 +521,29 @@ to on disk: a symlink inside a granted directory reaches wherever it points.
 - `provider: { name, account?, amountMax?, dailyMax? }` bounds money. `amountMax`
   caps one call, `dailyMax` the declared amounts committed in the last 24 hours.
 
-A grant is drawn down at one point only: where a task whose every kernel check
-held commits its idempotency key, either a verified task or one waiting on a
-semantic judgement, whose effect ran. An operation that was refused, failed a
-check, was cancelled, or collapsed into a duplicate costs nothing.
+A grant is drawn down whenever the adapter may have done the work, read or
+change, whatever the evidence then says: it returned (`verified_success`,
+`waiting_user`, `partial`, or a reported failure such as a non-2xx answer or a
+non-zero exit), or it threw an error marked outcome-unknown
+(`recovery_required` for a change; for a retried read, on any attempt).
+`verified_success` is the evidence verdict, not the meter. Each task is drawn
+once, however often recovery and reconciliation settle it, and a draw stands
+even if reconciliation later finds the effect did not happen: counting an
+effect that did not happen is preferred to exceeding a limit. An operation refused by policy, cancelled before the
+adapter ran, stopped by an adapter error saying nothing went out, or stopped as
+a duplicate before it ran costs nothing. A read cut off mid-flight is drawn when
+recovery parks it to run again; run again, it is the same task and draws nothing
+more, but its re-check counts that draw, so a read at its grant's limit is not
+run again. Below the limit, that second run goes uncounted, so each such
+interruption can let one read past the limit.
+
+A workflow's compensations draw on the same grants as its forward steps, so a
+forward step that ends `partial` has already spent what an unwind may need. A
+compensation its grant can no longer fund is refused like any other effect, and
+the unwind stops there (`workflow_compensation_incomplete:<node>`), leaving the
+effect it was to undo in place. Size a grant for every forward step that may run
+plus its compensations, or cover compensations with a grant of their own that
+the forward steps do not match.
 
 Money bounds need the caller to say what the call moves, because MELRA cannot
 read an amount out of an arbitrary provider's payload. That direction is what

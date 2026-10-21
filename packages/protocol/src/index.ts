@@ -710,9 +710,11 @@ export const CapabilityGrantSchema = z
      * How many times this grant may be spent, ever.
      *
      * `validUntil` bounds a window; this bounds what happens inside it. The
-     * count is durable and increments on commit, so a restart does not refill
-     * it and an operation that was refused, failed verification, or was
-     * cancelled does not draw it down.
+     * count is durable, so a restart does not refill it, and is drawn once per
+     * task whenever the adapter may have run (it returned, or threw an
+     * outcome-unknown error), whatever the evidence then says. A refusal, a
+     * cancel before the adapter ran, an adapter error saying nothing went out,
+     * or a duplicate stopped before it ran does not draw it down.
      */
     maxOperations: z.number().int().min(1).max(1_000_000).optional(),
     /**

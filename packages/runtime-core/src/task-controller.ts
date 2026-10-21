@@ -223,11 +223,12 @@ export class TaskController {
 
   /**
    * Draws by tasks between their re-check and their record, per grant and
-   * task. The durable draw is written only once work has passed every check
-   * the kernel can make (#54: verified, or waiting on a semantic verdict), so without
-   * this two tasks running at once both saw the grant unspent: two operations
-   * against `maxOperations: 1`, a parallel workflow node overspending
-   * `dailyMax`.
+   * task. The durable draw is written only once the adapter has answered, so
+   * without this two tasks running at once both saw the grant unspent: two
+   * operations against `maxOperations: 1`, a parallel workflow node
+   * overspending `dailyMax`. Let go once the draw is written or the effect is
+   * known not to have run; one whose draw failed to write is held until
+   * recovery writes it (`drawGrant`).
    *
    * ponytail: held in this process. Two servers sharing one database can
    * still both pass a re-check at the same moment; a durable reservation row
@@ -499,6 +500,21 @@ export class TaskController {
       held.set(task.id, classified.spend?.amount ?? 0);
       this.reserved.set(rechecked.grantId, held);
     }
+    // Charged whenever the adapter may have done the work, whatever the
+    // evidence says of it: `verified_success` is the evidence verdict only.
+    // Read off what the adapter gave back. It returned, whatever its `success`
+    // (a request answered 500 reached the far end, a command that exited 1
+    // ran), or it threw an outcome-unknown error (`OUTCOME_UNKNOWN_PREFIX`).
+    // Any other throw is an adapter saying nothing went out, and costs
+    // nothing; so does a refusal before it was called. Counting an effect
+    // that did not happen is preferred to a grant funding more than it says.
+    const charge = (ran: boolean): void => {
+      if (rechecked.grantId === undefined) return;
+      if (ran) {
+        this.store.recordCapabilityUse(rechecked.grantId, task.id, classified.spend?.amount ?? 0, now());
+      }
+      this.reserved.get(rechecked.grantId)?.delete(task.id);
+    };
     try {
       const opened = this.breaker.check(classified.target);
       if (opened !== undefined) {
@@ -561,9 +577,8 @@ export class TaskController {
         actionSucceeded &&
         evidence.some((item) => item.type === "semantic") &&
         evidence.every((item) => item.passed || item.type === "semantic");
-      // The effect ran and passed every kernel check, so it is committed and
-      // metered now: a key that ran must not run again, and a grant must not
-      // fund a second effect while the first waits for its verdict.
+      // The effect ran and passed every kernel check, so it is committed now:
+      // a key that ran must not run again, even while it waits for its verdict.
       const checksHeld = verified || awaitingJudgement;
       if (
         checksHeld &&
@@ -578,23 +593,9 @@ export class TaskController {
         task.status = "cancelled";
         task.error = "duplicate_attempt_prevented";
       }
-      // Metered here and nowhere else: the same point idempotency commits, so a
-      // grant is drawn down by work that actually happened and passed every
-      // check the kernel can make (verified, or waiting on a semantic verdict).
-      // A refusal, a failed check, a duplicate collapsed just above — none of
-      // them reach this line, and none of them cost the caller a draw.
-      if (
-        checksHeld &&
-        task.status !== "cancelled" &&
-        rechecked.grantId !== undefined
-      ) {
-        this.store.recordCapabilityUse(
-          rechecked.grantId,
-          task.id,
-          classified.spend?.amount ?? 0,
-          now(),
-        );
-      }
+      // The adapter returned, so the effect ran: drawn down for a `partial`,
+      // a `failed` or a duplicate collapsed just above as for a verified task.
+      charge(true);
       const receipt = this.createReceipt(
         task,
         request,
@@ -660,14 +661,18 @@ export class TaskController {
       if (!shortCircuited && !effectReturned && (!aborted || budgetExhausted)) {
         this.breaker.recordFailure(classified.target);
       }
+      // Paid for before the outcome is written, read or change alike. A draw
+      // that fails to write leaves the reservation held, and the task running
+      // for recovery to charge.
+      const ran = effectReturned || isOutcomeUnknown(rawMessage);
+      charge(ran);
       // Ahead of every other outcome, because it is the strongest thing known:
       // the effect may already have happened, either because the adapter says
       // so or because it returned and a write after it failed. `failed`,
       // `cancelled` and `budget_exhausted` all assert more than that. Reads
       // are exempt — a read that may or may not have run changed nothing
       // either way, so there is nothing to reconcile.
-      const unknownOutcome =
-        classified.effect !== "read" && (effectReturned || isOutcomeUnknown(rawMessage));
+      const unknownOutcome = classified.effect !== "read" && ran;
       task.status = unknownOutcome
         ? "recovery_required"
         : aborted
@@ -715,7 +720,6 @@ export class TaskController {
       if (timeout !== undefined) clearTimeout(timeout);
       this.active.delete(task.id);
       this.store.inFlight.delete(task.id);
-      if (rechecked.grantId !== undefined) this.reserved.get(rechecked.grantId)?.delete(task.id);
       this.running.delete(task.id);
       ended();
     }
@@ -951,18 +955,20 @@ export class TaskController {
    * no grant at all for one that is now exhausted, and the effect then went
    * uncharged. A task that drew one already is left alone: policy read now
    * names the first grant that matches, not the one execute drew once that
-   * was spent, and charging it too drew the task twice.
+   * was spent, and charging it too drew the task twice. Drawn, it lets go
+   * of a reservation `execute` held when its own draw failed to write.
    */
   private drawGrant(
     task: TaskRecord,
     request: TaskRequest,
     classified: ReturnType<typeof classifyOperation>,
   ): void {
-    if (this.store.hasCapabilityUse(task.id)) return;
-    const { grantId } = evaluatePolicy(task.id, request, this.policy, () => ({
-      operations: 0,
-      amountToday: 0,
-    }));
+    const grantId = this.store.hasCapabilityUse(task.id)
+      ? undefined
+      : evaluatePolicy(task.id, request, this.policy, () => ({
+          operations: 0,
+          amountToday: 0,
+        })).grantId;
     if (grantId !== undefined) {
       this.store.recordCapabilityUse(
         grantId,
@@ -971,6 +977,7 @@ export class TaskController {
         now(),
       );
     }
+    for (const held of this.reserved.values()) held.delete(task.id);
   }
 
   /**
@@ -1160,6 +1167,10 @@ export class TaskController {
         ? "interrupted_read_ready_for_retry"
         : "interrupted_mutation_requires_reconciliation";
     task.updatedAt = now();
+    // Cut off mid-flight, read or change, it may have run, so it is paid for
+    // before it is parked, as `execute` pays for one. A read run again is the
+    // same task, so it draws nothing more, but its re-check counts this draw.
+    this.drawGrant(task, request, classified);
     this.store.saveTask(task);
     // A crash mid-flight is the same unknown a dropped reply is, so a task
     // that declared how to settle one gets asked here rather than waiting for
@@ -1408,8 +1419,10 @@ export class TaskController {
           },
         };
       } catch (error) {
-        lastError = error;
-        if (attempt >= maximumAttempts || signal.aborted) throw error;
+        // An attempt that may have reached the far end outranks a later one
+        // saying nothing went out: the read may have run, so it is charged.
+        lastError = lastError instanceof Error && isOutcomeUnknown(lastError.message) ? lastError : error;
+        if (attempt >= maximumAttempts || signal.aborted) throw lastError;
       }
     }
     throw lastError instanceof Error

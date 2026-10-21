@@ -8,6 +8,30 @@ All notable changes are documented here. The format follows
 
 ### Security
 
+- **Breaking:** a capability grant's `maxOperations` and `provider.dailyMax`
+  are drawn down whenever the adapter may have done the work, whatever the
+  evidence then says, so grants run out sooner. A task that ends `partial`,
+  one whose adapter ran and reported failure, a change left
+  `recovery_required` by an outcome-unknown error or an interruption, and a
+  read cut off mid-flight or retried after an attempt whose outcome is unknown
+  are each charged once, as a verified task or one waiting on a `semantic`
+  question already was, reads included. `verified_success` stays the evidence
+  verdict only, and a grant now counts the effects that ran, not only the ones
+  that verified. A charge stands if reconciliation later finds the effect did
+  not happen, and a read charged when recovery parks it is not run again once
+  its grant is at its limit. One gap remains: running that same read again
+  draws nothing more, so each such interruption can let one read past the
+  limit. A policy refusal, a cancel
+  before the adapter ran, an adapter error saying nothing went out, and a
+  duplicate stopped before it ran still cost nothing. Upgrading: a grant sized
+  for verified effects alone may need a larger `maxOperations` or `dailyMax`.
+  A workflow's compensations draw on the same grants as its forward steps, so a
+  forward step that ends `partial` now spends what an unwind may need, and the
+  compensation is what gets refused, leaving the run `recovery_required` with
+  the effect it was to undo in place. Size a grant for every forward step that
+  may run plus its compensations, or cover compensations with a grant of their
+  own that the forward steps do not match.
+
 - **Breaking:** a browser action without a `url` now has the target
   `element:` followed by its target's `selector` or `name` (`active-page`, as
   before, when it has neither), in every mode. The selector or name used to be
