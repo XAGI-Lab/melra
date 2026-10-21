@@ -1098,7 +1098,9 @@ describe("approval console", () => {
       // One approved click, on the lure, as its render said.
       await run({ action: "click", target: { role: "button", name: "Approve" }, timeoutMs: 3_000 }).catch(() => undefined);
       expect(decisionFor(task.id)).toBeUndefined();
-      // Where the tab ended up is the console, not paired.
+      // Where the tab ended up is the console, not paired. The click fails as
+      // the lure's document goes, before the console has drawn: wait for it.
+      await run({ action: "wait", value: "not paired", timeoutMs: 10_000 });
       expect((await run({ action: "inspect" })).text).toContain("not paired");
     } finally {
       await attached.close();
