@@ -5,8 +5,8 @@
 //
 // `validUntil` bounds a window. These bound what happens inside it, and the
 // only interesting questions are about *when* a grant is drawn down: not at
-// plan time, not on a call that failed verification, and not again on a
-// restart. Nothing here leaves loopback.
+// plan time, not again on a restart, and on every call that may have reached
+// the provider, whatever its evidence says. Nothing here leaves loopback.
 
 import { createServer, type Server } from "node:http";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -147,17 +147,19 @@ describe("a grant that runs out", () => {
     await second.close();
   });
 
-  it("does not spend on a call that succeeded without doing the work", async () => {
-    // Same fixture, same 201 — the provider just never moved the money. The
-    // grant must not pay for a task that landed `partial`.
+  it("spends on a call the provider answered, even one that did not verify", async () => {
+    // Same fixture, same 201, and the refund reads back pending. The call went
+    // out and was answered, so the grant pays for it: `partial` says only that
+    // the evidence did not hold, not that nothing happened.
     state = "pending";
     const runtime = await open("unverified");
     const before = runtime.store.capabilityUsage("refunds-two", "");
     const task = await run(runtime, refund());
     expect(task.status).toBe("partial");
-    expect(runtime.store.capabilityUsage("refunds-two", "").operations).toBe(
-      before.operations,
-    );
+    expect(runtime.store.capabilityUsage("refunds-two", "")).toEqual({
+      operations: before.operations + 1,
+      amountInWindow: before.amountInWindow + 1_000,
+    });
     await runtime.close();
     state = "succeeded";
   });
@@ -188,7 +190,7 @@ describe("a grant that runs out", () => {
     await runtime.close();
   });
 
-  it("charges a reconciled effect even after the grant has run out", async () => {
+  it("charges an effect whose outcome was lost once, before and after it is reconciled", async () => {
     const runtime = await open("reconciled");
     const lost = TaskRequestSchema.parse({
       ...refund(),
@@ -204,12 +206,14 @@ describe("a grant that runs out", () => {
     });
     const parked = await run(runtime, lost);
     expect(parked.status).toBe("recovery_required");
-    // Two more spend the grant while the first is unsettled.
+    // It may have happened, so it is paid for while it is unsettled: one more
+    // spends the grant, and the third is refused.
+    expect(runtime.store.capabilityUsage("refunds-two", "").operations).toBe(1);
     expect((await run(runtime, refund())).status).toBe("verified_success");
-    expect((await run(runtime, refund())).status).toBe("verified_success");
-    // The provider confirms the first one happened: it is paid for too.
+    expect((await run(runtime, refund())).status).toBe("policy_blocked");
+    // The provider confirms the first one happened: paid for once, not again.
     expect((await runtime.controller.reconcile(parked.id)).task.status).toBe("verified_success");
-    expect(runtime.store.capabilityUsage("refunds-two", "").operations).toBe(3);
+    expect(runtime.store.capabilityUsage("refunds-two", "").operations).toBe(2);
     await runtime.close();
   });
 

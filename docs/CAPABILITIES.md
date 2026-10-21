@@ -502,10 +502,17 @@ to on disk: a symlink inside a granted directory reaches wherever it points.
 - `provider: { name, account?, amountMax?, dailyMax? }` bounds money. `amountMax`
   caps one call, `dailyMax` the declared amounts committed in the last 24 hours.
 
-A grant is drawn down at one point only: where a task whose every kernel check
-held commits its idempotency key, either a verified task or one waiting on a
-semantic judgement, whose effect ran. An operation that was refused, failed a
-check, was cancelled, or collapsed into a duplicate costs nothing.
+A grant is drawn down whenever the adapter may have done the work, read or
+change, whatever the evidence then says: it returned (`verified_success`,
+`waiting_user`, `partial`, or a reported failure such as a non-2xx answer or a
+non-zero exit), or it threw an error marked outcome-unknown
+(`recovery_required` for a change). `verified_success` is the evidence verdict,
+not the meter. Each task is drawn once, however often recovery and
+reconciliation settle it, and a draw stands even if reconciliation later finds
+the effect did not happen: counting an effect that did not happen is preferred
+to exceeding a limit. An operation refused by policy, cancelled before the
+adapter ran, stopped by an adapter error saying nothing went out, or stopped as
+a duplicate before it ran costs nothing.
 
 Money bounds need the caller to say what the call moves, because MELRA cannot
 read an amount out of an arbitrary provider's payload. That direction is what

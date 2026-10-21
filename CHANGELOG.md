@@ -6,6 +6,23 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+### Security
+
+- **Breaking:** a capability grant's `maxOperations` and `provider.dailyMax`
+  are drawn down whenever the adapter may have done the work, whatever the
+  evidence then says, so grants run out sooner. A task that ends `partial`,
+  one whose adapter ran and reported failure, and a change left
+  `recovery_required` by an outcome-unknown error or an interruption are each
+  charged once, as a verified task or one waiting on a `semantic` question
+  already was, and a metered read is charged the same way. `verified_success`
+  stays the evidence verdict only, and a grant's limits now bound every effect
+  attempted under it, not only the ones that verified. A charge stands if
+  reconciliation later finds the effect did not happen. A policy refusal, a
+  cancel before the adapter ran, an adapter error saying nothing went out, and
+  a duplicate stopped before it ran still cost nothing. Upgrading: a grant
+  sized for verified effects alone may need a larger `maxOperations` or
+  `dailyMax`.
+
 ## [0.3.0-alpha.15] - 2026-10-21
 
 ### Added
