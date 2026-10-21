@@ -47,20 +47,22 @@ export const SECRET_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
   ],
   // `password=x`, and the spellings that hide the word inside a longer name or
   // behind a quote: `DB_PASSWORD=x`, `AWS_SECRET_ACCESS_KEY: x`, `"password": "x"`.
-  // A name starts only where one can, and is read whole before its words are
-  // looked at, so a long run of `password_` costs one pass, not a minute.
+  // A match starts at the word, so text without one is skipped, and the part of
+  // the name before the word stays as it was. Only a name's last such word is
+  // read on to the end of the name, so a long run of `password_` costs one
+  // pass, not a minute.
   [
-    /(?<![A-Za-z0-9_])(?=(?:[A-Za-z0-9]*_)*(?:password|passwd|passphrase|secret)(?![A-Za-z0-9]))([A-Za-z0-9_]+)(["']?)\s*[:=]\s*["']?[^\s"',;}]+/gi,
+    /(?<![A-Za-z0-9])((?:password|passwd|passphrase|secret)(?![A-Za-z0-9])(?:_(?!(?:password|passwd|passphrase|secret)(?![A-Za-z0-9]))[A-Za-z0-9]*)*)(["']?)\s*[:=]\s*["']?[^\s"',;}]+/gi,
     "$1$2=[REDACTED]",
   ],
   // A name ending in a token or key word: `access_token=x`, `x-api-key: x`,
   // `"apiKey": "x"`. Only a value of token characters, eight or more with a
   // digit, the shape an issued token has, so `max_tokens: 4096`,
   // `token: string`, `tokens[0]`, a CSS `#00ff00ab` and the host after
-  // `x-access-token:<token>@` stay. Read from the start of a name only, and
-  // the digit looked for only so far, so a long run of text costs one pass.
+  // `x-access-token:<token>@` stay. Read from the word, which ends the name,
+  // and the digit looked for only so far, so a long run of text costs one pass.
   [
-    /(?<![A-Za-z0-9_-])((?:[A-Za-z0-9]*[_-])*[A-Za-z0-9]*(?:token|api[_-]?key|access[_-]?key))(["']?\s*[:=]\s*["']?)(?=[A-Za-z0-9._~+/=%-]{0,63}\d)[A-Za-z0-9._~+/=%-]{8,}/gi,
+    /(token|api[_-]?key|access[_-]?key)(["']?\s*[:=]\s*["']?)(?=[A-Za-z0-9._~+/=%-]{0,63}\d)[A-Za-z0-9._~+/=%-]{8,}/gi,
     "$1$2[REDACTED]",
   ],
   // Userinfo in a URL or connection string anywhere in text: `postgres://app:pw@db`,
@@ -72,11 +74,11 @@ export const SECRET_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
   // `${USER}` template. The password stops at a quote or a `${` template, so
   // it never runs on into the next JSON string or reads a port such as
   // `localhost:${port}/@vite` as one, and a `{password}` template is kept.
-  // The scheme starts only where a run of scheme characters does, and the
-  // password stops at the next `://`, so no character is scanned from two
-  // starts and a long run of text costs one pass.
+  // A match starts at a `://` after a scheme character, and the password stops
+  // at the next `://`, so no character is scanned from two starts and a long
+  // run of text costs one pass.
   [
-    /(?<![a-z0-9+.-])([a-z0-9+.-]+:\/\/)(?:[^\s/?#@:"'<>{}\[\],]*|\$?\{\{?\s*[\w.]+\s*\}\}?):(?!\d+(?:[/?]|$))(?!\{\{?\s*[\w.]+\s*\}\}?@)(?:(?!\$\{|:\/\/)[^\s@"'])+@/gi,
+    /(?<=[a-z0-9+.-])(:\/\/)(?:[^\s/?#@:"'<>{}\[\],]*|\$?\{\{?\s*[\w.]+\s*\}\}?):(?!\d+(?:[/?]|$))(?!\{\{?\s*[\w.]+\s*\}\}?@)(?:(?!\$\{|:\/\/)[^\s@"'])+@/gi,
     "$1[REDACTED_URL_CREDENTIALS]@",
   ],
   // A token standing alone as the user over http(s): `https://<token>@host`.
