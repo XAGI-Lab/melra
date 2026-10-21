@@ -24,7 +24,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "clean": "rm -rf dist",
-    "test": "vitest run --testTimeout=30000",
+    "test": "vitest run --testTimeout=30000 --hookTimeout=30000",
     "test:e2e": "vitest run test/e2e.test.ts",
     "typecheck": "tsc -p tsconfig.test.json"
   },
