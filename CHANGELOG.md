@@ -6,6 +6,8 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0-alpha.17] - 2026-10-22
+
 ### Changed
 
 - A workflow `checkpoint` node is recorded in the same commit as the advance
@@ -3314,7 +3316,8 @@ All notable changes are documented here. The format follows
 - Cross-scope memory overwrite and deletion protection.
 - Patched transitive HTTP adapter enforced through a package override.
 
-[Unreleased]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.16...HEAD
+[Unreleased]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.17...HEAD
+[0.3.0-alpha.17]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.16...v0.3.0-alpha.17
 [0.3.0-alpha.16]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.15...v0.3.0-alpha.16
 [0.3.0-alpha.15]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.14...v0.3.0-alpha.15
 [0.3.0-alpha.14]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.13...v0.3.0-alpha.14
