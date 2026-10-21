@@ -64,11 +64,11 @@ All notable changes are documented here. The format follows
   carry `network` too, as `curl`, `ssh` and the other network programs
   did, and a `git` read must name its subcommand in that same spelling. Under
   a policy that denies a trait, calls such as `cargo build`, `go build`, `uv
-  run`, `pnpm test`, `npm ls`, `git -C dir status`, `git rebase` and `git
+  run`, `pnpm test`, `git -C dir status`, `git rebase` and `git
   --version` are now refused; without one they need the same approval as
   before, at high risk for a package manager. What a package script, a hook,
-  or the repository's own git configuration (a partial clone, an LFS filter)
-  goes on to fetch is still not classified. The traits table in
+  or the repository's own git configuration goes on to fetch is still not
+  classified. The traits table in
   `docs/INSTALLATION.md` lists exactly what carries each.
 
 - **Breaking:** a terminal call whose argument, or an option's value, is a
