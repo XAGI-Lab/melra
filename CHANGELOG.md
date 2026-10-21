@@ -6,6 +6,8 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0-alpha.15] - 2026-10-21
+
 ### Added
 
 - A `semantic` evidence predicate (#54): a yes/no `question` about meaning,
@@ -3186,7 +3188,8 @@ All notable changes are documented here. The format follows
 - Cross-scope memory overwrite and deletion protection.
 - Patched transitive HTTP adapter enforced through a package override.
 
-[Unreleased]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.14...HEAD
+[Unreleased]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.15...HEAD
+[0.3.0-alpha.15]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.14...v0.3.0-alpha.15
 [0.3.0-alpha.14]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.13...v0.3.0-alpha.14
 [0.3.0-alpha.13]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.12...v0.3.0-alpha.13
 [0.3.0-alpha.12]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.11...v0.3.0-alpha.12

@@ -159,8 +159,8 @@ Images are published for `linux/amd64` and `linux/arm64` with build
 provenance and an SBOM attested to the registry. `:alpha`, `:beta` and `:rc`
 follow only their own channel, like the npm dist-tags of the same name, so
 `:alpha` stays on the last alpha once betas begin. `:latest` follows every
-release before 1.0, as npm's `latest` does, from the first release after
-`0.3.0-alpha.14`; until that one ships it does not exist, so use `:alpha`. Or pin an exact tag such as `:v0.3.0-alpha.12`. See
+release before 1.0, as npm's `latest` does, from `0.3.0-alpha.15`. Or pin an
+exact tag such as `:v0.3.0-alpha.15`. See
 [Docker](#docker) below for the hardened `serve` invocation an MCP client
 should use.
 
