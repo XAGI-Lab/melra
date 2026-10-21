@@ -22,6 +22,9 @@ import {
   type WorkflowInput,
   type WorkflowRun,
 } from "@melra/protocol";
+// Not the package root, which loads the MCP SDK and the HTTP server: `serve`,
+// `console`, `tasks`, `watch` and `status` load those when they run, and
+// `conformance` its MCP client, so `version` and `doctor` start without them (#368).
 import {
   assertEnforceable,
   broadWorkspace,
@@ -31,16 +34,14 @@ import {
   narrowWorkspaceAdvice,
   secretFiles,
   secretInsideWorkspace,
-  serveHttp,
   OAuthProvider,
   clientPrincipal,
   printable,
-  serveStdio,
   unconfinedRoot,
   workspaceHoldsData,
   workspaceInsideData,
   type MelraRuntime,
-} from "@melra/server";
+} from "@melra/server/kernel";
 import { detectBrowserExecutable } from "@melra/browser-runtime";
 import { createSystemComputerAdapter } from "@melra/computer-runtime";
 import { capabilityUsageReader, withDefaultEvidence } from "@melra/runtime-core";
@@ -59,8 +60,6 @@ import {
   serverLaunch,
 } from "./environment.js";
 import { approvalConsole, assertConsoleTerminal, confirmInTerminal } from "./approval-console.js";
-import { runConformance } from "./conformance.js";
-import { statusCommand, tasksCommand, watchCommand } from "./activity.js";
 import { clientStatuses, clientsCheck, detectClients } from "./client-status.js";
 import { RESTART_SAFE_WORKFLOW } from "./demo-workflow.js";
 import { detectIsolation, isolationCheck } from "./isolation.js";
@@ -1237,6 +1236,7 @@ async function main(): Promise<void> {
       }
       const url = argument("--url", args);
       const token = argument("--token", args);
+      const { runConformance } = await import("./conformance.js");
       const { report, failed } = await runConformance({
         ...(url === undefined ? {} : { url }),
         ...(token === undefined ? {} : { token }),
@@ -1299,6 +1299,7 @@ async function main(): Promise<void> {
           "--port requires a port; leave it out for the default (7457, or MELRA_HTTP_PORT), or pass 0 for any free port",
         );
       }
+      const { serveHttp, serveStdio } = await import("@melra/server");
       const melra = await runtime(env);
       const server =
         http || socketPath !== undefined ? undefined : await serveStdio(melra);
@@ -1416,6 +1417,7 @@ async function main(): Promise<void> {
           policyError = error instanceof Error ? error.message : String(error);
         }
       }
+      const { tasksCommand } = await import("./activity.js");
       process.exitCode = tasksCommand(env, {
         limit,
         json: args.includes("--json"),
@@ -1428,13 +1430,16 @@ async function main(): Promise<void> {
       });
       return;
     }
-    case "watch":
+    case "watch": {
       rejectUnknownFlags(args, ["--json"]);
+      const { watchCommand } = await import("./activity.js");
       process.exitCode = await watchCommand(env, { json: args.includes("--json") });
       return;
+    }
     case "status": {
       rejectUnknownFlags(args, ["--json"]);
       const policyPath = await existingPolicyPath(env);
+      const { statusCommand } = await import("./activity.js");
       process.exitCode = await statusCommand(env, {
         json: args.includes("--json"),
         ...(policyPath === undefined ? {} : { policyPath }),

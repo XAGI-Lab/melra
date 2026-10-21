@@ -4,7 +4,6 @@
 import { constants } from "node:fs";
 import { access } from "node:fs/promises";
 import type { Browser, BrowserContext } from "playwright-core";
-import { chromium } from "playwright-core";
 import { bounded } from "./bounded.js";
 
 /**
@@ -72,6 +71,9 @@ export async function detectBrowserExecutable(): Promise<string | undefined> {
 export async function connectBrowser(
   options: BrowserConnectionOptions,
 ): Promise<BrowserConnection> {
+  // Loaded here, not at the top: Playwright takes about 0.1 s to load, and every
+  // `melra` command, `version` and `doctor` included, imports this package (#368).
+  const { chromium } = await import("playwright-core");
   if (options.cdpEndpoint !== undefined) {
     if (options.recordHarPath !== undefined) {
       throw new Error("browser_cdp_cannot_start_har_recording");

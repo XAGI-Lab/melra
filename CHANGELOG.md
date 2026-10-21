@@ -6,6 +6,17 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- `melra version`, `doctor`, `init`, `setup`, `clients`, `policy test` and
+  `help` start in about a third of the time they took (0.08 s against 0.21 s
+  on a Mac): they no longer load the MCP SDK, the HTTP server or Playwright.
+  `serve`, `console`, `conformance`, `tasks`, `watch` and `status` load the
+  MCP and HTTP parts when they run, and `@melra/browser-runtime` loads
+  Playwright when it first connects to a browser rather than on import. The
+  new `@melra/server/kernel` export is `@melra/server` without its MCP and
+  HTTP interfaces, for embedders that want the same. (#368)
+
 ## [0.3.0-alpha.16] - 2026-10-21
 
 ### Security
