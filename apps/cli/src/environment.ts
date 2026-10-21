@@ -6,7 +6,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import { isSea } from "node:sea";
 import type { DeploymentMode } from "@melra/protocol";
 import { deploymentMode } from "@melra/protocol";
-import { printable, unhingedFromEnvironment } from "@melra/server";
+import { printable, unhingedFromEnvironment } from "@melra/server/kernel";
 
 export interface CliEnvironment {
   workspaceRoot: string;

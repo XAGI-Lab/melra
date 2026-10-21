@@ -18,6 +18,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./kernel": {
+      "types": "./dist/kernel.d.ts",
+      "default": "./dist/kernel.js"
     }
   },
   "files": ["dist"],

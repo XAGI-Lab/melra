@@ -12,7 +12,9 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { detectBrowserExecutable } from "@melra/browser-runtime";
 import { BrowserOperationSchema, FileOperationSchema, TaskRequestSchema, TerminalOperationSchema } from "@melra/protocol";
-import { createMelraRuntime, type MelraRuntime, type PredicateVerifier } from "../src/index.js";
+// The kernel subpath, as the CLI and an embedder without the MCP interface
+// import it; it must carry the verifier types the package root does.
+import { createMelraRuntime, type MelraRuntime, type PredicateVerifier } from "../src/kernel.js";
 
 const roots: string[] = [];
 const runtimes: MelraRuntime[] = [];

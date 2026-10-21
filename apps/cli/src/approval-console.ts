@@ -3,13 +3,8 @@
 
 import { once } from "node:events";
 import { createInterface } from "node:readline/promises";
-import {
-  approvalScreen,
-  serveHttp,
-  type ApprovalScreenView,
-  type MelraHttpServer,
-  type MelraRuntime,
-} from "@melra/server";
+import type { MelraHttpServer } from "@melra/server";
+import { approvalScreen, type ApprovalScreenView, type MelraRuntime } from "@melra/server/kernel";
 import { approverLabel, type CliEnvironment } from "./environment.js";
 
 /** What `melra console` needs from the terminal it was started in. */
@@ -111,6 +106,8 @@ export async function approvalConsole(
   const approvedLine = (taskId: string, at: Date) =>
     `Approved ${taskId} at ${at.toTimeString().slice(0, 5)} in the paired tab. ` +
     `If that was not you, run 'melra approve ${taskId} --deny', with this console's MELRA_HOME, before the agent runs it.\n`;
+  // Loaded here, not at the top, so commands that serve nothing skip the MCP SDK (#368).
+  const { serveHttp } = await import("@melra/server");
   const endpoint = await serveHttp({
     runtime: melra,
     port: 0,
