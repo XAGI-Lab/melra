@@ -867,8 +867,9 @@ All notable changes are documented here. The format follows
   a local git subcommand (`status`, `diff`, `add`, `commit`, `switch`, ...;
   not `config`, `rebase` or `grep`, each of which can be told to run another
   program). `wget2`, `slogin`, `dbclient`, `rsync-ssl`, `netcat`,
-  `nc.openbsd`, `nc.traditional`, `inetutils-telnet`, `inetutils-ftp` and
-  `tftp` carry `network` too, as `curl`, `ssh` and the other network programs
+  `nc.openbsd`, `nc.traditional`, `inetutils-telnet`, `telnet-ssl`,
+  `inetutils-ftp`, `tnftp`, `tftp` and PuTTY's `plink`, `pscp` and `psftp`
+  carry `network` too, as `curl`, `ssh` and the other network programs
   did, and a `git` read must name its subcommand in that same spelling. Under
   a policy that denies a trait, calls such as `cargo build`, `go build`, `uv
   run`, `pnpm test`, `npm ls`, `git -C dir status`, `git rebase` and `git
@@ -901,9 +902,10 @@ All notable changes are documented here. The format follows
   `sh`, `bash`, `zsh`, `fish`, `cmd`, `powershell`, `pwsh`, `sudo`, `su` and
   `osascript`, the other common POSIX shells (`ash`, `dash`, `ksh`, `mksh`,
   `csh`, `tcsh`, `yash`, ..., and the names packages install them as, such
-  as `lksh`, `mksh-static` and `bsd-csh`), the `busybox` and `toybox`
-  multi-call binaries, `wsl`, `powershell_ise` and `pwsh-preview`, the
-  programs that run another as a different user (`doas`, `pkexec`, `run0`,
+  as `lksh`, `mksh-static`, `bash-static`, `rzsh` and `bsd-csh`), the
+  `busybox` and `toybox` multi-call binaries, `wsl`, `powershell_ise`,
+  `pwsh-lts` and `pwsh-preview`, the programs that run another as a different
+  user (`doas`, `pkexec`, `run0`, `systemd-run`,
   `runuser`, `sudoedit`, `sudo-rs`, `su-rs`, `ksu`, `pfexec`, `runas`,
   `gsudo`) and the Windows script hosts (`wscript`, `cscript`, `mshta`) are
   refused with `command_not_allowlisted` even when `allowedCommands` names

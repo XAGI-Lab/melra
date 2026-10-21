@@ -322,6 +322,7 @@ describe("local policy", () => {
       "doas", "gsudo.exe", "pkexec", "run0", "runas.exe", "runuser", "sudoedit",
       "cscript.exe", "mshta.exe", "WScript.exe", "sudo-rs", "su-rs", "lksh", "rlksh",
       "mksh-static", "rmksh", "bsd-csh", "ksu", "pfexec", "pwsh-preview.exe",
+      "bash-static", "zsh-static", "rzsh", "rksh93", "pwsh-lts", "systemd-run",
     ]) {
       const policy = createDefaultPolicy(root);
       policy.allowedCommands.push(command);
@@ -1163,6 +1164,8 @@ describe("capability traits", () => {
       ["findstr", ["/G:\\\\h\\s\\x", "y"]],
       ["node", ["-r\\\\h\\s\\x.js"]],
       ["cat", ["\\??\\UNC\\h\\s\\x"]],
+      ["tar", ["-xf//h/s/a.tar"]],
+      ["git", ["commit", "-aF\\\\h\\s\\msg"]],
     ] as const) {
       expect(classifyCommand(command, [...args]).traits, `${command} ${args.join(" ")}`).toEqual([
         "network",
@@ -1172,15 +1175,20 @@ describe("capability traits", () => {
     for (const args of [
       ["commit", "-m", "see https://example.com"],
       ["commit", "--message=https://example.com"],
+      ["commit", "-m", "// WIP"],
     ]) {
       expect(classifyCommand("git", args).traits, `git ${args.join(" ")}`).toEqual([]);
+    }
+    // Nor is a code-comment pattern, or a separator with no host after it.
+    for (const args of [["// TODO", "src"], ["-e", "//"], ["///x"]]) {
+      expect(classifyCommand("rg", args).traits, `rg ${args.join(" ")}`).toEqual([]);
     }
   });
 
   it("knows the other names of the programs it lists", () => {
     for (const command of [
       "netcat", "nc.openbsd", "wget2", "slogin", "rsync-ssl", "inetutils-telnet",
-      "inetutils-ftp", "dbclient",
+      "inetutils-ftp", "dbclient", "telnet-ssl", "tnftp", "plink", "pscp", "psftp",
     ]) {
       expect(classifyCommand(command, []).traits, command).toEqual(["network"]);
     }

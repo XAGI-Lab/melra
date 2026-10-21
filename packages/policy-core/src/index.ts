@@ -185,14 +185,15 @@ const READ_ONLY_GIT_ACTIONS = new Set([
 const ALWAYS_DENIED_COMMANDS = new Set([
   // POSIX shells under the names they are installed as, and the multi-call
   // binaries that are one.
-  "ash", "bash", "bsd-csh", "busybox", "csh", "dash", "elvish", "fish", "ksh",
-  "ksh93", "lksh", "mksh", "mksh-static", "nu", "oksh", "pdksh", "rbash",
-  "rlksh", "rmksh", "sh", "tcsh", "toybox", "xonsh", "yash", "zsh",
+  "ash", "bash", "bash-static", "bsd-csh", "busybox", "csh", "dash", "elvish",
+  "fish", "ksh", "ksh93", "lksh", "mksh", "mksh-static", "nu", "oksh", "pdksh",
+  "rbash", "rksh93", "rlksh", "rmksh", "rzsh", "sh", "tcsh", "toybox", "xonsh",
+  "yash", "zsh", "zsh-static",
   // Windows shells, and WSL, which runs a Linux shell.
-  "cmd", "powershell", "powershell_ise", "pwsh", "pwsh-preview", "wsl",
+  "cmd", "powershell", "powershell_ise", "pwsh", "pwsh-lts", "pwsh-preview", "wsl",
   // Running a program as another user.
   "doas", "gsudo", "ksu", "pfexec", "pkexec", "run0", "runas", "runuser", "su",
-  "su-rs", "sudo", "sudo-rs", "sudoedit",
+  "su-rs", "sudo", "sudo-rs", "sudoedit", "systemd-run",
   // Script hosts.
   "cscript", "mshta", "osascript", "wscript",
 ]);
@@ -285,7 +286,8 @@ const PACKAGE_MANAGERS = new Set([
 const NETWORK_COMMANDS = new Set([
   "curl", "wget", "wget2", "scp", "sftp", "ssh", "slogin", "dbclient", "rsync",
   "rsync-ssl", "nc", "ncat", "netcat", "nc.openbsd", "nc.traditional", "telnet",
-  "inetutils-telnet", "ftp", "inetutils-ftp", "tftp", "git",
+  "inetutils-telnet", "telnet-ssl", "ftp", "inetutils-ftp", "tnftp", "tftp",
+  "plink", "pscp", "psftp", "git",
 ]);
 
 /**
@@ -418,11 +420,12 @@ function namesNetworkPath(arg: string): boolean {
 /**
  * The narrower test behind the `network` trait: a network path where a
  * program would open it, as the whole argument or as the value after `=`, a
- * switch (`/G:`, `-f`) or `@`. Any program given one connects to that host,
- * while a URL in a message or a pattern is not a path and adds no trait.
+ * switch (`/G:`, `-f`, `-xf`) or `@`, naming a host right after the two
+ * separators. Any program given one connects to that host, while a URL in a
+ * message or a pattern such as `// TODO` is not a path and adds no trait.
  */
 function opensNetworkPath(arg: string): boolean {
-  return /^(?:[^=]*=|[-/]\w+:|-\w|@)?(?:[\\/]{2}|\\\?\?\\)/.test(arg);
+  return /^(?:[^=]*=|[-/]\w+:|-\w+|@)?(?:[\\/]{2}(?=[^\s\\/])|\\\?\?\\)/.test(arg);
 }
 
 /**
