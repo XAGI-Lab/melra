@@ -1129,6 +1129,31 @@ describe("capability traits", () => {
     }
   });
 
+  it("gives git config, rebase and grep the network trait", () => {
+    // Each can be told to run another program, so none is known to stay local.
+    for (const args of [
+      ["rebase", "-x", "c", "HEAD~1"],
+      ["rebase", "main"],
+      ["grep", "-Oc", "x"],
+      ["config", "core.fsmonitor", "c"],
+    ]) {
+      expect(classifyCommand("git", args).traits, `git ${args.join(" ")}`).toEqual(["network"]);
+    }
+    const policy = createDefaultPolicy(root);
+    policy.deniedTraits = ["network"];
+    expect(
+      evaluatePolicy(
+        "0b6f4a52-5d0e-4f43-9a0c-3f6d2f1c9e11",
+        TaskRequestSchema.parse({
+          goal: "Rebase",
+          operation: { kind: "terminal", action: "run", command: "git", args: ["rebase", "-x", "c", "HEAD~1"] },
+          requiredEvidence: [{ type: "exit_code", value: 0 }],
+        }),
+        policy,
+      ).decision.reason,
+    ).toBe("trait_denied:network");
+  });
+
   it("knows the other names of the network programs it lists", () => {
     for (const command of ["netcat", "nc.openbsd", "wget2", "slogin"]) {
       expect(classifyCommand(command, []).traits, command).toEqual(["network"]);

@@ -300,7 +300,9 @@ const NETWORK_COMMANDS = new Set([
  * Among the managers only npm is here, and only for running package scripts:
  * pnpm can install before it runs one (`verify-deps-before-run`), and cargo,
  * go and uv fetch dependencies or a toolchain for an ordinary build or run.
- * What a script or hook goes on to do is its own, as with `node`.
+ * git's `config`, `rebase` and `grep` are left out because each can be told
+ * to run another program, which could reach anywhere. What a script or hook
+ * goes on to do is its own, as with `node`.
  */
 const LOCAL_SUBCOMMANDS = new Map<string, ReadonlySet<string>>([
   ["npm", new Set(["restart", "run", "run-script", "start", "stop", "test"])],
@@ -308,9 +310,9 @@ const LOCAL_SUBCOMMANDS = new Map<string, ReadonlySet<string>>([
     "git",
     new Set([
       ...READ_ONLY_GIT_ACTIONS, "add", "apply", "blame", "checkout",
-      "cherry-pick", "clean", "commit", "config", "describe", "grep", "init",
-      "ls-files", "merge", "mv", "rebase", "reflog", "reset", "restore",
-      "revert", "rm", "stash", "switch",
+      "cherry-pick", "clean", "commit", "describe", "init", "ls-files",
+      "merge", "mv", "reflog", "reset", "restore", "revert", "rm", "stash",
+      "switch",
     ]),
   ],
 ]);

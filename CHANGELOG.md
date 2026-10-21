@@ -863,7 +863,11 @@ All notable changes are documented here. The format follows
   `package-install` and `network`, and every `git` call carries `network`,
   unless its first argument is, exactly as spelled, a subcommand known to do
   neither: an npm package script (`npm run`, `npm test`, `npm start`, ...) or
-  a local git subcommand (`status`, `diff`, `add`, `commit`, `switch`, ...).
+  a local git subcommand (`status`, `diff`, `add`, `commit`, `switch`, ...;
+  not `config`, `rebase` or `grep`, each of which can be told to run another
+  program). What a package script, a hook, or the repository's own git
+  configuration (a partial clone, an LFS filter) goes on to fetch is still not
+  classified.
   `wget2`, `netcat`, `slogin` and the other installed names of the network
   programs carry `network` too, and a `git` read must name its subcommand in
   that same spelling. Under a policy that denies a trait, calls such as
