@@ -22,7 +22,7 @@ All notable changes are documented here. The format follows
 
 - Governed file and terminal actions spend less time keeping MELRA's own files
   out of reach: a `file.write` verified by `file_hash` takes 1.5 ms instead of
-  2.1 ms on a Mac, and a terminal command's checks about 0.7 ms less. The
+  2.0 ms on a Mac, and a terminal command's checks about 0.7 ms less. The
   identities of the reserved files are looked up once per file action,
   terminal command or verification instead of once per path checked, and
   lookups that do not depend on each other run together. A reserved file made
