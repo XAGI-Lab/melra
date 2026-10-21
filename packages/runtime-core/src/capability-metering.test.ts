@@ -168,18 +168,50 @@ describe("capability metering", () => {
     expect([drawn(store, "a").operations, drawn(store, "b").operations]).toEqual([1, 1]);
   });
 
-  it("holds the reservation of an effect whose draw failed to write until recovery draws it", async () => {
-    const { controller, store } = await setup();
-    const record = vi.spyOn(store, "recordCapabilityUse").mockImplementation(() => {
-      throw new Error("database is locked");
-    });
-    await expect(run(controller, request(WRITE))).rejects.toThrow("database is locked");
-    expect(drawn(store, "write").operations).toBe(0);
-    // Not durable yet, and still not free to fund a second effect.
-    expect(controller.plan(request(WRITE)).status).toBe("policy_blocked");
-    record.mockRestore();
-    const [recovered] = await controller.recoverInterrupted();
-    expect(recovered?.status).toBe("recovery_required");
-    expect(drawn(store, "write").operations).toBe(1);
+  it.each([
+    ["change", "write", WRITE, "recovery_required"],
+    ["read", "read", READ, "planned"],
+  ] as const)(
+    "holds the reservation of a %s whose draw failed to write until recovery draws it",
+    async (_, id, operation, status) => {
+      const { controller, store } = await setup();
+      const record = vi.spyOn(store, "recordCapabilityUse").mockImplementation(() => {
+        throw new Error("database is locked");
+      });
+      await expect(run(controller, request(operation))).rejects.toThrow("database is locked");
+      expect(drawn(store, id).operations).toBe(0);
+      // Not durable yet, and still not free to fund a second effect.
+      expect(controller.plan(request(operation)).status).toBe("policy_blocked");
+      record.mockRestore();
+      const [recovered] = await controller.recoverInterrupted();
+      expect(recovered?.status).toBe(status);
+      expect(drawn(store, id).operations).toBe(1);
+    },
+  );
+
+  it.each(["running", "verifying"] as const)(
+    "charges a read cut off while %s, and its re-run needs room in the grant",
+    async (status) => {
+      const { controller, store, executor } = await setup();
+      const planned = controller.plan(request(READ));
+      // The process died with the read in flight, or its answer back.
+      store.saveTask({ ...store.getTask(planned.id)!, status });
+      const [recovered] = await controller.recoverInterrupted();
+      expect(recovered).toMatchObject({ status: "planned", error: "interrupted_read_ready_for_retry" });
+      expect(drawn(store, "read").operations).toBe(1);
+      expect((await controller.execute(planned.id)).task.status).toBe("policy_blocked");
+      expect(executor.execute).not.toHaveBeenCalled();
+    },
+  );
+
+  it("charges a read whose earlier attempt may have run though its last failed plainly", async () => {
+    const { controller, store, executor } = await setup();
+    executor.execute
+      .mockRejectedValueOnce(outcomeUnknown("http_response_incomplete"))
+      .mockRejectedValueOnce(outcomeUnknown("http_response_incomplete"))
+      .mockRejectedValueOnce(new Error("connect ECONNREFUSED 127.0.0.1:443"));
+    expect((await run(controller, request(READ))).task.status).toBe("failed");
+    expect(executor.execute).toHaveBeenCalledTimes(3);
+    expect(drawn(store, "read").operations).toBe(1);
   });
 });

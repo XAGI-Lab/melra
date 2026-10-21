@@ -506,13 +506,16 @@ A grant is drawn down whenever the adapter may have done the work, read or
 change, whatever the evidence then says: it returned (`verified_success`,
 `waiting_user`, `partial`, or a reported failure such as a non-2xx answer or a
 non-zero exit), or it threw an error marked outcome-unknown
-(`recovery_required` for a change). `verified_success` is the evidence verdict,
-not the meter. Each task is drawn once, however often recovery and
-reconciliation settle it, and a draw stands even if reconciliation later finds
-the effect did not happen: counting an effect that did not happen is preferred
-to exceeding a limit. An operation refused by policy, cancelled before the
+(`recovery_required` for a change; for a retried read, on any attempt).
+`verified_success` is the evidence verdict, not the meter. Each task is drawn
+once, however often recovery and reconciliation settle it, and a draw stands
+even if reconciliation later finds the effect did not happen: counting an
+effect that did not happen is preferred to exceeding a limit. An operation refused by policy, cancelled before the
 adapter ran, stopped by an adapter error saying nothing went out, or stopped as
-a duplicate before it ran costs nothing.
+a duplicate before it ran costs nothing. A read cut off mid-flight is drawn when
+recovery parks it to run again; run again, it is the same task and draws nothing
+more, but its re-check counts that draw, so a read at its grant's limit is not
+run again.
 
 Money bounds need the caller to say what the call moves, because MELRA cannot
 read an amount out of an arbitrary provider's payload. That direction is what

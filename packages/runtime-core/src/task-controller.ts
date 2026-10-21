@@ -1167,9 +1167,10 @@ export class TaskController {
         ? "interrupted_read_ready_for_retry"
         : "interrupted_mutation_requires_reconciliation";
     task.updatedAt = now();
-    // A change cut off mid-flight may have run, so it is paid for before it
-    // is parked, as `execute` pays for one. A read is paid for when it runs again.
-    if (effect !== "read") this.drawGrant(task, request, classified);
+    // Cut off mid-flight, read or change, it may have run, so it is paid for
+    // before it is parked, as `execute` pays for one. A read run again is the
+    // same task, so it draws nothing more, but its re-check counts this draw.
+    this.drawGrant(task, request, classified);
     this.store.saveTask(task);
     // A crash mid-flight is the same unknown a dropped reply is, so a task
     // that declared how to settle one gets asked here rather than waiting for
@@ -1418,8 +1419,10 @@ export class TaskController {
           },
         };
       } catch (error) {
-        lastError = error;
-        if (attempt >= maximumAttempts || signal.aborted) throw error;
+        // An attempt that may have reached the far end outranks a later one
+        // saying nothing went out: the read may have run, so it is charged.
+        lastError = lastError instanceof Error && isOutcomeUnknown(lastError.message) ? lastError : error;
+        if (attempt >= maximumAttempts || signal.aborted) throw lastError;
       }
     }
     throw lastError instanceof Error
