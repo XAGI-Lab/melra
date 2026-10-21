@@ -630,7 +630,7 @@ export const RiskSchema = z.enum(["low", "medium", "high", "critical"]);
 export const PolicyOutcomeSchema = z.enum(["allow", "deny", "confirm"]);
 
 /**
- * What an operation reaches for, as opposed to what it is named. `npm ls` and
+ * What an operation reaches for, as opposed to what it is named. `npm test` and
  * `npm install` are the same allowlisted command; only the second one installs
  * a package and talks to a registry. Traits are what `policy.deniedTraits`
  * matches on and what a caller sees before it approves.

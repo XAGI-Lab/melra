@@ -175,17 +175,27 @@ const READ_ONLY_GIT_ACTIONS = new Set([
   "tag",
 ]);
 
+/**
+ * Programs no allowlist entry admits, matched by basename like the allowlist.
+ * Each turns one allowlisted name into any command at all: a shell, or a
+ * multi-call binary that contains one, runs whatever text it is given; an
+ * escalation program runs one as another user; a script host runs a script.
+ * docs/CAPABILITIES.md lists them and has to stay in step.
+ */
 const ALWAYS_DENIED_COMMANDS = new Set([
-  "bash",
-  "cmd",
-  "fish",
-  "osascript",
-  "powershell",
-  "pwsh",
-  "sh",
-  "sudo",
-  "su",
-  "zsh",
+  // POSIX shells under the names they are installed as, and the multi-call
+  // binaries that are one.
+  "ash", "bash", "bash-static", "bsd-csh", "busybox", "csh", "dash", "elvish",
+  "fish", "ksh", "ksh93", "lksh", "mksh", "mksh-static", "nu", "oksh", "pdksh",
+  "rbash", "rksh93", "rlksh", "rmksh", "rzsh", "sh", "tcsh", "toybox", "xonsh",
+  "yash", "zsh", "zsh-static",
+  // Windows shells, and WSL, which runs a Linux shell.
+  "cmd", "powershell", "powershell_ise", "pwsh", "pwsh-lts", "pwsh-preview", "wsl",
+  // Running a program as another user.
+  "doas", "gsudo", "ksu", "pfexec", "pkexec", "run0", "runas", "runuser", "su",
+  "su-rs", "sudo", "sudo-rs", "sudoedit", "systemd-run",
+  // Script hosts.
+  "cscript", "mshta", "osascript", "wscript",
 ]);
 
 /**
@@ -247,111 +257,75 @@ export {
 } from "./credentials.js";
 
 /**
- * Subcommands that install, per package manager, and the ones that only read.
+ * Package managers, and the runners that fetch a package to run it. A call to
+ * one installs and reaches a registry unless `LOCAL_SUBCOMMANDS` spares it.
+ * `corepack` fetches the manager it runs. `pip3.12` and `pip-3.12` are `pip`,
+ * and the golang.org/dl wrappers (`go1.22.0`, `go1.23rc1`, `gotip`) are `go`.
  *
- * Anything unlisted falls in between: a mutation, but not an install — `npm
- * run build` writes to the workspace and reaches nothing.
- *
- * Only npm has reads. Every other manager checked has a way for a "read" to
- * run code or write, through its own options or a file a cloned repository
- * carries: pnpm runs .pnpmfile.cjs and yarn its `yarnPath` on every command;
- * go switches to the toolchain go.mod names and rustup to the one
+ * None of them has reads. Each has a way for a "read" to run code or write,
+ * through its own options or a file a cloned repository carries: npm takes
+ * settings from a workspace `.npmrc` that can send its log or cache anywhere;
+ * pnpm runs .pnpmfile.cjs and yarn its `yarnPath` on every command; go
+ * switches to the toolchain go.mod names and rustup to the one
  * rust-toolchain.toml names, downloading and running it; `pip --python` runs
  * that interpreter and `--log` writes anywhere; `gem --config-file` loads
  * plugins; `brew outdated` updates Homebrew; `apt -o` sets hooks that run shell
  * commands; uv and cargo write their lockfiles. A read skips approval, so it
- * has to be one for every argument and every repository.
+ * has to be one for every argument and every repository, and policy sees
+ * neither a repository's files nor what they configure.
  */
-const PACKAGE_MANAGERS: Record<
-  string,
-  { install: Set<string>; read?: Set<string> }
-> = {
-  npm: {
-    install: new Set(["install", "i", "add", "ci", "update", "up", "publish"]),
-    // `config` is a read only as `config get`/`config list`; see readOnlyCall.
-    read: new Set(["ls", "list", "view", "info", "outdated", "why", "config"]),
-  },
-  pnpm: { install: new Set(["install", "i", "add", "update", "up", "publish", "dlx"]) },
-  yarn: { install: new Set(["install", "add", "up", "upgrade", "publish", "dlx"]) },
-  pip: { install: new Set(["install", "download", "wheel"]) },
-  pip3: { install: new Set(["install", "download", "wheel"]) },
-  uv: { install: new Set(["add", "sync", "install", "pip", "tool", "publish"]) },
-  cargo: { install: new Set(["install", "add", "update", "publish", "fetch"]) },
-  gem: { install: new Set(["install", "update", "push"]) },
-  brew: { install: new Set(["install", "upgrade", "reinstall", "tap"]) },
-  apt: { install: new Set(["install", "upgrade", "full-upgrade", "update"]) },
-  "apt-get": { install: new Set(["install", "upgrade", "dist-upgrade", "update"]) },
-  go: { install: new Set(["install", "get", "mod"]) },
-};
-
-/** `npx`/`pnpx` fetch and execute a package by name; there is no read form. */
-const ALWAYS_INSTALLING = new Set(["npx", "pnpx", "uvx", "pipx"]);
-
-/** Programs whose whole purpose is to talk to another host. */
-const NETWORK_COMMANDS = new Set([
-  "curl",
-  "wget",
-  "scp",
-  "sftp",
-  "ssh",
-  "rsync",
-  "nc",
-  "ncat",
-  "telnet",
-  "ftp",
-]);
-
-/** `git` subcommands that contact a remote. */
-const NETWORK_GIT_ACTIONS = new Set([
-  "clone",
-  "fetch",
-  "pull",
-  "push",
-  "submodule",
-  "ls-remote",
+const PACKAGE_MANAGERS = new Set([
+  "apt", "apt-get", "brew", "cargo", "corepack", "gem", "go", "npm", "npx",
+  "pip", "pipx", "pnpm", "pnpx", "uv", "uvx", "yarn", "yarnpkg",
 ]);
 
 /**
- * Flags that take their value as the next argument, so that argument is not
- * the subcommand. `git -c core.pager=cat push` pushes; a naive "first
- * non-flag" scan reads `core.pager=cat` as the subcommand and calls it local.
- *
- * The list is short on purpose: it covers the value-taking flags of the
- * commands this module classifies. An unlisted one costs an unrecognised
- * subcommand, which falls back to `mutate`/`medium` — the cautious answer.
+ * Programs that reach another host, under the names they are installed as,
+ * and `git`, whose calls do unless `LOCAL_SUBCOMMANDS` spares them.
  */
-const VALUE_TAKING_FLAGS = new Set([
-  "-c",
-  "-C",
-  "--config",
-  "--cwd",
-  "--dir",
-  "--prefix",
-  "--workspace",
-  "-w",
-  "--filter",
-  "--registry",
+const NETWORK_COMMANDS = new Set([
+  "curl", "wget", "wget2", "scp", "sftp", "ssh", "slogin", "dbclient", "rsync",
+  "rsync-ssl", "nc", "ncat", "netcat", "nc.openbsd", "nc.traditional", "telnet",
+  "inetutils-telnet", "telnet-ssl", "ftp", "inetutils-ftp", "tnftp", "tftp",
+  "plink", "pscp", "psftp", "git",
 ]);
 
-function subcommandOf(args: readonly string[]): string | undefined {
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index]!;
-    if (VALUE_TAKING_FLAGS.has(arg)) {
-      index += 1;
-      continue;
-    }
-    // `--filter=foo` carries its value inline, so nothing is skipped.
-    if (arg.startsWith("-")) continue;
-    return arg.toLowerCase();
-  }
-  return undefined;
-}
+/**
+ * The subcommands, per program, that neither install nor reach another host:
+ * the only calls to a package manager or `git` that carry no trait.
+ *
+ * Closed on purpose. npm takes aliases and abbreviations of its subcommands,
+ * an option before the subcommand can take the next argument as its value,
+ * and a git `-c` changes what any subcommand does, so a call is spared only
+ * when its first argument is one of these, exactly as spelled. Anything else
+ * carries the traits: the cautious answer, at the cost of a trait on an
+ * unusual spelling of a harmless call.
+ *
+ * Among the managers only npm is here, and only for running package scripts:
+ * pnpm can install before it runs one (`verify-deps-before-run`), and cargo,
+ * go and uv fetch dependencies or a toolchain for an ordinary build or run.
+ * git's `config`, `rebase` and `grep` are left out because each can be told
+ * to run another program, which could reach anywhere. What a script or hook
+ * goes on to do is its own, as with `node`.
+ */
+const LOCAL_SUBCOMMANDS = new Map<string, ReadonlySet<string>>([
+  ["npm", new Set(["restart", "run", "run-script", "start", "stop", "test"])],
+  [
+    "git",
+    new Set([
+      ...READ_ONLY_GIT_ACTIONS, "add", "apply", "blame", "checkout",
+      "cherry-pick", "clean", "commit", "describe", "init", "ls-files",
+      "merge", "mv", "reflog", "reset", "restore", "revert", "rm", "stash",
+      "switch",
+    ]),
+  ],
+]);
 
 /**
  * Classify a terminal command by what it does, not just by its name.
  *
  * Exported because the accurate answer is worth having outside policy — the
- * CLI's `policy test` prints it, and it is the only place `npm ls` and `npm
+ * CLI's `policy test` prints it, and it is the only place `npm test` and `npm
  * install` are told apart.
  */
 export function classifyCommand(
@@ -359,30 +333,21 @@ export function classifyCommand(
   args: readonly string[],
 ): { read: boolean; traits: CapabilityTrait[] } {
   const name = normalizeCommandName(command);
-  const subcommand = subcommandOf(args);
-  const traits = new Set<CapabilityTrait>();
-
-  if (NETWORK_COMMANDS.has(name)) traits.add("network");
-  if (name === "git" && subcommand !== undefined && NETWORK_GIT_ACTIONS.has(subcommand)) {
-    traits.add("network");
-  }
-  if (ALWAYS_INSTALLING.has(name)) {
-    traits.add("package-install");
-    traits.add("network");
-  }
-
-  const manager = PACKAGE_MANAGERS[name];
-  if (manager !== undefined && subcommand !== undefined) {
-    if (manager.install.has(subcommand)) {
-      traits.add("package-install");
-      traits.add("network");
-    }
-    if (manager.read?.has(subcommand) === true && readOnlyCall(command, name, subcommand, args)) {
-      // A read subcommand of a package manager still queries the registry in
-      // the general case, so it keeps `network` while dropping the mutation.
-      return { read: true, traits: [...traits, "network"] };
-    }
-  }
+  const program = /^pip-?[\d.]*$/.test(name)
+    ? "pip"
+    : /^go(tip|\d[\d.]*((rc|beta)\d+)?)$/.test(name)
+      ? "go"
+      : name;
+  const first = args[0];
+  const local = first !== undefined && LOCAL_SUBCOMMANDS.get(program)?.has(first) === true;
+  const traits: CapabilityTrait[] = local
+    ? []
+    : PACKAGE_MANAGERS.has(program)
+      ? ["package-install", "network"]
+      : NETWORK_COMMANDS.has(program)
+        ? ["network"]
+        : [];
+  if (!traits.includes("network") && args.some(opensNetworkPath)) traits.push("network");
 
   const READ_COMMANDS = new Set([
     "cat",
@@ -398,8 +363,8 @@ export function classifyCommand(
   ]);
   const read =
     (READ_COMMANDS.has(name) || name === "git") &&
-    readOnlyCall(command, name, subcommand, args);
-  return { read, traits: [...traits] };
+    readOnlyCall(command, name, args);
+  return { read, traits };
 }
 
 /**
@@ -422,7 +387,6 @@ export function classifyCommand(
 function readOnlyCall(
   command: string,
   name: string,
-  subcommand: string | undefined,
   args: readonly string[],
 ): boolean {
   // A path-qualified program is whatever file sits at that path, which the
@@ -437,12 +401,6 @@ function readOnlyCall(
   if (name === "wc" && args.some((arg) => /^--files0-from(=|$)/.test(arg))) return false;
   // `/s <computer>` queries another machine, as the logged-on user.
   if (name === "tasklist") return !args.some((arg) => /^[-/][sup](:|$)/i.test(arg));
-  // `--logs-dir <path>` creates that directory and writes npm's log into it.
-  if (name === "npm" && args.some((arg) => /^--logs-dir(=|$)/i.test(arg))) return false;
-  if (subcommand === "config" && PACKAGE_MANAGERS[name] !== undefined) {
-    const action = args[args.findIndex((arg) => arg.toLowerCase() === "config") + 1];
-    return action !== undefined && ["get", "list", "ls"].includes(action.toLowerCase());
-  }
   return true;
 }
 
@@ -457,6 +415,17 @@ function readOnlyCall(
  */
 function namesNetworkPath(arg: string): boolean {
   return /[\\/]{2}/.test(arg) || arg.includes("\\??\\");
+}
+
+/**
+ * The narrower test behind the `network` trait: a network path where a
+ * program would open it, as the whole argument or as the value after `=`, a
+ * switch (`/G:`, `-f`, `-xf`) or `@`, with a host named after the
+ * separators. Any program given one connects to that host, while a URL in a
+ * message or a pattern such as `// TODO` is not a path and adds no trait.
+ */
+function opensNetworkPath(arg: string): boolean {
+  return /^(?:[^=]*=|[-/]\w+:|-\w+|@)?(?:[\\/]{2}(?=[\\/]*[^\s\\/])|\\\?\?\\)/.test(arg);
 }
 
 /**
@@ -517,7 +486,8 @@ function gitReadOnly(args: readonly string[]): boolean {
   // call that names the subcommand first.
   const [first, ...rest] = args;
   if (first === undefined || first.startsWith("-")) return false;
-  const subcommand = first.toLowerCase();
+  // Exactly as spelled: git looks up another casing as an alias, not as this.
+  const subcommand = first;
   if (!READ_ONLY_GIT_ACTIONS.has(subcommand)) return false;
   if (rest.some((arg) => GIT_UNSAFE_OPTION.test(arg))) return false;
   if (subcommand !== "branch" && subcommand !== "tag") return true;
@@ -729,8 +699,8 @@ export function classifyOperation(operation: Operation): {
       return {
         effect: read ? "read" : "mutate",
         // Installing third-party code is the high-risk case, not the package
-        // manager's name: `npm run build` is an ordinary mutation and `npm ls`
-        // is a read, which the old blanket rule called high-risk alongside it.
+        // manager's name: `npm run build` is an ordinary mutation, which the
+        // old blanket rule called high-risk alongside `npm install`.
         risk: traits.includes("package-install")
           ? "high"
           : read

@@ -19,6 +19,66 @@ All notable changes are documented here. The format follows
   `url` on the actions that drive a page; this change also covers its
   url-less reads of an element (`inspect`, `wait`, `scroll`, `screenshot`).
 
+- **Breaking:** `deniedTraits` now fails closed for package managers and
+  `git`. Traits were assigned only to the subcommand spellings policy
+  recognised, so other spellings of an install or a remote operation carried
+  no trait, escaped a `package-install` or `network` deny, and reached an
+  approver with no trait shown. Now every call to a package manager or
+  package runner (`npm`, `npx`, `pnpm`, `yarn`, `corepack`, `pip` with or
+  without a version such as `pip3.12` or `pip-3.12`, `uv`, `cargo`, `go` and
+  its `go1.22.0`-style and `gotip` wrappers, `gem`, `brew`, `apt`, ...) carries
+  `package-install` and `network`, and every `git` call carries `network`,
+  unless its first argument is, exactly as spelled, a subcommand known to do
+  neither: an npm package script (`npm run`, `npm test`, `npm start`, ...) or
+  a local git subcommand (`status`, `diff`, `add`, `commit`, `switch`, ...;
+  not `config`, `rebase` or `grep`, each of which can be told to run another
+  program). `wget2`, `slogin`, `dbclient`, `rsync-ssl`, `netcat`,
+  `nc.openbsd`, `nc.traditional`, `inetutils-telnet`, `telnet-ssl`,
+  `inetutils-ftp`, `tnftp`, `tftp` and PuTTY's `plink`, `pscp` and `psftp`
+  carry `network` too, as `curl`, `ssh` and the other network programs
+  did, and a `git` read must name its subcommand in that same spelling. Under
+  a policy that denies a trait, calls such as `cargo build`, `go build`, `uv
+  run`, `pnpm test`, `npm ls`, `git -C dir status`, `git rebase` and `git
+  --version` are now refused; without one they need the same approval as
+  before, at high risk for a package manager. What a package script, a hook,
+  or the repository's own git configuration (a partial clone, an LFS filter)
+  goes on to fetch is still not classified. The traits table in
+  `docs/INSTALLATION.md` lists exactly what carries each.
+
+- **Breaking:** a terminal call whose argument, or an option's value, is a
+  Windows network path (`\\host\share`, `//host/share`) now carries the
+  `network` trait, whatever the program. Opening such a path connects to that
+  host, but only reads were checked for one, so under a policy that denies
+  `network` any other call given one still ran once approved. It is now
+  refused there; without such a policy it needs the same approval as before,
+  with the trait shown.
+
+- **Breaking:** no `npm` call is classified as a read any more, so none runs
+  without approval. `npm ls`, `npm view`, `npm outdated`, `npm why` and
+  `npm config get` were reads unless an argument redirected npm's log, but
+  npm also takes that setting, and others that make it write outside the
+  workspace, from `.npmrc` files in the workspace, which policy never sees.
+  They are now mutations like every other package manager's calls: they need
+  an approval and, like any mutation, declared evidence (an `exit_code`
+  predicate will do), or planning refuses them with
+  `mutation_requires_evidence`.
+
+- **Breaking:** the programs no allowlist entry can admit now match what
+  `docs/CAPABILITIES.md` promised, and that page names each one. Besides
+  `sh`, `bash`, `zsh`, `fish`, `cmd`, `powershell`, `pwsh`, `sudo`, `su` and
+  `osascript`, the other common POSIX shells (`ash`, `dash`, `ksh`, `mksh`,
+  `csh`, `tcsh`, `yash`, ..., and the names packages install them as, such
+  as `lksh`, `mksh-static`, `bash-static`, `rzsh` and `bsd-csh`), the
+  `busybox` and `toybox` multi-call binaries, `wsl`, `powershell_ise`,
+  `pwsh-lts` and `pwsh-preview`, the programs that run another as a different
+  user (`doas`, `pkexec`, `run0`, `systemd-run`,
+  `runuser`, `sudoedit`, `sudo-rs`, `su-rs`, `ksu`, `pfexec`, `runas`,
+  `gsudo`) and the Windows script hosts (`wscript`, `cscript`, `mshta`) are
+  refused with `command_not_allowlisted` even when `allowedCommands` names
+  them, where before they only needed an approval. Remove such an entry from
+  a policy; the request it allowed is no longer possible outside
+  `--unsafe-local`.
+
 ## [0.3.0-alpha.15] - 2026-10-21
 
 ### Added
