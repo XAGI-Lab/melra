@@ -54,6 +54,17 @@ describe("harness tool goals", () => {
       "Open https://example.com/callback",
     );
   });
+
+  it("names a page without its userinfo, whose password no secret pattern may match (#385)", () => {
+    for (const url of [
+      "https://alice:pa'ss@example.com/x?code=1#t",
+      'https://alice:pa"ss@example.com/x',
+      "https://alice:p@ssw0rdXYZ@example.com/x",
+      "https://al,{ice:pw@example.com/x",
+    ]) {
+      expect(HARNESS_TOOLS.browse!.goal({ url })).toBe("Open https://example.com/x");
+    }
+  });
 });
 
 describe("harness tools", () => {
