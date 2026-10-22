@@ -20,10 +20,11 @@ from mcp import types as mcp_types
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
 
-# Settings of this process a spawned server must not inherit, as the TypeScript
-# SDK leaves them out: MELRA_UNHINGED unconfines the server, with a banner
-# nobody reads, and MELRA_SOCKET moved older `melra serve` off stdio, so
-# connecting hung. Pass either in `environment` to mean it.
+# The only settings of this process a spawned server does not inherit; the
+# TypeScript SDK's connect() withholds the same two (#382). MELRA_UNHINGED
+# unconfines the server, with a banner nobody reads, and MELRA_SOCKET moved
+# older `melra serve` off stdio, so connecting hung. Pass either in
+# `environment` to mean it.
 _NOT_INHERITED = ("MELRA_UNHINGED", "MELRA_SOCKET")
 
 
