@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   TaskRequestSchema,
+  delegationChain,
   outcomeUnknown,
   type Operation,
 } from "@melra/protocol";
@@ -847,6 +848,35 @@ describe("effect contract and principal", () => {
     );
     const execution = await controller.execute(task.id);
     expect(execution.receipt?.principal).toBe("agent:local");
+  });
+
+  it("redacts the declared chain on the receipt as on the task row", async () => {
+    const { controller, store } = await setup();
+    // Built at run time so no literal here reads as a leaked credential.
+    const token = `${"ghp"}_${"A1b2C3d4E5".repeat(4)}`;
+    const task = controller.plan(
+      TaskRequestSchema.parse({
+        goal: "Read system info",
+        operation: { kind: "system", action: "info" },
+        identity: {
+          principal: { kind: "agent", id: "worker password=hunter2hunter2" },
+          onBehalfOf: [
+            { kind: "human", id: "alice" },
+            { kind: "harness", id: token },
+          ],
+        },
+      }),
+    );
+    const execution = await controller.execute(task.id);
+    const stored = store.getReceiptsForTask(task.id);
+    for (const text of [JSON.stringify(stored), JSON.stringify(execution.receipt)]) {
+      expect(text).not.toContain(token);
+      expect(text).not.toContain("hunter2hunter2");
+    }
+    expect(stored[0]?.principal).toBe("human:alice/harness:[REDACTED_GITHUB_TOKEN]/agent:worker password=[REDACTED]");
+    // The same chain the stored task row's identity names.
+    expect(stored[0]?.principal).toBe(delegationChain(store.getTask(task.id)!.request.identity!));
+    expect(stored[0]?.redactions).toContain("[REDACTED_GITHUB_TOKEN]");
   });
 
   describe("a write that fails after the adapter returned", () => {

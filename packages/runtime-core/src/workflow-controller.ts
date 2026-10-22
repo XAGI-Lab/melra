@@ -1516,7 +1516,7 @@ export class WorkflowController {
             state: {
               status: "awaiting_input",
               taskIds: [],
-              prompt: node.prompt,
+              prompt: recordedInput(node.prompt, 2_000),
             },
             tasks: [],
           };
@@ -1534,7 +1534,7 @@ export class WorkflowController {
           state: {
             status: "verified_complete",
             taskIds: [],
-            prompt: node.prompt,
+            prompt: recordedInput(node.prompt, 2_000),
             input: recordedInput(supplied.value),
           },
           tasks: [],
@@ -1546,9 +1546,11 @@ export class WorkflowController {
         const report = inputs.find((item) => item.nodeId === node.id)?.value ?? state.input;
         // Node state caps `prompt` at 2,000 chars; assignee + goal can exceed
         // that, and a truncated label is better than a schema rejection. The
-        // goal's secret shapes go first, as in the stored definition (#385),
-        // so the cut cannot leave half a token no pattern recognises.
-        const prompt = recordedInput(`${node.assignee}: ${node.goal}`).slice(0, 2_000);
+        // delegate reads its task here, so only secret shapes go, not the goal.
+        // Each field is redacted on its own, as the stored definition does, so
+        // the join cannot read the goal as the value of a credential-named
+        // assignee; the cap still comes after redaction.
+        const prompt = `${recordedInput(node.assignee)}: ${recordedInput(node.goal)}`.slice(0, 2_000);
         if (report === undefined) {
           return {
             state: { status: "awaiting_input", taskIds: [], prompt },
@@ -2113,10 +2115,12 @@ function asked(item: EvidenceItem): string {
 
 // Human- and delegate-supplied text is untrusted like any other input, so it is
 // redacted before it reaches persisted state, as is the check a node waits
-// on. Redaction can lengthen a value (a short secret becomes a longer
-// marker), hence the cap the state schema wants.
-function recordedInput(value: string): string {
-  return String(redactStructuredValue(value).value).slice(0, 10_000);
+// on, and so is the prompt a node shows, as the stored definition's copy is.
+// Redaction can lengthen a value (a short secret becomes a longer marker),
+// hence the cap the state schema wants, applied after it so a cut cannot
+// leave part of a secret its pattern no longer matches.
+function recordedInput(value: string, max = 10_000): string {
+  return String(redactStructuredValue(value).value).slice(0, max);
 }
 
 function requestsFor(node: WorkflowNode): TaskRequest[] {
