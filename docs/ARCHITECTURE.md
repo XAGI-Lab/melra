@@ -214,9 +214,9 @@ record exists to show (a goal, a command's arguments, a judgement's rationale,
 an answer to a prompt) keeps its words and loses only recognisable secrets:
 the `SECRET_PATTERNS` shapes, and in a command's arguments also the values of
 credential-named flags, `-u user:pass`, `-pPASSWORD`, credential-named
-assignments and auth headers. So a secret of no recognisable shape in a goal is
-stored. `MELRA_HOME` still contains sensitive encrypted material and must not be
-committed or publicly synchronized.
+assignments, auth headers and a URL's userinfo. So a secret of no recognisable
+shape in a goal is stored. `MELRA_HOME` still contains sensitive encrypted
+material and must not be committed or publicly synchronized.
 
 ## Workflow model
 
