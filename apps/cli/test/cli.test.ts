@@ -959,6 +959,54 @@ describe("melra CLI", () => {
     }
   });
 
+  it("inspects and exports by the eight characters `melra tasks` shows, in any status (#386)", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-cli-")));
+    roots.push(root);
+    const dataDirectory = join(root, ".melra");
+    const server = await createMelraRuntime({ workspaceRoot: root, dataDirectory, environment: {} });
+    try {
+      // Planned reads, so none waits for approval. Seventeen ids over sixteen
+      // hex digits: two of them start alike.
+      const ids = Array.from(
+        { length: 17 },
+        (_, index) =>
+          server.controller.plan(
+            TaskRequestSchema.parse({ goal: `List ${index}`, operation: { kind: "file", action: "list", path: "." } }),
+          ).id,
+      );
+      const shared = ids.find((id, index) => ids.findIndex((other) => other[0] === id[0]) !== index)![0]!;
+      const env = { ...process.env, MELRA_HOME: dataDirectory, MELRA_WORKSPACE: root };
+      const run = (args: string[]) =>
+        execute(process.execPath, [entry, ...args], { cwd: root, env }).catch((error: unknown) => error) as Promise<{
+          code?: number;
+          stdout: string;
+          stderr: string;
+        }>;
+      for (const command of ["inspect", "export"]) {
+        const shown = await run([command, ids[0]!.slice(0, 8)]);
+        expect(shown.code).toBeUndefined();
+        expect(JSON.parse(shown.stdout).task).toMatchObject({ id: ids[0], status: "planned" });
+        // A prefix two tasks share is refused, never resolved to either.
+        const ambiguous = await run([command, shared]);
+        expect(ambiguous.code).toBe(1);
+        expect(ambiguous.stderr).toContain(`melra: task_id_ambiguous:${shared}\n`);
+        const unknown = await run([command, "zzzzzzzz"]);
+        expect(unknown.code).toBe(1);
+        expect(unknown.stderr).toContain("melra: task_not_found:zzzzzzzz\n");
+        // An unset "$ID" names no task, however many there are.
+        const empty = await run([command, ""]);
+        expect(empty.code).toBe(1);
+        expect(empty.stderr).toContain("melra: task_not_found:\n");
+      }
+      // `judge` still takes ids whole.
+      const judged = await run(["judge", ids[0]!.slice(0, 8), "--judgement", ids[1]!, "--verdict", "no"]);
+      expect(judged.code).toBe(1);
+      expect(judged.stderr).toContain("taskId: Invalid UUID");
+    } finally {
+      await server.close();
+    }
+  });
+
   it("prints the product version", async () => {
     const result = await execute(process.execPath, [entry, "version"]);
     // Against the constant, not a literal: a literal here is an eighteenth

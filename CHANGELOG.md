@@ -31,6 +31,13 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- `melra inspect` and `melra export` take the eight-character id prefix the
+  plain `melra tasks` table prints, in any status, as `melra approve` already
+  did. Before, they passed it on as a whole id and reported `task_not_found`.
+  A prefix two tasks share is refused with `task_id_ambiguous:<prefix>`, and
+  one no task has with `task_not_found:<prefix>`; an empty argument, as an
+  unset `"$ID"` sends, names no task, where `melra approve` took it for the one
+  task waiting, if only one was. `melra judge` still takes ids whole. (#386)
 - A verdict sent in band where only an operator's counts, from a
   developer-mode process on a task that ran enforced (`melra judge` without
   `--mode enforced`, or `melra_task_judge`) or from an agent on an enforced

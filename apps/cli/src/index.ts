@@ -19,6 +19,7 @@ import {
   principalRef,
   type ApprovalResponse,
   type TaskRequest,
+  type TaskStatus,
   type WorkflowDefinition,
   type WorkflowInput,
   type WorkflowRun,
@@ -898,6 +899,22 @@ async function runTask(args: string[], env: CliEnvironment): Promise<number> {
 }
 
 /**
+ * The task a whole id or a prefix names: `melra tasks` shows the first eight
+ * characters, so a prefix naming one task among the 500 most recently updated
+ * (in `status`, if given) is enough. A prefix two of them share, or none, is
+ * refused rather than guessed; an empty argument, as an unset `"$ID"` sends,
+ * names nothing.
+ */
+function resolveTaskId(melra: MelraRuntime, given: string, status?: TaskStatus): string {
+  if (given.length >= 36) return given;
+  const matching =
+    given === "" ? [] : melra.store.listTasks(500, status).filter((task) => task.id.startsWith(given));
+  if (matching.length > 1) throw new Error(`task_id_ambiguous:${given}`);
+  if (matching.length === 0) throw new Error(`task_not_found:${given}`);
+  return matching[0]!.id;
+}
+
+/**
  * Records an approval for a task another process planned, without running it:
  * the agent that planned it runs it, and the decision lets it.
  */
@@ -908,13 +925,7 @@ async function approveCommand(args: string[], env: CliEnvironment): Promise<numb
   const approver = approverLabel(env);
   const melra = await runtime(env);
   try {
-    // `melra tasks` shows the first eight characters, so a prefix naming one
-    // waiting task is enough.
-    const waiting = melra.store
-      .listTasks(500, "awaiting_approval")
-      .filter((task) => task.id.startsWith(given));
-    if (given.length < 36 && waiting.length > 1) throw new Error(`task_id_ambiguous:${given}`);
-    const taskId = given.length < 36 && waiting.length === 1 ? waiting[0]!.id : given;
+    const taskId = resolveTaskId(melra, given, "awaiting_approval");
     const view = melra.controller.approvalView(taskId);
     if (args.includes("--deny")) {
       melra.controller.cancel(taskId);
@@ -1011,10 +1022,13 @@ async function judgeCommand(args: string[], env: CliEnvironment): Promise<number
 }
 
 async function inspectTask(args: string[], env: CliEnvironment): Promise<void> {
-  const taskId = args[0];
-  if (taskId === undefined) throw new Error("inspect requires a task ID");
+  const given = args[0];
+  if (given === undefined) throw new Error("inspect requires a task ID");
   const melra = await runtime(env);
   try {
+    // They only read, so the prefix `melra tasks` shows is enough, as for
+    // `approve`, in any status; `judge` still takes ids whole.
+    const taskId = resolveTaskId(melra, given);
     output({
       task: melra.controller.status(taskId),
       ...melra.controller.receipts({ taskId }),
