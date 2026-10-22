@@ -174,12 +174,14 @@ describe("harness tools in enforced mode", () => {
   });
 
   it("plans a URL or query it accepts even when its goal would pass the goal's cap", async () => {
-    // 8,018 characters, but each é is percent-encoded to six in the goal. On
+    // 8,017 characters, but each é is percent-encoded to six in the goal. On
     // loopback, so policy stops it at the plan and no page is opened.
     const held = await call(tools, "browse", { url: `http://localhost/${"é".repeat(8_000)}` });
     expect(held.status).toBe("blocked");
-    expect(runtime.controller.status(String(held.taskId)).request.goal).toHaveLength(10_000);
-    expect((await call(tools, "recall", { query: "q".repeat(10_000) })).status).toBe("verified_success");
+    expect(runtime.controller.status(String(held.taskId)).request.goal).toBe("Open (input too long to restate)");
+    const recalled = await call(tools, "recall", { query: "q".repeat(10_000) });
+    expect(recalled.status).toBe("verified_success");
+    expect(runtime.controller.status(String(recalled.taskId)).request.goal).toBe("Recall (input too long to restate)");
   });
 
   it("asks the browser tools for the page they act on", async () => {

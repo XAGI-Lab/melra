@@ -300,12 +300,15 @@ export function registerHarnessTools(
       },
       async (args: Record<string, unknown>) => {
         const parsed = z.object(definition.input).parse(args);
+        // A goal is capped at 10,000 characters, and one built from an
+        // accepted input can pass that: a `recall` query of 10,000, or a
+        // non-ASCII URL that percent-encoding lengthens up to ninefold. Cut
+        // through, it could keep part of a secret no pattern then matches, so
+        // it keeps only its verb; the operation still carries the input.
+        const goal = definition.goal(parsed);
         const task = runtime.controller.plan(
           TaskRequestSchema.parse({
-            // A goal is capped at 10,000 characters, and one built from an
-            // accepted input can pass that: a `recall` query of 10,000, or a
-            // non-ASCII URL that percent-encoding lengthens up to ninefold.
-            goal: definition.goal(parsed).slice(0, 10_000),
+            goal: goal.length <= 10_000 ? goal : `${goal.split(" ", 1)[0]} (input too long to restate)`,
             operation: definition.operation(parsed),
             ...(definition.evidence === undefined
               ? {}

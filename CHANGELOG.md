@@ -47,7 +47,9 @@ All notable changes are documented here. The format follows
 
 - The `recall` harness tool no longer fails a query it accepts that is longer
   than 9,993 characters: the goal built from it passed the 10,000 characters a
-  goal may hold. A harness tool's goal is now cut at 10,000 (#385).
+  goal may hold. A harness tool's goal that would pass that keeps only its verb,
+  as in `Recall (input too long to restate)`, rather than being cut through its
+  input; the operation still carries the input (#385).
 
 ### Security
 
