@@ -165,18 +165,6 @@ export class SqliteStore {
     if (options.readOnly === true) {
       this.database = new DatabaseSync(path, { readOnly: true });
       this.database.exec("PRAGMA busy_timeout = 5000");
-      // A home only an older MELRA has opened lacks migration 7's columns,
-      // and an observer never migrates: it reads tasks through a view that
-      // derives them from the JSON, without their indexes.
-      const columns = this.database.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>;
-      if (columns.length > 0 && !columns.some((column) => column.name === "status")) {
-        this.database.exec(`
-          CREATE TEMP VIEW tasks AS SELECT *,
-            json_extract(data, '$.status') AS status,
-            json_extract(data, '$.idempotencyKey') AS idempotency_key
-          FROM main.tasks
-        `);
-      }
       return;
     }
     if (path !== ":memory:") {
@@ -360,8 +348,7 @@ export class SqliteStore {
     );
     // Migration 4 records which process is running each task, so recovery can
     // tell a live peer's work from a crashed one's. The index expression must
-    // match the status filters' text exactly for SQLite to use it; migration 7
-    // replaces it.
+    // match the status filters' text exactly for SQLite to use it.
     this.applyMigration(
       4,
       `
@@ -388,34 +375,12 @@ export class SqliteStore {
     );
     // Migration 6 indexes tasks by idempotency key, so a workflow step finds
     // the tasks under its key without reading every task. As for migration 4,
-    // the expression must match listTasksByKey's text exactly; migration 7
-    // replaces it.
+    // the expression must match listTasksByKey's text exactly.
     this.applyMigration(
       6,
       `
       CREATE INDEX IF NOT EXISTS tasks_idempotency_key
         ON tasks(json_extract(data, '$.idempotencyKey'));
-    `,
-    );
-    // Migration 7 copies a task's status and idempotency key out of its JSON
-    // into columns, which every write of `data` sets with it, and indexes
-    // those instead of the expressions of migrations 4 and 6, which parsed
-    // `data` on every write. Status is indexed with `updated_at`, the order
-    // every listing by status returns. An older MELRA still opens the
-    // database but leaves the columns behind when it writes a task, so a
-    // home this has opened must not be run by one.
-    this.applyMigration(
-      7,
-      `
-      ALTER TABLE tasks ADD COLUMN status TEXT;
-      ALTER TABLE tasks ADD COLUMN idempotency_key TEXT;
-      UPDATE tasks SET
-        status = json_extract(data, '$.status'),
-        idempotency_key = json_extract(data, '$.idempotencyKey');
-      DROP INDEX IF EXISTS tasks_status;
-      DROP INDEX IF EXISTS tasks_idempotency_key;
-      CREATE INDEX tasks_status ON tasks(status, updated_at);
-      CREATE INDEX tasks_idempotency_key ON tasks(idempotency_key);
     `,
     );
   }
@@ -466,32 +431,18 @@ export class SqliteStore {
     }
   }
 
-  /**
-   * Without `owner`, a save keeps whichever owner the row already has. The
-   * status and key columns are written with `data` (migration 7), here and in
-   * `saveTaskIf`, the only two writes of it.
-   */
+  /** Without `owner`, a save keeps whichever owner the row already has. */
   saveTask(task: TaskRecord, owner?: string): void {
     this.database
       .prepare(`
-        INSERT INTO tasks(id, data, created_at, updated_at, owner, status, idempotency_key)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO tasks(id, data, created_at, updated_at, owner)
+        VALUES (?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           data = excluded.data,
           updated_at = excluded.updated_at,
-          owner = COALESCE(excluded.owner, tasks.owner),
-          status = excluded.status,
-          idempotency_key = excluded.idempotency_key
+          owner = COALESCE(excluded.owner, tasks.owner)
       `)
-      .run(
-        task.id,
-        JSON.stringify(task),
-        task.createdAt,
-        task.updatedAt,
-        owner ?? null,
-        task.status,
-        task.idempotencyKey ?? null,
-      );
+      .run(task.id, JSON.stringify(task), task.createdAt, task.updatedAt, owner ?? null);
   }
 
   /**
@@ -502,18 +453,10 @@ export class SqliteStore {
   saveTaskIf(task: TaskRecord, expected: readonly TaskRecord["status"][], owner?: string): boolean {
     const result = this.database
       .prepare(`
-        UPDATE tasks SET data = ?, updated_at = ?, owner = COALESCE(?, owner), status = ?, idempotency_key = ?
-        WHERE id = ? AND status IN (SELECT value FROM json_each(?))
+        UPDATE tasks SET data = ?, updated_at = ?, owner = COALESCE(?, owner)
+        WHERE id = ? AND json_extract(data, '$.status') IN (SELECT value FROM json_each(?))
       `)
-      .run(
-        JSON.stringify(task),
-        task.updatedAt,
-        owner ?? null,
-        task.status,
-        task.idempotencyKey ?? null,
-        task.id,
-        JSON.stringify(expected),
-      );
+      .run(JSON.stringify(task), task.updatedAt, owner ?? null, task.id, JSON.stringify(expected));
     return Number(result.changes) === 1;
   }
 
@@ -602,7 +545,7 @@ export class SqliteStore {
       .prepare(`
         UPDATE tasks SET owner = ?
         WHERE id = ? AND owner IS ?
-          AND status IN ('running', 'verifying')
+          AND json_extract(data, '$.status') IN ('running', 'verifying')
         RETURNING data
       `)
       .get(this.ownerId(), id, row.owner) as JsonRow | undefined;
@@ -625,7 +568,9 @@ export class SqliteStore {
             .prepare("SELECT data FROM tasks ORDER BY updated_at DESC LIMIT ?")
             .all(limit)
         : this.database
-            .prepare("SELECT data FROM tasks WHERE status = ? ORDER BY updated_at DESC LIMIT ?")
+            .prepare(
+              "SELECT data FROM tasks WHERE json_extract(data, '$.status') = ? ORDER BY updated_at DESC LIMIT ?",
+            )
             .all(status, limit)
     ) as unknown as JsonRow[];
     return rows.map((row) => JSON.parse(row.data) as TaskRecord);
@@ -642,7 +587,7 @@ export class SqliteStore {
     const rows = this.database
       .prepare(`
         SELECT data FROM tasks
-        WHERE status = 'waiting_user'
+        WHERE json_extract(data, '$.status') = 'waiting_user'
           AND coalesce(json_extract(data, '$.judgements[0].expiresAt'), '') <= ?
         ORDER BY updated_at ASC
       `)
@@ -653,7 +598,7 @@ export class SqliteStore {
   /** Every task planned under one idempotency key, any status, found by its index. */
   listTasksByKey(idempotencyKey: string): TaskRecord[] {
     const rows = this.database
-      .prepare("SELECT data FROM tasks WHERE idempotency_key = ?")
+      .prepare("SELECT data FROM tasks WHERE json_extract(data, '$.idempotencyKey') = ?")
       .all(idempotencyKey) as unknown as JsonRow[];
     return rows.map((row) => JSON.parse(row.data) as TaskRecord);
   }
@@ -661,7 +606,9 @@ export class SqliteStore {
   /** Counted in SQL so a summary does not have to load every task to add them up. */
   taskStatusCounts(): Record<string, number> {
     const rows = this.database
-      .prepare("SELECT status, COUNT(*) AS count FROM tasks GROUP BY status")
+      .prepare(
+        "SELECT json_extract(data, '$.status') AS status, COUNT(*) AS count FROM tasks GROUP BY 1",
+      )
       .all() as unknown as Array<{ status: string; count: number }>;
     return Object.fromEntries(rows.map((row) => [row.status, Number(row.count)]));
   }
@@ -745,7 +692,7 @@ export class SqliteStore {
     const rows = this.database
       .prepare(`
         SELECT data FROM tasks
-        WHERE status IN ('running', 'verifying')
+        WHERE json_extract(data, '$.status') IN ('running', 'verifying')
         ORDER BY updated_at
       `)
       .all() as unknown as JsonRow[];
