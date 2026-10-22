@@ -4,6 +4,7 @@
 import { describe, expect, it } from "vitest";
 import {
   allowsRetry,
+  DelegationNodeSchema,
   delegationChain,
   effectContract,
   LOCAL_IDENTITY,
@@ -38,6 +39,12 @@ describe("public protocol schemas", () => {
     const description = TaskRequestSchema.shape.goal.description ?? "";
     expect(description).toContain("stored as written");
     expect(description).toContain("certificates");
+    expect(description).toContain("credentials");
+  });
+
+  it("tells whoever writes a delegation's goal that it is stored as written (#385)", () => {
+    const description = DelegationNodeSchema.shape.goal.description ?? "";
+    expect(description).toContain("stored as written");
     expect(description).toContain("credentials");
   });
 

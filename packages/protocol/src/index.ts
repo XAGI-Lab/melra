@@ -1061,7 +1061,13 @@ export const HumanInputNodeSchema = NodeBaseSchema.extend({
 export const DelegationNodeSchema = NodeBaseSchema.extend({
   type: z.literal("delegation"),
   assignee: z.string().min(1).max(200),
-  goal: z.string().min(1).max(2_000),
+  goal: z
+    .string()
+    .min(1)
+    .max(2_000)
+    .describe(
+      "What the assignee is asked to do, in human-readable words. It is stored as written in the workflow's definition and the run's state and events, with only recognisable secret formats removed, so never put credentials or other secrets in it.",
+    ),
   requiredEvidence: z.array(EvidencePredicateSchema).max(20).default([]),
 }).strict();
 
