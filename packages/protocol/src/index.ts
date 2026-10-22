@@ -578,7 +578,9 @@ export const TaskRequestSchema = z
       .string()
       .min(1)
       .max(10_000)
-      .describe("Why this task is being run, in one human-readable sentence."),
+      .describe(
+        "Why this task is being run, in one human-readable sentence. It is stored as written in task records and certificates, with only recognisable secret formats removed, so never put credentials, URL query values or other secrets in it.",
+      ),
     operation: OperationSchema.describe("The one effect to run: a kind (file, terminal, browser, memory, computer, http or system), an action (melra_capabilities lists each kind's actions) and that kind's fields. MELRA classifies it as read, mutate or destructive; policy then allows it, asks for approval or denies it."),
     // These three carry the rules callers get wrong, and a description is the
     // only channel that reaches a model reading the tool's JSON Schema.

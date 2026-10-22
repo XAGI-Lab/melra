@@ -32,6 +32,15 @@ describe("public protocol schemas", () => {
     expect(request.requiredEvidence).toEqual([]);
   });
 
+  it("tells whoever writes a goal that it is stored as written (#385)", () => {
+    // The schema description is the one channel that reaches a model filling
+    // in melra_plan, and a goal's secret of no recognisable shape is kept.
+    const description = TaskRequestSchema.shape.goal.description ?? "";
+    expect(description).toContain("stored as written");
+    expect(description).toContain("certificates");
+    expect(description).toContain("credentials");
+  });
+
   it("rejects unknown fields and unknown effect names", () => {
     expect(() =>
       TaskRequestSchema.parse({
