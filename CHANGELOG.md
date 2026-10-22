@@ -28,6 +28,17 @@ All notable changes are documented here. The format follows
   OAuth client's token puts above a judge's chain is recorded in `judgedBy` but
   not compared. The check still rests on declared identities; `melra judge` is
   unchanged.
+- A task's goal is stored as declared, with only recognisable secret shapes
+  taken out, instead of being replaced whole (#385). The stored request, the
+  certificate's `goal`, and a workflow definition's step and delegation goals
+  used to read `[REDACTED_SENSITIVE_FIELD]` whatever the goal said; they now
+  hold the goal itself, so a certificate states what its task was for. The
+  trade-off: a secret with no recognisable shape written into a goal is now
+  kept in those records, so keep secrets out of goals. A delegation's waiting
+  prompt in the run's state is now redacted too (it held the plaintext goal),
+  and the `browse` harness tool's goal no longer includes the URL's query or
+  fragment. Records written before this keep the placeholder; nothing is
+  migrated.
 
 ## [0.3.0-alpha.18] - 2026-10-22
 

@@ -208,8 +208,13 @@ and non-regular key files are rejected. Losing or changing the key makes
 existing payloads unreadable. MELRA does not escrow or recover keys.
 
 Status, events, logs, receipts, and certificates contain redacted projections,
-not executable plaintext. `MELRA_HOME` still contains sensitive encrypted
-material and must not be committed or publicly synchronized.
+not executable plaintext. A field that holds content, typed values, headers,
+environment, terminal output or a credential is replaced whole. Free text a
+record exists to show (a goal, a command's arguments, a judgement's rationale,
+an answer to a prompt) keeps its words and loses only the `SECRET_PATTERNS`
+shapes, so a secret of no recognisable shape in a goal is stored. `MELRA_HOME`
+still contains sensitive encrypted material and must not be committed or
+publicly synchronized.
 
 ## Workflow model
 
