@@ -43,8 +43,15 @@ async with MelraClient(workspace="/path/to/project") as melra:
     capabilities = await melra.capabilities()
 ```
 
-That spawns `melra serve` over stdio. To use a server that is already running,
-connect to it instead; every method is the same:
+That spawns `melra serve` over stdio. The server gets this process's
+environment except `MELRA_UNHINGED` and `MELRA_SOCKET`, so a credential a
+policy reads from the environment, `MELRA_BROWSER*`, `LANG` and `CI` reach it.
+`workspace` and `data_directory` set `MELRA_WORKSPACE` and `MELRA_HOME`, and
+`environment` goes on top of all of it, so pass either of the two left out
+there to mean it. The TypeScript SDK's `connect()` passes the same.
+
+To use a server that is already running, connect to it instead; every method is
+the same:
 
 ```python
 # melra serve --http — the MCP URL and token it prints at startup

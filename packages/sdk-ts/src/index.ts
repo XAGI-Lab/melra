@@ -110,18 +110,21 @@ export function parseMelraToolResult(result: unknown): Record<string, unknown> {
 }
 
 /**
- * The settings of this process worth passing to a stdio server it spawns:
- * where its state and policy live, and a stricter mode. Not the ones that
- * would redirect or widen it: MELRA_SOCKET moved older versions of `melra
- * serve` off stdio, so connecting hung; MELRA_UNHINGED unconfines it, with a banner nobody reads; and an
- * explicit `cwd` decides the workspace over an inherited MELRA_WORKSPACE.
- * Pass any of those in `env` to mean them.
+ * What a stdio server this process spawns inherits, by the Python SDK's rule:
+ * all of this process's environment, so credentials a policy reads from
+ * `source.env`, MELRA_BROWSER* and LANG or CI arrive too, but not the
+ * settings that would redirect or widen it. MELRA_SOCKET moved older versions
+ * of `melra serve` off stdio, so connecting hung; MELRA_UNHINGED unconfines
+ * it, with a banner nobody reads; and an explicit `cwd` decides the workspace
+ * over an inherited MELRA_WORKSPACE. Pass any of those in `env` to mean them.
  */
-function melraSettings(environment: NodeJS.ProcessEnv, cwd: string | undefined): Record<string, string> {
-  const names = ["MELRA_HOME", "MELRA_POLICY", "MELRA_MODE", "MELRA_PAYLOAD_KEY"];
-  if (cwd === undefined) names.push("MELRA_WORKSPACE");
+function inheritedEnvironment(environment: NodeJS.ProcessEnv, cwd: string | undefined): Record<string, string> {
+  const withheld = ["MELRA_SOCKET", "MELRA_UNHINGED", ...(cwd === undefined ? [] : ["MELRA_WORKSPACE"])];
   return Object.fromEntries(
-    names.flatMap((name) => (environment[name] === undefined ? [] : [[name, environment[name]!]])),
+    // Upper-cased, since on Windows `melra_unhinged` is MELRA_UNHINGED.
+    Object.entries(environment).filter(
+      (entry): entry is [string, string] => entry[1] !== undefined && !withheld.includes(entry[0].toUpperCase()),
+    ),
   );
 }
 
@@ -162,9 +165,9 @@ export class MelraClient {
               args: options.args ?? ["serve"],
               ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
               // The MCP SDK passes the child only HOME, PATH and a few more,
-              // so MELRA_MODE, MELRA_POLICY and MELRA_HOME set for this
-              // process were dropped and the server ran configured differently.
-              env: { ...melraSettings(process.env, options.cwd), ...options.env },
+              // so the server ran without the settings and credentials it
+              // gets when the Python SDK starts it (#382).
+              env: { ...inheritedEnvironment(process.env, options.cwd), ...options.env },
               stderr: "pipe",
             });
     const client = new Client({
