@@ -6,6 +6,25 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- A governed action commits to SQLite six times instead of nine, and runs
+  6-12% faster on a Mac (M4, medians of 20 rounds interleaved with
+  0.3.0-alpha.17): `file.write` 2.21 ms to 2.10 ms, `file.read` 1.11 ms to
+  1.00 ms, an HTTP `GET` 1.18 ms to 1.05 ms, and a ten-step workflow 18.8 ms
+  to 17.3 ms (151 commits to 111). Everything that records a task's outcome
+  after verification (its idempotency commit, its grant's draw, its receipt,
+  its status and its certificate) commits in one transaction, so a crash
+  leaves the task as it was during verification or finished, never with part
+  of its outcome written. A task is still recorded before its adapter runs,
+  and the adapter's result before it is verified. A task's status and
+  idempotency key are indexed as columns of their own (SQLite migration 7)
+  instead of as expressions over its JSON, which every write parsed. The
+  migration upgrades a home in place. 0.3.0-alpha.17 and earlier still open
+  an upgraded home but do not write those columns, so recovery and workflow
+  steps here would miss tasks they plan or run there: do not downgrade past
+  this release. (#351)
+
 ## [0.3.0-alpha.17] - 2026-10-22
 
 ### Changed

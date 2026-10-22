@@ -123,26 +123,28 @@ describe("TaskController", () => {
       TaskRequestSchema.parse({ goal: "Inspect the runtime", operation: { kind: "system", action: "info" } }),
     );
     // Another process reads the task, and a workflow advance certifies it,
-    // after its outcome is recorded and before its certificate is.
+    // while its certificate is being written.
     const save = running.saveCertificate.bind(running);
     let read: ReturnType<TaskController["receipts"]> | undefined;
     let certified: ReturnType<TaskController["certify"]>;
+    let seen: string | undefined;
     vi.spyOn(running, "saveCertificate").mockImplementationOnce((certificate, options) => {
       read = other.receipts({ taskId: planned.id });
       certified = other.certify(planned.id);
+      seen = elsewhere.getTask(planned.id)?.status;
       return save(certificate, options);
     });
 
     const executed = await executing.execute(planned.id);
 
-    // A read writes nothing, so it cannot hand out a certificate the
-    // executor's then replaces.
+    // The outcome commits with its certificate, so until then the task is
+    // still verifying to anyone else: a read has no certificate to hand out,
+    // and an advance none to write that the executor's would then replace.
+    expect(seen).toBe("verifying");
     expect(read?.certificate).toBeUndefined();
+    expect(certified).toBeUndefined();
     const stored = running.getCertificateForTask(planned.id)!;
-    expect([executed.certificate?.certificateId, certified?.certificateId]).toEqual([
-      stored.certificateId,
-      stored.certificateId,
-    ]);
+    expect(executed.certificate?.certificateId).toBe(stored.certificateId);
     expect(running.getTask(planned.id)?.certificateId).toBe(stored.certificateId);
   });
 
@@ -899,6 +901,35 @@ describe("effect contract and principal", () => {
 
       expect(settled.task.status).toBe("verified_success");
       expect(settled.certificate?.result).toBe("VERIFIED_SUCCESS");
+      expect(execute).toHaveBeenCalledTimes(1);
+    });
+
+    it("lists only the receipts that were stored when its outcome failed to commit", async () => {
+      const execute = vi.fn(async () => ({ success: true }));
+      const { controller, store, task, approval } = await charge(execute, {
+        idempotencyKey: "d".repeat(64),
+      });
+      const save = store.saveTask.bind(store);
+      let failed = false;
+      vi.spyOn(store, "saveTask").mockImplementation((saved, owner) => {
+        if (saved.status === "verified_success" && !failed) {
+          failed = true;
+          throw new Error("disk full");
+        }
+        save(saved, owner);
+      });
+
+      const parked = await controller.execute(task.id, approval);
+
+      // The live receipt went with the rest of the outcome; the task names
+      // only the one that says it failed, and so does its certificate.
+      expect(parked.task.status).toBe("recovery_required");
+      const { receipts, certificate } = controller.receipts({ taskId: task.id });
+      expect(receipts.map((receipt) => receipt.receiptId)).toEqual(store.getTask(task.id)?.receiptIds);
+      expect(certificate?.receiptIds).toEqual(store.getTask(task.id)?.receiptIds);
+      expect(receipts).toHaveLength(1);
+      // Its key was committed on its own all the same, so it settles on it.
+      expect((await controller.execute(task.id)).task.status).toBe("verified_success");
       expect(execute).toHaveBeenCalledTimes(1);
     });
   });

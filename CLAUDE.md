@@ -125,7 +125,10 @@ marks a task `verified_success` only when the adapter succeeded *and* every
 may have run (it returned, or threw an outcome-unknown error), whatever the verdict, so a
 `partial` or `recovery_required` task is charged too. Read-only ops with no declared
 evidence get a synthetic `operation_completed` item. Retries apply to `read` effects
-only — mutations and destructive ops run at most once.
+only — mutations and destructive ops run at most once. After verification, everything that
+records the outcome (idempotency commit, grant draw, receipt, task, certificate) commits in one
+`store.transaction`; the adapter's result is committed on its own before verification, because
+recovery re-observes a `verifying` change against it.
 
 Policy (`packages/policy-core/src/index.ts`) denies before the adapter is reached. Non-obvious
 defaults that trip people up:

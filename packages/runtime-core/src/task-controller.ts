@@ -494,7 +494,10 @@ export class TaskController {
     let budgetExhausted = false;
     let shortCircuited = false;
     let effectReturned = false;
-    let settled: ExecutionResult | undefined;
+    // Set once verification is done, until what it decided is committed: the
+    // writes are undone together if any fails, and the catch puts back what
+    // was true before them.
+    let unwritten: { checksHeld: boolean; receiptIds: string[] } | undefined;
     if (rechecked.grantId !== undefined) {
       const held = this.reserved.get(rechecked.grantId) ?? new Map<string, number>();
       held.set(task.id, classified.spend?.amount ?? 0);
@@ -508,12 +511,13 @@ export class TaskController {
     // Any other throw is an adapter saying nothing went out, and costs
     // nothing; so does a refusal before it was called. Counting an effect
     // that did not happen is preferred to a grant funding more than it says.
-    const charge = (ran: boolean): void => {
+    const draw = (): void => {
       if (rechecked.grantId === undefined) return;
-      if (ran) {
-        this.store.recordCapabilityUse(rechecked.grantId, task.id, classified.spend?.amount ?? 0, now());
-      }
-      this.reserved.get(rechecked.grantId)?.delete(task.id);
+      this.store.recordCapabilityUse(rechecked.grantId, task.id, classified.spend?.amount ?? 0, now());
+    };
+    // Only once the draw is committed, or the effect is known not to have run.
+    const release = (): void => {
+      if (rechecked.grantId !== undefined) this.reserved.get(rechecked.grantId)?.delete(task.id);
     };
     try {
       const opened = this.breaker.check(classified.target);
@@ -542,6 +546,10 @@ export class TaskController {
       task.status = "verifying";
       task.result = sanitizedResult.value as Record<string, unknown>;
       task.updatedAt = now();
+      // Committed on its own, ahead of the rest, on purpose: recovery settles
+      // a `verifying` change it can look at again against this result
+      // (`recoverTask`), and no transaction is held across the verifier,
+      // which may wait on an HTTP probe.
       this.store.saveTaskExecutionResult(
         task,
         this.payloadCipher.seal(result, `task:${task.id}:result`),
@@ -580,22 +588,7 @@ export class TaskController {
       // The effect ran and passed every kernel check, so it is committed now:
       // a key that ran must not run again, even while it waits for its verdict.
       const checksHeld = verified || awaitingJudgement;
-      if (
-        checksHeld &&
-        task.idempotencyKey !== undefined &&
-        !this.store.commitIdempotency(
-          task.idempotencyKey,
-          task.id,
-          task.attempt ?? 1,
-          now(),
-        )
-      ) {
-        task.status = "cancelled";
-        task.error = "duplicate_attempt_prevented";
-      }
-      // The adapter returned, so the effect ran: drawn down for a `partial`,
-      // a `failed` or a duplicate collapsed just above as for a verified task.
-      charge(true);
+      unwritten = { checksHeld, receiptIds: [...task.receiptIds] };
       const receipt = this.createReceipt(
         task,
         request,
@@ -607,47 +600,77 @@ export class TaskController {
         result,
         evidence,
       );
-      this.store.saveReceipt(receipt);
-      task.receiptIds.push(receipt.receiptId);
-      if (task.status !== "cancelled") {
-        task.status = verified
-          ? "verified_success"
-          : awaitingJudgement
-            ? "waiting_user"
-            : actionSucceeded
-              ? "partial"
-              : "failed";
-      }
-      // Written in the same save as the status, so a waiting row always says
-      // what it waits on, and until when.
-      if (task.status === "waiting_user") {
-        const expiresAt = new Date(Date.now() + approvalTtl(this.policy)).toISOString();
-        task.judgements = request.requiredEvidence.flatMap((predicate, predicateIndex) =>
-          predicate.type === "semantic" ? [{ judgementId: randomUUID(), predicateIndex, expiresAt }] : [],
-        );
-      }
-      task.updatedAt = now();
-      // A wait lands with its certificate in one transaction: written apart, a
-      // peer's expiry between the two was overwritten by the second. Either
-      // failing writes neither, so `settled` stays unset for the catch.
-      if (task.status === "waiting_user") {
-        const certificate = this.store.transaction(() => {
-          this.store.saveTask(task);
+      // Everything that records the outcome commits at once: the key, the
+      // draw, the receipt, the task and its certificate. A crash before the
+      // commit leaves the task `verifying`, as a crash during verification
+      // does, and never a part of the outcome.
+      const certificate = this.store.transaction(() => {
+        if (
+          checksHeld &&
+          task.idempotencyKey !== undefined &&
+          !this.store.commitIdempotency(
+            task.idempotencyKey,
+            task.id,
+            task.attempt ?? 1,
+            now(),
+          )
+        ) {
+          task.status = "cancelled";
+          task.error = "duplicate_attempt_prevented";
+        }
+        // The adapter returned, so the effect ran: drawn down for a `partial`,
+        // a `failed` or a duplicate collapsed just above as for a verified task.
+        draw();
+        this.store.saveReceipt(receipt);
+        task.receiptIds.push(receipt.receiptId);
+        if (task.status !== "cancelled") {
+          task.status = verified
+            ? "verified_success"
+            : awaitingJudgement
+              ? "waiting_user"
+              : actionSucceeded
+                ? "partial"
+                : "failed";
+        }
+        // Written in the same save as the status, so a waiting row always says
+        // what it waits on, and until when.
+        if (task.status === "waiting_user") {
+          const expiresAt = new Date(Date.now() + approvalTtl(this.policy)).toISOString();
+          task.judgements = request.requiredEvidence.flatMap((predicate, predicateIndex) =>
+            predicate.type === "semantic" ? [{ judgementId: randomUUID(), predicateIndex, expiresAt }] : [],
+          );
+        }
+        task.updatedAt = now();
+        this.store.saveTask(task);
+        // A wait lands with its certificate or not at all: written apart, a
+        // peer's expiry between the two was overwritten by the second.
+        if (task.status === "waiting_user") return this.createAndSaveCertificate(task, evidence, true);
+        // Any other outcome stands without its certificate. Rewriting it
+        // would contradict its receipt and commit, and an error would read
+        // as the effect not having happened, so the caller gets what was
+        // recorded; a workflow step's certificate is written by the run's
+        // next advance (`certify`). A failure SQLite rolled the whole
+        // transaction back for fails the commit instead, and the catch has it.
+        try {
           return this.createAndSaveCertificate(task, evidence, true);
-        });
-        return { task, output: result, receipt, certificate };
-      }
-      this.store.saveTask(task);
-      settled = { task, output: result, receipt };
-      const certificate = this.createAndSaveCertificate(task, evidence, true);
-      return { ...settled, certificate };
+        } catch {
+          return undefined;
+        }
+      });
+      unwritten = undefined;
+      release();
+      return { task, output: result, receipt, ...(certificate === undefined ? {} : { certificate }) };
     } catch (error) {
-      // The outcome is recorded, beside its receipt and idempotency commit,
-      // and only the certificate summarising it failed to write. Rewriting it
-      // would contradict them, and an error would read as the effect not
-      // having happened, so the caller gets what was recorded. A workflow
-      // step's certificate is written by the run's next advance (`certify`).
-      if (settled !== undefined) return settled;
+      // The writes after verification were undone together. The receipt they
+      // stored is gone, and a key whose effect passed every check is committed
+      // here on its own, as it was before anything after it could fail: a
+      // parked task settles on that commit (`settleCommitted`).
+      if (unwritten !== undefined) {
+        task.receiptIds = unwritten.receiptIds;
+        if (unwritten.checksHeld && task.idempotencyKey !== undefined) {
+          this.store.commitIdempotency(task.idempotencyKey, task.id, task.attempt ?? 1, now());
+        }
+      }
       const rawMessage = error instanceof Error ? error.message : String(error);
       // Capped after redaction, which can lengthen it, at the 10,000 characters
       // a workflow node's `error` holds: a longer one failed the node's write
@@ -665,7 +688,8 @@ export class TaskController {
       // that fails to write leaves the reservation held, and the task running
       // for recovery to charge.
       const ran = effectReturned || isOutcomeUnknown(rawMessage);
-      charge(ran);
+      if (ran) draw();
+      release();
       // Ahead of every other outcome, because it is the strongest thing known:
       // the effect may already have happened, either because the adapter says
       // so or because it returned and a write after it failed. `failed`,

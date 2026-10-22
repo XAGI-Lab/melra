@@ -189,6 +189,24 @@ describe("capability metering", () => {
     },
   );
 
+  it("holds the reservation of a change whose draw was undone with the rest of its outcome", async () => {
+    const { controller, store } = await setup();
+    const record = store.recordCapabilityUse.bind(store);
+    // Written in the outcome's transaction, undone when its receipt fails,
+    // and not written again.
+    vi.spyOn(store, "recordCapabilityUse")
+      .mockImplementationOnce(record)
+      .mockImplementation(() => {
+        throw new Error("database is locked");
+      });
+    vi.spyOn(store, "saveReceipt").mockImplementationOnce(() => {
+      throw new Error("database is locked");
+    });
+    await expect(run(controller, request(WRITE))).rejects.toThrow("database is locked");
+    expect(drawn(store, "write").operations).toBe(0);
+    expect(controller.plan(request(WRITE)).status).toBe("policy_blocked");
+  });
+
   it.each(["running", "verifying"] as const)(
     "charges a read cut off while %s, and its re-run needs room in the grant",
     async (status) => {
