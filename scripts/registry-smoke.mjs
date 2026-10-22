@@ -47,6 +47,7 @@ const EXPECTED_TOOLS = [
   "melra_plan",
   "melra_receipt",
   "melra_task_cancel",
+  "melra_task_judge",
   "melra_task_status",
   "melra_workflow_advance",
   "melra_workflow_cancel",

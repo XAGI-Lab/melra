@@ -162,7 +162,7 @@ describe("melra http server", () => {
       policy: { unhinged: boolean; workspaceRoot: string };
     };
     expect(body.product).toBe("MELRA");
-    expect(body.tools).toHaveLength(11);
+    expect(body.tools).toHaveLength(12);
     expect(body.policy.unhinged).toBe(false);
     expect(body.policy.workspaceRoot).toBe(runtime.policy.workspaceRoot);
   });
@@ -228,7 +228,7 @@ describe("melra http server", () => {
     );
     try {
       const tools = await client.listTools();
-      expect(tools.tools).toHaveLength(11);
+      expect(tools.tools).toHaveLength(12);
 
       const planned = await client.callTool({
         name: "melra_plan",

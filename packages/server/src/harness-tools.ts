@@ -3,7 +3,7 @@
 
 // Harness adapter: ordinary tool names on top of the kernel.
 //
-// The eleven `melra_*` tools are the kernel's own vocabulary, and a model asked
+// The twelve `melra_*` tools are the kernel's own vocabulary, and a model asked
 // to plan, read an approval challenge, and execute for every small read spends
 // most of its turn on ceremony. This surface gives a harness what it already
 // knows how to call — `read_file`, `write_file`, `run_command`, `browser_click`

@@ -12,6 +12,7 @@ import {
   MelraPlanInputSchema,
   MelraReceiptInputSchema,
   MelraTaskCancelInputSchema,
+  MelraTaskJudgeInputSchema,
   MelraTaskStatusInputSchema,
   OperationSchema,
   PRODUCT_VERSION,
@@ -29,7 +30,7 @@ import { HARNESS_TOOLS, registerHarnessTools } from "./harness-tools.js";
 
 /**
  * Whether to also expose the ordinary tool names a harness already knows.
- * Opt-in, because a client that shows all twenty-four tools at once buys
+ * Opt-in, because a client that shows all twenty-five tools at once buys
  * confusion rather than convenience: the kernel vocabulary is the default, and
  * `MELRA_HARNESS_TOOLS=1` adds the adapter surface on top.
  */
@@ -208,7 +209,7 @@ export const SERVER_INSTRUCTIONS = [
   "1. melra_capabilities (once): the operations available and the policy in force: allowed commands and domains, and whether mutations need approval.",
   "2. melra_plan with a goal, one operation, and requiredEvidence. Nothing runs yet. status policy_blocked means refused: read the reason and change the request; the same request will be refused again. status awaiting_approval returns an approval challenge.",
   "3. melra_execute with the taskId, plus the challenge id and its exact phrase if one was issued. Policy is checked again here.",
-  "4. Read the status. verified_success means the operation ran and every requiredEvidence check passed. partial means it ran but evidence did not hold. waiting_user means it ran and every check MELRA can make passed, but a semantic question (listed in judgements) waits for an answer from outside MELRA; nothing can answer one in this version, so at expiresAt it ends recovery_required for a change or partial for a read. recovery_required means a change may or may not have happened, or happened and its semantic question went unanswered (error semantic_judgement_expired): inspect the world before trying again, never re-run blindly. Only reads are retried for you.",
+  "4. Read the status. verified_success means the operation ran and every requiredEvidence check passed. partial means it ran but evidence did not hold, or a semantic question was answered no. waiting_user means it ran and every check MELRA can make passed, but a semantic question (listed in judgements) waits for an answer from outside MELRA: answer it with melra_task_judge, as a principal other than the one that planned it. yes on every question → verified_success; no → partial; cannot_tell, or no answer by expiresAt → recovery_required for a change, partial for a read. A change answered no stays in place, and nothing re-runs it: fixing it takes a new plan. recovery_required means a change may or may not have happened, or happened and its semantic question went unanswered or was answered cannot_tell (error semantic_judgement_expired or semantic_judgement_cannot_tell): inspect the world before trying again, never re-run blindly. Only reads are retried for you.",
   "5. melra_receipt returns the receipt and certificate when you need to show what was done.",
   "Rules: any operation that is not a read must declare requiredEvidence describing how to confirm it (result_equals, result_contains, exit_code, file_exists, file_absent, file_hash, page_contains, url_matches, http_resource_matches, custom, semantic). custom takes a verifier name from customEvidence in melra_capabilities. Outside unsafe-local mode, semantic is never enough alone for a destructive effect, which also needs file_exists, file_absent, file_hash or http_resource_matches. Leave constraints empty; free-text constraints are refused because they cannot be enforced.",
   "For multi-step jobs that must survive restarts, use melra_workflow_plan and melra_workflow_advance; each step still goes through the same policy, approval, and verification.",
@@ -221,7 +222,7 @@ export const SERVER_INSTRUCTIONS = [
  * unchanged byte for byte.
  */
 const ENFORCED_APPROVAL =
-  "Enforced mode: a challenge has no phrase and you cannot approve it. Anything you send as an approval is refused (approval_in_band_refused). An operator approves with `melra approve <taskId>` outside this conversation; until then melra_execute answers approval_awaiting_operator, so try again later. approval_expired means plan the task again.";
+  "Enforced mode: a challenge has no phrase and you cannot approve it. Anything you send as an approval is refused (approval_in_band_refused). An operator approves with `melra approve <taskId>` outside this conversation; until then melra_execute answers approval_awaiting_operator, so try again later. approval_expired means plan the task again. A verdict you send is refused (judgement_in_band_refused); an operator judges with `melra judge <taskId> --judgement <judgementId> --verdict yes|no|cannot_tell`.";
 
 export function createMcpServer(
   runtime: MelraRuntime,
@@ -235,7 +236,7 @@ export function createMcpServer(
     },
     // Clients that support it (Claude Code among them) put this in the model's
     // context once, so the loop below is learned up front instead of pieced
-    // together from eleven tool descriptions after a failed first call.
+    // together from twelve tool descriptions after a failed first call.
     {
       instructions:
         runtime.policy.mode === "enforced" ? `${SERVER_INSTRUCTIONS}\n${ENFORCED_APPROVAL}` : SERVER_INSTRUCTIONS,
@@ -309,7 +310,7 @@ export function createMcpServer(
     {
       title: "Inspect MELRA task status",
       description:
-        "Read one task's stored record by taskId (from melra_plan, or a workflow node's taskIds), in any status, policy_blocked and cancelled included, without changing or waiting on it. Returns the task: status, policyDecision, any approval challenge and approvedBy, the redacted request and result, error, attempts, receiptIds, certificateId and timestamps. Use it to re-check a task after melra_task_cancel or from another session, or to re-read a pending challenge. Use melra_receipt for receipts and the certificate, and melra_workflow_status for a whole workflow run.",
+        "Read one task's stored record by taskId (from melra_plan, or a workflow node's taskIds), in any status, policy_blocked and cancelled included, without changing or waiting on it. Returns the task: status, policyDecision, any approval challenge and approvedBy, the redacted request and result, error, attempts, receiptIds, certificateId, judgements (with judgedBy once answered) and timestamps. Use it to re-check a task after melra_task_cancel or from another session, or to re-read a pending challenge. Use melra_receipt for receipts and the certificate, and melra_workflow_status for a whole workflow run.",
       inputSchema: MelraTaskStatusInputSchema,
       annotations: {
         readOnlyHint: true,
@@ -368,6 +369,33 @@ export function createMcpServer(
             : { receiptId: parsed.receiptId }),
         }),
       );
+    },
+  );
+
+  server.registerTool(
+    "melra_task_judge",
+    {
+      title: "Judge a MELRA task's semantic question",
+      description:
+        "Answer one semantic question a waiting_user task waits on. MELRA runs no model, so a semantic predicate in requiredEvidence is answered from outside it, by a principal other than the one that planned the task. Read the task with melra_task_status first: judgements lists each question's judgementId, predicateIndex and expiresAt; request.requiredEvidence[predicateIndex] is the question, and the redacted result is what the effect returned. Judge that result, not the question's framing: the question was written by whoever ran the effect. identity is required and recorded as given, beside the receipt's principal; a judge whose principal is the task's principal, or a non-human link that principal acts for, is refused (semantic_judge_is_actor). rationale is for the people reading the record: stored redacted, never read by MELRA. A yes on every question makes the task verified_success; the first no ends it partial (error semantic_judgement_no); cannot_tell ends a change recovery_required and a read partial (semantic_judgement_cannot_tell); a yes while other questions are open is recorded and the task keeps waiting. Each question is answered once. Nothing runs again and no receipt is added: only the task and, once settled, its certificate change. Returns { task, certificate? }, the certificate only when the verdict settled the task. Fails without writing anything with task_not_found, judgement_in_band_refused (a task run in enforced mode takes a verdict only from an operator), task_not_awaiting_judgement:<status>, judgement_not_found, judgement_already_answered, judgement_expired (from expiresAt on; the task then settles closed) or semantic_judge_is_actor." +
+        (runtime.policy.mode === "enforced"
+          ? " Enforced mode: every verdict sent here is refused (judgement_in_band_refused); an operator judges with `melra judge <taskId> --judgement <judgementId> --verdict yes|no|cannot_tell` outside this conversation."
+          : ""),
+      inputSchema: MelraTaskJudgeInputSchema,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async (input) => {
+      // Parsed before it is attributed, which would otherwise stand the
+      // client in for an identity the judge never declared.
+      const { identity, ...judgement } = MelraTaskJudgeInputSchema.parse(
+        attributed(MelraTaskJudgeInputSchema.parse(input), client),
+      );
+      return toolResult(runtime.controller.judge(judgement, { identity }));
     },
   );
 
