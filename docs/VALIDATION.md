@@ -18,15 +18,15 @@ Host exercised locally: macOS arm64, Node.js 24.10.0, Python 3.11.14
 |---|---|
 | Package-version consistency | all 16 workspace manifests, protocol constant, and Python distribution match |
 | TypeScript build and strict typecheck | passed across 15 packages/apps |
-| JavaScript/Vitest cases | 506 passed, 6 platform-skipped (current `main`, ubuntu / Node 24 CI) |
+| JavaScript/Vitest cases | 1,134 passed, 8 platform-skipped (current `main`, ubuntu / Node 24 CI) |
 | Python lint and SDK tests | ruff passed; 2 tests passed |
-| Safety/execution evaluation | 54 of 54 passed |
+| Safety/execution evaluation | 55 of 55 passed |
 | Durable Core evaluation | 8 valid, 0 invalid |
 | Durable recovery rate | `1.0` |
 | Duplicate-execution rate | `0.0` |
 | False-success rate | `0.0` |
 | Event-consistency rate | `1.0` |
-| Real MCP stdio E2E | 15 cases passed |
+| Real MCP stdio E2E | 16 cases passed |
 | CLI package dry run | `melra-cli-0.3.0-alpha.1.tgz` produced |
 | Hardened container MCP smoke | all 11 tools discovered; verified certificate produced |
 | Shipped Node and Python dependency audit | no known vulnerabilities |
@@ -96,9 +96,9 @@ Host exercised locally: macOS arm64 (Darwin 25.5.0), Node.js 24, Python 3.11.14
 | Gate | Result |
 |---|---|
 | `pnpm check` | passed (versions, strict typecheck, tests, Python) |
-| TypeScript/Vitest cases | 506 passed, 6 platform-skipped (current `main`, ubuntu / Node 24 CI) |
-| `pnpm evals` | 54 of 54 scenarios passed, 0 failed |
-| `pnpm e2e` | 15 end-to-end cases passed over real stdio |
+| TypeScript/Vitest cases | 1,134 passed, 8 platform-skipped (current `main`, ubuntu / Node 24 CI) |
+| `pnpm evals` | 55 of 55 scenarios passed, 0 failed |
+| `pnpm e2e` | 16 end-to-end cases passed over real stdio |
 | `pnpm pack:check` | passed |
 | `pnpm security:audit` | no known vulnerabilities, Node and Python |
 | `pnpm benchmark:browser:check` | ruff clean, 28 pytest cases passed |
