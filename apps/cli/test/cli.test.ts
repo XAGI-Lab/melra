@@ -257,6 +257,7 @@ describe("melra CLI", () => {
         cwd: root,
         env: { ...process.env, MELRA_HOME: home, MELRA_WORKSPACE: root, MELRA_MODE: mode, MELRA_APPROVER: "alice" },
       }).catch((error: unknown) => error) as Promise<{ code?: number; stdout: string; stderr: string }>;
+    const unknown = ["--judgement", "11111111-1111-4111-8111-111111111111", "--verdict", "no"];
 
     const enforcedHome = join(base, "enforced");
     const server = await createMelraRuntime({
@@ -275,6 +276,10 @@ describe("melra CLI", () => {
       expect(inBand.code).toBe(1);
       expect(inBand.stderr).toContain("judgement_in_band_refused");
       expect(inBand.stderr).toContain("MELRA_MODE=enforced");
+      // Sent to rerun enforced, it would only meet the real refusal there (#384).
+      const wrongId = await judge([task[0]!, ...unknown], "", enforcedHome);
+      expect(wrongId.code).toBe(1);
+      expect(wrongId.stderr).toContain("melra: judgement_not_found");
       const judged = await judge([...task, "--verdict", "yes", "--rationale", "Looks tidy."], "enforced", enforcedHome);
       expect(judged.code).toBeUndefined();
       expect(JSON.parse(judged.stdout).task).toMatchObject({
@@ -285,6 +290,9 @@ describe("melra CLI", () => {
       const again = await judge([...task, "--verdict", "no"], "enforced", enforcedHome);
       expect(again.code).toBe(1);
       expect(again.stderr).toContain("task_not_awaiting_judgement:verified_success");
+      const settled = await judge([...task, "--verdict", "no"], "", enforcedHome);
+      expect(settled.code).toBe(1);
+      expect(settled.stderr).toContain("melra: task_not_awaiting_judgement:verified_success");
     } finally {
       await server.close();
     }

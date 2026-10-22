@@ -1074,14 +1074,15 @@ It prints `{ task, certificate? }` and exits 0 when the verdict is recorded,
 and 1 when it is refused, which writes nothing:
 `task_not_awaiting_judgement:<status>`, `judgement_not_found`,
 `judgement_already_answered`, `judgement_expired` (the task then settles
-closed), or `judgement_in_band_refused`.
+closed), or `judgement_in_band_refused`, checked in that order.
 
 The judge is recorded as `cli:` plus [`MELRA_APPROVER`](#local-configuration).
 It is not checked against the task's principal, as `melra approve` checks no
 approver. The verdict is `out_of_band` only when this command and the server
 the task ran under are both in enforced mode; otherwise it is `in_band`, and
-the command says so. A developer-mode `melra judge` on a task that ran enforced
-is refused with `judgement_in_band_refused` and asked to rerun with
+the command says so. A developer-mode `melra judge` on a task that ran enforced,
+once the checks before it have held, is refused with
+`judgement_in_band_refused` and asked to rerun with
 `--mode enforced` or `MELRA_MODE=enforced`, with the same `MELRA_HOME` and
 `MELRA_WORKSPACE` as the server.
 

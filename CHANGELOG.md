@@ -29,6 +29,17 @@ All notable changes are documented here. The format follows
   not compared. The check still rests on declared identities; `melra judge` is
   unchanged.
 
+### Fixed
+
+- A verdict on a task that ran enforced, sent from a developer-mode process
+  (`melra judge` without `--mode enforced`, or `melra_task_judge`), is checked
+  for the task's status, the judgement id, an earlier answer and expiry before
+  it is refused as in band, as `melra approve` checks the challenge before the
+  mode. It got `judgement_in_band_refused`, and `melra judge` advice to rerun
+  with `--mode enforced`, for a settled task or a wrong id, and only the rerun
+  showed `task_not_awaiting_judgement:<status>` or `judgement_not_found`.
+  Every one of these refusals still records nothing. (#384)
+
 ## [0.3.0-alpha.18] - 2026-10-22
 
 ### Added

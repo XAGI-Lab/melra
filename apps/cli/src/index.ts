@@ -974,6 +974,8 @@ async function judgeCommand(args: string[], env: CliEnvironment): Promise<number
         { operator },
       );
     } catch (error) {
+      // `judge` refuses the channel only once every other check held (#384),
+      // so the rerun this asks for would be taken.
       if (!melra.controller.enforced && error instanceof Error && error.message === "judgement_in_band_refused") {
         throw new Error(
           "judgement_in_band_refused: the task ran in enforced mode; rerun with --mode enforced or MELRA_MODE=enforced",
