@@ -825,7 +825,7 @@ describe("semantic verdicts (#54)", () => {
     );
   });
 
-  it("redacts a rationale, a judge's name and the actor's on the task and the certificate", async () => {
+  it("redacts a rationale, a judge's name and the actor's on the task, the receipt and the certificate", async () => {
     const { controller, store } = await setup();
     const token = "ghp_0123456789abcdefghijklmnopqrstuvwxyz";
     const ran = await run(
@@ -837,14 +837,17 @@ describe("semantic verdicts (#54)", () => {
       as(`agent:${token}`),
     );
     const stored = JSON.stringify(store.getTask(ran.task.id));
-    const certificate = JSON.stringify(controller.receipts({ taskId: ran.task.id }).certificate);
-    for (const text of [stored, certificate, JSON.stringify(judged)]) {
+    const { receipts, certificate } = controller.receipts({ taskId: ran.task.id });
+    for (const text of [stored, JSON.stringify(certificate), JSON.stringify(judged)]) {
       expect(text).not.toContain(token);
       expect(text).toContain("The summary pastes [REDACTED_GITHUB_TOKEN] into the file.");
       expect(text).toContain('"judge":"agent:[REDACTED_GITHUB_TOKEN]"');
     }
-    for (const text of [certificate, JSON.stringify(judged.certificate)]) {
+    for (const text of [JSON.stringify(certificate), JSON.stringify(judged.certificate)]) {
       expect(text).toContain('"executedBy":"harness:[REDACTED_GITHUB_TOKEN]"');
     }
+    // The receipt's chain reads as the certificate's `executedBy` does.
+    expect(JSON.stringify(receipts)).not.toContain(token);
+    expect(receipts.map((receipt) => receipt.principal)).toEqual([certificate?.evidence[1]?.executedBy]);
   });
 });

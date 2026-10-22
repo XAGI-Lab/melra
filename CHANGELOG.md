@@ -29,6 +29,22 @@ All notable changes are documented here. The format follows
   not compared. The check still rests on declared identities; `melra judge` is
   unchanged.
 
+### Security
+
+- A receipt's `principal`, the declared delegation chain, is redacted like the
+  rest of the record, as the task row, `judgedBy` and a certificate's
+  `executedBy` already were, so it reads the same as `executedBy`, and the
+  kinds taken out are listed in the receipt's `redactions`. Receipts written
+  before this are left as they were.
+- The `prompt` a `human_input` or `delegation` node records in a run's state,
+  and so in its events and snapshots, is redacted like the rest of the record,
+  as the stored definition's copy already was. Only secret shapes are taken
+  out, so a delegation's prompt still says what to do, and it stays within the
+  2,000 characters node state allows. A run's state, events and snapshots
+  written before this keep the prompt they had; a node still waiting takes the
+  redacted prompt at the run's next advance, which records one more
+  `workflow.node_changed`.
+
 ## [0.3.0-alpha.18] - 2026-10-22
 
 ### Added
