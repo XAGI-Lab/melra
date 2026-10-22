@@ -458,8 +458,8 @@ a non-human link it acts for, is refused (`semantic_judge_is_actor`), and so is
 one whose declared `onBehalfOf` names the task's principal, such as a grader
 that agent started. A judge sharing only a link above the task's principal,
 another session of the same harness or another agent of the same person, may
-answer. The link an OAuth client's token adds above every chain it sends is
-never compared. That check compares declared identities, so over MCP even a `human:` judge is the
+answer. The `harness:` link an OAuth client's token puts above a judge's
+chain is recorded in `judgedBy` but not compared. That check compares declared identities, so over MCP even a `human:` judge is the
 harness's claim; only a `cli:` judge, from `melra judge`, came through an
 operator surface. In enforced mode, and on a task that ran enforced, a verdict
 sent over MCP is refused (`judgement_in_band_refused`) and an operator answers

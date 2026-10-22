@@ -1089,8 +1089,8 @@ declaring the task's own principal, or a non-human link that principal acts
 for, is refused with `semantic_judge_is_actor`, and so is one whose
 `onBehalfOf` names the task's principal. Another session under the same
 harness, or another agent of the same person, may answer; the `harness:` link
-an [OAuth client](#clients-that-let-themselves-in) gets above every chain it sends is
-recorded but never compared. That compares declared
+an [OAuth client](#clients-that-let-themselves-in) gets above a judge's chain is
+recorded in `judgedBy` but not compared. That compares declared
 identities, so an agent can still claim to be someone else, `human:` links
 included: only a `cli:` judge came through an operator surface. In enforced
 mode every verdict sent over MCP is refused.

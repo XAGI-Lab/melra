@@ -201,7 +201,7 @@ describe("melra oauth", () => {
             identity: { principal: { kind: "agent", id }, onBehalfOf },
           },
         }) as Promise<{ isError?: boolean; content: { text: string }[] }>;
-      // The client's own name is authenticated and never compared; what it
+      // The client's own name heads the judge's chain and is not compared; what it
       // declares is, so the agent that planned cannot grade itself, nor send
       // a grader acting for it.
       for (const self of [await judge("a"), await judge("grader", [{ kind: "agent", id: "a" }])]) {

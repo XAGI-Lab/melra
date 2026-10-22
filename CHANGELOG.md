@@ -22,8 +22,9 @@ All notable changes are documented here. The format follows
   names the task's principal, such as a grader the acting agent started
   (`semantic_judge_is_actor`, #378). Another session under the same harness,
   or another agent of the person the work was for, may still answer, and the
-  link an OAuth client's token adds is never compared. The check still rests
-  on declared identities; `melra judge` is unchanged.
+  `harness:` link an OAuth client's token puts above a judge's chain is
+  recorded in `judgedBy` but not compared. The check still rests on declared
+  identities; `melra judge` is unchanged.
 
 ## [0.3.0-alpha.18] - 2026-10-22
 
