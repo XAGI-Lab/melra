@@ -526,6 +526,9 @@ export class TaskController {
       }
       // A decision an operator recorded wins over anything the caller sent.
       const { contract, renderDigest: render } = this.approvalRender(task, request);
+      // Recorded keyed, whatever form `render` takes: an older executor reads
+      // the plain form only from a decision row.
+      const bound = this.payloadCipher.digest(contract, "render");
       const decision = this.store.getApprovalDecision(task.approval.approvalId);
       // Waiting is only worth it while an operator could still say yes:
       // `decide` refuses an expired challenge, so past it the task is re-planned.
@@ -544,10 +547,10 @@ export class TaskController {
         // Out of band is this kernel's claim to make, not the row's: a
         // developer-mode kernel cannot vouch that nothing the agent touched
         // wrote it, whatever mode the process that recorded it was in. The
-        // digest is the one this kernel bound, whichever form the row holds.
+        // digest is keyed, whichever form the row holds.
         task.approvedBy = {
           ...decision,
-          renderDigest: render,
+          renderDigest: bound,
           channel:
             decision.channel === "out_of_band" && this.policy.mode === "enforced"
               ? "out_of_band"
@@ -563,7 +566,7 @@ export class TaskController {
         task.approvedBy = {
           approvalId: task.approval.approvalId,
           taskId: task.id,
-          renderDigest: render,
+          renderDigest: bound,
           channel: "in_band",
           approver: "phrase",
           decidedAt: now(),

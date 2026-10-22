@@ -270,17 +270,22 @@ describe("digests stored beside redacted records", () => {
 
 describe("a home shared with 0.3.0-alpha.17 or alpha.18", () => {
   it("runs once a challenge an older process planned, on its phrase", async () => {
-    const { store, tasks, calls } = await setup();
+    const { store, tasks, calls, cipher } = await setup();
     const planned = tasks.plan(pin);
     const phrase = plannedBefore(store, planned.id);
+    const { contract } = tasks.approvalView(planned.id);
     const done = await tasks.execute(planned.id, { approvalId: planned.approval!.approvalId, phrase });
     expect(done.task.status).toBe("verified_success");
     expect(calls).toHaveLength(1);
+    // No older executor reads what this one records, so it is keyed.
+    expect(done.task.approvedBy!.renderDigest).toBe(cipher.digest(contract, "render"));
+    expect(done.receipt!.policyDecision.approval!.renderDigest).toBe(cipher.digest(contract, "render"));
+    expect(dump(store)).not.toContain(sha256(contract));
   });
 
   it("decides an older process's task in the digest its executor recomputes", async () => {
     const env = await setup({ mode: "enforced" });
-    const { store, tasks, calls } = env;
+    const { store, tasks, calls, cipher } = env;
     const planned = tasks.plan(pin);
     plannedBefore(store, planned.id);
     const view = tasks.approvalView(planned.id);
@@ -290,7 +295,11 @@ describe("a home shared with 0.3.0-alpha.17 or alpha.18", () => {
     // The older executor accepts it; so does this one, and either runs it once.
     await priorExecute(env, planned.id);
     expect(calls).toHaveLength(1);
-    expect((await tasks.execute(planned.id)).task.status).toBe("verified_success");
+    const done = await tasks.execute(planned.id);
+    expect(done.task.status).toBe("verified_success");
+    // Only the row keeps the plain form, for the older executor.
+    expect(done.task.approvedBy!.renderDigest).toBe(cipher.digest(view.contract, "render"));
+    expect(done.receipt!.policyDecision.approval!.renderDigest).toBe(cipher.digest(view.contract, "render"));
   });
 
   for (const mode of ["developer", "enforced"] as const) {
