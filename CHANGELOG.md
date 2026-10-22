@@ -12,6 +12,15 @@ All notable changes are documented here. The format follows
   rationale=None)`, which answers a waiting task's semantic question through
   `melra_task_judge` as the TypeScript SDK's `judge()` does (#378).
 
+### Changed
+
+- `melra_task_judge` also refuses a judge whose declared delegation chain
+  names the task's principal, such as a grader the acting agent started
+  (`semantic_judge_is_actor`, #378). Another session under the same harness,
+  or another agent of the person the work was for, may still answer, and the
+  link an OAuth client's token adds is never compared. The check still rests
+  on declared identities; `melra judge` is unchanged.
+
 ## [0.3.0-alpha.18] - 2026-10-22
 
 ### Added

@@ -198,14 +198,23 @@ function overlay(evidence: EvidenceItem[], judgements: SemanticJudgement[], unan
 
 /**
  * Whether a judge is the actor it would judge (#54): its declared principal
- * is the actor's, or a non-human link the actor acts for. The person the work
- * was for may judge it. Claims on both sides, so it stops one loop grading
- * itself, not a harness that declares someone else.
+ * is the actor's, or a non-human link the actor acts for; or its declared
+ * chain names the actor's principal, as a grader the actor spawned would. The
+ * person the work was for may judge it, and so may another session under a
+ * link the actor's chain shares. `client`, the link a transport authenticated,
+ * heads the judge's chain undeclared and is not compared: an OAuth client that
+ * planned as itself would otherwise refuse every judge it sends. Claims on
+ * both sides, so it stops one loop grading itself, not a harness that
+ * declares someone else.
  */
-function judgesItself(judge: Identity, actor: Identity): boolean {
-  const same = (principal: Principal) =>
-    principal.kind === judge.principal.kind && principal.id === judge.principal.id;
-  return same(actor.principal) || actor.onBehalfOf.some((link) => link.kind !== "human" && same(link));
+function judgesItself(judge: Identity, actor: Identity, client?: Principal): boolean {
+  const same = (one: Principal, other: Principal) => one.kind === other.kind && one.id === other.id;
+  const declared = judge.onBehalfOf.slice(client === undefined ? 0 : 1);
+  return (
+    same(actor.principal, judge.principal) ||
+    actor.onBehalfOf.some((link) => link.kind !== "human" && same(link, judge.principal)) ||
+    declared.some((link) => same(link, actor.principal))
+  );
 }
 
 /** The one browser action that reads each list. */
@@ -1208,14 +1217,15 @@ export class TaskController {
    * against this one at most once.
    *
    * `by` is the surface. An agent's declared identity is checked against the
-   * task's actor; an operator's is not, as `decide` checks no approver. Only
+   * task's actor, with `client` the link its transport authenticated, if any;
+   * an operator's is not, as `decide` checks no approver. Only
    * an operator in an enforced process, on a task that ran enforced, judges
    * out of band, and an in-band verdict counts for nothing where approvals
    * come only from an operator.
    */
   judge(
     input: Omit<MelraTaskJudgeInput, "identity">,
-    by: { identity: Identity } | { operator: string },
+    by: { identity: Identity; client?: Principal } | { operator: string },
   ): ExecutionResult {
     const parsed = MelraTaskJudgeInputSchema.omit({ identity: true }).parse(input);
     const operator = "operator" in by && this.enforced;
@@ -1235,7 +1245,7 @@ export class TaskController {
       // Refused rather than settled here, which the throw would roll back:
       // the recovery pass settles it closed.
       if (Date.parse(judgement.expiresAt) <= Date.now()) throw new Error("judgement_expired");
-      if ("identity" in by && judgesItself(by.identity, this.loadRequest(task.id).identity ?? LOCAL_IDENTITY)) {
+      if ("identity" in by && judgesItself(by.identity, this.loadRequest(task.id).identity ?? LOCAL_IDENTITY, by.client)) {
         throw new Error("semantic_judge_is_actor");
       }
       judgement.judgedBy = redactStructuredValue({

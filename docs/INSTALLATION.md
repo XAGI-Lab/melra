@@ -1084,7 +1084,11 @@ is refused with `judgement_in_band_refused` and asked to rerun with
 
 An agent answers with `melra_task_judge` instead, declaring an `identity`. One
 declaring the task's own principal, or a non-human link that principal acts
-for, is refused with `semantic_judge_is_actor`. That compares declared
+for, is refused with `semantic_judge_is_actor`, and so is one whose
+`onBehalfOf` names the task's principal. Another session under the same
+harness, or another agent of the same person, may answer; the `harness:` link
+an [OAuth client](#clients-that-let-themselves-in) gets above every chain it sends is
+recorded but never compared. That compares declared
 identities, so an agent can still claim to be someone else, `human:` links
 included: only a `cli:` judge came through an operator surface. In enforced
 mode every verdict sent over MCP is refused.

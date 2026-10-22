@@ -669,6 +669,17 @@ describe("semantic verdicts (#54)", () => {
         [["harness:C", "agent:a"], ["harness:C"], true],
         [["human:alice", "agent:a"], ["human:alice"], false],
         [["human:alice"], ["human:alice"], true],
+        // A judge whose chain names the actor acts for it: a grader it spawned (#378).
+        [undefined, ["agent:local", "agent:grader"], true],
+        [["agent:a"], ["agent:a", "agent:grader"], true],
+        [["harness:C", "agent:a"], ["harness:C", "agent:a", "agent:grader"], true],
+        [["harness:C", "agent:a"], ["agent:a", "harness:D", "session:2"], true],
+        [["human:alice"], ["human:alice", "agent:grader"], true],
+        [["harness:C"], ["harness:C", "session:2"], true],
+        // A link above the actor names someone else: another session of its
+        // harness, or another agent of the person the work was for.
+        [["harness:C", "agent:a"], ["harness:C", "session:2", "agent:grader"], false],
+        [["human:alice", "agent:a"], ["human:alice", "agent:grader"], false],
       ];
       for (const [actor, judge, isActor] of matrix) {
         const ran = await run(
@@ -688,6 +699,29 @@ describe("semantic verdicts (#54)", () => {
       }
     });
   }
+
+  it("never compares the link a transport authenticated above a judge", async () => {
+    const { controller } = await setup();
+    const client = { kind: "harness" as const, id: "C" };
+    // An OAuth client that planned declaring nothing is the actor, and heads
+    // every chain it sends, so a judge it sends names it without declaring it.
+    const itself = await run(controller, read([SEMANTIC], { identity: as("harness:C").identity }));
+    expect(controller.judge(on(itself.task, "yes"), { ...as("harness:C", "agent:grader"), client }).task.status).toBe(
+      "verified_success",
+    );
+    // What the judge declares beneath it still counts.
+    const planned = await run(controller, read([SEMANTIC], { identity: as("harness:C", "agent:a").identity }));
+    expect(() =>
+      controller.judge(on(planned.task, "yes"), { ...as("harness:C", "agent:a", "agent:grader"), client }),
+    ).toThrow("semantic_judge_is_actor");
+    const declared = await run(controller, read([SEMANTIC], { identity: as("harness:C").identity }));
+    expect(() =>
+      controller.judge(on(declared.task, "yes"), { ...as("harness:C", "harness:C", "agent:grader"), client }),
+    ).toThrow("semantic_judge_is_actor");
+    // And an operator is not compared at all.
+    const operated = await run(controller, read([SEMANTIC], { identity: as("human:alice").identity }));
+    expect(controller.judge(on(operated.task, "yes"), { operator: "cli:alice" }).task.status).toBe("verified_success");
+  });
 
   it("refuses an in-band verdict where only an operator's counts", async () => {
     const { controller, store, peer } = await setup(enforced);

@@ -86,6 +86,7 @@ judged = await melra.judge(
 )
 ```
 
-A judge declaring the task's own principal, or one of the non-human links it
-acts for, is refused with `semantic_judge_is_actor`. In enforced mode a verdict sent this way is refused,
+A judge declaring the task's own principal or one of the non-human links it
+acts for, or whose `onBehalfOf` names that principal, is refused with
+`semantic_judge_is_actor`. In enforced mode a verdict sent this way is refused,
 and an operator answers with `melra judge`.

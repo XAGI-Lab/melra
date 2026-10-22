@@ -1429,7 +1429,7 @@ export const MelraTaskJudgeInputSchema = z
     judgementId: z.string().uuid().describe("One entry of the task's judgements, as melra_task_status shows them. Each is answered once (judgement_already_answered); an id that is not one of this task's fails with judgement_not_found."),
     verdict: SemanticVerdictSchema.describe("yes, no or cannot_tell, about the effect's result, not about how the question is framed. There is no confidence: when the result does not settle it, say cannot_tell."),
     rationale: z.string().min(1).max(1_000).optional().describe("Why, for the people who read the record. Stored redacted beside the verdict; MELRA never reads it."),
-    identity: IdentitySchema.describe("Who judges, required and recorded as given. Refused (semantic_judge_is_actor) when its principal is the principal that planned the task, or a non-human link that principal acts for."),
+    identity: IdentitySchema.describe("Who judges, required and recorded as given. Refused (semantic_judge_is_actor) when its principal is the principal that planned the task or a non-human link that principal acts for, or when its onBehalfOf names the principal that planned the task."),
   })
   .strict();
 // What a judge writes, before `identity.onBehalfOf` is defaulted.

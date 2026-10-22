@@ -191,21 +191,23 @@ describe("melra oauth", () => {
         text(await client.callTool({ name: "melra_execute", arguments: { taskId: planned.id } })),
       ) as { task: { status: string; judgements: { judgementId: string }[] } };
       expect(waiting.task.status).toBe("waiting_user");
-      const judge = (id: string) =>
+      const judge = (id: string, onBehalfOf: { kind: string; id: string }[] = [], task = planned.id, on = waiting) =>
         client.callTool({
           name: "melra_task_judge",
           arguments: {
-            taskId: planned.id,
-            judgementId: waiting.task.judgements[0]!.judgementId,
+            taskId: task,
+            judgementId: on.task.judgements[0]!.judgementId,
             verdict: "yes",
-            identity: { principal: { kind: "agent", id } },
+            identity: { principal: { kind: "agent", id }, onBehalfOf },
           },
         }) as Promise<{ isError?: boolean; content: { text: string }[] }>;
       // The client's own name is authenticated and never compared; what it
-      // declares is, so the agent that planned cannot grade itself.
-      const self = await judge("a");
-      expect(self.isError).toBe(true);
-      expect(text(self)).toContain("semantic_judge_is_actor");
+      // declares is, so the agent that planned cannot grade itself, nor send
+      // a grader acting for it.
+      for (const self of [await judge("a"), await judge("grader", [{ kind: "agent", id: "a" }])]) {
+        expect(self.isError).toBe(true);
+        expect(text(self)).toContain("semantic_judge_is_actor");
+      }
       // Another session of the same harness may.
       const judged = JSON.parse(text(await judge("grader"))) as {
         task: { status: string; judgements: { judgedBy: { judge: string } }[] };
@@ -215,6 +217,24 @@ describe("melra oauth", () => {
       expect(runtime.controller.receipts({ taskId: planned.id }).receipts[0]!.principal).toMatch(
         /^harness:Grading Harness#[0-9a-f]{8}\/agent:a$/,
       );
+      // Planned declaring nothing, the client is the actor, and heads every
+      // chain it sends without the judge naming it.
+      const bare = JSON.parse(
+        text(
+          await client.callTool({
+            name: "melra_plan",
+            arguments: {
+              goal: "List the workspace as the client itself",
+              operation: { kind: "file", action: "list", path: "." },
+              requiredEvidence: [{ type: "semantic", question: "Does the workspace look tidy?" }],
+            },
+          }),
+        ),
+      ) as { id: string };
+      const bareWaiting = JSON.parse(
+        text(await client.callTool({ name: "melra_execute", arguments: { taskId: bare.id } })),
+      ) as typeof waiting;
+      expect(JSON.parse(text(await judge("grader", [], bare.id, bareWaiting))).task.status).toBe("verified_success");
     } finally {
       await client.close();
     }

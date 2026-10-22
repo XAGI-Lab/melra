@@ -183,8 +183,8 @@ adding predicates. `semantic` is the one built-in that never passes: the kernel 
 so `TaskController` parks such a task in `waiting_user` for a verdict from outside
 (`melra_task_judge`, or `melra judge` for an operator), and the recovery sweep settles it
 closed at expiry (#54). `judge()` acts only on the verdict enum, never reads the rationale,
-refuses a judge that declares the task's own principal (`semantic_judge_is_actor`), and
-writes only the task row and its certificate.
+refuses a judge that declares the task's own principal or names it in its chain
+(`semantic_judge_is_actor`), and writes only the task row and its certificate.
 
 Redaction happens at multiple layers: `redactStructuredValue` on task requests, results, and
 error messages before persistence, plus `redactMemoryValue` inside the memory package and
