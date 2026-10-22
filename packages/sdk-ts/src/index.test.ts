@@ -190,6 +190,29 @@ describe("TypeScript workflow SDK", () => {
     });
   });
 
+  it("sends a verdict to melra_task_judge, and refuses one with no judge before sending it", async () => {
+    const callTool = vi.fn(async (_input: { name: string; arguments: Record<string, unknown> }) => ({
+      content: [{ type: "text", text: JSON.stringify({ task: { status: "verified_success" } }) }],
+    }));
+    const client = new (MelraClient as unknown as new (
+      client: { callTool: typeof callTool; close(): Promise<void> },
+    ) => MelraClient)({ callTool, async close() {} });
+    const verdict = {
+      taskId: "88888888-8888-4888-8888-888888888888",
+      judgementId: "99999999-9999-4999-8999-999999999999",
+      verdict: "yes" as const,
+    };
+    await expect(
+      client.judge({ ...verdict, identity: { principal: { kind: "agent", id: "grader" } } }),
+    ).resolves.toEqual({ task: { status: "verified_success" } });
+    expect(callTool.mock.calls[0]?.[0]).toEqual({
+      name: "melra_task_judge",
+      arguments: { ...verdict, identity: { principal: { kind: "agent", id: "grader" }, onBehalfOf: [] } },
+    });
+    await expect(client.judge(verdict as Parameters<MelraClient["judge"]>[0])).rejects.toThrow();
+    expect(callTool).toHaveBeenCalledTimes(1);
+  });
+
   it("names the missing receipt selector without a round trip", async () => {
     const callTool = vi.fn();
     const client = new (MelraClient as unknown as new (
