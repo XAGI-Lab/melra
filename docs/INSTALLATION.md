@@ -1089,7 +1089,8 @@ An agent answers with `melra_task_judge` instead, declaring an `identity`. One
 declaring the task's own principal, or a non-human link that principal acts
 for, is refused with `semantic_judge_is_actor`, and so is one whose
 `onBehalfOf` names the task's principal. Another session under the same
-harness, or another agent of the same person, may answer; the `harness:` link
+harness, or another agent of the same person, may answer, unless the task's
+principal is that harness or person itself; the `harness:` link
 an [OAuth client](#clients-that-let-themselves-in) gets above a judge's chain is
 recorded in `judgedBy` but not compared. That compares declared
 identities, so an agent can still claim to be someone else, `human:` links

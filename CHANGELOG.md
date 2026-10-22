@@ -20,13 +20,14 @@ All notable changes are documented here. The format follows
 
 ### Changed
 
-- `melra_task_judge` also refuses a judge whose declared delegation chain
-  names the task's principal, such as a grader the acting agent started
-  (`semantic_judge_is_actor`, #378). Another session under the same harness,
-  or another agent of the person the work was for, may still answer, and the
-  `harness:` link an OAuth client's token puts above a judge's chain is
-  recorded in `judgedBy` but not compared. The check still rests on declared
-  identities; `melra judge` is unchanged.
+- `melra_task_judge` also refuses a judge whose declared delegation chain names
+  the task's principal, such as a grader the acting agent started
+  (`semantic_judge_is_actor`, #378). Another session under the same harness, or
+  another agent of the person the work was for, may still answer, unless the
+  task's principal is that harness or person itself. The `harness:` link an
+  OAuth client's token puts above a judge's chain is recorded in `judgedBy` but
+  not compared. The check still rests on declared identities; `melra judge` is
+  unchanged.
 
 ## [0.3.0-alpha.18] - 2026-10-22
 
