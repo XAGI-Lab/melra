@@ -163,7 +163,8 @@ describe("TaskController", () => {
     );
     const planned = controllerA.plan(
       TaskRequestSchema.parse({
-        goal: "one-time-secret",
+        // Secret-shaped, since a goal keeps any words that are not (#385).
+        goal: "Inspect with password=one-time-secret",
         operation: { kind: "system", action: "info" },
       }),
     );
@@ -751,6 +752,30 @@ describe("TaskController", () => {
     const result = await controller.execute(task.id);
     expect(JSON.stringify(store.getTask(task.id))).not.toContain("S3cretPass");
     expect(result.receipt?.target).not.toContain("S3cretPass");
+  });
+
+  it("records the declared goal on the task and certificate, minus its secret shapes (#385)", async () => {
+    const { controller, store } = await setup({
+      async execute() {
+        return { success: true };
+      },
+    });
+    const goal = "Read a.txt to confirm the greeting";
+    const plain = controller.plan(
+      TaskRequestSchema.parse({ goal, operation: { kind: "system", action: "info" } }),
+    );
+    expect((await controller.execute(plain.id)).certificate?.goal).toBe(goal);
+    expect(store.getTask(plain.id)?.request.goal).toBe(goal);
+    expect(store.getCertificateForTask(plain.id)?.goal).toBe(goal);
+
+    // Built at run time so no literal here reads as a leaked credential.
+    const secret = `${"ghp"}_${"A1b2C3d4E5".repeat(4)}`;
+    const leaky = controller.plan(
+      TaskRequestSchema.parse({ goal: `Deploy with ${secret}`, operation: { kind: "system", action: "info" } }),
+    );
+    await controller.execute(leaky.id);
+    expect(store.getTask(leaky.id)?.request.goal).toBe("Deploy with [REDACTED_GITHUB_TOKEN]");
+    expect(store.getCertificateForTask(leaky.id)?.goal).toBe("Deploy with [REDACTED_GITHUB_TOKEN]");
   });
 
   it("shows the live caller the approval input without retaining it", async () => {
