@@ -3090,6 +3090,22 @@ describe("WorkflowController human input and delegation", () => {
     ).toMatchObject({ goal: "Rotate [REDACTED_GITHUB_TOKEN]" });
     expect(JSON.stringify(store.getWorkflowRun(planned.id))).not.toContain(secret);
     expect(JSON.stringify(store.listWorkflowEvents(planned.id))).not.toContain(secret);
+
+    // The token ends at prompt index 1990: cut before redaction, it would be
+    // left as a stub no pattern recognises, so the redaction must come first.
+    const long = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 2,
+        name: "Hand it off",
+        nodes: [{ id: "handoff", type: "delegation", assignee: "a".repeat(200), goal: `${"x".repeat(1_787)} ${secret}` }],
+      }),
+    );
+    const cut = await controller.advance(long.id);
+    expect(cut.run.nodes.handoff?.prompt).toHaveLength(2_000);
+    expect(cut.run.nodes.handoff?.prompt).not.toContain(secret.slice(0, 10));
+    expect(JSON.stringify(store.getWorkflowRun(long.id))).not.toContain(secret.slice(0, 10));
   });
 
   it("fails a delegation whose declared evidence does not hold", async () => {
