@@ -6,6 +6,29 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- The Python SDK gains `judge(task_id, judgement_id, verdict, *, identity,
+  rationale=None)`, which answers a waiting task's semantic question through
+  `melra_task_judge` as the TypeScript SDK's `judge()` does (#378).
+- A settled semantic certificate's answered item carries `executedBy`, the
+  action receipt's declared principal, beside `judgedBy`, so the two declared
+  chains can be compared without the receipt (#378). Both are claims, and
+  neither marks the `harness:` link an OAuth client's token adds. It is
+  redacted with the certificate; certificates written before it simply lack
+  it, and nothing is migrated.
+
+### Changed
+
+- `melra_task_judge` also refuses a judge whose declared delegation chain names
+  the task's principal, such as a grader the acting agent started
+  (`semantic_judge_is_actor`, #378). Another session under the same harness, or
+  another agent of the person the work was for, may still answer, unless the
+  task's principal is that harness or person itself. The `harness:` link an
+  OAuth client's token puts above a judge's chain is recorded in `judgedBy` but
+  not compared. The check still rests on declared identities; `melra judge` is
+  unchanged.
+
 ## [0.3.0-alpha.18] - 2026-10-22
 
 ### Added

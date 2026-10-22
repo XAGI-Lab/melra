@@ -270,6 +270,14 @@ export interface EvidenceItem {
     judgedAt: string;
     rationale?: string;
   };
+  /**
+   * Beside `judgedBy`: the action receipt's `principal`, the delegation chain
+   * the planner declared, redacted with the certificate, so the two declared
+   * chains can be compared without the receipt. Both are claims, and neither
+   * marks the `harness:` link an OAuth client's token adds. Absent on
+   * certificates written before it existed.
+   */
+  executedBy?: string;
   source?: string;
   digest?: string;
 }

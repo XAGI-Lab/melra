@@ -452,12 +452,14 @@ describe("semantic verdicts (#54)", () => {
       judgedAt: expect.any(String),
       rationale: "It reads as the summary asked for.",
     };
+    // Beside the actor's declared chain, so the two compare without the receipt.
     expect(judged.certificate?.evidence[1]).toEqual({
       type: "semantic",
       passed: true,
       strength: "semantic",
       summary: "semantic_judgement_yes",
       judgedBy,
+      executedBy: "human:alice/agent:a",
     });
     // On the stored task too, beside the receipt's principal it was checked against.
     expect(store.getTask(ran.task.id)?.judgements?.[0]?.judgedBy).toEqual(judgedBy);
@@ -488,6 +490,7 @@ describe("semantic verdicts (#54)", () => {
         strength: "semantic",
         summary: `semantic_judgement_${verdict}`,
         judgedBy: { verdict, judge: "agent:grader", channel: "in_band", judgedAt: expect.any(String) },
+        executedBy: "agent:local",
       });
     }
   });
@@ -543,9 +546,15 @@ describe("semantic verdicts (#54)", () => {
       error: "semantic_judgement_expired",
     });
     expect(expired?.evidence.slice(1)).toMatchObject([
-      { passed: true, summary: "semantic_judgement_yes", judgedBy: { verdict: "yes", judge: "agent:grader" } },
+      {
+        passed: true,
+        summary: "semantic_judgement_yes",
+        judgedBy: { verdict: "yes", judge: "agent:grader" },
+        executedBy: "agent:local",
+      },
       { passed: false, inconclusive: true, summary: "semantic_judgement_expired" },
     ]);
+    expect(expired?.evidence[2]?.executedBy).toBeUndefined();
   });
 
   it("writes only the task: no breaker record, grant draw, commit or receipt", async () => {
@@ -669,6 +678,17 @@ describe("semantic verdicts (#54)", () => {
         [["harness:C", "agent:a"], ["harness:C"], true],
         [["human:alice", "agent:a"], ["human:alice"], false],
         [["human:alice"], ["human:alice"], true],
+        // A judge whose chain names the actor acts for it: a grader it spawned (#378).
+        [undefined, ["agent:local", "agent:grader"], true],
+        [["agent:a"], ["agent:a", "agent:grader"], true],
+        [["harness:C", "agent:a"], ["harness:C", "agent:a", "agent:grader"], true],
+        [["harness:C", "agent:a"], ["agent:a", "harness:D", "session:2"], true],
+        [["human:alice"], ["human:alice", "agent:grader"], true],
+        [["harness:C"], ["harness:C", "session:2"], true],
+        // A link above the actor names someone else: another session of its
+        // harness, or another agent of the person the work was for.
+        [["harness:C", "agent:a"], ["harness:C", "session:2", "agent:grader"], false],
+        [["human:alice", "agent:a"], ["human:alice", "agent:grader"], false],
       ];
       for (const [actor, judge, isActor] of matrix) {
         const ran = await run(
@@ -688,6 +708,29 @@ describe("semantic verdicts (#54)", () => {
       }
     });
   }
+
+  it("never compares the link a transport authenticated above a judge", async () => {
+    const { controller } = await setup();
+    const client = { kind: "harness" as const, id: "C" };
+    // An OAuth client that planned declaring nothing is the actor, and heads
+    // every chain it sends, so a judge it sends names it without declaring it.
+    const itself = await run(controller, read([SEMANTIC], { identity: as("harness:C").identity }));
+    expect(controller.judge(on(itself.task, "yes"), { ...as("harness:C", "agent:grader"), client }).task.status).toBe(
+      "verified_success",
+    );
+    // What the judge declares beneath it still counts.
+    const planned = await run(controller, read([SEMANTIC], { identity: as("harness:C", "agent:a").identity }));
+    expect(() =>
+      controller.judge(on(planned.task, "yes"), { ...as("harness:C", "agent:a", "agent:grader"), client }),
+    ).toThrow("semantic_judge_is_actor");
+    const declared = await run(controller, read([SEMANTIC], { identity: as("harness:C").identity }));
+    expect(() =>
+      controller.judge(on(declared.task, "yes"), { ...as("harness:C", "harness:C", "agent:grader"), client }),
+    ).toThrow("semantic_judge_is_actor");
+    // And an operator is not compared at all.
+    const operated = await run(controller, read([SEMANTIC], { identity: as("human:alice").identity }));
+    expect(controller.judge(on(operated.task, "yes"), { operator: "cli:alice" }).task.status).toBe("verified_success");
+  });
 
   it("refuses an in-band verdict where only an operator's counts", async () => {
     const { controller, store, peer } = await setup(enforced);
@@ -782,10 +825,13 @@ describe("semantic verdicts (#54)", () => {
     );
   });
 
-  it("redacts a rationale and a judge's name on the task and the certificate", async () => {
+  it("redacts a rationale, a judge's name and the actor's on the task and the certificate", async () => {
     const { controller, store } = await setup();
-    const ran = await run(controller, write([{ type: "file_exists", path: "out.txt" }, SEMANTIC]));
     const token = "ghp_0123456789abcdefghijklmnopqrstuvwxyz";
+    const ran = await run(
+      controller,
+      write([{ type: "file_exists", path: "out.txt" }, SEMANTIC], { identity: as(`harness:${token}`).identity }),
+    );
     const judged = controller.judge(
       { ...on(ran.task, "no"), rationale: `The summary pastes ${token} into the file.` },
       as(`agent:${token}`),
@@ -796,6 +842,9 @@ describe("semantic verdicts (#54)", () => {
       expect(text).not.toContain(token);
       expect(text).toContain("The summary pastes [REDACTED_GITHUB_TOKEN] into the file.");
       expect(text).toContain('"judge":"agent:[REDACTED_GITHUB_TOKEN]"');
+    }
+    for (const text of [certificate, JSON.stringify(judged.certificate)]) {
+      expect(text).toContain('"executedBy":"harness:[REDACTED_GITHUB_TOKEN]"');
     }
   });
 });

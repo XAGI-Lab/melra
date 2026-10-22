@@ -454,8 +454,12 @@ task waits in `waiting_user`, its `judgements` naming each question and when it
 expires: the approval TTL (`approvalTtlMs`). A principal other than the one
 that planned the task answers each question with `melra_task_judge`
 (`yes`, `no` or `cannot_tell`); a judge declaring the task's own principal, or
-a non-human link it acts for, is refused (`semantic_judge_is_actor`). That
-check compares declared identities, so over MCP even a `human:` judge is the
+a non-human link it acts for, is refused (`semantic_judge_is_actor`), and so is
+one whose declared `onBehalfOf` names the task's principal, such as a grader
+that agent started. A judge sharing only a link above the task's principal,
+another session of the same harness or another agent of the same person, may
+answer. The `harness:` link an OAuth client's token puts above a judge's
+chain is recorded in `judgedBy` but not compared. That check compares declared identities, so over MCP even a `human:` judge is the
 harness's claim; only a `cli:` judge, from `melra judge`, came through an
 operator surface. In enforced mode, and on a task that ran enforced, a verdict
 sent over MCP is refused (`judgement_in_band_refused`) and an operator answers
@@ -464,8 +468,10 @@ The first `no` ends it `partial` (`semantic_judgement_no`); `cannot_tell` ends a
 change `recovery_required` and a read `partial`
 (`semantic_judgement_cannot_tell`). Unanswered at expiry, the task settles
 closed the same way as `cannot_tell`, with the error
-`semantic_judgement_expired`, keeping any yes already given. A verdict writes
-only the task and its certificate, never a receipt. A task with a failing
+`semantic_judgement_expired`, keeping any yes already given. On the settled
+certificate an answered item carries `judgedBy` and, beside it, `executedBy`,
+the receipt's principal. A verdict writes only the task and its certificate,
+never a receipt. A task with a failing
 predicate beside it is `partial` without waiting. Outside unsafe-local mode, a
 destructive effect whose evidence has a `semantic` predicate but nothing the
 kernel re-reads (`file_exists`, `file_absent`, `file_hash`) or asks another

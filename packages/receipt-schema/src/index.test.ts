@@ -78,14 +78,17 @@ describe("receipt and certificate primitives", () => {
       judgedAt: "2026-10-22T00:00:00.000Z",
       rationale: "It pastes sk-live-0123456789abcdefghij into the summary.",
     };
+    const executedBy = "harness:C/agent:ghp_0123456789abcdefghijABCDEFGHIJ012345";
     // No field name here is a credential's, so nothing is blanked whole.
     expect(
-      redactStructuredValue({ type: "semantic", passed: false, summary: "semantic_judgement_no", judgedBy }).value,
+      redactStructuredValue({ type: "semantic", passed: false, summary: "semantic_judgement_no", judgedBy, executedBy })
+        .value,
     ).toEqual({
       type: "semantic",
       passed: false,
       summary: "semantic_judgement_no",
       judgedBy: { ...judgedBy, rationale: "It pastes [REDACTED_API_KEY] into the summary." },
+      executedBy: "harness:C/agent:[REDACTED_GITHUB_TOKEN]",
     });
   });
 

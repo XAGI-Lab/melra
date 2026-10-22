@@ -240,6 +240,40 @@ class MelraClient:
             arguments["receiptId"] = receipt_id
         return await self.call_tool("melra_receipt", arguments)
 
+    async def judge(
+        self,
+        task_id: str,
+        judgement_id: str,
+        verdict: str,
+        *,
+        identity: dict[str, Any],
+        rationale: str | None = None,
+    ) -> dict[str, Any]:
+        """Answer one semantic question of a `waiting_user` task.
+
+        `judgement_id` comes from the task's `judgements` (see `status`), and
+        `verdict` is `yes`, `no` or `cannot_tell`. `identity` is who judges,
+        as on a plan. It is refused (`semantic_judge_is_actor`) when its
+        principal is the principal that planned the task or a non-human link
+        that principal acts for, or when its `onBehalfOf` names that
+        principal; the person the work was for may judge it. `rationale` is
+        stored redacted for people to read; MELRA never reads it. Returns
+        `{task, certificate?}`, the certificate only when the verdict settled
+        the task. In enforced mode a verdict sent here is refused, and an
+        operator runs `melra judge`.
+        """
+        if verdict not in {"yes", "no", "cannot_tell"}:
+            raise ValueError("verdict must be yes, no, or cannot_tell")
+        arguments: dict[str, Any] = {
+            "taskId": task_id,
+            "judgementId": judgement_id,
+            "verdict": verdict,
+            "identity": identity,
+        }
+        if rationale is not None:
+            arguments["rationale"] = rationale
+        return await self.call_tool("melra_task_judge", arguments)
+
     async def plan_workflow(
         self,
         definition: dict[str, Any],

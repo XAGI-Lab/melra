@@ -1064,7 +1064,10 @@ change `recovery_required` and a read `partial`
 (`semantic_judgement_cannot_tell`). A yes while other questions are open is
 recorded, and the task keeps waiting. Nothing runs again and no receipt is
 added: the task records the verdict as `judgedBy`, and the certificate, once
-the task settles, carries it on the question's item. The `rationale` is for
+the task settles, carries it on the question's item beside `executedBy`, the
+receipt's declared principal, so the two can be compared without the receipt.
+Both are recorded as declared, and neither marks the `harness:` link an OAuth
+client's token adds. The `rationale` is for
 people; MELRA stores it redacted and never reads it.
 
 It prints `{ task, certificate? }` and exits 0 when the verdict is recorded,
@@ -1084,7 +1087,12 @@ is refused with `judgement_in_band_refused` and asked to rerun with
 
 An agent answers with `melra_task_judge` instead, declaring an `identity`. One
 declaring the task's own principal, or a non-human link that principal acts
-for, is refused with `semantic_judge_is_actor`. That compares declared
+for, is refused with `semantic_judge_is_actor`, and so is one whose
+`onBehalfOf` names the task's principal. Another session under the same
+harness, or another agent of the same person, may answer, unless the task's
+principal is that harness or person itself; the `harness:` link
+an [OAuth client](#clients-that-let-themselves-in) gets above a judge's chain is
+recorded in `judgedBy` but not compared. That compares declared
 identities, so an agent can still claim to be someone else, `human:` links
 included: only a `cli:` judge came through an operator surface. In enforced
 mode every verdict sent over MCP is refused.

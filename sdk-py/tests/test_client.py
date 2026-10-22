@@ -66,6 +66,53 @@ async def test_python_sdk_uses_the_real_stdio_server(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_python_sdk_judges_a_semantic_question(tmp_path: Path) -> None:
+    repository = Path(__file__).resolve().parents[2]
+    cli = repository / "apps" / "cli" / "dist" / "index.js"
+    assert cli.exists(), "run pnpm build before the Python SDK test"
+    node = shutil.which("node")
+    assert node is not None
+
+    async with MelraClient(
+        command=node,
+        args=[str(cli), "serve"],
+        workspace=tmp_path,
+        data_directory=tmp_path / ".melra",
+        environment={"PATH": os.environ["PATH"]},
+    ) as melra:
+        task = await melra.plan(
+            {
+                "goal": "List the workspace and ask whether it looks tidy",
+                "operation": {"kind": "file", "action": "list", "path": "."},
+                "requiredEvidence": [{"type": "semantic", "question": "Does it look tidy?"}],
+            }
+        )
+        waiting = await melra.execute(task["id"])
+        assert waiting["task"]["status"] == "waiting_user"
+        judgement_id = waiting["task"]["judgements"][0]["judgementId"]
+        with pytest.raises(ValueError, match="verdict must be"):
+            await melra.judge(task["id"], judgement_id, "maybe", identity={})
+        # Planned with no identity, so the task's principal is agent:local.
+        with pytest.raises(RuntimeError, match="semantic_judge_is_actor"):
+            await melra.judge(
+                task["id"],
+                judgement_id,
+                "yes",
+                identity={"principal": {"kind": "agent", "id": "local"}},
+            )
+        judged = await melra.judge(
+            task["id"],
+            judgement_id,
+            "yes",
+            identity={"principal": {"kind": "agent", "id": "grader"}},
+            rationale="Nothing out of place.",
+        )
+        assert judged["task"]["status"] == "verified_success"
+        assert judged["task"]["judgements"][0]["judgedBy"]["judge"] == "agent:grader"
+        assert judged["certificate"]["result"] == "VERIFIED_SUCCESS"
+
+
+@pytest.mark.asyncio
 async def test_python_sdk_calls_workflow_tools_with_validated_inputs() -> None:
     workflow_id = "11111111-1111-4111-8111-111111111111"
     definition = {
