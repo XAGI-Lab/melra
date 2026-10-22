@@ -63,6 +63,20 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- `melra inspect` and `melra export` take the eight-character id prefix the
+  plain `melra tasks` table prints, in any status, as `melra approve` already
+  did. Before, they passed it on as a whole id and reported `task_not_found`.
+  A prefix two tasks share is refused with `task_id_ambiguous:<prefix>`, and
+  one no task has with `task_not_found:<prefix>`; an empty argument, as an
+  unset `"$ID"` sends, names no task, where `melra approve` took it for the one
+  task waiting, if only one was. `melra judge` still takes ids whole. (#386)
+- `examples/README.md` said the API example succeeds unauthenticated without
+  `GITHUB_TOKEN`; it fails with `credential_source_missing:github` before any
+  request is sent, as it always has. The example now says it needs the token,
+  and `docs/INSTALLATION.md#credentials` documents `credential_source_missing`
+  beside `credential_source_invalid`: a credential whose source is missing
+  fails every call to its hosts and never falls back to an unauthenticated
+  one. (#387)
 - The `recall` harness tool no longer fails a query it accepts that is longer
   than 9,993 characters: the goal built from it passed the 10,000 characters a
   goal may hold. A harness tool's goal that would pass that keeps only its verb,

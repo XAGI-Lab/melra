@@ -547,7 +547,12 @@ reads files by means of its own is not covered, which is what approving that
 program accepts. Keep it outside the workspace. The value (a file's with
 surrounding whitespace trimmed) must be printable ASCII; one holding any other
 character is refused with `credential_source_invalid:<name>`, so a copy echoed
-back is matched byte for byte.
+back is matched byte for byte. A variable that is unset or empty is refused
+with `credential_source_missing:<name>`; a file that is empty or holds only
+whitespace with `credential_file_empty`, and one that is missing or unreadable
+with its own error. Either way every call to a host in `hosts` fails before
+anything is sent: a credential whose source is missing never falls back to an
+unauthenticated call.
 
 The two lists are scoped differently on purpose, and the difference is the
 whole feature:
@@ -1051,14 +1056,17 @@ its effect has run and every other check has held. Its `judgements` list one
 `judgementId` per question. `melra tasks --status waiting_user --json` lists
 those tasks, and `melra inspect <task-id>` prints the question
 (`request.requiredEvidence[predicateIndex]`), the redacted result and the
-judgements. Answer one with:
+judgements. `melra inspect` and `melra export` also take the first eight
+characters the plain `melra tasks` table prints, as `melra approve` does; a
+prefix two tasks share is refused with `task_id_ambiguous:<prefix>`. Answer one
+with:
 
 ```bash
 melra judge <task-id> --judgement <judgement-id> --verdict yes|no|cannot_tell \
   [--rationale "Reads as the summary asked for."]
 ```
 
-Both ids are taken whole. A yes on every question makes the task
+`melra judge` takes both ids whole. A yes on every question makes the task
 `verified_success`. The first `no` ends it `partial` (`semantic_judgement_no`):
 a change stays in place, and fixing it takes a new plan. `cannot_tell` ends a
 change `recovery_required` and a read `partial`
