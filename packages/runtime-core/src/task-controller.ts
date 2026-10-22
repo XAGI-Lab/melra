@@ -174,7 +174,10 @@ export function capabilityUsageReader(store: SqliteStore): CapabilityUsageReader
  * passed equals the hash its request declared). Applied after redaction to
  * the task's result and to receipt and certificate evidence; the marker maps
  * to itself, so a certificate written from a stored receipt (`certify`) says
- * what the live one did. The live caller and recovery read the raw values.
+ * what the live one did. The caller still gets the `sha256` in `output`, and
+ * recovery reads the sealed raw result. A failed item's digest is returned
+ * nowhere, since the caller gets the stored receipt and certificate; a file
+ * `hash` operation reads it again.
  */
 const MASKED = "[REDACTED_SENSITIVE_FIELD]";
 
