@@ -9,6 +9,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
   ApprovalResponseSchema,
+  SemanticVerdictSchema,
   TaskRequestSchema,
   TaskStatusSchema,
   WorkflowDefinitionSchema,
@@ -947,6 +948,52 @@ async function approveCommand(args: string[], env: CliEnvironment): Promise<numb
   }
 }
 
+/**
+ * Answers a waiting task's semantic question as the operator (#54). The
+ * question and the result are what `melra inspect` prints; ids are taken
+ * whole, so a verdict never lands on a question nobody named.
+ */
+async function judgeCommand(args: string[], env: CliEnvironment): Promise<number> {
+  const valued = ["--mode", "--judgement", "--verdict", "--rationale"];
+  const taskId = args.find((value, index) => !value.startsWith("--") && !valued.includes(args[index - 1] ?? ""));
+  if (taskId === undefined) throw new Error("judge requires a task ID");
+  const judgementId = argument("--judgement", args);
+  const given = argument("--verdict", args);
+  if (judgementId === undefined || given === undefined) {
+    throw new Error("judge requires --judgement <id> --verdict yes|no|cannot_tell; melra inspect <task-id> lists the judgements");
+  }
+  const operator = approverLabel(env);
+  const verdict = SemanticVerdictSchema.parse(given);
+  const rationale = argument("--rationale", args);
+  const melra = await runtime(env);
+  try {
+    let judged: ReturnType<typeof melra.controller.judge>;
+    try {
+      judged = melra.controller.judge(
+        { taskId, judgementId, verdict, ...(rationale === undefined ? {} : { rationale }) },
+        { operator },
+      );
+    } catch (error) {
+      if (!melra.controller.enforced && error instanceof Error && error.message === "judgement_in_band_refused") {
+        throw new Error(
+          "judgement_in_band_refused: the task ran in enforced mode; rerun with --mode enforced or MELRA_MODE=enforced",
+        );
+      }
+      throw error;
+    }
+    const recorded = judged.task.judgements?.find((entry) => entry.judgementId === judgementId)?.judgedBy;
+    if (recorded?.channel === "in_band") {
+      process.stderr.write(
+        "Recorded in band: this process, or the one the task ran under, is in developer mode. Set \"mode\": \"enforced\" in the policy file (or MELRA_MODE=enforced) for the server and for this command to judge out of band.\n",
+      );
+    }
+    output(judged);
+    return 0;
+  } finally {
+    await melra.close();
+  }
+}
+
 async function inspectTask(args: string[], env: CliEnvironment): Promise<void> {
   const taskId = args[0];
   if (taskId === undefined) throw new Error("inspect requires a task ID");
@@ -1087,6 +1134,8 @@ Usage:
   melra serve --socket <path>
   melra run --request <task.json>
   melra approve <task-id> [--yes] [--deny] [--json]
+  melra judge <task-id> --judgement <id> --verdict yes|no|cannot_tell
+                        [--rationale <text>]
   melra console
   melra inspect <task-id>
   melra tasks [--limit <n>] [--status <status>] [--json]
@@ -1166,8 +1215,8 @@ Environment:
   MELRA_POLICY     Optional local policy JSON
   MELRA_UNHINGED   Set to 1 to disable every guardrail (see --unsafe-local)
   MELRA_MODE       developer (default) or enforced (see --mode)
-  MELRA_APPROVER   Name 'melra approve' and 'melra console' record as the
-                   approver (default: operator)
+  MELRA_APPROVER   Name 'melra approve', 'melra judge' and 'melra console'
+                   record as the approver or judge (default: operator)
   MELRA_HTTP_PORT  Port for 'serve --http' (default: 7457)
   MELRA_HTTP_TOKEN Fixed bearer token for 'serve --http' (default: random)
   MELRA_HTTP_OAUTH Set to 0 so only that token gets in; no client can register
@@ -1383,6 +1432,10 @@ async function main(): Promise<void> {
     case "approve":
       rejectUnknownFlags(args, ["--yes", "--deny", "--json"]);
       process.exitCode = await approveCommand(args, env);
+      return;
+    case "judge":
+      rejectUnknownFlags(args, ["--judgement", "--verdict", "--rationale"]);
+      process.exitCode = await judgeCommand(args, env);
       return;
     case "inspect":
     case "export":

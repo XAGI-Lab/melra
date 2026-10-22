@@ -233,6 +233,87 @@ describe("melra CLI", () => {
     }
   });
 
+  it("judges a waiting task as the named operator, out of band only when enforced", async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), "melra-cli-")));
+    roots.push(base);
+    const root = join(base, "workspace");
+    await mkdir(root);
+    const waiting = async (server: Awaited<ReturnType<typeof createMelraRuntime>>) => {
+      const planned = server.controller.plan(
+        TaskRequestSchema.parse({
+          goal: "List the workspace and ask whether it looks tidy",
+          operation: { kind: "file", action: "list", path: "." },
+          requiredEvidence: [{ type: "semantic", question: "Does the workspace look tidy?" }],
+          // Planned as the operator's own name: an operator is not checked.
+          identity: { principal: { kind: "human", id: "alice" } },
+        }),
+      );
+      const { task } = await server.controller.execute(planned.id);
+      expect(task.status).toBe("waiting_user");
+      return [task.id, "--judgement", task.judgements![0]!.judgementId];
+    };
+    const judge = (args: string[], mode: string, home: string) =>
+      execute(process.execPath, [entry, "judge", ...args], {
+        cwd: root,
+        env: { ...process.env, MELRA_HOME: home, MELRA_WORKSPACE: root, MELRA_MODE: mode, MELRA_APPROVER: "alice" },
+      }).catch((error: unknown) => error) as Promise<{ code?: number; stdout: string; stderr: string }>;
+
+    const enforcedHome = join(base, "enforced");
+    const server = await createMelraRuntime({
+      workspaceRoot: root,
+      dataDirectory: enforcedHome,
+      environment: { MELRA_MODE: "enforced" },
+    });
+    try {
+      const task = await waiting(server);
+      // The command as the server gives it names what it lacks.
+      const bare = await judge([task[0]!], "enforced", enforcedHome);
+      expect(bare.code).toBe(1);
+      expect(bare.stderr).toContain("judge requires --judgement <id> --verdict yes|no|cannot_tell");
+      // A developer process on the enforced run is refused, and writes nothing.
+      const inBand = await judge([...task, "--verdict", "yes"], "", enforcedHome);
+      expect(inBand.code).toBe(1);
+      expect(inBand.stderr).toContain("judgement_in_band_refused");
+      expect(inBand.stderr).toContain("MELRA_MODE=enforced");
+      const judged = await judge([...task, "--verdict", "yes", "--rationale", "Looks tidy."], "enforced", enforcedHome);
+      expect(judged.code).toBeUndefined();
+      expect(JSON.parse(judged.stdout).task).toMatchObject({
+        status: "verified_success",
+        judgements: [{ judgedBy: { verdict: "yes", judge: "cli:alice", channel: "out_of_band", rationale: "Looks tidy." } }],
+      });
+      expect(judged.stderr).not.toContain("in band");
+      const again = await judge([...task, "--verdict", "no"], "enforced", enforcedHome);
+      expect(again.code).toBe(1);
+      expect(again.stderr).toContain("task_not_awaiting_judgement:verified_success");
+    } finally {
+      await server.close();
+    }
+
+    const developerHome = join(base, "developer");
+    const developer = await createMelraRuntime({ workspaceRoot: root, dataDirectory: developerHome, environment: {} });
+    try {
+      const task = await waiting(developer);
+      const judged = await judge([...task, "--verdict", "no"], "", developerHome);
+      expect(judged.code).toBeUndefined();
+      expect(judged.stderr).toContain("Recorded in band");
+      expect(JSON.parse(judged.stdout).task).toMatchObject({
+        status: "partial",
+        error: "semantic_judgement_no",
+        judgements: [{ judgedBy: { judge: "cli:alice", channel: "in_band" } }],
+      });
+      // An enforced command cannot vouch for a developer run: in band too.
+      const lent = await judge([...(await waiting(developer)), "--verdict", "yes"], "enforced", developerHome);
+      expect(lent.code).toBeUndefined();
+      expect(lent.stderr).toContain("Recorded in band");
+      expect(JSON.parse(lent.stdout).task).toMatchObject({
+        status: "verified_success",
+        judgements: [{ judgedBy: { judge: "cli:alice", channel: "in_band" } }],
+      });
+    } finally {
+      await developer.close();
+    }
+  });
+
   it("takes the approver's name from MELRA_APPROVER, and never just anything", async () => {
     const defaults = { cwd: "/w", home: "/h" };
     const label = (value?: string) =>
