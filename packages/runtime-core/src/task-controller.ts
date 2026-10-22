@@ -1570,19 +1570,28 @@ export class TaskController {
     // A verifier's summary and source are stored text like any other.
     const sanitizedEvidence = redactStructuredValue(evidence);
     const storedEvidence = maskEvidenceDigests(sanitizedEvidence.value as EvidenceItem[]);
+    // The declared chain, redacted as the task row, a judge's name and a
+    // certificate's `executedBy` are, so it reads the same as `executedBy`.
+    const principal = redactSecrets(delegationChain(request.identity ?? LOCAL_IDENTITY));
     const adapterRedactions = Array.isArray(result.redactions)
       ? result.redactions.filter((item): item is string => typeof item === "string")
       : [];
     const masked = observedEffect !== sanitized.value || storedEvidence !== sanitizedEvidence.value ? [MASKED] : [];
     const redactions = [
-      ...new Set([...adapterRedactions, ...sanitized.redactions, ...sanitizedEvidence.redactions, ...masked]),
+      ...new Set([
+        ...adapterRedactions,
+        ...sanitized.redactions,
+        ...sanitizedEvidence.redactions,
+        ...principal.redactions,
+        ...masked,
+      ]),
     ];
     return {
       schemaVersion: "1.0.0",
       receiptId: createReceiptId(),
       taskId: task.id,
       capability,
-      principal: delegationChain(request.identity ?? LOCAL_IDENTITY),
+      principal: principal.value,
       effect,
       executionGuarantee: executionGuaranteeFor(
         effect,
