@@ -70,7 +70,7 @@ The residual risk is the assertion itself. See
 | Malicious downloads/uploads | path confinement and artifact hashes | file content is not malware-scanned |
 | Unintended computer input | typed actions, named-key allowlist, high-risk approval | focus can change between approval and action |
 | Desktop observation leakage | local-only screenshot artifact with explicit invocation | screenshots may contain sensitive on-screen data |
-| Secret persistence | executable payload encryption plus redacted projections, events, receipts, certificates, and logs; a brokered credential the far end echoes back is replaced in the result itself; the files the browser keeps its session in and credentials are read from are reserved like MELRA's own data (see Path traversal) | novel secret formats may not match redaction patterns, and a goal keeps its words, so a secret of no recognisable format in one is stored; a credential echoed back encoded or altered is not recognised; key loss is unrecoverable |
+| Secret persistence | executable payload encryption plus redacted projections, events, receipts, certificates, and logs; digests stored beside redacted records keyed per home with a key derived from the payload key, and a file's content digest masked where its content is; a brokered credential the far end echoes back is replaced in the result itself; the files the browser keeps its session in and credentials are read from are reserved like MELRA's own data (see Path traversal) | novel secret formats may not match redaction patterns, and a goal keeps its words, so a secret of no recognisable format in one is stored; a credential echoed back encoded or altered is not recognised; key loss is unrecoverable; a workflow step's idempotency key stays a plain digest, because every version sharing a home must derive it alike, as do hashes a request asks for or declares (a file `hash`, artifact digests, `file_hash`), sizes, records written by `0.3.0-alpha.18` or earlier, and the render digest this version records in a decision row for a challenge one of those versions issued |
 | Memory poisoning | explicit mutation approval, scopes, provenance | no content-level poisoning classifier; classifying text is left to the harness, and a poisoned memory still has to pass policy, approval, and evidence to become an effect |
 | Receipt tampering | canonical digests and task-linked certificate | receipts and projections are not encrypted or externally signed |
 | A local process taking the HTTP surface | bearer token compared in constant time, loopback binding, read-only JSON API; or `--socket`, a mode-`0600` Unix socket the kernel closes to every other OS user, with the token still required | a loopback port is reachable by every local process, so there the token is the only barrier; on either transport, anything running as the same OS user (or root) can connect and read the token from the process that holds it; no socket transport on Windows |
@@ -84,8 +84,8 @@ The residual risk is the assertion itself. See
 
 ## Approval properties
 
-An approval challenge contains a random approval ID, the task ID, a digest of
-the exact operation, and an expiration time. Whether it also carries a phrase,
+An approval challenge contains a random approval ID, the task ID, a keyed
+digest of the exact operation, and an expiration time. Whether it also carries a phrase,
 and what lets the mutation run, depends on the
 [deployment mode](INSTALLATION.md#deployment-modes):
 
@@ -96,7 +96,7 @@ and what lets the mutation run, depends on the
 | An approval the agent sends | checked against the phrase | refused (`approval_in_band_refused`), even when an operator has already decided |
 | No usable decision yet | `approval_required` | `approval_awaiting_operator`, or `approval_expired` once the challenge has expired |
 | Channel on the receipt | `in_band` | `out_of_band` |
-| Residual risk | anyone who knows the task can compute the phrase, so an echo shows only that something echoed it | anyone with OS access to the data directory can run `melra approve` or `melra console`, or write `melra.sqlite` directly, which is an operator only if the agent has no such access; see [the approval console](#the-approval-console) for that path's own residuals |
+| Residual risk | anyone who can read the task can read the phrase, so an echo shows only that something echoed it | anyone with OS access to the data directory can run `melra approve` or `melra console`, or write `melra.sqlite` directly, which is an operator only if the agent has no such access; see [the approval console](#the-approval-console) for that path's own residuals |
 
 Approvals cannot be reused for a different task or operation. Policy is
 re-evaluated after approval and immediately before execution.
