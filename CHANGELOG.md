@@ -6,6 +6,21 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- A governed action commits to SQLite six times instead of nine, and runs
+  4-8% faster on a Mac (M4, medians of 30 rounds interleaved with
+  0.3.0-alpha.17): `file.write` 2.19 ms to 2.10 ms, `file.read` 1.10 ms to
+  1.01 ms, an HTTP `GET` 1.14 ms to 1.07 ms, and a ten-step workflow 18.4 ms
+  to 17.4 ms (151 commits to 111). Everything that records a task's outcome
+  after verification (its idempotency commit, its grant's draw, its receipt,
+  its status and its certificate) commits in one transaction, so a crash
+  leaves the task as it was during verification or finished, never with part
+  of its outcome written. A task is still recorded before its adapter runs,
+  and the adapter's result before it is verified. The database schema is
+  unchanged, so a client `melra setup` pinned to 0.3.0-alpha.17 can keep
+  running on the same home beside this release. (#351)
+
 ## [0.3.0-alpha.17] - 2026-10-22
 
 ### Changed

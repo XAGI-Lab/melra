@@ -379,6 +379,10 @@ interface is served.
   (`file_exists`, `file_absent`, or `file_hash`).
 - Other interrupted mutations enter `recovery_required`; MELRA does not repeat
   them automatically.
+- After verification, everything that records a task's outcome (its
+  idempotency commit, its grant's draw, its receipt, its status and its
+  certificate) commits in one transaction, so a crash leaves the task as it
+  was during verification or finished, never with part of its outcome.
 - A verified task committed before its workflow projection is repaired from
   persisted task evidence and recorded as `workflow.recovered`.
 - An advance whose commit failed leaves the run naming none of the tasks it
