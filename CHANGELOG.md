@@ -6,6 +6,8 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0-alpha.18] - 2026-10-22
+
 ### Added
 
 - A semantic question can be answered (#54). The twelfth MCP tool,
@@ -3376,7 +3378,8 @@ All notable changes are documented here. The format follows
 - Cross-scope memory overwrite and deletion protection.
 - Patched transitive HTTP adapter enforced through a package override.
 
-[Unreleased]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.17...HEAD
+[Unreleased]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.18...HEAD
+[0.3.0-alpha.18]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.17...v0.3.0-alpha.18
 [0.3.0-alpha.17]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.16...v0.3.0-alpha.17
 [0.3.0-alpha.16]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.15...v0.3.0-alpha.16
 [0.3.0-alpha.15]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.14...v0.3.0-alpha.15
