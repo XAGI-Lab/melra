@@ -29,6 +29,14 @@ All notable changes are documented here. The format follows
   not compared. The check still rests on declared identities; `melra judge` is
   unchanged.
 
+### Security
+
+- A receipt's `principal`, the declared delegation chain, is redacted like the
+  rest of the record, as the task row, `judgedBy` and a certificate's
+  `executedBy` already were, so it reads the same as `executedBy`, and the
+  kinds taken out are listed in the receipt's `redactions`. Receipts written
+  before this are left as they were.
+
 ## [0.3.0-alpha.18] - 2026-10-22
 
 ### Added
