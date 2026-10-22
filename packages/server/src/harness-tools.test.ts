@@ -9,7 +9,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { TOOL_NAMES } from "@melra/protocol";
 import { createMcpServer, harnessToolsEnabled, SERVER_INSTRUCTIONS } from "./mcp-server.js";
-import { registerHarnessTools } from "./harness-tools.js";
+import { HARNESS_TOOLS, registerHarnessTools } from "./harness-tools.js";
 import { createMelraRuntime, type MelraRuntime } from "./runtime.js";
 
 type Handler = (args: Record<string, unknown>) => Promise<{
@@ -45,6 +45,14 @@ describe("harnessToolsEnabled", () => {
     expect(harnessToolsEnabled({ MELRA_HARNESS_TOOLS: "1" })).toBe(true);
     expect(harnessToolsEnabled({ MELRA_HARNESS_TOOLS: "0" })).toBe(false);
     expect(harnessToolsEnabled({})).toBe(false);
+  });
+});
+
+describe("harness tool goals", () => {
+  it("names a page without its query or fragment, which the stored URL drops too (#385)", () => {
+    expect(HARNESS_TOOLS.browse!.goal({ url: "https://example.com/callback?code=4f2a9c&state=x#token=y" })).toBe(
+      "Open https://example.com/callback",
+    );
   });
 });
 

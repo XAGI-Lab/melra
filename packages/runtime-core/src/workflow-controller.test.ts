@@ -119,7 +119,7 @@ function fileRequest(goal: string, path: string): TaskRequest {
   });
 }
 
-function definition(goal = "one-time-workflow-secret"): WorkflowDefinition {
+function definition(goal = "Inspect with password=one-time-workflow-secret"): WorkflowDefinition {
   return WorkflowDefinitionSchema.parse({
     schemaVersion: "1.0.0",
     id: definitionId,
@@ -150,9 +150,10 @@ describe("WorkflowController planning", () => {
       "workflow.created",
       "workflow.status_changed",
     ]);
+    // The step's goal keeps its words and loses its secret shapes (#385).
     expect(
       (store.getWorkflowDefinition(definitionId, 1) as WorkflowDefinition | undefined)?.nodes[0],
-    ).not.toEqual(exact.nodes[0]);
+    ).toEqual({ ...exact.nodes[0], request: { ...request("Inspect with password=[REDACTED]") } });
     expect(
       cipher.open(
         store.getWorkflowPayload(definitionId, 1)!,
@@ -174,10 +175,10 @@ describe("WorkflowController planning", () => {
     expect(second.status).toBe("planned");
     expect(store.listWorkflowEvents(second.id)).toHaveLength(2);
 
-    // The goal is redacted before storage, so the stored copies of these two
-    // look identical. The comparison is against the sealed exact definition,
-    // so a change only a secret carried is still caught.
-    expect(() => controller.plan(definition("a-different-secret"))).toThrow(
+    // The goal's secret is redacted before storage, so the stored copies of
+    // these two look identical. The comparison is against the sealed exact
+    // definition, so a change only a secret carried is still caught.
+    expect(() => controller.plan(definition("Inspect with password=a-different-secret"))).toThrow(
       /^workflow_definition_conflict:/,
     );
   });
@@ -3067,6 +3068,28 @@ describe("WorkflowController human input and delegation", () => {
 
     const finished = await controller.advance(planned.id);
     expect(finished.run.status).toBe("verified_complete");
+  });
+
+  it("records a delegation's goal minus its secret shapes (#385)", async () => {
+    const { controller, store } = await setup();
+    // Built at run time so no literal here reads as a leaked credential.
+    const secret = `${"ghp"}_${"A1b2C3d4E5".repeat(4)}`;
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Hand it off",
+        nodes: [{ id: "handoff", type: "delegation", assignee: "outside-worker", goal: `Rotate ${secret}` }],
+      }),
+    );
+    const waiting = await controller.advance(planned.id);
+    expect(waiting.run.nodes.handoff?.prompt).toBe("outside-worker: Rotate [REDACTED_GITHUB_TOKEN]");
+    expect(
+      (store.getWorkflowDefinition(definitionId, 1) as WorkflowDefinition | undefined)?.nodes[0],
+    ).toMatchObject({ goal: "Rotate [REDACTED_GITHUB_TOKEN]" });
+    expect(JSON.stringify(store.getWorkflowRun(planned.id))).not.toContain(secret);
+    expect(JSON.stringify(store.listWorkflowEvents(planned.id))).not.toContain(secret);
   });
 
   it("fails a delegation whose declared evidence does not hold", async () => {

@@ -162,7 +162,10 @@ export const HARNESS_TOOLS: Record<string, HarnessTool<z.ZodRawShape>> = {
     description: "Navigate the browser to a URL and report the page it landed on.",
     input: { url: z.string().url().max(8_192) },
     readOnly: false,
-    goal: (a) => `Open ${a.url}`,
+    // The goal is stored with only secret shapes taken out (#385), and a
+    // query or fragment can carry a credential of no recognisable shape, so
+    // it names the page as the stored URL does: without them.
+    goal: (a) => `Open ${a.url.split(/[?#]/, 1)[0]}`,
     operation: (a) => ({ kind: "browser", action: "navigate", url: a.url }),
   }),
   browser_read: tool({

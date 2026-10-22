@@ -1545,8 +1545,10 @@ export class WorkflowController {
         // next advance asks again without the worker reporting twice.
         const report = inputs.find((item) => item.nodeId === node.id)?.value ?? state.input;
         // Node state caps `prompt` at 2,000 chars; assignee + goal can exceed
-        // that, and a truncated label is better than a schema rejection.
-        const prompt = `${node.assignee}: ${node.goal}`.slice(0, 2_000);
+        // that, and a truncated label is better than a schema rejection. The
+        // goal's secret shapes go first, as in the stored definition (#385),
+        // so the cut cannot leave half a token no pattern recognises.
+        const prompt = recordedInput(`${node.assignee}: ${node.goal}`).slice(0, 2_000);
         if (report === undefined) {
           return {
             state: { status: "awaiting_input", taskIds: [], prompt },
