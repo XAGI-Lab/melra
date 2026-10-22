@@ -547,11 +547,12 @@ reads files by means of its own is not covered, which is what approving that
 program accepts. Keep it outside the workspace. The value (a file's with
 surrounding whitespace trimmed) must be printable ASCII; one holding any other
 character is refused with `credential_source_invalid:<name>`, so a copy echoed
-back is matched byte for byte. A variable that is unset or empty, or a file
-that holds only whitespace, is refused with `credential_source_missing:<name>`
-(a file that is missing or unreadable fails with its own error). Either way
-every call to a host in `hosts` fails before anything is sent: a credential
-whose source is missing never falls back to an unauthenticated call.
+back is matched byte for byte. A variable that is unset or empty is refused
+with `credential_source_missing:<name>`; a file that is empty or holds only
+whitespace with `credential_file_empty`, and one that is missing or unreadable
+with its own error. Either way every call to a host in `hosts` fails before
+anything is sent: a credential whose source is missing never falls back to an
+unauthenticated call.
 
 The two lists are scoped differently on purpose, and the difference is the
 whole feature:
