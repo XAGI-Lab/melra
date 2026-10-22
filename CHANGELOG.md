@@ -38,6 +38,13 @@ All notable changes are documented here. The format follows
   one no task has with `task_not_found:<prefix>`; an empty argument, as an
   unset `"$ID"` sends, names no task, where `melra approve` took it for the one
   task waiting, if only one was. `melra judge` still takes ids whole. (#386)
+- `examples/README.md` said the API example succeeds unauthenticated without
+  `GITHUB_TOKEN`; it fails with `credential_source_missing:github` before any
+  request is sent, as it always has. The example now says it needs the token,
+  and `docs/INSTALLATION.md#credentials` documents `credential_source_missing`
+  beside `credential_source_invalid`: a credential whose source is missing
+  fails every call to its hosts and never falls back to an unauthenticated
+  one. (#387)
 - A verdict sent in band where only an operator's counts, from a
   developer-mode process on a task that ran enforced (`melra judge` without
   `--mode enforced`, or `melra_task_judge`) or from an agent on an enforced
