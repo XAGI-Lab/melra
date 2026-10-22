@@ -166,6 +166,26 @@ Changing or losing `MELRA_PAYLOAD_KEY` or `payload.key` makes existing
 executable payloads unreadable. The key is installation state, not a
 reproducible package artifact.
 
+Releases after `0.3.0-alpha.18` key the digests stored beside redacted
+records with a key derived from the payload key: an approval challenge's
+`actionDigest` and the phrase taken from it, the `renderDigest` a decision is
+bound to, and a receipt's `inputDigest`, which now also binds the task id.
+They can be checked only with that key, and are lost with it. A file read's
+or write's `sha256`, and a failed `file_hash` item's `digest`, are stored as
+`[REDACTED_SENSITIVE_FIELD]`; the caller of `melra_execute` still receives
+them. Nothing stored is rewritten: older receipts keep their plain digests,
+and older certificates verify unchanged.
+
+In a home shared with `0.3.0-alpha.17` or `0.3.0-alpha.18`, a newer process
+still runs a challenge an older one issued, and accepts a decision an older
+`melra approve` or `melra console` recorded, until the challenge expires; it
+shows such a challenge the digest the older executor checks. The reverse
+fails closed: an older process refuses a challenge a newer one issued with
+`approval_action_digest_mismatch` before anything runs, and the task stays
+`awaiting_approval` for a newer process to run. There that error means the
+versions differ, not that the request changed. Upgrade every process sharing
+a `MELRA_HOME` together, and re-run `melra setup` so pinned clients move.
+
 ## Workflow compatibility and limits
 
 The implemented node types are operation, approval, condition, parallel,

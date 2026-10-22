@@ -1456,8 +1456,8 @@ reported: instead of failing, the tool comes back with the phrase.
 ```
 
 `approve` takes that task id and that phrase and runs the operation that was
-approved. It cannot change anything about it — the phrase is a hash of the task
-id and the operation together, so approved arguments cannot be swapped for
+approved. It cannot change anything about it — the phrase is a keyed hash of
+the task id and the operation together, so approved arguments cannot be swapped for
 others afterwards. A policy denial comes back the same way, as a result with
 `status: "blocked"` and a reason, rather than an error.
 

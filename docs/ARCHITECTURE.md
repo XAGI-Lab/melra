@@ -587,9 +587,9 @@ See [deployment modes](INSTALLATION.md#deployment-modes).
 
 A receipt for an approved effect also says who approved it and how:
 `policyDecision.approval` holds the `channel`, the `approver`, when they decided,
-and `renderDigest`, the digest of the effect contract they were shown. An echoed
-phrase is `in_band` with approver `phrase`, because anything that knows the task
-can compute it. A decision recorded through an operator surface
+and `renderDigest`, a keyed digest of the effect contract they were shown. An
+echoed phrase is `in_band` with approver `phrase`, because anything that can
+read the task can read it. A decision recorded through an operator surface
 (`TaskController.decide`, which `melra approve`, `melra run`'s prompt and
 `melra console` call; the approver reads `cli:<name>` or `console:<name>`) is
 `out_of_band` only in enforced mode, and is bound to the render: a request that
