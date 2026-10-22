@@ -1071,10 +1071,17 @@ client's token adds. The `rationale` is for
 people; MELRA stores it redacted and never reads it.
 
 It prints `{ task, certificate? }` and exits 0 when the verdict is recorded,
-and 1 when it is refused, which writes nothing:
+and 1 when it is refused, which records no verdict:
 `task_not_awaiting_judgement:<status>`, `judgement_not_found`,
-`judgement_already_answered`, `judgement_expired` (the task then settles
-closed), or `judgement_in_band_refused`, checked in that order.
+`judgement_already_answered`, `judgement_expired`, or
+`judgement_in_band_refused`, checked in that order. A question whose
+`expiresAt` passed while its task still waited gets `judgement_expired`: the
+task settles closed (`semantic_judgement_expired`) when a runtime next opens
+the data directory, this command's own startup included, so it is normally
+settled by the time the refusal prints. Until then `melra tasks` and
+`melra status` count it apart from the tasks still waiting
+(`expiredJudgements` beside `awaitingJudgement` in `melra status --json`),
+though it is still listed as `waiting_user`.
 
 The judge is recorded as `cli:` plus [`MELRA_APPROVER`](#local-configuration).
 It is not checked against the task's principal, as `melra approve` checks no

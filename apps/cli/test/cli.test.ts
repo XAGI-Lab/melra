@@ -317,6 +317,19 @@ describe("melra CLI", () => {
         status: "verified_success",
         judgements: [{ judgedBy: { judge: "cli:alice", channel: "in_band" } }],
       });
+      // Past its expiry, this command's own startup settles it closed before
+      // the verdict arrives, and the refusal still names the expiry (#383).
+      const lapsed = await waiting(developer);
+      const record = developer.store.getTask(lapsed[0]!)!;
+      const past = new Date(Date.now() - 1_000).toISOString();
+      developer.store.saveTask({ ...record, judgements: record.judgements!.map((entry) => ({ ...entry, expiresAt: past })) });
+      const expired = await judge([...lapsed, "--verdict", "yes"], "", developerHome);
+      expect(expired.code).toBe(1);
+      expect(expired.stderr).toContain("melra: judgement_expired");
+      expect(developer.store.getTask(lapsed[0]!)).toMatchObject({ status: "partial", error: "semantic_judgement_expired" });
+      // Only for the question that expired: a wrong id is still a settled task.
+      const stray = await judge([lapsed[0]!, ...unknown], "", developerHome);
+      expect(stray.stderr).toContain("melra: task_not_awaiting_judgement:partial");
     } finally {
       await developer.close();
     }

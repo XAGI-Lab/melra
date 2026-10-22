@@ -981,6 +981,20 @@ async function judgeCommand(args: string[], env: CliEnvironment): Promise<number
           "judgement_in_band_refused: the task ran in enforced mode; rerun with --mode enforced or MELRA_MODE=enforced",
         );
       }
+      // This command's own startup settles an expired wait before the verdict
+      // reaches `judge`, which then sees only a settled task (#383).
+      if (error instanceof Error && error.message.startsWith("task_not_awaiting_judgement:")) {
+        const task = melra.controller.status(taskId);
+        const named = task.judgements?.find((entry) => entry.judgementId === judgementId);
+        if (
+          task.error === "semantic_judgement_expired" &&
+          named !== undefined &&
+          named.judgedBy === undefined &&
+          Date.parse(named.expiresAt) <= Date.now()
+        ) {
+          throw new Error("judgement_expired");
+        }
+      }
       throw error;
     }
     const recorded = judged.task.judgements?.find((entry) => entry.judgementId === judgementId)?.judgedBy;

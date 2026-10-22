@@ -39,6 +39,16 @@ All notable changes are documented here. The format follows
   with `--mode enforced`, for a settled task or a wrong id, and only the rerun
   showed `task_not_awaiting_judgement:<status>` or `judgement_not_found`.
   Every one of these refusals still records nothing. (#384)
+- `melra judge` on a question past its `expiresAt` reports `judgement_expired`
+  (exit 1), as documented. Its own startup settles the expired wait first, so
+  it reported `task_not_awaiting_judgement:partial` (or `:recovery_required`).
+  `melra tasks` and `melra status` count a `waiting_user` task as waiting only
+  while one of its open questions has not expired, and count the expired ones
+  apart, with a hint that they settle closed when a runtime next opens the
+  data directory; `status --json` adds `awaitingJudgement` and
+  `expiredJudgements`. Before, only the stored `waiting_user` count was
+  reported, so an expired wait counted as waiting until something opened the
+  data directory. (#383)
 
 ## [0.3.0-alpha.18] - 2026-10-22
 
