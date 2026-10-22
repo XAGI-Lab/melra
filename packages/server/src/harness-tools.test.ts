@@ -9,7 +9,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { TOOL_NAMES } from "@melra/protocol";
 import { createMcpServer, harnessToolsEnabled, SERVER_INSTRUCTIONS } from "./mcp-server.js";
-import { registerHarnessTools } from "./harness-tools.js";
+import { HARNESS_TOOLS, registerHarnessTools } from "./harness-tools.js";
 import { createMelraRuntime, type MelraRuntime } from "./runtime.js";
 
 type Handler = (args: Record<string, unknown>) => Promise<{
@@ -45,6 +45,25 @@ describe("harnessToolsEnabled", () => {
     expect(harnessToolsEnabled({ MELRA_HARNESS_TOOLS: "1" })).toBe(true);
     expect(harnessToolsEnabled({ MELRA_HARNESS_TOOLS: "0" })).toBe(false);
     expect(harnessToolsEnabled({})).toBe(false);
+  });
+});
+
+describe("harness tool goals", () => {
+  it("names a page without its query or fragment, which the stored URL drops too (#385)", () => {
+    expect(HARNESS_TOOLS.browse!.goal({ url: "https://example.com/callback?code=4f2a9c&state=x#token=y" })).toBe(
+      "Open https://example.com/callback",
+    );
+  });
+
+  it("names a page without its userinfo, whose password no secret pattern may match (#385)", () => {
+    for (const url of [
+      "https://alice:pa'ss@example.com/x?code=1#t",
+      'https://alice:pa"ss@example.com/x',
+      "https://alice:p@ssw0rdXYZ@example.com/x",
+      "https://al,{ice:pw@example.com/x",
+    ]) {
+      expect(HARNESS_TOOLS.browse!.goal({ url })).toBe("Open https://example.com/x");
+    }
   });
 });
 
@@ -152,6 +171,17 @@ describe("harness tools in enforced mode", () => {
     runtime.controller.decide(task.id, runtime.controller.approvalView(task.id).renderDigest, "cli:test");
     expect((await call(tools, "approve", { taskId: held.taskId })).status).toBe("verified_success");
     expect(await readFile(join(workspace, "w.txt"), "utf8")).toBe("x");
+  });
+
+  it("plans a URL or query it accepts even when its goal would pass the goal's cap", async () => {
+    // 8,017 characters, but each é is percent-encoded to six in the goal. On
+    // loopback, so policy stops it at the plan and no page is opened.
+    const held = await call(tools, "browse", { url: `http://localhost/${"é".repeat(8_000)}` });
+    expect(held.status).toBe("blocked");
+    expect(runtime.controller.status(String(held.taskId)).request.goal).toBe("Open (input too long to restate)");
+    const recalled = await call(tools, "recall", { query: "q".repeat(10_000) });
+    expect(recalled.status).toBe("verified_success");
+    expect(runtime.controller.status(String(recalled.taskId)).request.goal).toBe("Recall (input too long to restate)");
   });
 
   it("asks the browser tools for the page they act on", async () => {
