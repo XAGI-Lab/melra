@@ -6,6 +6,8 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0-alpha.19] - 2026-10-23
+
 ### Added
 
 - The Python SDK gains `judge(task_id, judgement_id, verdict, *, identity,
@@ -20,28 +22,27 @@ All notable changes are documented here. The format follows
 
 ### Changed
 
-- `melra_task_judge` also refuses a judge whose declared delegation chain names
-  the task's principal, such as a grader the acting agent started
-  (`semantic_judge_is_actor`, #378). Another session under the same harness, or
-  another agent of the person the work was for, may still answer, unless the
-  task's principal is that harness or person itself. The `harness:` link an
-  OAuth client's token puts above a judge's chain is recorded in `judgedBy` but
-  not compared. The check still rests on declared identities; `melra judge` is
-  unchanged.
-- A task's goal is stored as declared, with only recognisable secret shapes
-  taken out, instead of being replaced whole (#385). The stored request, the
-  certificate's `goal`, and a workflow definition's step and delegation goals
-  used to read `[REDACTED_SENSITIVE_FIELD]` whatever the goal said; they now
-  hold the goal itself, so a certificate states what its task was for. The
-  trade-off: a secret with no recognisable shape written into a goal is now
-  kept in those records, so keep secrets out of goals; the goal's schema
-  description now says so to whoever writes one. The `browse` harness tool's
-  goal no longer includes the URL's userinfo, query or fragment. Tasks planned
-  before this keep the placeholder, as do certificates later written for them.
-  A definition stored before this keeps it in its stored copy (bump its version
-  to store the goal there), but a new run of it reads the sealed definition, so
-  that run's tasks, certificates and delegation prompts hold the goal. Nothing
-  is migrated.
+- **Breaking:** `melra_task_judge` also refuses a judge whose declared
+  delegation chain names the task's principal, such as a grader the acting
+  agent started (`semantic_judge_is_actor`, #378). Another session under the
+  same harness, or another agent of the person the work was for, may still
+  answer, unless the task's principal is that harness or person itself. The
+  `harness:` link an OAuth client's token puts above a judge's chain is
+  recorded in `judgedBy` but not compared. The check still rests on declared
+  identities; `melra judge` is unchanged. - A task's goal is stored as
+  declared, with only recognisable secret shapes taken out, instead of being
+  replaced whole (#385). The stored request, the certificate's `goal`, and a
+  workflow definition's step and delegation goals used to read
+  `[REDACTED_SENSITIVE_FIELD]` whatever the goal said; they now hold the goal
+  itself, so a certificate states what its task was for. The trade-off: a
+  secret with no recognisable shape written into a goal is now kept in those
+  records, so keep secrets out of goals; the goal's schema description now says
+  so to whoever writes one. The `browse` harness tool's goal no longer includes
+  the URL's userinfo, query or fragment. Tasks planned before this keep the
+  placeholder, as do certificates later written for them. A definition stored
+  before this keeps it in its stored copy (bump its version to store the goal
+  there), but a new run of it reads the sealed definition, so that run's tasks,
+  certificates and delegation prompts hold the goal. Nothing is migrated.
 
 - **Breaking:** an approval challenge's `actionDigest` (and so its phrase,
   still `APPROVE` plus its first twelve hex digits), the `renderDigest` an
@@ -3511,7 +3512,8 @@ All notable changes are documented here. The format follows
 - Cross-scope memory overwrite and deletion protection.
 - Patched transitive HTTP adapter enforced through a package override.
 
-[Unreleased]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.18...HEAD
+[Unreleased]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.19...HEAD
+[0.3.0-alpha.19]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.18...v0.3.0-alpha.19
 [0.3.0-alpha.18]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.17...v0.3.0-alpha.18
 [0.3.0-alpha.17]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.16...v0.3.0-alpha.17
 [0.3.0-alpha.16]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.15...v0.3.0-alpha.16
