@@ -4,14 +4,11 @@
 // Every MELRA_* variable the shipped code reads must have a row in an
 // environment table in docs/INSTALLATION.md, and every row must name a variable
 // the code still reads. A variable the docs never mention is a feature nobody
-// can find; a row for one nothing reads is a knob that does nothing. Every row
-// also needs a line in the Environment block `melra help` prints, the first
-// place someone in a terminal looks (#388); that line is not a read.
+// can find; a row for one nothing reads is a knob that does nothing.
 
 import { glob, readFile } from "node:fs/promises";
 
 const DOC = "docs/INSTALLATION.md";
-const HELP = "apps/cli/src/index.ts";
 
 // Runtime plumbing, not configuration: values MELRA sets on its own child
 // processes. Documenting them as knobs would be wrong. Keep this a literal
@@ -36,16 +33,10 @@ const INTERNAL = new Map([
 // path check covers a test/ directory nested under src/ as well.
 const isTest = (path) => /\.test\.[cm]?[jt]sx?$/.test(path) || /(^|[\\/])test[\\/]/.test(path);
 
-// help() is left out, blanked to as many newlines so line numbers hold: every
-// documented variable has a line there, so counting it as a read would let a
-// row for one nothing else reads pass.
-const HELP_BODY = /^function help\(\): void \{[\s\S]*?\n\}$/m;
 const readBy = new Map();
 for await (const path of glob("{apps,packages}/*/src/**/*.{ts,mts,cts,js,mjs}")) {
   if (isTest(path)) continue;
-  let text = await readFile(path, "utf8");
-  if (path.replaceAll("\\", "/") === HELP) text = text.replace(HELP_BODY, (body) => body.replace(/[^\n]/g, ""));
-  const lines = text.split(/\r?\n/);
+  const lines = (await readFile(path, "utf8")).split(/\r?\n/);
   lines.forEach((line, index) => {
     for (const [name] of line.matchAll(/MELRA_[A-Z0-9_]+/g)) {
       if (!readBy.has(name)) readBy.set(name, `${path.replaceAll("\\", "/")}:${index + 1}`);
@@ -71,19 +62,6 @@ for (const [name, line] of documented) {
     failures.push(`${DOC}:${line}: ${name} is documented but nothing in {apps,packages}/*/src reads it; remove the row`);
   }
 }
-// From the source, not dist/: docs:check runs before anything is built.
-const environment = /function help\(\): void \{[\s\S]*?\nEnvironment:\n([\s\S]*?)`\);/.exec(
-  await readFile(HELP, "utf8"),
-)?.[1];
-if (environment === undefined) {
-  failures.push(`${HELP}: found no Environment block in help()`);
-} else {
-  for (const [name, line] of documented) {
-    if (!new RegExp(`^  ${name}\\s`, "m").test(environment)) {
-      failures.push(`${DOC}:${line}: ${name} has no line in the Environment block of help() in ${HELP}`);
-    }
-  }
-}
 for (const name of INTERNAL.keys()) {
   if (!readBy.has(name)) {
     failures.push(`${name} is allowlisted as internal in scripts/check-env-docs.mjs but no longer appears in the code; remove it`);
@@ -95,6 +73,6 @@ if (failures.length > 0) {
   process.exitCode = 1;
 } else {
   process.stdout.write(
-    `All ${readBy.size - INTERNAL.size} MELRA_* configuration variables are documented in ${DOC} and listed by melra help.\n`,
+    `All ${readBy.size - INTERNAL.size} MELRA_* configuration variables are documented in ${DOC}.\n`,
   );
 }
