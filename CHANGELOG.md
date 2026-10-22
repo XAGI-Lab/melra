@@ -34,11 +34,21 @@ All notable changes are documented here. The format follows
   used to read `[REDACTED_SENSITIVE_FIELD]` whatever the goal said; they now
   hold the goal itself, so a certificate states what its task was for. The
   trade-off: a secret with no recognisable shape written into a goal is now
-  kept in those records, so keep secrets out of goals. A delegation's waiting
-  prompt in the run's state is now redacted too (it held the plaintext goal),
-  and the `browse` harness tool's goal no longer includes the URL's query or
-  fragment. Records written before this keep the placeholder; nothing is
-  migrated.
+  kept in those records, so keep secrets out of goals; the goal's schema
+  description now says so to whoever writes one. The `browse` harness tool's
+  goal no longer includes the URL's userinfo, query or fragment. Tasks planned
+  and definitions stored before this keep the placeholder, including
+  certificates later written for those tasks and new runs of such a definition
+  (bump its version to store the goal); nothing is migrated.
+
+### Security
+
+- A workflow delegation node's goal was written in plaintext into the run's
+  node state (`prompt`, in every node state) and its `workflow.node_changed`
+  events, although the stored definition replaced it (#385). It now passes the
+  shared secret patterns. Runs and events recorded before this keep the
+  plaintext, so delete such runs if a delegation goal ever carried a
+  credential.
 
 ## [0.3.0-alpha.18] - 2026-10-22
 

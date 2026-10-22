@@ -211,10 +211,12 @@ Status, events, logs, receipts, and certificates contain redacted projections,
 not executable plaintext. A field that holds content, typed values, headers,
 environment, terminal output or a credential is replaced whole. Free text a
 record exists to show (a goal, a command's arguments, a judgement's rationale,
-an answer to a prompt) keeps its words and loses only the `SECRET_PATTERNS`
-shapes, so a secret of no recognisable shape in a goal is stored. `MELRA_HOME`
-still contains sensitive encrypted material and must not be committed or
-publicly synchronized.
+an answer to a prompt) keeps its words and loses only recognisable secrets:
+the `SECRET_PATTERNS` shapes, and in a command's arguments also the values of
+credential-named flags, `-u user:pass`, `-pPASSWORD`, credential-named
+assignments and auth headers. So a secret of no recognisable shape in a goal is
+stored. `MELRA_HOME` still contains sensitive encrypted material and must not be
+committed or publicly synchronized.
 
 ## Workflow model
 
