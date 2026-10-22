@@ -290,7 +290,7 @@ describe("TypeScript SDK stdio connect", () => {
       MELRA_BROWSER_CDP_ENDPOINT: "http://127.0.0.1:9222",
       PARITY_GIVEN: "inherited",
     };
-    const names = Object.keys(set);
+    const names = [...Object.keys(set), "melra_unhinged", "Melra_Socket"];
     const previous = Object.fromEntries(names.map((name) => [name, process.env[name]]));
     Object.assign(process.env, set);
     const spawned = async (options: { cwd?: string; env?: Record<string, string> }) => {
@@ -317,6 +317,14 @@ describe("TypeScript SDK stdio connect", () => {
       const asked = await spawned({ env: { MELRA_UNHINGED: "1" } });
       expect(asked.MELRA_WORKSPACE).toBe("/elsewhere");
       expect(asked.MELRA_UNHINGED).toBe("1");
+
+      // Any spelling: on Windows `set melra_unhinged=1` is MELRA_UNHINGED, under
+      // that name. Alone, since there one would overwrite the other.
+      delete process.env.MELRA_SOCKET;
+      delete process.env.MELRA_UNHINGED;
+      Object.assign(process.env, { melra_unhinged: "1", Melra_Socket: join(directory, "s.sock") });
+      const spelled = Object.keys(await spawned({ cwd: directory }));
+      expect(spelled.filter((name) => ["MELRA_SOCKET", "MELRA_UNHINGED"].includes(name.toUpperCase()))).toEqual([]);
     } finally {
       for (const name of names) {
         if (previous[name] === undefined) delete process.env[name];
