@@ -461,9 +461,10 @@ another session of the same harness or another agent of the same person, may
 answer. The `harness:` link an OAuth client's token puts above a judge's
 chain is recorded in `judgedBy` but not compared. That check compares declared identities, so over MCP even a `human:` judge is the
 harness's claim; only a `cli:` judge, from `melra judge`, came through an
-operator surface. In enforced mode, and on a task that ran enforced, a verdict
-sent over MCP is refused (`judgement_in_band_refused`) and an operator answers
-with `melra judge`. A yes on every question makes the task `verified_success`.
+operator surface. In enforced mode, and on a task that ran enforced, no verdict
+sent over MCP is recorded: one on a question still waiting is refused
+(`judgement_in_band_refused`), and an operator answers with `melra judge`. A
+yes on every question makes the task `verified_success`.
 The first `no` ends it `partial` (`semantic_judgement_no`); `cannot_tell` ends a
 change `recovery_required` and a read `partial`
 (`semantic_judgement_cannot_tell`). Unanswered at expiry, the task settles
