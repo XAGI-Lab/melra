@@ -1163,6 +1163,49 @@ describe("WorkflowController execution", () => {
     expect(memoryCalls).toBe(1);
   });
 
+  it("says which task a compensation names, the one a failed run's advance asks again once expired (#303)", async () => {
+    const { controller, store, tasks } = await setup(async (operation) =>
+      operation.kind === "file" ? { success: operation.path !== "fail" } : { success: true, stored: true },
+    );
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Expired compensation",
+        nodes: [
+          { id: "first", type: "operation", request: fileRequest("First", "first") },
+          { id: "second", type: "operation", dependsOn: ["first"], request: fileRequest("Fail", "fail") },
+          { id: "third", type: "operation", dependsOn: ["first"], request: mutationRequest("Third") },
+          { id: "undo-first", type: "compensation", forNodeId: "first", request: mutationRequest("Undo") },
+        ],
+      }),
+    );
+    await controller.advance(planned.id);
+    const failed = (await controller.advance(planned.id)).run;
+    expect(failed.status).toBe("failed");
+    const [first, third, undo] = ["first", "third", "undo-first"].map((id) => failed.nodes[id]!.taskIds[0]!);
+    for (const taskId of [third!, undo!]) {
+      const task = tasks.status(taskId);
+      expect(task.status).toBe("awaiting_approval");
+      store.saveTask({ ...task, approval: { ...task.approval!, expiresAt: new Date(Date.now() - 1_000).toISOString() } });
+    }
+    expect(controller.isCompensation(planned.id, undo!)).toBe(true);
+    expect(controller.isCompensation(planned.id, third!)).toBe(false);
+    expect(controller.isCompensation(planned.id, first!)).toBe(false);
+    expect(controller.isCompensation(planned.id, "not-a-task")).toBe(false);
+    // The advance asks the compensation again and leaves the forward step as it was.
+    const asked = (await controller.advance(planned.id)).run;
+    const again = asked.nodes["undo-first"]!.taskIds[0]!;
+    expect(again).not.toBe(undo);
+    expect(tasks.status(undo!).status).toBe("cancelled");
+    expect(tasks.status(again)).toMatchObject({ status: "awaiting_approval", attempt: 2 });
+    expect(Date.parse(tasks.status(again).approval!.expiresAt)).toBeGreaterThan(Date.now());
+    expect(controller.isCompensation(planned.id, again)).toBe(true);
+    expect(asked.nodes.third!.taskIds).toEqual([third]);
+    expect(tasks.status(third!).status).toBe("awaiting_approval");
+  });
+
   const PAYMENTS = "https://payments.example.test";
   const LOGISTICS = "https://logistics.example.test";
 

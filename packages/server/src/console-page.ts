@@ -612,7 +612,10 @@ function closedAdvice(id, left, pending) {
   const lead = spent ? "This workflow step" + spent : "This workflow step's approval has expired.";
   const run = pending.workflowId;
   // Only for the task the run names: advancing never takes up an older duplicate.
-  if (pending.named && !spent && ["awaiting_approval", "running"].includes(pending.workflowStatus)) return [lead + " Advance it with ", code("melra workflow advance " + run), "."];
+  // A failed run's advance unwinds: it asks a compensation again, never a forward step.
+  const advances = ["awaiting_approval", "running"].includes(pending.workflowStatus) ||
+    (pending.compensation === true && pending.workflowStatus === "failed");
+  if (pending.named && !spent && advances) return [lead + " Advance it with ", code("melra workflow advance " + run), "."];
   const resume = pending.named ? resumeHint(pending) : null;
   if (resume) return [lead, ...resume];
   // Spent, only an advance after the challenge expires asks again; nothing asks again for an older duplicate.

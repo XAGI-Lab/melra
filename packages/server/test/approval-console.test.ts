@@ -574,6 +574,59 @@ describe("approval console", () => {
     expect(text).not.toMatch(/next advance asks again|melra workflow advance|--deny/);
   }, 60_000);
 
+  it("tells an expired compensation of a failed run to advance it, and a forward step of that run to inspect (#303)", async () => {
+    const run = runtime.workflows.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: randomUUID(),
+        version: 1,
+        name: "expired-compensation",
+        nodes: [
+          { id: "first", type: "operation", request: write("comp-first.txt") },
+          { id: "second", type: "operation", dependsOn: ["first"], request: write("comp-second.txt") },
+          { id: "third", type: "operation", dependsOn: ["first"], request: write("comp-third.txt") },
+          { id: "undo-first", type: "compensation", forNodeId: "first", request: write("comp-undo.txt") },
+        ],
+      }),
+    );
+    const named = (nodeId: string) => runtime.workflows.status(run.id).nodes[nodeId]!.taskIds[0]!;
+    await runtime.workflows.advance(run.id);
+    runtime.controller.decide(named("first"), runtime.controller.approvalView(named("first")).renderDigest, "console:test");
+    await runtime.workflows.advance(run.id);
+    await runtime.workflows.advance(run.id);
+    // The operator denies the second step: the run fails and offers the first's undo.
+    runtime.controller.cancel(named("second"));
+    await runtime.workflows.advance(run.id);
+    expect(runtime.workflows.status(run.id).status).toBe("failed");
+    const undo = named("undo-first");
+    const third = named("third");
+    expire(undo);
+    expire(third);
+    const undoState = await call(agent, `/api/tasks/${undo}/approval-state`, { token: "agent-token" });
+    expect(undoState.body).toMatchObject({ step: true, workflowId: run.id, workflowStatus: "failed", named: true, compensation: true });
+    const thirdState = await call(agent, `/api/tasks/${third}/approval-state`, { token: "agent-token" });
+    expect(thirdState.body).toMatchObject({ step: true, workflowId: run.id, workflowStatus: "failed", named: true });
+    expect(thirdState.body.compensation).toBeUndefined();
+    const undoText = await callouts(undo);
+    if (undoText !== undefined) {
+      expect(undoText).toContain(`melra workflow advance ${run.id}`);
+      expect(undoText).not.toMatch(/melra workflow inspect|--deny/);
+    }
+    // A failed run's advance never offers a forward step again: it unwinds.
+    const thirdText = await callouts(third);
+    if (thirdText !== undefined) {
+      expect(thirdText).toContain(`melra workflow inspect ${run.id}`);
+      expect(thirdText).not.toMatch(/melra workflow advance|--deny/);
+    }
+    // What the advice promises: the advance asks the compensation again, and leaves the forward step.
+    await runtime.workflows.advance(run.id);
+    expect(runtime.controller.status(undo).status).toBe("cancelled");
+    const again = runtime.controller.status(named("undo-first"));
+    expect(again).toMatchObject({ status: "awaiting_approval", attempt: 2 });
+    expect(Date.parse(again.approval!.expiresAt)).toBeGreaterThan(Date.now());
+    expect(named("third")).toBe(third);
+  }, 60_000);
+
   it("points an older duplicate under a run's key at inspect, since advancing never takes it up", async () => {
     const run = oneStep("duplicate-step");
     await runtime.workflows.advance(run.id);
