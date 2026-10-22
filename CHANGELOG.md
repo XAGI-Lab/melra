@@ -6,6 +6,12 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- The Python SDK gains `judge(task_id, judgement_id, verdict, *, identity,
+  rationale=None)`, which answers a waiting task's semantic question through
+  `melra_task_judge` as the TypeScript SDK's `judge()` does (#378).
+
 ## [0.3.0-alpha.18] - 2026-10-22
 
 ### Added

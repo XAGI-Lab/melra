@@ -63,3 +63,29 @@ where it lives. A wrong token raises `PermissionError`.
 The token can drive the machine, so `connect_http` refuses plain `http://` to
 anything but a loopback host; reach a remote server over `https://`, or pass
 `allow_insecure_http=True` on a network you trust.
+
+## Methods
+
+`capabilities`, `plan`, `execute`, `status`, `cancel`, `receipt` and `judge`
+call the task tools; `plan_workflow`, `advance_workflow`, `workflow_status`,
+`cancel_workflow` and `control_workflow` call the workflow tools. `call_tool`
+reaches any tool by name.
+
+A task whose `requiredEvidence` asks a `semantic` question stops at
+`waiting_user` until someone outside MELRA answers it. Answer it as a principal
+other than the one that planned it:
+
+```python
+waiting = await melra.status(task_id)
+judged = await melra.judge(
+    task_id,
+    waiting["judgements"][0]["judgementId"],
+    "yes",  # or "no", "cannot_tell"
+    identity={"principal": {"kind": "agent", "id": "grader"}},
+    rationale="The summary covers every section.",  # optional; MELRA never reads it
+)
+```
+
+A judge declaring the task's own principal, or one of the non-human links it
+acts for, is refused with `semantic_judge_is_actor`. In enforced mode a verdict sent this way is refused,
+and an operator answers with `melra judge`.
