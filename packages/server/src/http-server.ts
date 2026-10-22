@@ -610,7 +610,8 @@ export async function serveHttp(
    * workflow's step, which is never told to deny, and the run naming it, if
    * one does yet, with that run's status, since only some runs can advance,
    * and whether the run names this very task: advancing never takes up an
-   * older duplicate under its key.
+   * older duplicate under its key. And whether it names it from a
+   * compensation, the one step a failed run's advance asks again.
    */
   function approvalState(task: TaskRecord) {
     const decision = runtime.controller.approvalDecision(task);
@@ -632,6 +633,7 @@ export async function serveHttp(
             workflowId: run.id,
             workflowStatus: run.status,
             named: Object.values(run.nodes).some((node) => node.taskIds.includes(task.id)),
+            ...(runtime.workflows.isCompensation(run.id, task.id) ? { compensation: true } : {}),
           }),
     };
   }

@@ -21,6 +21,18 @@ All notable changes are documented here. The format follows
   unchanged, so a client `melra setup` pinned to 0.3.0-alpha.17 can keep
   running on the same home beside this release. (#351)
 
+### Fixed
+
+- The web console tells an expired compensation step of a failed run to
+  `melra workflow advance <workflow-id>`, where it pointed at
+  `melra workflow inspect`: that advance cancels the expired challenge and
+  asks again. A forward step of a failed run is still pointed at `inspect`,
+  since an advance there unwinds the run and never offers the step again.
+  `/api/tasks/<id>/approval-state` adds `compensation: true` when the run
+  names the task from a compensation node, which `WorkflowController`'s new
+  read-only `isCompensation(workflowId, taskId)` tells from the run's sealed
+  definition. (#303)
+
 ## [0.3.0-alpha.17] - 2026-10-22
 
 ### Changed

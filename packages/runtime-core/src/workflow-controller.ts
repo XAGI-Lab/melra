@@ -204,6 +204,18 @@ export class WorkflowController {
     return this.store.listWorkflowEvents(workflowId, afterSequence);
   }
 
+  /**
+   * Whether the node of this run naming the task is a compensation; false
+   * when none names it. A failed run's advance asks a compensation's expired
+   * challenge again, but never offers a forward step again (#303).
+   */
+  isCompensation(workflowId: string, taskId: string): boolean {
+    const run = this.status(workflowId);
+    const nodeId = Object.keys(run.nodes).find((id) => run.nodes[id]!.taskIds.includes(taskId));
+    return nodeId !== undefined &&
+      this.loadDefinition(run).nodes.some((node) => node.id === nodeId && node.type === "compensation");
+  }
+
   async advance(
     workflowId: string,
     approvals: ApprovalResponse[] = [],
