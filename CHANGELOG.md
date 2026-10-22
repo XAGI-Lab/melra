@@ -28,6 +28,21 @@ All notable changes are documented here. The format follows
   OAuth client's token puts above a judge's chain is recorded in `judgedBy` but
   not compared. The check still rests on declared identities; `melra judge` is
   unchanged.
+- A task's goal is stored as declared, with only recognisable secret shapes
+  taken out, instead of being replaced whole (#385). The stored request, the
+  certificate's `goal`, and a workflow definition's step and delegation goals
+  used to read `[REDACTED_SENSITIVE_FIELD]` whatever the goal said; they now
+  hold the goal itself, so a certificate states what its task was for. The
+  trade-off: a secret with no recognisable shape written into a goal is now
+  kept in those records, so keep secrets out of goals; the goal's schema
+  description now says so to whoever writes one. The `browse` harness tool's
+  goal no longer includes the URL's userinfo, query or fragment. Tasks planned
+  before this keep the placeholder, as do certificates later written for them.
+  A definition stored before this keeps it in its stored copy (bump its version
+  to store the goal there), but a new run of it reads the sealed definition, so
+  that run's tasks, certificates and delegation prompts hold the goal. Nothing
+  is migrated.
+
 - **Breaking:** an approval challenge's `actionDigest` (and so its phrase,
   still `APPROVE` plus its first twelve hex digits), the `renderDigest` an
   approval is bound to, and a receipt's `inputDigest`, which now also binds the
@@ -48,6 +63,11 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- The `recall` harness tool no longer fails a query it accepts that is longer
+  than 9,993 characters: the goal built from it passed the 10,000 characters a
+  goal may hold. A harness tool's goal that would pass that keeps only its verb,
+  as in `Recall (input too long to restate)`, rather than being cut through its
+  input; the operation still carries the input (#385).
 - A verdict sent in band where only an operator's counts, from a
   developer-mode process on a task that ran enforced (`melra judge` without
   `--mode enforced`, or `melra_task_judge`) or from an agent on an enforced

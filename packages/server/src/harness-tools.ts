@@ -162,7 +162,17 @@ export const HARNESS_TOOLS: Record<string, HarnessTool<z.ZodRawShape>> = {
     description: "Navigate the browser to a URL and report the page it landed on.",
     input: { url: z.string().url().max(8_192) },
     readOnly: false,
-    goal: (a) => `Open ${a.url}`,
+    // The goal is stored with only secret shapes taken out (#385), and a
+    // query, fragment or userinfo can carry a credential of no recognisable
+    // shape, so it names the page as the stored URL does: parsed, without them.
+    goal: (a) => {
+      const url = new URL(a.url);
+      url.username = "";
+      url.password = "";
+      url.search = "";
+      url.hash = "";
+      return `Open ${url}`;
+    },
     operation: (a) => ({ kind: "browser", action: "navigate", url: a.url }),
   }),
   browser_read: tool({
@@ -290,9 +300,15 @@ export function registerHarnessTools(
       },
       async (args: Record<string, unknown>) => {
         const parsed = z.object(definition.input).parse(args);
+        // A goal is capped at 10,000 characters, and one built from an
+        // accepted input can pass that: a `recall` query of 10,000, or a
+        // non-ASCII URL that percent-encoding lengthens up to ninefold. Cut
+        // through, it could keep part of a secret no pattern then matches, so
+        // it keeps only its verb; the operation still carries the input.
+        const goal = definition.goal(parsed);
         const task = runtime.controller.plan(
           TaskRequestSchema.parse({
-            goal: definition.goal(parsed),
+            goal: goal.length <= 10_000 ? goal : `${goal.split(" ", 1)[0]} (input too long to restate)`,
             operation: definition.operation(parsed),
             ...(definition.evidence === undefined
               ? {}

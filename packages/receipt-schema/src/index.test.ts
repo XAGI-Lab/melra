@@ -424,6 +424,17 @@ describe("receipt and certificate primitives", () => {
     ]);
   });
 
+  it("keeps a goal's words and takes out only its secret shapes (#385)", () => {
+    const goal = "Read a.txt to confirm the greeting";
+    expect(redactStructuredValue({ goal })).toEqual({ value: { goal }, redactions: [] });
+    // Built at run time so no literal here reads as a leaked credential.
+    const token = `${"ghp"}_${"A1b2C3d4E5".repeat(4)}`;
+    expect(redactStructuredValue({ goal: `Deploy with ${token}` })).toEqual({
+      value: { goal: "Deploy with [REDACTED_GITHUB_TOKEN]" },
+      redactions: ["[REDACTED_GITHUB_TOKEN]"],
+    });
+  });
+
   it("redacts args in a stored request instead of blanking them", () => {
     const redacted = redactStructuredValue({
       operation: { command: "pnpm", args: ["check", "--token=abc"] },

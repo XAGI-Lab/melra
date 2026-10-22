@@ -508,8 +508,11 @@ predicates stays parked for a human.
 Durable task state, receipts and certificates keep only centrally redacted
 input, output and evidence; file contents, browser text, terminal output, typed
 values, environment values, URL queries and userinfo, and common secret formats
-are not retained there. An `http_resource_matches` item names the URL it read
-without its query or userinfo; the request itself goes out as declared.
+are not retained there. A task's goal is kept as declared with only those secret
+formats taken out, so a certificate's `goal` says what the task was for; a
+secret of no recognisable format written into a goal is kept with it. An
+`http_resource_matches` item names the URL it read without its query or
+userinfo; the request itself goes out as declared.
 
 Free-form task constraints fail closed because they cannot be enforced
 deterministically. `forbiddenEffects` accepts only `read`, `mutate`, and
