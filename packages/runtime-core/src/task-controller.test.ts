@@ -162,7 +162,8 @@ describe("TaskController", () => {
     );
     const planned = controllerA.plan(
       TaskRequestSchema.parse({
-        goal: "one-time-secret",
+        // Secret-shaped, since a goal keeps any words that are not (#385).
+        goal: "Inspect with password=one-time-secret",
         operation: { kind: "system", action: "info" },
       }),
     );
