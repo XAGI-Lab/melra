@@ -1547,7 +1547,10 @@ export class WorkflowController {
         // Node state caps `prompt` at 2,000 chars; assignee + goal can exceed
         // that, and a truncated label is better than a schema rejection. The
         // delegate reads its task here, so only secret shapes go, not the goal.
-        const prompt = recordedInput(`${node.assignee}: ${node.goal}`, 2_000);
+        // Each field is redacted on its own, as the stored definition does, so
+        // the join cannot read the goal as the value of a credential-named
+        // assignee; the cap still comes after redaction.
+        const prompt = `${recordedInput(node.assignee)}: ${recordedInput(node.goal)}`.slice(0, 2_000);
         if (report === undefined) {
           return {
             state: { status: "awaiting_input", taskIds: [], prompt },

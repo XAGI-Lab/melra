@@ -3285,6 +3285,43 @@ describe("WorkflowController human input and delegation", () => {
     const waiting = await controller.advance(planned.id);
     expect(waiting.run.nodes.ask?.prompt).toBe(`${"a".repeat(1_990)} secret=[REDACTED]`.slice(0, 2_000));
   });
+
+  function delegating(assignee: string, goal: string) {
+    return WorkflowDefinitionSchema.parse({
+      schemaVersion: "1.0.0",
+      id: definitionId,
+      version: 1,
+      name: "Hand off",
+      nodes: [{ id: "hand", type: "delegation", assignee, goal }],
+    });
+  }
+
+  it("redacts a delegation's assignee and goal apart, so joining them cannot make a match", async () => {
+    const { controller } = await setup();
+    const planned = controller.plan(delegating("secret_rotator", "rotate the db credentials on db1"));
+    const waiting = await controller.advance(planned.id);
+    expect(waiting.run.nodes.hand?.prompt).toBe("secret_rotator: rotate the db credentials on db1");
+  });
+
+  it("redacts a delegation's prompt before cutting it, so no part of a secret is kept", async () => {
+    const { controller, store } = await setup();
+    const token = `${"ghp"}_${"A1b2C3d4E5".repeat(4)}`;
+    // The token straddles character 2,000 of the joined prompt.
+    const planned = controller.plan(delegating("w".repeat(100), `${"x".repeat(1_880)} ${token}`));
+    const waiting = await controller.advance(planned.id);
+    expect(waiting.run.nodes.hand?.prompt.length).toBeLessThanOrEqual(2_000);
+    for (const table of ["workflow_runs", "workflow_events"]) {
+      const rows = JSON.stringify(store.database.prepare(`SELECT data FROM ${table}`).all());
+      expect(rows).not.toContain(token.slice(0, 14));
+    }
+  });
+
+  it("keeps a delegation prompt that redaction lengthens within the state's cap", async () => {
+    const { controller } = await setup();
+    const planned = controller.plan(delegating("w", `${"a".repeat(1_985)} secret=x`));
+    const waiting = await controller.advance(planned.id);
+    expect(waiting.run.nodes.hand?.prompt.length).toBeLessThanOrEqual(2_000);
+  });
 });
 
 describe("WorkflowController leases", () => {
