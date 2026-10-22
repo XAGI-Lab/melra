@@ -153,3 +153,31 @@ test("the release workflows publish in that order, gate the container, and relea
   before(dry, 'channel="$(node scripts/release-channel.mjs)"', 'npm publish "${tarball}" --dry-run --tag "${channel}"');
   assert.doesNotMatch(dry, /--tag alpha/);
 });
+
+test("a row the code no longer reads fails docs:check, even though melra help still lists it", () => {
+  const docs = (names) => `| Variable | Meaning |\n| --- | --- |\n${names.map((name) => `| \`${name}\` | x |`).join("\n")}\n`;
+  // The last help line runs straight into the closing backtick.
+  const cli = (reads) => `${reads}
+function help(): void {
+  process.stdout.write(\`MELRA
+
+Environment:
+  MELRA_HOME                       Data directory
+  MELRA_GONE                       No longer read\`);
+}
+`;
+  const check = (reads) =>
+    node("scripts/check-env-docs.mjs", [], scratch({
+      "docs/INSTALLATION.md": docs(["MELRA_HOME", "MELRA_GONE"]),
+      "apps/cli/src/index.ts": cli(reads),
+    }));
+
+  // The scratch tree has none of the Windows script variables, so the
+  // allowlist complains in both runs; only the lines about these two matter.
+  const stale = check("const home = process.env.MELRA_HOME;");
+  assert.match(stale.stderr, /MELRA_GONE is documented but nothing in \{apps,packages\}\/\*\/src reads it; remove the row/);
+  assert.doesNotMatch(stale.stderr, /missing from the Environment block|could not find/);
+
+  const read = check("const home = process.env.MELRA_HOME;\nconst gone = process.env.MELRA_GONE;");
+  assert.doesNotMatch(read.stderr, /MELRA_HOME|MELRA_GONE|help\(\)/);
+});

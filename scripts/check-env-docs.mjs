@@ -36,10 +36,30 @@ const INTERNAL = new Map([
 // path check covers a test/ directory nested under src/ as well.
 const isTest = (path) => /\.test\.[cm]?[jt]sx?$/.test(path) || /(^|[\\/])test[\\/]/.test(path);
 
+// help() prints the Environment block, so the names in it are not reads: were
+// they counted, a row would stay "read" after the code stopped reading it and
+// the "remove the row" failure below could never fire. Its body is blanked,
+// line breaks kept, before the scan, and also searched for the block.
+const HELP_START = "function help(): void {";
+const failures = [];
+let helpEnvironment;
+const withoutHelp = (source) => {
+  const start = source.indexOf(HELP_START);
+  const end = start === -1 ? -1 : source.indexOf("`);", start);
+  if (end === -1) {
+    failures.push(`${HELP}: could not find help() and the end of its template literal`);
+    return source;
+  }
+  const body = source.slice(start + HELP_START.length, end);
+  helpEnvironment = /\nEnvironment:\n([\s\S]*)$/.exec(body)?.[1];
+  return source.slice(0, start + HELP_START.length) + body.replace(/[^\n]/g, "") + source.slice(end);
+};
+
 const readBy = new Map();
 for await (const path of glob("{apps,packages}/*/src/**/*.{ts,mts,cts,js,mjs}")) {
   if (isTest(path)) continue;
-  const lines = (await readFile(path, "utf8")).split(/\r?\n/);
+  const source = await readFile(path, "utf8");
+  const lines = (path.replaceAll("\\", "/") === HELP ? withoutHelp(source) : source).split(/\r?\n/);
   lines.forEach((line, index) => {
     for (const [name] of line.matchAll(/MELRA_[A-Z0-9_]+/g)) {
       if (!readBy.has(name)) readBy.set(name, `${path.replaceAll("\\", "/")}:${index + 1}`);
@@ -54,7 +74,6 @@ const documented = new Map();
   if (name && !documented.has(name)) documented.set(name, index + 1);
 });
 
-const failures = [];
 for (const [name, where] of [...readBy].sort()) {
   if (!INTERNAL.has(name) && !documented.has(name)) {
     failures.push(`${name} (first seen at ${where}) has no row in the environment table in ${DOC}`);
@@ -68,8 +87,6 @@ for (const [name, line] of documented) {
 // The Environment block is the tail of the help() template literal: each
 // variable starts a line indented by two spaces; continuation lines are
 // indented further and never start with a name.
-const helpSource = await readFile(HELP, "utf8");
-const helpEnvironment = /\nEnvironment:\n([\s\S]*?)\n`\);/.exec(helpSource)?.[1];
 if (helpEnvironment === undefined) {
   failures.push(`${HELP}: could not find the Environment block of help()`);
 } else {
