@@ -7,8 +7,13 @@ import type {
   ApprovalResponse,
   EffectContract,
   EvidencePredicate,
+  Identity,
+  MelraTaskJudgeInput,
   Operation,
   PolicyDecision,
+  Principal,
+  SemanticJudgedBy,
+  SemanticJudgement,
   TaskRecord,
   TaskRequest,
 } from "@melra/protocol";
@@ -19,6 +24,7 @@ import {
   executionGuaranteeFor,
   isOutcomeUnknown,
   LOCAL_IDENTITY,
+  MelraTaskJudgeInputSchema,
   TaskRequestSchema,
 } from "@melra/protocol";
 import {
@@ -165,6 +171,41 @@ const UNSTARTED: TaskRecord["status"][] = ["planned", "awaiting_approval"];
 /** Whether a task waits on a question only someone outside MELRA answers (#54). */
 function asksSemantic(request: TaskRequest): boolean {
   return request.requiredEvidence.some((predicate) => predicate.type === "semantic");
+}
+
+/**
+ * A semantic task's evidence with its answers written in (#54). An answered
+ * item passes only on a yes, is inconclusive on cannot_tell, and says who
+ * judged it; an open one stays failed and inconclusive, summarised
+ * `unanswered`. Matched by index: a semantic task's receipt has one item per
+ * predicate, in order. Every other item is left as it was.
+ */
+function overlay(evidence: EvidenceItem[], judgements: SemanticJudgement[], unanswered: string): EvidenceItem[] {
+  return evidence.map((item, index) => {
+    if (item.type !== "semantic") return item;
+    const { inconclusive: _inconclusive, ...rest } = item;
+    const judgedBy = judgements.find((judgement) => judgement.predicateIndex === index)?.judgedBy;
+    if (judgedBy === undefined) return { ...rest, passed: false, inconclusive: true, summary: unanswered };
+    return {
+      ...rest,
+      passed: judgedBy.verdict === "yes",
+      ...(judgedBy.verdict === "cannot_tell" ? { inconclusive: true } : {}),
+      summary: `semantic_judgement_${judgedBy.verdict}`,
+      judgedBy,
+    };
+  });
+}
+
+/**
+ * Whether a judge is the actor it would judge (#54): its declared principal
+ * is the actor's, or a non-human link the actor acts for. The person the work
+ * was for may judge it. Claims on both sides, so it stops one loop grading
+ * itself, not a harness that declares someone else.
+ */
+function judgesItself(judge: Identity, actor: Identity): boolean {
+  const same = (principal: Principal) =>
+    principal.kind === judge.principal.kind && principal.id === judge.principal.id;
+  return same(actor.principal) || actor.onBehalfOf.some((link) => link.kind !== "human" && same(link));
 }
 
 /** The one browser action that reads each list. */
@@ -1027,8 +1068,12 @@ export class TaskController {
       // Settled already, it is left as it stands rather than certified again.
       // Asked of the stored row: a peer may have settled it since `task` was
       // read, and its status says `recovery_required` either way.
+      // A verdict of cannot_tell settled it as well: settling it again would
+      // rewrite that answer, and any yes beside it, as expired.
       const stored = this.status(task.id);
-      if (stored.error === "semantic_judgement_expired") return { task: stored };
+      if (stored.error === "semantic_judgement_expired" || stored.error === "semantic_judgement_cannot_tell") {
+        return { task: stored };
+      }
       // Cut off before it reached `waiting_user`, maybe before its draw too.
       this.drawGrant(task, request, classified);
       return this.settleUnanswered(task);
@@ -1091,11 +1136,13 @@ export class TaskController {
   /**
    * A waiting task whose judgements are past their `expiresAt` settles
    * closed. Re-read and written in one transaction, so a peer settling the
-   * same task wins once.
+   * same task, or a verdict, wins once.
    *
    * ponytail: runs on the startup pass and the 30 s recovery sweep, so a wait
    * can outlive its `expiresAt` by one interval, or until a runtime next opens
-   * this data directory; a verdict tool must check `expiresAt` itself.
+   * this data directory. `judge` refuses a verdict from `expiresAt` on and
+   * writes nothing, so nothing is answered in that gap; every runtime runs
+   * this pass before it serves, `melra judge` included.
    */
   private expireJudgements(failures: Map<string, unknown>): void {
     for (const listed of this.store.listExpiredJudgements(now())) {
@@ -1114,22 +1161,106 @@ export class TaskController {
    * No answer is not a yes (#54). A task whose semantic question went
    * unanswered, at expiry or cut off after its commit, settles closed: its
    * effect ran, so a change is `recovery_required` (never `failed`) and a
-   * read is `partial`. Nothing runs here, so it writes no receipt: the
-   * certificate, replaced, carries the evidence of the task's last one, the
-   * live path's or the one recovery wrote.
+   * read is `partial`. A yes given before expiry stays on the certificate.
    */
   private settleUnanswered(task: TaskRecord): ExecutionResult {
+    return this.settleSemantic(
+      task,
+      task.policyDecision.effect === "read" ? "partial" : "recovery_required",
+      "semantic_judgement_expired",
+      "semantic_judgement_expired",
+    );
+  }
+
+  /**
+   * Settles a semantic task. Nothing runs here, so it writes no receipt: the
+   * certificate, replaced, carries the evidence of the task's last one, the
+   * live path's or the one recovery wrote, with the answers given so far.
+   */
+  private settleSemantic(
+    task: TaskRecord,
+    status: TaskRecord["status"],
+    error: string | undefined,
+    unanswered: string,
+  ): ExecutionResult {
     const last = task.receiptIds[task.receiptIds.length - 1];
     const receipt = last === undefined ? undefined : this.store.getReceipt(last);
-    const evidence = (receipt?.evidence ?? []).map((item) =>
-      item.type === "semantic"
-        ? { ...item, passed: false, inconclusive: true, summary: "semantic_judgement_expired" }
-        : item,
-    );
-    task.status = task.policyDecision.effect === "read" ? "partial" : "recovery_required";
-    task.error = "semantic_judgement_expired";
+    const evidence = overlay(receipt?.evidence ?? [], task.judgements ?? [], unanswered);
+    task.status = status;
+    if (error === undefined) delete task.error;
+    else task.error = error;
     task.updatedAt = now();
     return { task, certificate: this.createAndSaveCertificate(task, evidence) };
+  }
+
+  /**
+   * Records the answer to one semantic question of a waiting task (#54). The
+   * first verdict other than yes settles the task: no ends it `partial`,
+   * cannot_tell ends a change `recovery_required` and a read `partial`. The
+   * yes that answers the last open question verifies it; an earlier one is
+   * recorded, and the task waits on.
+   *
+   * A verdict writes the task row and nothing else, its certificate on a
+   * settle included: no receipt, grant draw, breaker record or idempotency
+   * commit, all of which the effect settled when it ran. Every check reads
+   * the row inside one transaction, and each refusal writes nothing, so a
+   * question is answered once, and a peer's verdict or the expiry sweep wins
+   * against this one at most once.
+   *
+   * `by` is the surface. An agent's declared identity is checked against the
+   * task's actor; an operator's is not, as `decide` checks no approver. Only
+   * an operator in an enforced process, on a task that ran enforced, judges
+   * out of band, and an in-band verdict counts for nothing where approvals
+   * come only from an operator.
+   */
+  judge(
+    input: Omit<MelraTaskJudgeInput, "identity">,
+    by: { identity: Identity } | { operator: string },
+  ): ExecutionResult {
+    const parsed = MelraTaskJudgeInputSchema.omit({ identity: true }).parse(input);
+    const operator = "operator" in by && this.enforced;
+    return this.store.transaction(() => {
+      const task = this.status(parsed.taskId);
+      const runEnforced = this.runMode(task) === "enforced";
+      // Every door an agent has to an enforced kernel is its harness's, and a
+      // developer process sharing the home must not settle an enforced run.
+      if (!operator && (this.enforced || runEnforced)) throw new Error("judgement_in_band_refused");
+      // Out of band only on an enforced run, as `execute` downgrades an
+      // approval: on a developer run the agent's own shell could have sent it.
+      const channel = operator && runEnforced ? "out_of_band" : "in_band";
+      if (task.status !== "waiting_user") throw new Error(`task_not_awaiting_judgement:${task.status}`);
+      const judgement = task.judgements?.find((entry) => entry.judgementId === parsed.judgementId);
+      if (judgement === undefined) throw new Error("judgement_not_found");
+      if (judgement.judgedBy !== undefined) throw new Error("judgement_already_answered");
+      // Refused rather than settled here, which the throw would roll back:
+      // the recovery pass settles it closed.
+      if (Date.parse(judgement.expiresAt) <= Date.now()) throw new Error("judgement_expired");
+      if ("identity" in by && judgesItself(by.identity, this.loadRequest(task.id).identity ?? LOCAL_IDENTITY)) {
+        throw new Error("semantic_judge_is_actor");
+      }
+      judgement.judgedBy = redactStructuredValue({
+        verdict: parsed.verdict,
+        judge: "identity" in by ? delegationChain(by.identity) : by.operator,
+        channel,
+        judgedAt: now(),
+        ...(parsed.rationale === undefined ? {} : { rationale: parsed.rationale }),
+      }).value as SemanticJudgedBy;
+      if (parsed.verdict === "yes" && task.judgements!.some((entry) => entry.judgedBy === undefined)) {
+        task.updatedAt = now();
+        this.store.saveTask(task);
+        return { task };
+      }
+      return this.settleSemantic(
+        task,
+        parsed.verdict === "yes"
+          ? "verified_success"
+          : parsed.verdict === "cannot_tell" && task.policyDecision.effect !== "read"
+            ? "recovery_required"
+            : "partial",
+        parsed.verdict === "yes" ? undefined : `semantic_judgement_${parsed.verdict}`,
+        "semantic_judgement_unanswered",
+      );
+    });
   }
 
   private async recoverTask(task: TaskRecord): Promise<TaskRecord> {
