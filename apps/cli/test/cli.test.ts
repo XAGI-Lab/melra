@@ -1007,6 +1007,27 @@ describe("melra CLI", () => {
     }
   });
 
+  it("finds a prefix `melra tasks --status` prints however many tasks are newer (#386)", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-cli-")));
+    roots.push(root);
+    const dataDirectory = join(root, ".melra");
+    const server = await createMelraRuntime({ workspaceRoot: root, dataDirectory, environment: {} });
+    const list = (goal: string) =>
+      server.controller.plan(TaskRequestSchema.parse({ goal, operation: { kind: "file", action: "list", path: "." } }));
+    try {
+      const old = server.controller.cancel(list("The old one").id);
+      // More than any one listing reads, so only a search of every task finds it.
+      for (let index = 0; index < 510; index += 1) list(`List ${index}`);
+      const env = { ...process.env, MELRA_HOME: dataDirectory, MELRA_WORKSPACE: root };
+      for (const command of ["inspect", "export"]) {
+        const { stdout } = await execute(process.execPath, [entry, command, old.id.slice(0, 8)], { cwd: root, env });
+        expect(JSON.parse(stdout).task).toMatchObject({ id: old.id, status: "cancelled" });
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
   it("prints the product version", async () => {
     const result = await execute(process.execPath, [entry, "version"]);
     // Against the constant, not a literal: a literal here is an eighteenth

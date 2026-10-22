@@ -577,6 +577,26 @@ export class SqliteStore {
   }
 
   /**
+   * Up to `limit` ids starting with `prefix` (in `status`, if given), matched in
+   * SQL over every task: a prefix any listing printed is found however many
+   * tasks have been updated since.
+   */
+  taskIdsWithPrefix(prefix: string, limit: number, status?: TaskRecord["status"]): string[] {
+    const rows = (
+      status === undefined
+        ? this.database
+            .prepare("SELECT id FROM tasks WHERE substr(id, 1, ?) = ? LIMIT ?")
+            .all(prefix.length, prefix, limit)
+        : this.database
+            .prepare(
+              "SELECT id FROM tasks WHERE substr(id, 1, ?) = ? AND json_extract(data, '$.status') = ? LIMIT ?",
+            )
+            .all(prefix.length, prefix, status, limit)
+    ) as unknown as Array<{ id: string }>;
+    return rows.map((row) => row.id);
+  }
+
+  /**
    * Tasks waiting on a semantic judgement (#54) whose wait is over, oldest
    * first, and only those: the sweep that settles them should neither parse
    * every waiting row nor let newer ones crowd out the oldest. A task's
