@@ -3309,7 +3309,7 @@ describe("WorkflowController human input and delegation", () => {
     // The token straddles character 2,000 of the joined prompt.
     const planned = controller.plan(delegating("w".repeat(100), `${"x".repeat(1_880)} ${token}`));
     const waiting = await controller.advance(planned.id);
-    expect(waiting.run.nodes.hand?.prompt.length).toBeLessThanOrEqual(2_000);
+    expect(waiting.run.nodes.hand?.prompt?.length).toBeLessThanOrEqual(2_000);
     for (const table of ["workflow_runs", "workflow_events"]) {
       const rows = JSON.stringify(store.database.prepare(`SELECT data FROM ${table}`).all());
       expect(rows).not.toContain(token.slice(0, 14));
@@ -3320,7 +3320,7 @@ describe("WorkflowController human input and delegation", () => {
     const { controller } = await setup();
     const planned = controller.plan(delegating("w", `${"a".repeat(1_985)} secret=x`));
     const waiting = await controller.advance(planned.id);
-    expect(waiting.run.nodes.hand?.prompt.length).toBeLessThanOrEqual(2_000);
+    expect(waiting.run.nodes.hand?.prompt?.length).toBeLessThanOrEqual(2_000);
   });
 });
 
