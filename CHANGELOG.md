@@ -28,6 +28,23 @@ All notable changes are documented here. The format follows
   OAuth client's token puts above a judge's chain is recorded in `judgedBy` but
   not compared. The check still rests on declared identities; `melra judge` is
   unchanged.
+- **Breaking:** an approval challenge's `actionDigest` (and so its phrase,
+  still `APPROVE` plus its first twelve hex digits), the `renderDigest` an
+  approval is bound to, and a receipt's `inputDigest`, which now also binds the
+  task id, can no longer be recomputed without the home's payload key. A file
+  read's or write's `sha256` and a failed `file_hash` item's `digest` are
+  stored as `[REDACTED_SENSITIVE_FIELD]`. The caller of `melra_execute` still
+  receives the `sha256` in `output`, but a failed `file_hash` item's `digest`
+  is masked in the receipt and certificate and is no longer returned anywhere;
+  run a file `hash` operation to read the actual hash. In a home shared with
+  `0.3.0-alpha.17` or `0.3.0-alpha.18`, this version still runs challenges and
+  accepts decisions those versions recorded, and a decision it records for a
+  challenge one of them issued keeps the plain `renderDigest` their executor
+  checks; an older process refuses a challenge this version issued with
+  `approval_action_digest_mismatch` before anything runs, and the task waits
+  for a newer process. Upgrade every process sharing a `MELRA_HOME` together
+  and re-run `melra setup`
+  ([compatibility](docs/COMPATIBILITY.md#data-compatibility)).
 
 ### Fixed
 
@@ -65,6 +82,9 @@ All notable changes are documented here. The format follows
 
 ### Security
 
+- Digests stored beside redacted records are now keyed per home, with a key
+  derived from the payload key, and a content digest stored beside redacted
+  content is masked like it. Records written before this are not rewritten.
 - A receipt's `principal`, the declared delegation chain, is redacted like the
   rest of the record, as the task row, `judgedBy` and a certificate's
   `executedBy` already were, so it reads the same as `executedBy`, and the

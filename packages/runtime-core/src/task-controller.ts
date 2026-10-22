@@ -3,6 +3,7 @@
 
 import { randomUUID } from "node:crypto";
 import type {
+  ApprovalChallenge,
   ApprovalDecision,
   ApprovalResponse,
   EffectContract,
@@ -32,6 +33,7 @@ import {
   CAPABILITY_DAY_MS,
   classifyOperation,
   defaultEvidenceFor,
+  digestOperation,
   evaluatePolicy,
   type CapabilityUsageReader,
   type LocalPolicy,
@@ -163,6 +165,32 @@ export function capabilityUsageReader(store: SqliteStore): CapabilityUsageReader
     const drawn = store.capabilityUsage(grantId, since);
     return { operations: drawn.operations, amountToday: drawn.amountInWindow };
   };
+}
+
+/**
+ * A stored copy's content digests, masked as the content is. A file read's or
+ * write's `sha256` hashes exactly what redaction took out of the record, and
+ * a `file_hash` item that did not pass carries the file's real hash (one that
+ * passed equals the hash its request declared). Applied after redaction to
+ * the task's result and to receipt and certificate evidence; the marker maps
+ * to itself, so a certificate written from a stored receipt (`certify`) says
+ * what the live one did. The caller still gets the `sha256` in `output`, and
+ * recovery reads the sealed raw result. A failed item's digest is returned
+ * nowhere, since the caller gets the stored receipt and certificate; a file
+ * `hash` operation reads it again.
+ */
+const MASKED = "[REDACTED_SENSITIVE_FIELD]";
+
+function maskResultDigest(result: Record<string, unknown>, operation: Operation): Record<string, unknown> {
+  return operation.kind === "file" && (operation.action === "read" || operation.action === "write") && "sha256" in result
+    ? { ...result, sha256: MASKED }
+    : result;
+}
+
+/** The same list when there is nothing to mask, so a caller can tell. */
+function maskEvidenceDigests(evidence: EvidenceItem[]): EvidenceItem[] {
+  const hides = (item: EvidenceItem) => item.type === "file_hash" && !item.passed && item.digest !== undefined && item.digest !== MASKED;
+  return evidence.some(hides) ? evidence.map((item) => (hides(item) ? { ...item, digest: MASKED } : item)) : evidence;
 }
 
 /** Statuses a task leaves only once: by starting, by a deny, or by a refusal. */
@@ -336,7 +364,7 @@ export class TaskController {
         ? {}
         : { idempotencyKey: options.idempotencyKey }),
       ...(options.attempt === undefined ? {} : { attempt: options.attempt }),
-      ...(policy.challenge === undefined ? {} : { approval: policy.challenge }),
+      ...(policy.challenge === undefined ? {} : { approval: this.keyedChallenge(policy.challenge) }),
       receiptIds: [],
       createdAt: timestamp,
       updatedAt: timestamp,
@@ -482,9 +510,14 @@ export class TaskController {
     }
 
     if (rechecked.decision.outcome === "confirm") {
+      // Stored keyed (`keyedChallenge`). One a 0.3.0-alpha.17 or alpha.18
+      // process planned holds the plain digest, which binds the same exact
+      // operation; it stays executable until it expires.
+      const fresh = rechecked.challenge?.actionDigest;
       if (
-        rechecked.challenge === undefined ||
-        task.approval?.actionDigest !== rechecked.challenge.actionDigest
+        fresh === undefined ||
+        (task.approval?.actionDigest !== this.payloadCipher.digest(fresh, "action") &&
+          task.approval?.actionDigest !== fresh)
       ) {
         throw new Error("approval_action_digest_mismatch");
       }
@@ -495,7 +528,10 @@ export class TaskController {
         throw new Error("approval_in_band_refused");
       }
       // A decision an operator recorded wins over anything the caller sent.
-      const render = this.approvalRender(task, request).renderDigest;
+      const { contract, renderDigest: render } = this.approvalRender(task, request);
+      // Recorded keyed, whatever form `render` takes: an older executor reads
+      // the plain form only from a decision row.
+      const bound = this.payloadCipher.digest(contract, "render");
       const decision = this.store.getApprovalDecision(task.approval.approvalId);
       // Waiting is only worth it while an operator could still say yes:
       // `decide` refuses an expired challenge, so past it the task is re-planned.
@@ -505,13 +541,19 @@ export class TaskController {
         );
       }
       if (decision !== undefined) {
-        if (decision.renderDigest !== render) throw new Error("approval_render_mismatch");
+        // A row a 0.3.0-alpha.17 or alpha.18 `melra approve` or console wrote
+        // holds the plain digest of the same contract.
+        if (decision.renderDigest !== render && decision.renderDigest !== sha256(contract)) {
+          throw new Error("approval_render_mismatch");
+        }
         if (!this.usable(task, decision)) throw new Error("approval_expired");
         // Out of band is this kernel's claim to make, not the row's: a
         // developer-mode kernel cannot vouch that nothing the agent touched
-        // wrote it, whatever mode the process that recorded it was in.
+        // wrote it, whatever mode the process that recorded it was in. The
+        // digest is keyed, whichever form the row holds.
         task.approvedBy = {
           ...decision,
+          renderDigest: bound,
           channel:
             decision.channel === "out_of_band" && this.policy.mode === "enforced"
               ? "out_of_band"
@@ -522,12 +564,12 @@ export class TaskController {
         if (!approvalResult.ok) {
           throw new Error(approvalResult.reason);
         }
-        // The phrase is derivable by anyone who knows the task, so an echo of
-        // it says only that something echoed it.
+        // The phrase is readable by anyone who can read the task, so an echo
+        // of it says only that something echoed it.
         task.approvedBy = {
           approvalId: task.approval.approvalId,
           taskId: task.id,
-          renderDigest: render,
+          renderDigest: bound,
           channel: "in_band",
           approver: "phrase",
           decidedAt: now(),
@@ -602,7 +644,7 @@ export class TaskController {
       effectReturned = true;
       const sanitizedResult = redactStructuredValue(result);
       task.status = "verifying";
-      task.result = sanitizedResult.value as Record<string, unknown>;
+      task.result = maskResultDigest(sanitizedResult.value as Record<string, unknown>, request.operation);
       task.updatedAt = now();
       // Committed on its own, ahead of the rest, on purpose: recovery settles
       // a `verifying` change it can look at again against this result
@@ -1371,7 +1413,25 @@ export class TaskController {
       { ...task, request },
       classifyOperation(request.operation),
     );
-    return { contract, renderDigest: sha256(contract) };
+    // Keyed, like the challenge. A task a 0.3.0-alpha.17 or alpha.18 process
+    // planned is shown its plain digest, the one that version's executor
+    // recomputes, so a decision recorded here is one it accepts.
+    const legacy = task.approval?.actionDigest === digestOperation(task.id, request.operation);
+    return { contract, renderDigest: legacy ? sha256(contract) : this.payloadCipher.digest(contract, "render") };
+  }
+
+  /**
+   * The challenge as stored beside the redacted request: its digest keyed by
+   * this home's payload key, and the phrase still `APPROVE` plus that digest's
+   * first twelve hex digits, as clients read it.
+   */
+  private keyedChallenge(challenge: ApprovalChallenge): ApprovalChallenge {
+    const actionDigest = this.payloadCipher.digest(challenge.actionDigest, "action");
+    return {
+      ...challenge,
+      actionDigest,
+      ...(challenge.phrase === undefined ? {} : { phrase: `APPROVE ${actionDigest.slice(0, 12)}` }),
+    };
   }
 
   /** A pending challenge as an operator surface shows it. */
@@ -1512,20 +1572,24 @@ export class TaskController {
       task.approvedBy?.approvalId ??
       (task.policyDecision.outcome === "confirm" ? task.approval?.approvalId : undefined);
     const sanitized = redactStructuredValue(result);
+    const observedEffect = maskResultDigest(sanitized.value as Record<string, unknown>, request.operation);
     // A verifier's summary and source are stored text like any other.
     const sanitizedEvidence = redactStructuredValue(evidence);
+    const storedEvidence = maskEvidenceDigests(sanitizedEvidence.value as EvidenceItem[]);
     // The declared chain, redacted as the task row, a judge's name and a
     // certificate's `executedBy` are, so it reads the same as `executedBy`.
     const principal = redactSecrets(delegationChain(request.identity ?? LOCAL_IDENTITY));
     const adapterRedactions = Array.isArray(result.redactions)
       ? result.redactions.filter((item): item is string => typeof item === "string")
       : [];
+    const masked = observedEffect !== sanitized.value || storedEvidence !== sanitizedEvidence.value ? [MASKED] : [];
     const redactions = [
       ...new Set([
         ...adapterRedactions,
         ...sanitized.redactions,
         ...sanitizedEvidence.redactions,
         ...principal.redactions,
+        ...masked,
       ]),
     ];
     return {
@@ -1558,12 +1622,14 @@ export class TaskController {
       // The target is built from the request (a URL, a memory key) and stored
       // as it is, so it takes the same secret shapes out as everything else.
       target: redactSecrets(target).value,
-      inputDigest: sha256(request.operation),
+      // Keyed and bound to the task: it still pins the exact input for a
+      // holder of the home's key, and two tasks' digests are never comparable.
+      inputDigest: this.payloadCipher.digest({ taskId: task.id, operation: request.operation }, "input"),
       startedAt,
       endedAt: now(),
       success,
-      observedEffect: sanitized.value as Record<string, unknown>,
-      evidence: sanitizedEvidence.value as EvidenceItem[],
+      observedEffect,
+      evidence: storedEvidence,
       redactions,
       ...(error === undefined ? {} : { error }),
     };
@@ -1641,10 +1707,10 @@ export class TaskController {
       result: certificateResult(task),
       policyVersion: task.policyDecision.policyVersion,
       receiptIds: task.receiptIds,
-      // Redacted as a receipt's is, before the digest is taken. Redacting
-      // again changes nothing, so one written from a stored receipt's items
-      // (`certify`) says what one written from the verifier's would.
-      evidence: redactStructuredValue(evidence).value as EvidenceItem[],
+      // Redacted and masked as a receipt's is, before the digest is taken.
+      // Doing either again changes nothing, so one written from a stored
+      // receipt's items (`certify`) says what one written from the verifier's would.
+      evidence: maskEvidenceDigests(redactStructuredValue(evidence).value as EvidenceItem[]),
       createdAt: now(),
       ...(mode === undefined ? {} : { mode }),
       ...(approvalChannel === undefined ? {} : { approvalChannel }),

@@ -2306,6 +2306,12 @@ function hadNoEffect(task: TaskRecord): boolean {
   return ["failed", "budget_exhausted", "cancelled", "policy_blocked"].includes(task.status);
 }
 
+/**
+ * Plain, unlike the digests a task stores (`PayloadCipher.digest`): every
+ * version sharing a home must derive the same key for a step, or one could
+ * plan again a step another already ran. It can be keyed only once no process
+ * that derives it plain may share the home (see THREAT_MODEL.md).
+ */
 function taskIdempotencyKey(
   identity: TaskIdentity,
   request: TaskRequest,
