@@ -4,6 +4,8 @@
 import {
   createCipheriv,
   createDecipheriv,
+  createHmac,
+  hkdfSync,
   randomBytes,
 } from "node:crypto";
 import {
@@ -12,12 +14,30 @@ import {
 } from "@melra/protocol";
 import { canonicalJson } from "@melra/receipt-schema";
 
+/** What a record digest is for. Each one is keyed apart from the others. */
+export type DigestPurpose = "action" | "render" | "input";
+
 export class PayloadCipher {
   private readonly key: Buffer;
+  /** Derived, so the encryption key itself is never used as an HMAC key. */
+  private readonly digestKey: Buffer;
 
   constructor(key: Buffer) {
     if (key.length !== 32) throw new Error("payload_key_must_be_32_bytes");
     this.key = Buffer.from(key);
+    // `v1` names the derivation, so a later one can sit beside it.
+    this.digestKey = Buffer.from(hkdfSync("sha256", this.key, Buffer.alloc(0), "melra:record-digest:v1", 32));
+  }
+
+  /**
+   * A digest stored beside a redacted record: an HMAC under a key derived
+   * from this home's payload key, so it is checkable only by a holder of
+   * that key, who can open the sealed payload anyway. Labelled by purpose, so
+   * the same value digested for two purposes gives two unrelated digests.
+   * 64 lowercase hex, the shape a plain SHA-256 had.
+   */
+  digest(value: unknown, purpose: DigestPurpose): string {
+    return createHmac("sha256", this.digestKey).update(`${purpose}\0${canonicalJson(value)}`).digest("hex");
   }
 
   seal(value: unknown, context: string): EncryptedPayload {
