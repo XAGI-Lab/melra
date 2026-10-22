@@ -1239,10 +1239,10 @@ export class TaskController {
     const operator = "operator" in by && this.enforced;
     return this.store.transaction(() => {
       const task = this.status(parsed.taskId);
-      // The task and its question first, as `decide` checks the challenge
-      // before the mode: told to change channel, a caller would only meet a
-      // settled task or a wrong id there (#384). Nothing here is news to it:
-      // `melra_task_status` and `melra inspect` show both.
+      // The task and its question before the channel: told to change it, a
+      // caller would only meet a settled task or a wrong id there (#384).
+      // Nothing here is news to it: `melra_task_status` and `melra inspect`
+      // show both.
       if (task.status !== "waiting_user") throw new Error(`task_not_awaiting_judgement:${task.status}`);
       const judgement = task.judgements?.find((entry) => entry.judgementId === parsed.judgementId);
       if (judgement === undefined) throw new Error("judgement_not_found");

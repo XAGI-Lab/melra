@@ -745,6 +745,10 @@ describe("semantic verdicts (#54)", () => {
     expect(() => developer.judge(on(ran.task, "yes"), { operator: "cli:alice" })).toThrow(
       "judgement_in_band_refused",
     );
+    // The task and its question come first, through every door (#384).
+    const unknown = { ...on(ran.task, "yes"), judgementId: "00000000-0000-4000-8000-000000000000" };
+    expect(() => controller.judge(unknown, GRADER)).toThrow("judgement_not_found");
+    expect(() => developer.judge(unknown, GRADER)).toThrow("judgement_not_found");
     expect(snapshot(controller, store, ran.task.id)).toBe(before);
     // An operator of an enforced process, whoever the task was planned as.
     const asOperator = await run(controller, read([SEMANTIC], { identity: as("human:alice").identity }));
@@ -753,6 +757,7 @@ describe("semantic verdicts (#54)", () => {
       expect(judged.task.status).toBe("verified_success");
       expect(judged.task.judgements?.[0]?.judgedBy).toMatchObject({ judge: "cli:alice", channel: "out_of_band" });
     }
+    expect(() => controller.judge(on(ran.task, "no"), GRADER)).toThrow("task_not_awaiting_judgement:verified_success");
     // In developer mode the operator's verdict is in band, and stands.
     const local = await run(developer, read([SEMANTIC]));
     expect(developer.judge(on(local.task, "no"), { operator: "cli:alice" }).task.judgements?.[0]?.judgedBy).toMatchObject(

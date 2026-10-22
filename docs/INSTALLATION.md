@@ -961,8 +961,9 @@ closing every door it owns:
   `approval_expired` once the challenge has expired, which means plan the task
   again. A developer-mode `melra approve` on a task with no phrase records
   nothing and fails with `approval_needs_enforced_mode`. The same holds for an
-  answer to a `semantic` question: one sent with `melra_task_judge` is refused
-  with `judgement_in_band_refused`, and an operator answers with
+  answer to a `semantic` question: none sent with `melra_task_judge` is
+  recorded (one on a question still waiting is refused with
+  `judgement_in_band_refused`), and an operator answers with
   [`melra judge`](#judging-from-the-command-line).
 - **Every receipt says `enforced`.** `ActionReceipt.mode` records it, and
   `melra_capabilities` publishes `policy.mode`, so an auditor never has to infer

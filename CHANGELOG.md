@@ -31,14 +31,17 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
-- A verdict on a task that ran enforced, sent from a developer-mode process
-  (`melra judge` without `--mode enforced`, or `melra_task_judge`), is checked
-  for the task's status, the judgement id, an earlier answer and expiry before
-  it is refused as in band, as `melra approve` checks the challenge before the
-  mode. It got `judgement_in_band_refused`, and `melra judge` advice to rerun
-  with `--mode enforced`, for a settled task or a wrong id, and only the rerun
-  showed `task_not_awaiting_judgement:<status>` or `judgement_not_found`.
-  Every one of these refusals still records nothing. (#384)
+- A verdict sent in band where only an operator's counts, from a
+  developer-mode process on a task that ran enforced (`melra judge` without
+  `--mode enforced`, or `melra_task_judge`) or from an agent on an enforced
+  server (`melra_task_judge`), is checked for the task's status, the judgement
+  id, an earlier answer and expiry first, so it gets
+  `task_not_awaiting_judgement:<status>`, `judgement_not_found`,
+  `judgement_already_answered` or `judgement_expired` where one applies; only a
+  verdict on a question still waiting gets `judgement_in_band_refused`. Before,
+  every one got `judgement_in_band_refused`, with `melra judge` advice to
+  rerun with `--mode enforced`, and only the rerun showed the refusal it would
+  meet. Every one of these refusals still records nothing. (#384)
 - `melra judge` on a question past its `expiresAt` reports `judgement_expired`
   (exit 1), as documented. Its own startup settles the expired wait first, so
   it reported `task_not_awaiting_judgement:partial` (or `:recovery_required`).
