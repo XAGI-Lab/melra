@@ -169,9 +169,9 @@ To exercise a published build the way an end user gets it, install it and point
 the smoke at the installed binary rather than a source build:
 
 ```bash
-npm install --prefix /tmp/melra-check @melra/cli@0.3.0-alpha.16
+npm install --prefix /tmp/melra-check @melra/cli@0.3.0-alpha.17
 MELRA_COMMAND=/tmp/melra-check/node_modules/.bin/melra \
-  MELRA_EXPECTED_VERSION=0.3.0-alpha.16 \
+  MELRA_EXPECTED_VERSION=0.3.0-alpha.17 \
   pnpm registry:smoke
 ```
 
@@ -356,6 +356,11 @@ tools, `verified_success`, `VERIFIED_SUCCESS`, digest
 `32999f0acbaa4bd2cbbafdeea565fbccba0edfc9c255d81dc125da25ee1e9b3c`
 (macos-latest, Node 24; run 39631163379, attempt 3: the first two attempts were
 cancelled from outside the workflow before this job ran).
+
+On `v0.3.0-alpha.17` it passed on all six runners on the first attempt:
+`version 0.3.0-alpha.17`, 11 tools, `verified_success`, `VERIFIED_SUCCESS`,
+digest `b704b12864b5a992222219c95afb239175c1ab12fdec4e129e7ab2ca0dfaf658`
+(macos-latest, Node 24; run 39698282941).
 
 Before `1.0`, an independent security review must resolve all critical
 findings.
