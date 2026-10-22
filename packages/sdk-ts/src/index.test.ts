@@ -275,30 +275,48 @@ describe("TypeScript SDK stdio connect", () => {
     );
   });
 
-  it("passes where state and policy live, and not what would redirect or widen the server", async () => {
+  it("passes this process's environment, all but what would redirect or widen the server (#382)", async () => {
     // A stand-in server that records what it was given and exits; connecting
     // fails, which is fine, the spawn is what is under test.
     const directory = mkdtempSync(join(tmpdir(), "melra-sdk-env-"));
     const out = join(directory, "env.json");
-    const names = ["MELRA_MODE", "MELRA_SOCKET", "MELRA_UNHINGED", "MELRA_WORKSPACE"];
-    const previous = Object.fromEntries(names.map((name) => [name, process.env[name]]));
-    Object.assign(process.env, {
+    const set = {
       MELRA_MODE: "enforced",
       MELRA_SOCKET: join(directory, "s.sock"),
       MELRA_UNHINGED: "1",
       MELRA_WORKSPACE: "/elsewhere",
-    });
-    try {
+      // What a policy's `{ "source": { "env": ... } }` credential and the browser read.
+      PARITY_TOKEN: "inherited",
+      MELRA_BROWSER_CDP_ENDPOINT: "http://127.0.0.1:9222",
+      PARITY_GIVEN: "inherited",
+    };
+    const names = Object.keys(set);
+    const previous = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+    Object.assign(process.env, set);
+    const spawned = async (options: { cwd?: string; env?: Record<string, string> }) => {
+      rmSync(out, { force: true });
       const record = `require("fs").writeFileSync(${JSON.stringify(out)}, JSON.stringify(process.env))`;
       await expect(
-        MelraClient.connect({ command: process.execPath, args: ["-e", record], cwd: directory }),
+        MelraClient.connect({ command: process.execPath, args: ["-e", record], ...options }),
       ).rejects.toThrow();
-      const seen = JSON.parse(readFileSync(out, "utf8")) as Record<string, string | undefined>;
+      return JSON.parse(readFileSync(out, "utf8")) as Record<string, string | undefined>;
+    };
+    try {
+      const seen = await spawned({ cwd: directory, env: { PARITY_GIVEN: "given" } });
       expect(seen.MELRA_MODE).toBe("enforced");
+      expect(seen.PARITY_TOKEN).toBe("inherited");
+      expect(seen.MELRA_BROWSER_CDP_ENDPOINT).toBe("http://127.0.0.1:9222");
+      // `env` goes on top.
+      expect(seen.PARITY_GIVEN).toBe("given");
       expect(seen.MELRA_SOCKET).toBeUndefined();
       expect(seen.MELRA_UNHINGED).toBeUndefined();
       // `cwd` decides the workspace.
       expect(seen.MELRA_WORKSPACE).toBeUndefined();
+
+      // Without `cwd` the inherited workspace stands, and `env` can mean MELRA_UNHINGED.
+      const asked = await spawned({ env: { MELRA_UNHINGED: "1" } });
+      expect(asked.MELRA_WORKSPACE).toBe("/elsewhere");
+      expect(asked.MELRA_UNHINGED).toBe("1");
     } finally {
       for (const name of names) {
         if (previous[name] === undefined) delete process.env[name];
