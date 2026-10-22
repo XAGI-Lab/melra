@@ -37,9 +37,11 @@ All notable changes are documented here. The format follows
   kept in those records, so keep secrets out of goals; the goal's schema
   description now says so to whoever writes one. The `browse` harness tool's
   goal no longer includes the URL's userinfo, query or fragment. Tasks planned
-  and definitions stored before this keep the placeholder, including
-  certificates later written for those tasks and new runs of such a definition
-  (bump its version to store the goal); nothing is migrated.
+  before this keep the placeholder, as do certificates later written for them.
+  A definition stored before this keeps it in its stored copy (bump its version
+  to store the goal there), but a new run of it reads the sealed definition, so
+  that run's tasks, certificates and delegation prompts hold the goal. Nothing
+  is migrated.
 
 ### Fixed
 
