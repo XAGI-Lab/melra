@@ -961,8 +961,9 @@ closing every door it owns:
   `approval_expired` once the challenge has expired, which means plan the task
   again. A developer-mode `melra approve` on a task with no phrase records
   nothing and fails with `approval_needs_enforced_mode`. The same holds for an
-  answer to a `semantic` question: one sent with `melra_task_judge` is refused
-  with `judgement_in_band_refused`, and an operator answers with
+  answer to a `semantic` question: none sent with `melra_task_judge` is
+  recorded (one on a question still waiting is refused with
+  `judgement_in_band_refused`), and an operator answers with
   [`melra judge`](#judging-from-the-command-line).
 - **Every receipt says `enforced`.** `ActionReceipt.mode` records it, and
   `melra_capabilities` publishes `policy.mode`, so an auditor never has to infer
@@ -1071,17 +1072,25 @@ client's token adds. The `rationale` is for
 people; MELRA stores it redacted and never reads it.
 
 It prints `{ task, certificate? }` and exits 0 when the verdict is recorded,
-and 1 when it is refused, which writes nothing:
+and 1 when it is refused, which records no verdict:
 `task_not_awaiting_judgement:<status>`, `judgement_not_found`,
-`judgement_already_answered`, `judgement_expired` (the task then settles
-closed), or `judgement_in_band_refused`.
+`judgement_already_answered`, `judgement_expired`, or
+`judgement_in_band_refused`, checked in that order. A question whose
+`expiresAt` passed while its task still waited gets `judgement_expired`: the
+task settles closed (`semantic_judgement_expired`) when a runtime next opens
+the data directory, this command's own startup included, so it is normally
+settled by the time the refusal prints. Until then `melra tasks` and
+`melra status` count it apart from the tasks still waiting
+(`expiredJudgements` beside `awaitingJudgement` in `melra status --json`),
+though it is still listed as `waiting_user`.
 
 The judge is recorded as `cli:` plus [`MELRA_APPROVER`](#local-configuration).
 It is not checked against the task's principal, as `melra approve` checks no
 approver. The verdict is `out_of_band` only when this command and the server
 the task ran under are both in enforced mode; otherwise it is `in_band`, and
-the command says so. A developer-mode `melra judge` on a task that ran enforced
-is refused with `judgement_in_band_refused` and asked to rerun with
+the command says so. A developer-mode `melra judge` on a task that ran enforced,
+once the checks before it have held, is refused with
+`judgement_in_band_refused` and asked to rerun with
 `--mode enforced` or `MELRA_MODE=enforced`, with the same `MELRA_HOME` and
 `MELRA_WORKSPACE` as the server.
 

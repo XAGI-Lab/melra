@@ -200,6 +200,36 @@ function approvalCounts(
   return counts;
 }
 
+interface JudgementCounts {
+  waiting: number;
+  expired: number;
+}
+
+/**
+ * Tasks waiting on a semantic question, and those whose questions expired
+ * unanswered (#383). An expired one stays waiting_user until a runtime opens
+ * the data directory and settles it closed, and `melra judge` refuses it, so
+ * counted as waiting it was reported until something did.
+ */
+function judgementCounts(store: SqliteStore): JudgementCounts {
+  const now = Date.now();
+  const counts = { waiting: 0, expired: 0 };
+  for (const task of store.listTasks(100_000, "waiting_user")) {
+    const open = task.judgements?.some((entry) => entry.judgedBy === undefined && now < Date.parse(entry.expiresAt));
+    if (open === true) counts.waiting += 1;
+    else counts.expired += 1;
+  }
+  return counts;
+}
+
+function judgementHint(waiting: number): string {
+  return `${waiting} waiting for judgement — answer with \`melra judge <task-id> --judgement <id> --verdict yes|no|cannot_tell\``;
+}
+
+function expiredJudgementHint(expired: number): string {
+  return `${expired} whose judgement expired — they settle closed when a runtime next opens this data directory`;
+}
+
 export interface TasksOptions {
   limit: number;
   status?: TaskStatus;
@@ -210,12 +240,17 @@ export interface TasksOptions {
 }
 
 export function tasksCommand(env: CliEnvironment, options: TasksOptions): number {
-  const { tasks, approvals } = withStore(
+  const { tasks, approvals, judgements } = withStore(
     env,
-    { tasks: [] as TaskRecord[], approvals: { waiting: 0, expired: 0, expiredSteps: 0 } },
+    {
+      tasks: [] as TaskRecord[],
+      approvals: { waiting: 0, expired: 0, expiredSteps: 0 },
+      judgements: { waiting: 0, expired: 0 },
+    },
     (store) => ({
       tasks: store.listTasks(options.limit, options.status),
       approvals: approvalCounts(store, options.window),
+      judgements: judgementCounts(store),
     }),
   );
   if (!humanOutput(options.json)) {
@@ -261,7 +296,12 @@ export function tasksCommand(env: CliEnvironment, options: TasksOptions): number
       ),
     ]),
   );
-  const hints = [...(approvals.waiting > 0 ? [approvalHint(approvals.waiting)] : []), ...expiredHints(approvals)];
+  const hints = [
+    ...(approvals.waiting > 0 ? [approvalHint(approvals.waiting)] : []),
+    ...expiredHints(approvals),
+    ...(judgements.waiting > 0 ? [judgementHint(judgements.waiting)] : []),
+    ...(judgements.expired > 0 ? [expiredJudgementHint(judgements.expired)] : []),
+  ];
   if (hints.length > 0) write();
   for (const hint of hints) write(hint);
   return 0;
@@ -471,13 +511,14 @@ export async function statusCommand(
   }
   const mode = env.mode === "enforced" || policyMode === "enforced" ? "enforced" : "developer";
   const path = databasePath(env);
-  const { tasks, workflows, lastActivity, approvals } = withStore(
+  const { tasks, workflows, lastActivity, approvals, judgements } = withStore(
     env,
     {
       tasks: {} as Record<string, number>,
       workflows: {} as Record<string, number>,
       lastActivity: undefined as string | undefined,
       approvals: { waiting: 0, expired: 0, expiredSteps: 0 },
+      judgements: { waiting: 0, expired: 0 },
     },
     (store) => {
       const runs = store.listWorkflowRuns();
@@ -494,6 +535,7 @@ export async function statusCommand(
           { mode, ...(policyTtlMs === undefined ? {} : { approvalTtlMs: policyTtlMs }) },
           () => runs,
         ),
+        judgements: judgementCounts(store),
       };
     },
   );
@@ -521,6 +563,8 @@ export async function statusCommand(
     awaitingApproval: approvals.waiting,
     expiredApprovals: approvals.expired,
     expiredWorkflowSteps: approvals.expiredSteps,
+    awaitingJudgement: judgements.waiting,
+    expiredJudgements: judgements.expired,
     lastActivity: lastActivity ?? null,
     server: {
       http: { address: `127.0.0.1:${port}`, state: http ? "reachable" : "not running" },
@@ -548,6 +592,8 @@ export async function statusCommand(
   row("Workflows", summary(workflows));
   if (report.awaitingApproval > 0) row("Waiting", approvalHint(report.awaitingApproval));
   for (const hint of expiredHints(approvals)) row("Expired", hint);
+  if (report.awaitingJudgement > 0) row("Waiting", judgementHint(report.awaitingJudgement));
+  if (report.expiredJudgements > 0) row("Expired", expiredJudgementHint(report.expiredJudgements));
   row("Last active", lastActivity === undefined ? "never" : ago(lastActivity));
   row("HTTP", `${report.server.http.address} ${report.server.http.state}`);
   if (report.server.socket !== undefined) {
