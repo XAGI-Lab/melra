@@ -253,11 +253,14 @@ class MelraClient:
 
         `judgement_id` comes from the task's `judgements` (see `status`), and
         `verdict` is `yes`, `no` or `cannot_tell`. `identity` is who judges,
-        as on a plan, and must not be the principal that planned the task or
-        one it acts for. `rationale` is stored redacted for people to read;
-        MELRA never reads it. Returns `{task, certificate?}`, the certificate
-        only when the verdict settled the task. In enforced mode a verdict
-        sent here is refused, and an operator runs `melra judge`.
+        as on a plan. It is refused (`semantic_judge_is_actor`) when its
+        principal is the principal that planned the task or a non-human link
+        that principal acts for, or when its `onBehalfOf` names that
+        principal; the person the work was for may judge it. `rationale` is
+        stored redacted for people to read; MELRA never reads it. Returns
+        `{task, certificate?}`, the certificate only when the verdict settled
+        the task. In enforced mode a verdict sent here is refused, and an
+        operator runs `melra judge`.
         """
         if verdict not in {"yes", "no", "cannot_tell"}:
             raise ValueError("verdict must be yes, no, or cannot_tell")
