@@ -214,10 +214,14 @@ describe("task ownership", () => {
     const path = database();
     const legacy = "8d1f0f8e-6c1b-4f43-9f55-6c0a3e7d0a06";
     const fresh = new SqliteStore(path);
+    // Migrations 6 and 7 index what 4 added, so they are undone with it.
     fresh.database.exec(`
       DROP INDEX tasks_status;
+      DROP INDEX tasks_idempotency_key;
+      ALTER TABLE tasks DROP COLUMN status;
+      ALTER TABLE tasks DROP COLUMN idempotency_key;
       ALTER TABLE tasks DROP COLUMN owner;
-      DELETE FROM schema_migrations WHERE version = 4;
+      DELETE FROM schema_migrations WHERE version >= 4;
     `);
     fresh.database
       .prepare("INSERT INTO tasks(id, data, created_at, updated_at) VALUES (?, ?, ?, ?)")
@@ -229,7 +233,7 @@ describe("task ownership", () => {
     const plan = store.database
       .prepare(`
         EXPLAIN QUERY PLAN SELECT data FROM tasks
-        WHERE json_extract(data, '$.status') IN ('running', 'verifying')
+        WHERE status IN ('running', 'verifying')
         ORDER BY updated_at
       `)
       .all() as Array<{ detail: string }>;

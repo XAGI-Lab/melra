@@ -301,7 +301,7 @@ describe("durable workflow storage", () => {
     expect(store.listTasksByKey(key).map((found) => found.id).sort()).toEqual([taskId, second]);
     expect(store.listTasksByKey("c".repeat(64))).toEqual([]);
     const plan = store.database
-      .prepare("EXPLAIN QUERY PLAN SELECT data FROM tasks WHERE json_extract(data, '$.idempotencyKey') = ?")
+      .prepare("EXPLAIN QUERY PLAN SELECT data FROM tasks WHERE idempotency_key = ?")
       .all(key) as Array<{ detail: string }>;
     // A workflow step asks this for every task it plans; it must not scan every task.
     expect(plan.map((row) => row.detail).join("\n")).toContain("USING INDEX tasks_idempotency_key");

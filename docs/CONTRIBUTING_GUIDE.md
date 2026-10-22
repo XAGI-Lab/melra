@@ -103,7 +103,7 @@ validated.
 
 ### …change the database
 
-`packages/storage-sqlite/src/index.ts`, in migrations 1–6 today. A schema
+`packages/storage-sqlite/src/index.ts`, in migrations 1–7 today. A schema
 change needs a **new migration**, never an edit to an existing one's
 statements — someone out there has a database that already ran them.
 
