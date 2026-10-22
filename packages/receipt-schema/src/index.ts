@@ -271,10 +271,11 @@ export interface EvidenceItem {
     rationale?: string;
   };
   /**
-   * Beside `judgedBy`: the delegation chain that ran the effect, the action
-   * receipt's `principal`, redacted with the certificate, so the certificate
-   * alone shows whether the judge was the actor. Absent on certificates
-   * written before it existed.
+   * Beside `judgedBy`: the action receipt's `principal`, the delegation chain
+   * the planner declared, redacted with the certificate, so the two declared
+   * chains can be compared without the receipt. Both are claims, and neither
+   * marks the `harness:` link an OAuth client's token adds. Absent on
+   * certificates written before it existed.
    */
   executedBy?: string;
   source?: string;

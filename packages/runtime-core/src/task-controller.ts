@@ -176,11 +176,11 @@ function asksSemantic(request: TaskRequest): boolean {
 /**
  * A semantic task's evidence with its answers written in (#54). An answered
  * item passes only on a yes, is inconclusive on cannot_tell, and says who
- * judged it and, as `executedBy`, the receipt's principal, so the certificate
- * alone shows whether the judge was the actor; an open one stays failed and
- * inconclusive, summarised `unanswered`. Matched by index: a semantic task's
- * receipt has one item per predicate, in order. Every other item is left as
- * it was.
+ * judged it and, as `executedBy`, the receipt's declared principal, so the
+ * two declared chains can be compared without the receipt; an open one stays
+ * failed and inconclusive, summarised `unanswered`. Matched by index: a
+ * semantic task's receipt has one item per predicate, in order. Every other
+ * item is left as it was.
  */
 function overlay(
   evidence: EvidenceItem[],

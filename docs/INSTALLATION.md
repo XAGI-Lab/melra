@@ -1065,8 +1065,9 @@ change `recovery_required` and a read `partial`
 recorded, and the task keeps waiting. Nothing runs again and no receipt is
 added: the task records the verdict as `judgedBy`, and the certificate, once
 the task settles, carries it on the question's item beside `executedBy`, the
-receipt's principal, so the certificate alone shows who ran the effect and who
-judged it. The `rationale` is for
+receipt's declared principal, so the two can be compared without the receipt.
+Both are recorded as declared, and neither marks the `harness:` link an OAuth
+client's token adds. The `rationale` is for
 people; MELRA stores it redacted and never reads it.
 
 It prints `{ task, certificate? }` and exits 0 when the verdict is recorded,

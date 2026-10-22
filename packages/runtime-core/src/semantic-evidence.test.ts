@@ -452,7 +452,7 @@ describe("semantic verdicts (#54)", () => {
       judgedAt: expect.any(String),
       rationale: "It reads as the summary asked for.",
     };
-    // Beside who ran it, so the certificate alone shows the judge was not the actor.
+    // Beside the actor's declared chain, so the two compare without the receipt.
     expect(judged.certificate?.evidence[1]).toEqual({
       type: "semantic",
       passed: true,
