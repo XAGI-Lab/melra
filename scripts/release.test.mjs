@@ -68,6 +68,30 @@ test("a version with no notes fails docs:check, not just the release", () => {
   }
 });
 
+test("docs:check calls a documented variable only melra help names one nothing reads", () => {
+  const dir = scratch({
+    "docs/INSTALLATION.md": "| Variable | Meaning |\n| --- | --- |\n| `MELRA_READ` | Read. |\n| `MELRA_GONE` | Gone. |\n",
+    "apps/cli/src/index.ts": `const read = process.env.MELRA_READ;
+
+function help(): void {
+  process.stdout.write(\`MELRA
+
+Environment:
+  MELRA_READ  Read
+  MELRA_GONE  Gone
+\`);
+}
+`,
+  });
+  const result = node("scripts/check-env-docs.mjs", [], dir);
+  assert.equal(result.status, 1, result.stdout);
+  assert.match(
+    result.stderr,
+    /^docs\/INSTALLATION\.md:4: MELRA_GONE is documented but nothing in \{apps,packages\}\/\*\/src reads it; remove the row$/m,
+  );
+  assert.doesNotMatch(result.stderr, /MELRA_READ/);
+});
+
 test("the notes join wrapped lines, which a release body would render as line breaks", () => {
   const result = notes(
     "\n### Fixed\n\n- A fix wrapped\n  across lines:\n\n  - a nested item,\n    wrapped too\n\n  ```bash\n  melra doctor\n  melra serve\n  ```\n",
