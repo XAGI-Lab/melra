@@ -45,6 +45,10 @@ All notable changes are documented here. The format follows
   beside `credential_source_invalid`: a credential whose source is missing
   fails every call to its hosts and never falls back to an unauthenticated
   one. (#387)
+- `melra help` lists `MELRA_PAYLOAD_KEY` and `MELRA_HARNESS_TOOLS` in its
+  Environment block, beside every other variable `docs/INSTALLATION.md`
+  documents; `pnpm docs:check` now fails when a documented variable has no
+  line there. (#388)
 - A verdict sent in band where only an operator's counts, from a
   developer-mode process on a task that ran enforced (`melra judge` without
   `--mode enforced`, or `melra_task_judge`) or from an agent on an enforced

@@ -1242,6 +1242,10 @@ Environment:
   MELRA_WORKSPACE  Workspace boundary (default: a MELRA_POLICY file's
                    workspaceRoot, else the current directory)
   MELRA_HOME       Local database and artifact directory
+  MELRA_PAYLOAD_KEY
+                   Payload key, base64url (default: <MELRA_HOME>/payload.key).
+                   Back it up: changing or losing it makes stored payloads
+                   unreadable
   MELRA_POLICY     Optional local policy JSON
   MELRA_UNHINGED   Set to 1 to disable every guardrail (see --unsafe-local)
   MELRA_MODE       developer (default) or enforced (see --mode)
@@ -1251,6 +1255,9 @@ Environment:
   MELRA_HTTP_TOKEN Fixed bearer token for 'serve --http' (default: random)
   MELRA_HTTP_OAUTH Set to 0 so only that token gets in; no client can register
   MELRA_SOCKET     Socket path 'doctor' and 'status' check (serve needs --socket)
+  MELRA_HARNESS_TOOLS
+                   Set to 1 to add read_file, run_command and the other plain
+                   tool names beside the melra_* tools
   MELRA_BROWSER    Optional Chrome/Chromium/Edge executable
   MELRA_BROWSER_CDP_ENDPOINT       Optional HTTP(S) CDP endpoint
   MELRA_BROWSER_CDP_CONTEXT_INDEX  External context index (-1 is last)
