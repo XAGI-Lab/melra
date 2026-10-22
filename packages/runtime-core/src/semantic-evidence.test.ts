@@ -452,12 +452,14 @@ describe("semantic verdicts (#54)", () => {
       judgedAt: expect.any(String),
       rationale: "It reads as the summary asked for.",
     };
+    // Beside who ran it, so the certificate alone shows the judge was not the actor.
     expect(judged.certificate?.evidence[1]).toEqual({
       type: "semantic",
       passed: true,
       strength: "semantic",
       summary: "semantic_judgement_yes",
       judgedBy,
+      executedBy: "human:alice/agent:a",
     });
     // On the stored task too, beside the receipt's principal it was checked against.
     expect(store.getTask(ran.task.id)?.judgements?.[0]?.judgedBy).toEqual(judgedBy);
@@ -488,6 +490,7 @@ describe("semantic verdicts (#54)", () => {
         strength: "semantic",
         summary: `semantic_judgement_${verdict}`,
         judgedBy: { verdict, judge: "agent:grader", channel: "in_band", judgedAt: expect.any(String) },
+        executedBy: "agent:local",
       });
     }
   });
@@ -543,9 +546,15 @@ describe("semantic verdicts (#54)", () => {
       error: "semantic_judgement_expired",
     });
     expect(expired?.evidence.slice(1)).toMatchObject([
-      { passed: true, summary: "semantic_judgement_yes", judgedBy: { verdict: "yes", judge: "agent:grader" } },
+      {
+        passed: true,
+        summary: "semantic_judgement_yes",
+        judgedBy: { verdict: "yes", judge: "agent:grader" },
+        executedBy: "agent:local",
+      },
       { passed: false, inconclusive: true, summary: "semantic_judgement_expired" },
     ]);
+    expect(expired?.evidence[2]?.executedBy).toBeUndefined();
   });
 
   it("writes only the task: no breaker record, grant draw, commit or receipt", async () => {
@@ -816,10 +825,13 @@ describe("semantic verdicts (#54)", () => {
     );
   });
 
-  it("redacts a rationale and a judge's name on the task and the certificate", async () => {
+  it("redacts a rationale, a judge's name and the actor's on the task and the certificate", async () => {
     const { controller, store } = await setup();
-    const ran = await run(controller, write([{ type: "file_exists", path: "out.txt" }, SEMANTIC]));
     const token = "ghp_0123456789abcdefghijklmnopqrstuvwxyz";
+    const ran = await run(
+      controller,
+      write([{ type: "file_exists", path: "out.txt" }, SEMANTIC], { identity: as(`harness:${token}`).identity }),
+    );
     const judged = controller.judge(
       { ...on(ran.task, "no"), rationale: `The summary pastes ${token} into the file.` },
       as(`agent:${token}`),
@@ -830,6 +842,9 @@ describe("semantic verdicts (#54)", () => {
       expect(text).not.toContain(token);
       expect(text).toContain("The summary pastes [REDACTED_GITHUB_TOKEN] into the file.");
       expect(text).toContain('"judge":"agent:[REDACTED_GITHUB_TOKEN]"');
+    }
+    for (const text of [certificate, JSON.stringify(judged.certificate)]) {
+      expect(text).toContain('"executedBy":"harness:[REDACTED_GITHUB_TOKEN]"');
     }
   });
 });

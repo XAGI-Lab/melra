@@ -251,10 +251,14 @@ describe("MELRA over real stdio transport", () => {
     expect(unnamed.isError).toBe(true);
     const judged = parsed(
       await client.callTool({ name: "melra_task_judge", arguments: verdict("grader") }),
-    ) as { task: { status: string }; certificate: { result: string; evidence: { judgedBy?: unknown }[] } };
+    ) as {
+      task: { status: string };
+      certificate: { result: string; evidence: { judgedBy?: unknown; executedBy?: string }[] };
+    };
     expect(judged.task.status).toBe("verified_success");
     expect(judged.certificate.result).toBe("VERIFIED_SUCCESS");
     expect(judged.certificate.evidence[0]?.judgedBy).toMatchObject({ judge: "agent:grader", channel: "in_band" });
+    expect(judged.certificate.evidence[0]?.executedBy).toBe("agent:local");
   });
 
   it("plans and advances a verified workflow over MCP", async () => {

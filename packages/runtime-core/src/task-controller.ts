@@ -176,11 +176,18 @@ function asksSemantic(request: TaskRequest): boolean {
 /**
  * A semantic task's evidence with its answers written in (#54). An answered
  * item passes only on a yes, is inconclusive on cannot_tell, and says who
- * judged it; an open one stays failed and inconclusive, summarised
- * `unanswered`. Matched by index: a semantic task's receipt has one item per
- * predicate, in order. Every other item is left as it was.
+ * judged it and, as `executedBy`, the receipt's principal, so the certificate
+ * alone shows whether the judge was the actor; an open one stays failed and
+ * inconclusive, summarised `unanswered`. Matched by index: a semantic task's
+ * receipt has one item per predicate, in order. Every other item is left as
+ * it was.
  */
-function overlay(evidence: EvidenceItem[], judgements: SemanticJudgement[], unanswered: string): EvidenceItem[] {
+function overlay(
+  evidence: EvidenceItem[],
+  judgements: SemanticJudgement[],
+  unanswered: string,
+  executedBy: string | undefined,
+): EvidenceItem[] {
   return evidence.map((item, index) => {
     if (item.type !== "semantic") return item;
     const { inconclusive: _inconclusive, ...rest } = item;
@@ -192,6 +199,7 @@ function overlay(evidence: EvidenceItem[], judgements: SemanticJudgement[], unan
       ...(judgedBy.verdict === "cannot_tell" ? { inconclusive: true } : {}),
       summary: `semantic_judgement_${judgedBy.verdict}`,
       judgedBy,
+      ...(executedBy === undefined ? {} : { executedBy }),
     };
   });
 }
@@ -1194,7 +1202,7 @@ export class TaskController {
   ): ExecutionResult {
     const last = task.receiptIds[task.receiptIds.length - 1];
     const receipt = last === undefined ? undefined : this.store.getReceipt(last);
-    const evidence = overlay(receipt?.evidence ?? [], task.judgements ?? [], unanswered);
+    const evidence = overlay(receipt?.evidence ?? [], task.judgements ?? [], unanswered, receipt?.principal);
     task.status = status;
     if (error === undefined) delete task.error;
     else task.error = error;

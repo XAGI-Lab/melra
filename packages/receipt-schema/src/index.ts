@@ -270,6 +270,13 @@ export interface EvidenceItem {
     judgedAt: string;
     rationale?: string;
   };
+  /**
+   * Beside `judgedBy`: the delegation chain that ran the effect, the action
+   * receipt's `principal`, redacted with the certificate, so the certificate
+   * alone shows whether the judge was the actor. Absent on certificates
+   * written before it existed.
+   */
+  executedBy?: string;
   source?: string;
   digest?: string;
 }

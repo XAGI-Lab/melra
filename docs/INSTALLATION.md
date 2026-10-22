@@ -1064,7 +1064,9 @@ change `recovery_required` and a read `partial`
 (`semantic_judgement_cannot_tell`). A yes while other questions are open is
 recorded, and the task keeps waiting. Nothing runs again and no receipt is
 added: the task records the verdict as `judgedBy`, and the certificate, once
-the task settles, carries it on the question's item. The `rationale` is for
+the task settles, carries it on the question's item beside `executedBy`, the
+receipt's principal, so the certificate alone shows who ran the effect and who
+judged it. The `rationale` is for
 people; MELRA stores it redacted and never reads it.
 
 It prints `{ task, certificate? }` and exits 0 when the verdict is recorded,

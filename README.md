@@ -561,7 +561,8 @@ list is the kernel contract, not an MCP-specific API.
 | `melra_workflow_cancel` | Cooperatively cancel nonterminal workflow work |
 | `melra_workflow_control` | Pause, resume or suspend a run without losing its place |
 
-A verdict records its judge as declared, beside the receipt's principal. Over MCP even
+A verdict records its judge as declared, and the certificate carries it beside who ran
+the effect (`executedBy`, the receipt's principal). Over MCP even
 a `human:` judge is the harness's claim; only a `cli:` judge, from `melra judge`, came
 through an operator surface.
 

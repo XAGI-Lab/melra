@@ -468,8 +468,10 @@ The first `no` ends it `partial` (`semantic_judgement_no`); `cannot_tell` ends a
 change `recovery_required` and a read `partial`
 (`semantic_judgement_cannot_tell`). Unanswered at expiry, the task settles
 closed the same way as `cannot_tell`, with the error
-`semantic_judgement_expired`, keeping any yes already given. A verdict writes
-only the task and its certificate, never a receipt. A task with a failing
+`semantic_judgement_expired`, keeping any yes already given. On the settled
+certificate an answered item carries `judgedBy` and, beside it, `executedBy`,
+the receipt's principal. A verdict writes only the task and its certificate,
+never a receipt. A task with a failing
 predicate beside it is `partial` without waiting. Outside unsafe-local mode, a
 destructive effect whose evidence has a `semantic` predicate but nothing the
 kernel re-reads (`file_exists`, `file_absent`, `file_hash`) or asks another

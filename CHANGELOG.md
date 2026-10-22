@@ -11,6 +11,10 @@ All notable changes are documented here. The format follows
 - The Python SDK gains `judge(task_id, judgement_id, verdict, *, identity,
   rationale=None)`, which answers a waiting task's semantic question through
   `melra_task_judge` as the TypeScript SDK's `judge()` does (#378).
+- A settled semantic certificate's answered item carries `executedBy`, the
+  action receipt's principal, beside `judgedBy`, so the certificate alone shows
+  whether the judge was the actor (#378). It is redacted with the certificate;
+  certificates written before it simply lack it, and nothing is migrated.
 
 ### Changed
 
