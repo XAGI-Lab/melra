@@ -3091,8 +3091,9 @@ describe("WorkflowController human input and delegation", () => {
     expect(JSON.stringify(store.getWorkflowRun(planned.id))).not.toContain(secret);
     expect(JSON.stringify(store.listWorkflowEvents(planned.id))).not.toContain(secret);
 
-    // The token ends at prompt index 1990: cut before redaction, it would be
-    // left as a stub no pattern recognises, so the redaction must come first.
+    // The token starts at prompt index 1990, so the cut at 2,000 falls inside
+    // it: cut before redaction, it would be left as a stub no pattern
+    // recognises, so the redaction must come first.
     const long = controller.plan(
       WorkflowDefinitionSchema.parse({
         schemaVersion: "1.0.0",
