@@ -52,6 +52,16 @@ All notable changes are documented here. The format follows
   `expiredJudgements`. Before, only the stored `waiting_user` count was
   reported, so an expired wait counted as waiting until something opened the
   data directory. (#383)
+- `MelraClient.connect()` in the TypeScript SDK gives the stdio server it
+  spawns this process's whole environment except `MELRA_UNHINGED` and
+  `MELRA_SOCKET`, and except `MELRA_WORKSPACE` when `cwd` is given, with `env`
+  on top: the Python SDK's rule. It passed only `MELRA_HOME`, `MELRA_POLICY`,
+  `MELRA_MODE`, `MELRA_PAYLOAD_KEY` and `MELRA_WORKSPACE`, plus the MCP SDK's
+  `HOME`, `PATH` and a few more, so a credential a policy reads from
+  `source.env` was missing and every credentialed call failed
+  (`credential_source_missing`), `MELRA_BROWSER*` were dropped without a word,
+  and terminal commands lost `LANG`, `LC_ALL`, `CI` and `NO_COLOR`. Both SDK
+  READMEs now say what a spawned server inherits. (#382)
 
 ### Security
 
