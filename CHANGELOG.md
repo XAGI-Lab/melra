@@ -41,7 +41,6 @@ All notable changes are documented here. The format follows
   optional, there is no migration, and a task left waiting by 0.3.0-alpha.17
   can be answered after an upgrade until it expires. (#54)
 
-
 - A governed action commits to SQLite six times instead of nine, and runs
   4-8% faster on a Mac (M4, medians of 30 rounds interleaved with
   0.3.0-alpha.17): `file.write` 2.19 ms to 2.10 ms, `file.read` 1.10 ms to
