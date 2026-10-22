@@ -70,6 +70,25 @@ describe("receipt and certificate primitives", () => {
     expect(evidenceStrength("custom:semantic")).toBe("execution");
   });
 
+  it("keeps a verdict's shape through redaction, taking out only secret shapes", () => {
+    const judgedBy = {
+      verdict: "no",
+      judge: "harness:C/agent:grader",
+      channel: "in_band",
+      judgedAt: "2026-10-22T00:00:00.000Z",
+      rationale: "It pastes sk-live-0123456789abcdefghij into the summary.",
+    };
+    // No field name here is a credential's, so nothing is blanked whole.
+    expect(
+      redactStructuredValue({ type: "semantic", passed: false, summary: "semantic_judgement_no", judgedBy }).value,
+    ).toEqual({
+      type: "semantic",
+      passed: false,
+      summary: "semantic_judgement_no",
+      judgedBy: { ...judgedBy, rationale: "It pastes [REDACTED_API_KEY] into the summary." },
+    });
+  });
+
   it("reads an unknown evidence type as the weakest claim", () => {
     // A predicate added without a decision in the table, or a type from a
     // future version, must not inherit a strength it never earned.

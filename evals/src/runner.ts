@@ -10,7 +10,7 @@ import {
   type ComputerTrace,
 } from "@melra/computer-runtime";
 import { createMelraRuntime } from "@melra/server";
-import { TaskRequestSchema } from "@melra/protocol";
+import { IdentitySchema, TaskRequestSchema } from "@melra/protocol";
 import { scenarios, type EvaluationScenario } from "./scenarios.js";
 
 export interface EvaluationResult {
@@ -102,6 +102,25 @@ async function runScenario(scenario: EvaluationScenario): Promise<EvaluationResu
       evidenceStrengths = execution.certificate?.evidence.map(
         (item) => item.strength ?? "unstamped",
       );
+      if (scenario.judge !== undefined) {
+        let refused: string | undefined;
+        try {
+          runtime.controller.judge(
+            {
+              taskId: task.id,
+              judgementId: execution.task.judgements?.[0]?.judgementId ?? "",
+              verdict: scenario.judge.verdict,
+            },
+            { identity: IdentitySchema.parse(scenario.judge.identity) },
+          );
+        } catch (error) {
+          refused = error instanceof Error ? error.message : String(error);
+        }
+        if (refused !== scenario.judge.expectedError) {
+          throw new Error(`judge:${refused ?? "recorded"}; expected:${scenario.judge.expectedError ?? "recorded"}`);
+        }
+        observedFinal = runtime.controller.status(task.id).status;
+      }
     }
     if (
       scenario.expectedFinal !== undefined &&

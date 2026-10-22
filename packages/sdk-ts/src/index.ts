@@ -9,6 +9,7 @@ import {
 } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { httpTransport, socketTransport } from "./remote.js";
 import {
+  MelraTaskJudgeInputSchema,
   WorkflowAdvanceInputSchema,
   WorkflowAdvanceResultSchema,
   WorkflowControlInputSchema,
@@ -21,6 +22,7 @@ import {
   type WorkflowInput,
   type WorkflowRun,
   type ApprovalResponse,
+  type MelraTaskJudgeInput,
   type TaskRequestInput,
 } from "@melra/protocol";
 
@@ -273,6 +275,15 @@ export class MelraClient {
       ...(input.taskId === undefined ? {} : { taskId: input.taskId }),
       ...(input.receiptId === undefined ? {} : { receiptId: input.receiptId }),
     });
+  }
+
+  /**
+   * Answers one semantic question of a `waiting_user` task (#54), as a
+   * principal other than the one that planned it. Returns `{ task,
+   * certificate? }`; the certificate only when the verdict settled the task.
+   */
+  async judge(input: MelraTaskJudgeInput): Promise<Record<string, unknown>> {
+    return await this.call("melra_task_judge", MelraTaskJudgeInputSchema.parse(input));
   }
 
   // Same reason as `plan`: this is the shape an author writes, not the shape the

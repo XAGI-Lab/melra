@@ -32,7 +32,7 @@ made through other tools remain outside MELRA's control.
 <a href="https://mcp.site/servers/melra"><img src="https://mcp.site/badge/melra" alt="Listed on mcp.site" /></a>
 <a href="https://smithery.ai/servers/xagi-labs/melra"><img src="https://img.shields.io/badge/Smithery-listed-F97316?style=flat-square" alt="MELRA on Smithery" /></a>
 <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-f97316?style=flat-square" alt="Apache-2.0 license" /></a>
-<img src="https://img.shields.io/badge/evals-54%2F54-22c55e?style=flat-square&logo=checkmarx&logoColor=white" alt="54 of 54 deterministic evaluation scenarios passing" />
+<img src="https://img.shields.io/badge/evals-55%2F55-22c55e?style=flat-square&logo=checkmarx&logoColor=white" alt="55 of 55 deterministic evaluation scenarios passing" />
 <img src="https://img.shields.io/badge/telemetry-off-0f172a?style=flat-square" alt="Telemetry off" />
 
 <!-- Platforms & stack -->
@@ -311,11 +311,11 @@ sequenceDiagram
 | Status | Meaning | Next step |
 |---|---|---|
 | 🟢 `verified_success` | It ran and every declared check passed | Done |
-| 🟡 `partial` | It ran, but the evidence did not hold | Look at the evidence, then decide |
+| 🟡 `partial` | It ran, but the evidence did not hold, or a `semantic` question was answered no | Look at the evidence, then decide; a change answered no stays in place, so fixing it takes a new plan |
 | 🔴 `policy_blocked` | Refused before anything ran | Read the reason; the same request will be refused again |
 | 🔵 `awaiting_approval` | A change is waiting for your approval | Developer mode: approve it from the agent that planned it. Enforced mode: `melra approve <task-id>` |
-| ⏳ `waiting_user` | It ran and every check MELRA can make passed; a `semantic` question waits for an answer from outside | Nothing can answer it yet; it settles closed at expiry |
-| 🟣 `recovery_required` | A change may or may not have happened, or happened and its `semantic` question went unanswered | **Check the world first**; never re-run blindly |
+| ⏳ `waiting_user` | It ran and every check MELRA can make passed; a `semantic` question waits for an answer from outside | A principal other than the one that planned it answers with `melra_task_judge`; in enforced mode, an operator with `melra judge <task-id>`. Unanswered, it settles closed at expiry |
+| 🟣 `recovery_required` | A change may or may not have happened, or happened and its `semantic` question went unanswered or was answered `cannot_tell` | **Check the world first**; never re-run blindly |
 | ⚪ `failed` · `cancelled` · `budget_exhausted` | It did not complete | Safe to plan again |
 
 <details>
@@ -542,8 +542,8 @@ belongs to the harness, not here.
 
 ### A deliberately small tool surface
 
-Eleven tools in front of the adapters and one durable workflow controller. The CLI,
-both SDKs, loopback HTTP and the Unix socket reach the same eleven operations; this
+Twelve tools in front of the adapters and one durable workflow controller. The CLI,
+both SDKs, loopback HTTP and the Unix socket reach the same twelve operations; this
 list is the kernel contract, not an MCP-specific API.
 
 | Tool | Purpose |
@@ -554,11 +554,16 @@ list is the kernel contract, not an MCP-specific API.
 | `melra_task_status` | Read durable task state |
 | `melra_task_cancel` | Cooperatively cancel pending or running work |
 | `melra_receipt` | Retrieve redacted evidence and the execution certificate |
+| `melra_task_judge` | Answer a waiting task's `semantic` question: `yes`, `no` or `cannot_tell`, never as the principal that planned it |
 | `melra_workflow_plan` | Validate, preflight, encrypt and persist a bounded workflow |
 | `melra_workflow_advance` | Execute one ready scheduling wave |
 | `melra_workflow_status` | Read the durable workflow projection |
 | `melra_workflow_cancel` | Cooperatively cancel nonterminal workflow work |
 | `melra_workflow_control` | Pause, resume or suspend a run without losing its place |
+
+A verdict records its judge as declared, beside the receipt's principal. Over MCP even
+a `human:` judge is the harness's claim; only a `cli:` judge, from `melra judge`, came
+through an operator surface.
 
 Prefer tool names your model already knows? Set `MELRA_HARNESS_TOOLS=1` and thirteen
 more appear alongside these (`read_file`, `write_file`, `run_command`, `browser_click`,
@@ -629,7 +634,7 @@ or that unlike benchmarks are comparable.
 
 | | What | Result | What it means |
 |:--:|---|---:|---|
-| ✅ | Safety and execution evals | **54/54** | Deterministic policy, capability-grant, credential-scope, traversal, terminal, memory, computer, HTTP, cancellation and verification scenarios |
+| ✅ | Safety and execution evals | **55/55** | Deterministic policy, capability-grant, credential-scope, traversal, terminal, memory, computer, HTTP, cancellation and verification scenarios |
 | 🔁 | Durable Core eval | **8/8** | 100% expected recovery, 0 duplicate execution, 0 false success, 100% event consistency |
 | 🛡️ | [GovBench](docs/research/GOVBENCH.md) (self-authored) | **312/312** safety, **50/50** utility | 362 model-free cases through the real runtime: containment, approval integrity, verification honesty, exactly-once, redaction, and false positives on legitimate work. Its first run found two real bugs (293/307), both fixed; governance adds about 0.5–1.4 ms per action |
 | 🧠 | LoCoMo retrieval | **0.7597** coverage@20 | 1,982 evidence-bearing questions with zero model, embedding or network calls; re-run on 2026-10-14 and identical on every metric |
@@ -718,6 +723,7 @@ unless you opt in.
 | See activity | `melra tasks` · `watch` · `status` |
 | Run one task | `melra run --request task.json` |
 | Approve a task an agent planned | `melra approve <task-id>` · in a browser: `melra console` |
+| Answer a task's semantic question | `melra judge <task-id> --judgement <id> --verdict yes\|no\|cannot_tell` |
 | Inspect a receipt | `melra inspect <task-id>` |
 | Test a policy | `melra policy test --request task.json` |
 | Check conformance | `melra conformance` |

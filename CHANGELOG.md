@@ -6,7 +6,40 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- A semantic question can be answered (#54). The twelfth MCP tool,
+  `melra_task_judge`, takes a waiting task's `judgementId`, a `verdict` of
+  `yes`, `no` or `cannot_tell`, an optional `rationale` for people (stored
+  redacted, never read by MELRA) and a required `identity`. A judge that
+  declares the task's own principal, or a non-human link it acts for, is
+  refused (`semantic_judge_is_actor`); the person the work was for may judge
+  it. The check compares claims, so it stops one agent loop grading itself, not
+  a harness that declares someone else. In enforced mode, and on a task that
+  ran enforced, a verdict sent over MCP is refused
+  (`judgement_in_band_refused`), and an operator answers with
+  `melra judge <task-id> --judgement <id> --verdict yes|no|cannot_tell
+  [--rationale <text>]`, recorded as `cli:<MELRA_APPROVER>`: `out_of_band`
+  when both that command and the task's run are enforced, `in_band`
+  otherwise. Each answer is recorded once as `judgedBy` (verdict, judge,
+  channel, time, rationale) on `task.judgements` and on the certificate's
+  semantic item. A verdict writes only the task and, when it settles it, its
+  certificate: no receipt, grant draw, breaker record or idempotency commit.
+  The TypeScript SDK gains `judge()`.
+
 ### Changed
+
+- Twelve MCP tools instead of eleven, seven of them task tools.
+  `melra conformance` still requires the eleven kernel tools, so a server
+  without the judge tool passes. A yes on every question makes the task
+  `verified_success`. The first `no` ends it `partial`, which now also means
+  "a semantic question was answered no" (error `semantic_judgement_no`); a
+  change answered no stays in place, and fixing it takes a new plan.
+  `cannot_tell` ends a change `recovery_required` and a read `partial`
+  (`semantic_judgement_cannot_tell`). A task whose questions expire keeps any
+  `yes` already given on its certificate. Nothing breaks: every new field is
+  optional, there is no migration, and a task left waiting by 0.3.0-alpha.17
+  can be answered after an upgrade until it expires. (#54)
 
 - A governed action commits to SQLite six times instead of nine, and runs
   4-8% faster on a Mac (M4, medians of 30 rounds interleaved with

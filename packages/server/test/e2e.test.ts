@@ -168,7 +168,7 @@ describe("MELRA over real stdio transport", () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it("advertises exactly the compact eleven-tool product surface", async () => {
+  it("advertises exactly the compact twelve-tool product surface", async () => {
     const tools = await client.listTools();
     expect(tools.tools.map((tool) => tool.name).sort()).toEqual([
       "melra_capabilities",
@@ -176,6 +176,7 @@ describe("MELRA over real stdio transport", () => {
       "melra_plan",
       "melra_receipt",
       "melra_task_cancel",
+      "melra_task_judge",
       "melra_task_status",
       "melra_workflow_advance",
       "melra_workflow_cancel",
@@ -214,6 +215,46 @@ describe("MELRA over real stdio transport", () => {
     const evidence = EvidencePredicateSchema.options.map((option) => option.shape.type.value);
     const listed = /requiredEvidence describing how to confirm it \(([^)]+)\)/.exec(instructions)?.[1];
     expect(listed?.split(", ").sort()).toEqual([...evidence].sort());
+  });
+
+  it("takes a semantic verdict from a judge other than the actor", async () => {
+    const instructions = client.getInstructions() ?? "";
+    expect(instructions).toContain("melra_task_judge");
+    const task = parsed(
+      await client.callTool({
+        name: "melra_plan",
+        arguments: {
+          goal: "List the workspace and ask whether it looks tidy",
+          operation: { kind: "file", action: "list", path: "." },
+          requiredEvidence: [{ type: "semantic", question: "Does the workspace look tidy?" }],
+        },
+      }),
+    );
+    const waiting = parsed(
+      await client.callTool({ name: "melra_execute", arguments: { taskId: task.id } }),
+    ) as { task: { status: string; judgements: { judgementId: string }[] } };
+    expect(waiting.task.status).toBe("waiting_user");
+    const verdict = (id: string) => ({
+      taskId: task.id,
+      judgementId: waiting.task.judgements[0]!.judgementId,
+      verdict: "yes",
+      identity: { principal: { kind: "agent", id } },
+    });
+    // Planned with nothing declared, so the actor is agent:local: the same
+    // loop cannot grade itself.
+    const self = (await client.callTool({ name: "melra_task_judge", arguments: verdict("local") })) as TextToolResult;
+    expect(self.isError).toBe(true);
+    expect(self.content[0]?.text).toContain("semantic_judge_is_actor");
+    // Nor say nothing about who it is.
+    const { identity: _identity, ...anonymous } = verdict("grader");
+    const unnamed = (await client.callTool({ name: "melra_task_judge", arguments: anonymous })) as TextToolResult;
+    expect(unnamed.isError).toBe(true);
+    const judged = parsed(
+      await client.callTool({ name: "melra_task_judge", arguments: verdict("grader") }),
+    ) as { task: { status: string }; certificate: { result: string; evidence: { judgedBy?: unknown }[] } };
+    expect(judged.task.status).toBe("verified_success");
+    expect(judged.certificate.result).toBe("VERIFIED_SUCCESS");
+    expect(judged.certificate.evidence[0]?.judgedBy).toMatchObject({ judge: "agent:grader", channel: "in_band" });
   });
 
   it("plans and advances a verified workflow over MCP", async () => {
@@ -632,6 +673,28 @@ describe("MELRA over real stdio transport", () => {
       });
       expect(advanced.text).toContain("approval_in_band_refused");
       await call("melra_workflow_status", { workflowId });
+
+      // A verdict is the agent's word too: only an operator's counts.
+      expect(instructions).toContain("melra judge <taskId>");
+      const asked = await call("melra_plan", {
+        goal: "List the workspace and ask whether it looks tidy",
+        operation: { kind: "file", action: "list", path: "." },
+        requiredEvidence: [{ type: "semantic", question: "Does the workspace look tidy?" }],
+      });
+      const waitingTask = (await call("melra_execute", { taskId: asked.value.id })).value.task as {
+        status: string;
+        judgements: { judgementId: string }[];
+      };
+      expect(waitingTask.status).toBe("waiting_user");
+      const verdict = await call("melra_task_judge", {
+        taskId: asked.value.id,
+        judgementId: waitingTask.judgements[0]!.judgementId,
+        verdict: "yes",
+        identity: { principal: { kind: "agent", id: "grader" } },
+      });
+      expect(verdict.ok).toBe(false);
+      expect(verdict.text).toContain("judgement_in_band_refused");
+      expect((await call("melra_task_status", { taskId: asked.value.id })).value.status).toBe("waiting_user");
 
       const held = await call("write_file", { path: "h.txt", content: "x" });
       expect(held.value.status).toBe("approval_required");

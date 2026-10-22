@@ -38,7 +38,7 @@ Host exercised locally: macOS arm64, Node.js 24.10.0, Python 3.11.14
 
 The real-process workflow test:
 
-- discovers exactly eleven MCP tools;
+- discovers exactly twelve MCP tools;
 - plans the committed restart-safe workflow;
 - executes one verified node and records its event sequence;
 - closes the MCP client and child process;
@@ -331,7 +331,7 @@ Every tag runs an `installed` job on `ubuntu-latest`, `macos-latest`, and
 `windows-latest` after publishing: each runner checks out nothing but
 `scripts/registry-smoke.mjs`, installs the just-published `@melra/cli` from the
 npm registry, runs `melra doctor`, and drives a real MCP stdio session that
-discovers exactly eleven tools and takes a `{kind:"system",action:"info"}` task
+discovers exactly twelve tools and takes a `{kind:"system",action:"info"}` task
 to `verified_success` with a `VERIFIED_SUCCESS` certificate and a 64-character
 digest. It asserts the reported version against the tag, so a cached older build
 cannot pass for the new one. That is evidence about the tarball an end user

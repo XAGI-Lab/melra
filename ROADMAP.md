@@ -23,7 +23,7 @@ memory stay with the model and the harness above.
 
 ### Runtime and protocol
 
-- [x] Strict versioned task contracts, now exposed through an eleven-tool MCP surface.
+- [x] Strict versioned task contracts, now exposed through a twelve-tool MCP surface.
 - [x] Local stdio transport.
 - [x] Persisted task state, budgets, cancellation, and bounded read retries.
 - [x] Local allow/deny/confirm policy re-evaluated at execution.
@@ -119,7 +119,7 @@ them as promises was the wrong call:
       the one an end user makes: they install a tarball. Every tag now runs an
       `installed` job on all three that pulls the just-published `@melra/cli`
       from the registry onto a runner holding nothing but the smoke script,
-      runs `melra doctor`, and drives eleven tools plus a plan/execute/receipt
+      runs `melra doctor`, and drives twelve tools plus a plan/execute/receipt
       to a `VERIFIED_SUCCESS` certificate over real MCP stdio — asserting the
       version it reached, so a stale cached build cannot pass for the new one.
 - [ ] Independent security review.
@@ -267,7 +267,7 @@ but not in the shape the protocol should eventually name.
 | Durable effect runtime | ✓ | `@melra/runtime-core` over SQLite |
 | Idempotency | ✓ | `idempotency_commits`, unique per committed attempt |
 | Recovery engine | ✓ | Conservative rules plus explicit `recovery_required` |
-| Verification framework | partial | Execution, state, and independent levels ship; semantic questions are posed and fail closed, and the verdict that answers them is next ([P3](#p3--verification-framework)) |
+| Verification framework | partial | Execution, state, and independent levels ship; semantic questions are posed, answered from outside with `melra_task_judge` or `melra judge`, and fail closed unanswered ([P3](#p3--verification-framework)) |
 | Evidence system | ✓ | Redacted receipts and SHA-256 certificates |
 | Effect adapters | partial | Files, terminal, browser, computer, HTTP; database, cloud, SaaS pending ([P4](#p4--credentials-and-api-effects)) |
 | Harness adapters | ✓ | Ordinary tool names over the same pipeline (`MELRA_HARNESS_TOOLS=1`), proven against three mismatched clients on one data directory |
@@ -318,7 +318,7 @@ but not in the shape the protocol should eventually name.
       underneath. The goal is boring infrastructure: install the adapter,
       configure policy, run the agent normally. Opt-in with
       `MELRA_HARNESS_TOOLS=1` so a client that only knows the kernel
-      vocabulary sees the same eleven tools it always did.
+      vocabulary sees the same twelve tools it always did.
 - [x] At least two reference integrations against different harnesses, with the
       same policy, durable state, and receipts surviving the swap. This is the
       claim that distinguishes a kernel from a server.
@@ -409,11 +409,13 @@ alternative, not asking the harness not to use it.
       to write; none ships here.
       ([#53](https://github.com/XAGI-Lab/melra/issues/53),
       [#139](https://github.com/XAGI-Lab/melra/issues/139))
-- [ ] Semantic verification, labelled probabilistic everywhere it appears, and
-      never the sole evidence for a destructive effect. The first slice ships
-      the `semantic` predicate, `semantic_only_destructive`, and `waiting_user`
-      with a wait that fails closed at expiry; the verdict tool and the check
-      that the judge is not the actor are next.
+- [x] Semantic verification, labelled probabilistic everywhere it appears, and
+      never the sole evidence for a destructive effect outside unsafe-local
+      mode. The first slice shipped the `semantic` predicate,
+      `semantic_only_destructive`, and `waiting_user` with a wait that fails
+      closed at expiry; the second ships the verdict, `melra_task_judge` and
+      `melra judge`, with the check that the judge is not the actor
+      (`semantic_judge_is_actor`) and `judgedBy` on the task and certificate.
       ([#54](https://github.com/XAGI-Lab/melra/issues/54))
 
 ### P4 — credentials and API effects

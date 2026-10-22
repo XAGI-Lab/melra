@@ -104,7 +104,9 @@ result.
   L3; they differ in a way this suite cannot see.
 - **Anything about effects the suite does not exercise.** It probes one file
   effect end to end. Browser, terminal, computer, and memory adapters are out
-  of scope, and so is `semantic` evidence: no level claims it.
+  of scope, and so is `semantic` evidence: no level claims it. The judge tool,
+  `melra_task_judge`, is optional for the same reason: it is not one of the
+  eleven kernel tools, so an endpoint without it can reach every level.
 
 `--unsafe-local` removes the guardrails by design, so an unsafe-local endpoint reaches
 L1 and stops there. That is the correct result, not a bug.

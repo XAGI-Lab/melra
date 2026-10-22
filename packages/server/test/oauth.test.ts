@@ -164,6 +164,62 @@ describe("melra oauth", () => {
     }
   });
 
+  it("compares the principal a client declares when it judges, and records the client above it", async () => {
+    const token = await authorize("Grading Harness");
+    const client = new Client({ name: "oauth-judge", version: "0.0.0" });
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL(`${base}/mcp`), {
+        requestInit: { headers: { authorization: `Bearer ${token}` } },
+      }) as unknown as Transport,
+    );
+    const text = (result: unknown) => (result as { content: { text: string }[] }).content[0]!.text;
+    try {
+      const planned = JSON.parse(
+        text(
+          await client.callTool({
+            name: "melra_plan",
+            arguments: {
+              goal: "List the workspace and ask whether it looks tidy",
+              operation: { kind: "file", action: "list", path: "." },
+              requiredEvidence: [{ type: "semantic", question: "Does the workspace look tidy?" }],
+              identity: { principal: { kind: "agent", id: "a" } },
+            },
+          }),
+        ),
+      ) as { id: string };
+      const waiting = JSON.parse(
+        text(await client.callTool({ name: "melra_execute", arguments: { taskId: planned.id } })),
+      ) as { task: { status: string; judgements: { judgementId: string }[] } };
+      expect(waiting.task.status).toBe("waiting_user");
+      const judge = (id: string) =>
+        client.callTool({
+          name: "melra_task_judge",
+          arguments: {
+            taskId: planned.id,
+            judgementId: waiting.task.judgements[0]!.judgementId,
+            verdict: "yes",
+            identity: { principal: { kind: "agent", id } },
+          },
+        }) as Promise<{ isError?: boolean; content: { text: string }[] }>;
+      // The client's own name is authenticated and never compared; what it
+      // declares is, so the agent that planned cannot grade itself.
+      const self = await judge("a");
+      expect(self.isError).toBe(true);
+      expect(text(self)).toContain("semantic_judge_is_actor");
+      // Another session of the same harness may.
+      const judged = JSON.parse(text(await judge("grader"))) as {
+        task: { status: string; judgements: { judgedBy: { judge: string } }[] };
+      };
+      expect(judged.task.status).toBe("verified_success");
+      expect(judged.task.judgements[0]!.judgedBy.judge).toMatch(/^harness:Grading Harness#[0-9a-f]{8}\/agent:grader$/);
+      expect(runtime.controller.receipts({ taskId: planned.id }).receipts[0]!.principal).toMatch(
+        /^harness:Grading Harness#[0-9a-f]{8}\/agent:a$/,
+      );
+    } finally {
+      await client.close();
+    }
+  });
+
   it("refuses a code that fails PKCE, and never lets one be spent twice", async () => {
     const registered = await fetch(`${base}/oauth/register`, {
       method: "POST",

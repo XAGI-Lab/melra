@@ -30,14 +30,14 @@ host evidence and unverified claims are listed in [VALIDATION.md](VALIDATION.md)
 
 ## MCP and SDK compatibility
 
-The server exposes eleven `melra_*` tools: six task/evidence tools and five
+The server exposes twelve `melra_*` tools: seven task/evidence tools and five
 workflow tools. Unknown fields are rejected. The retired product prefix is not
 an alias.
 
 `MELRA_HARNESS_TOOLS=1` additionally exposes plain-vocabulary aliases
 (`write_file`, `approve`, and so on) for harnesses that expect ordinary tool
 names. They are a translation layer over the same pipeline, not a second path:
-a client that only knows the kernel vocabulary sees the same eleven tools it
+a client that only knows the kernel vocabulary sees the same twelve tools it
 always did.
 
 `melra conformance` checks a live endpoint rather than a build and reports the

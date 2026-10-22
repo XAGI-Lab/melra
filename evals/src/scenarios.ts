@@ -3,6 +3,7 @@
 
 import type {
   ExecutionGuarantee,
+  SemanticVerdict,
   TaskRequestInput,
   TaskStatus,
 } from "@melra/protocol";
@@ -49,6 +50,17 @@ export interface EvaluationScenario {
   expectedExecutionGuarantee?: ExecutionGuarantee;
   approve?: boolean;
   cancel?: boolean;
+  /**
+   * A verdict on the task's first semantic question once it waits, as
+   * `identity` would send it over MCP. With `expectedError`, the verdict must
+   * be refused with exactly that error; `expectedFinal` is then the status the
+   * task is left in.
+   */
+  judge?: {
+    verdict: SemanticVerdict;
+    identity: NonNullable<TaskRequestInput["identity"]>;
+    expectedError?: string;
+  };
 }
 
 export const scenarios: EvaluationScenario[] = [
@@ -307,6 +319,38 @@ export const scenarios: EvaluationScenario[] = [
     },
     expectedPlan: "awaiting_approval",
     approve: true,
+    expectedFinal: "waiting_user",
+    expectedEvidenceStrengths: ["state", "semantic"],
+  },
+  {
+    // The agent that ran an effect does not grade it (#54): a verdict declared
+    // as the task's own principal is refused, and the task waits on.
+    id: "semantic-self-judgement-refused",
+    category: "verification",
+    request: {
+      goal: "Write a summary, prove it exists, and ask whether it reads as asked",
+      operation: {
+        kind: "file",
+        action: "write",
+        path: "semantic-summary.txt",
+        content: "the summary",
+        encoding: "utf8",
+      },
+      constraints: [],
+      forbiddenEffects: [],
+      budget: { maxSteps: 2, maxDurationMs: 5_000, maxRetries: 0 },
+      requiredEvidence: [
+        { type: "file_exists", path: "semantic-summary.txt" },
+        { type: "semantic", question: "Does semantic-summary.txt read as the summary asked for?" },
+      ],
+    },
+    expectedPlan: "awaiting_approval",
+    approve: true,
+    judge: {
+      verdict: "yes",
+      identity: { principal: { kind: "agent", id: "local" } },
+      expectedError: "semantic_judge_is_actor",
+    },
     expectedFinal: "waiting_user",
     expectedEvidenceStrengths: ["state", "semantic"],
   },

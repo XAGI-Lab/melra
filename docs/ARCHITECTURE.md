@@ -459,7 +459,7 @@ same durable record; none of them is a shortcut past a stage of the lifecycle.
 | JSON API | loopback HTTP or the Unix socket, read-only | Consoles and dashboards |
 | Approval console | `melra console`: its own loopback HTTP server, no MCP endpoint | An operator approving or denying in a browser tab paired with it |
 
-The MCP surface is exactly eleven tools:
+The MCP surface is exactly twelve tools:
 
 | Task tools | Workflow tools |
 |---|---|
@@ -469,6 +469,7 @@ The MCP surface is exactly eleven tools:
 | `melra_task_status` | `melra_workflow_cancel` |
 | `melra_task_cancel` | `melra_workflow_control` |
 | `melra_receipt` |  |
+| `melra_task_judge` |  |
 
 The CLI exposes `workflow plan`, `workflow advance`, `workflow inspect`,
 `workflow cancel`, and the operator halts `workflow pause`, `workflow resume`,
@@ -520,7 +521,7 @@ rather than flattening it into a boolean:
 | 0 | **Execution** | The adapter's own report | exit code `0`, HTTP 200, no exception | ✓ |
 | 1 | **State** | MELRA re-reads the target itself | `file_exists`, `file_hash` re-reading the workspace | ✓ |
 | 2 | **Independent** | A different channel to the same fact | `http_resource_matches`: execute via `POST /refund`, verify via `GET /refund/:id` | ✓ |
-| 3 | **Semantic** | A judgement about meaning | "the summary is accurate" | posed and recorded; a verdict from outside is next (#54); **probabilistic** |
+| 3 | **Semantic** | A judgement about meaning | "the summary is accurate" | posed, recorded and answered from outside with `melra_task_judge` or `melra judge` (#54); **probabilistic** |
 
 Execution evidence is the weakest: it says the call returned, not that the world
 changed. Independent verification is much stronger precisely because the channel

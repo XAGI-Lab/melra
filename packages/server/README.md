@@ -1,7 +1,7 @@
 # @melra/server
 
 The official local Model Context Protocol server and workflow runtime for
-[MELRA](https://github.com/XAGI-Lab/melra). Eleven MCP tools over stdio,
+[MELRA](https://github.com/XAGI-Lab/melra). Twelve MCP tools over stdio,
 loopback HTTP, or a Unix socket, sitting in front of the file, terminal,
 browser, computer, and HTTP runtimes and operational memory.
 
@@ -73,8 +73,9 @@ decision), runs the adapter under an `AbortSignal` armed with the task's
 duration budget, then verifies. A task is `verified_success` only when the
 adapter succeeded *and* every declared evidence predicate passed — an adapter
 that claimed success with failing evidence is `partial`, unless the only unmet
-evidence is a `semantic` question, which waits in `waiting_user` and settles
-closed at expiry (#54).
+evidence is a `semantic` question, which waits in `waiting_user` until a judge
+other than the actor answers it with `melra_task_judge`, or settles closed at
+expiry (#54).
 
 Paths and terminal working directories stay inside the configured root. The
 browser runtime independently rejects non-`http(s)` protocols, URL credentials,

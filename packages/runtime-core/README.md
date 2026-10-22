@@ -18,7 +18,7 @@ Verification decides success, not the adapter. A task reaches
 `verified_success` only when the adapter succeeded *and* every declared evidence
 predicate passed; an adapter that reported success with failing evidence is
 `partial`, unless the only unmet evidence is a `semantic` question, which waits
-in `waiting_user` and settles closed at expiry (#54). Retries apply to `read` effects only — mutations and destructive
+in `waiting_user` until `judge()` answers it, or settles closed at expiry (#54). Retries apply to `read` effects only — mutations and destructive
 operations run at most once, because a retried delete is a second delete.
 
 `WorkflowController` layers a bounded graph over that same pipeline. Nine node
