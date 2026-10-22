@@ -258,6 +258,18 @@ export interface EvidenceItem {
    * rather than the summary. Only the kernel sets it; a verifier's is dropped.
    */
   unanswerable?: boolean;
+  /**
+   * On a semantic item whose question was answered (#54): the verdict, who
+   * gave it, through which channel, when, and why, redacted. Strings, as in
+   * `policyDecision.approval`, for the same reason as `executionGuarantee`.
+   */
+  judgedBy?: {
+    verdict: string;
+    judge: string;
+    channel: string;
+    judgedAt: string;
+    rationale?: string;
+  };
   source?: string;
   digest?: string;
 }

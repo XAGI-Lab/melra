@@ -8,6 +8,7 @@ import {
   effectContract,
   LOCAL_IDENTITY,
   MelraReceiptInputSchema,
+  MelraTaskJudgeInputSchema,
   PROTOCOL_VERSION,
   TaskRequestSchema,
   terminalArgumentPaths,
@@ -60,6 +61,7 @@ describe("public protocol schemas", () => {
       "melra_task_status",
       "melra_task_cancel",
       "melra_receipt",
+      "melra_task_judge",
       "melra_workflow_plan",
       "melra_workflow_advance",
       "melra_workflow_status",
@@ -72,6 +74,31 @@ describe("public protocol schemas", () => {
         taskId: "8c73f2ad-f503-47c6-83d5-7a866a70bdf0",
       }).taskId,
     ).toBe("8c73f2ad-f503-47c6-83d5-7a866a70bdf0");
+  });
+
+  it("takes a verdict only with a declared judge, one of three answers, and nothing more", () => {
+    const verdict = {
+      taskId: "8c73f2ad-f503-47c6-83d5-7a866a70bdf0",
+      judgementId: "4b0d1c55-2d2a-4d63-9a8f-1f3f7c2a9e10",
+      verdict: "yes",
+      identity: { principal: { kind: "agent", id: "grader" } },
+    };
+    expect(MelraTaskJudgeInputSchema.parse(verdict).identity).toEqual({
+      principal: { kind: "agent", id: "grader" },
+      onBehalfOf: [],
+    });
+    const { identity: _identity, ...anonymous } = verdict;
+    for (const refused of [
+      anonymous,
+      { ...verdict, verdict: "probably" },
+      { ...verdict, confidence: 0.9 },
+      { ...verdict, rationale: "x".repeat(1_001) },
+      { ...verdict, rationale: "" },
+      { ...verdict, judgementId: "first" },
+    ]) {
+      expect(MelraTaskJudgeInputSchema.safeParse(refused).success, JSON.stringify(refused).slice(0, 80)).toBe(false);
+    }
+    expect(MelraTaskJudgeInputSchema.parse({ ...verdict, rationale: "x".repeat(1_000) }).rationale).toHaveLength(1_000);
   });
 });
 

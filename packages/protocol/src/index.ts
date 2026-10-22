@@ -466,7 +466,7 @@ export const EvidencePredicateSchema = z.discriminatedUnion("type", [
   /**
    * A question about meaning, which MELRA poses and never answers: the kernel
    * runs no model (#54). The task waits in `waiting_user` for a verdict from
-   * outside and fails closed when none comes. Its strength is always
+   * outside (`melra_task_judge`) and fails closed when none comes. Its strength is always
    * `semantic`, and it is never the only evidence for a destructive effect
    * that the actor did not report itself.
    */
@@ -606,7 +606,7 @@ export const TaskRequestSchema = z
       .max(20)
       .default([])
       .describe(
-        "Predicates that must hold after execution for the task to be verified_success. A non-read operation needs them unless MELRA derives a default for it; outside unsafe-local mode one with neither is denied with mutation_requires_evidence. An adapter that succeeded while a predicate failed is partial, never success. A semantic predicate is never answered by MELRA: the task waits in waiting_user and fails closed at expiry. Beside semantic, a destructive effect also needs file_exists, file_absent, file_hash or http_resource_matches, or outside unsafe-local mode it is denied with semantic_only_destructive; semantic beside reconciliation is denied with semantic_evidence_not_reconcilable.",
+        "Predicates that must hold after execution for the task to be verified_success. A non-read operation needs them unless MELRA derives a default for it; outside unsafe-local mode one with neither is denied with mutation_requires_evidence. An adapter that succeeded while a predicate failed is partial, never success. A semantic predicate is never answered by MELRA: the task waits in waiting_user for melra_task_judge and fails closed at expiry. Beside semantic, a destructive effect also needs file_exists, file_absent, file_hash or http_resource_matches, or outside unsafe-local mode it is denied with semantic_only_destructive; semantic beside reconciliation is denied with semantic_evidence_not_reconcilable.",
       ),
     reconciliation: z
       .array(EvidencePredicateSchema)
@@ -1300,16 +1300,36 @@ export interface ApprovalDecision {
   decidedAt: string;
 }
 
+/** An answer to a semantic question (#54): no confidence, only these three. */
+export const SemanticVerdictSchema = z.enum(["yes", "no", "cannot_tell"]);
+export type SemanticVerdict = z.infer<typeof SemanticVerdictSchema>;
+
+/**
+ * Who answered a semantic question, through what, and what they said.
+ * `judge` is the delegation chain the judge declared, or `cli:<name>` for an
+ * operator; `channel` is `out_of_band` only for an operator's verdict in an
+ * enforced process on a task that ran enforced, as for an approval. Redacted
+ * before it is stored.
+ */
+export interface SemanticJudgedBy {
+  verdict: SemanticVerdict;
+  judge: string;
+  channel: "in_band" | "out_of_band";
+  judgedAt: string;
+  rationale?: string;
+}
+
 /**
  * One per semantic predicate, written in the save that moves a task to
  * `waiting_user` and kept after it settles. `predicateIndex` indexes
  * `request.requiredEvidence` and the action receipt's evidence; the question
- * itself stays in the request, redacted once.
+ * itself stays in the request, redacted once. `judgedBy` once answered.
  */
 export interface SemanticJudgement {
   judgementId: string;
   predicateIndex: number;
   expiresAt: string;
+  judgedBy?: SemanticJudgedBy;
 }
 
 export interface TaskRecord {
@@ -1403,6 +1423,18 @@ export const MelraReceiptInputSchema = MelraReceiptBaseSchema
     message: "taskId or receiptId is required",
   });
 
+export const MelraTaskJudgeInputSchema = z
+  .object({
+    taskId: z.string().uuid().describe("The waiting_user task's id, from melra_plan or melra_task_status. An unknown id fails with task_not_found, and a task in any other status with task_not_awaiting_judgement:<status>."),
+    judgementId: z.string().uuid().describe("One entry of the task's judgements, as melra_task_status shows them. Each is answered once (judgement_already_answered); an id that is not one of this task's fails with judgement_not_found."),
+    verdict: SemanticVerdictSchema.describe("yes, no or cannot_tell, about the effect's result, not about how the question is framed. There is no confidence: when the result does not settle it, say cannot_tell."),
+    rationale: z.string().min(1).max(1_000).optional().describe("Why, for the people who read the record. Stored redacted beside the verdict; MELRA never reads it."),
+    identity: IdentitySchema.describe("Who judges, required and recorded as given. Refused (semantic_judge_is_actor) when its principal is the principal that planned the task, or a non-human link that principal acts for."),
+  })
+  .strict();
+// What a judge writes, before `identity.onBehalfOf` is defaulted.
+export type MelraTaskJudgeInput = z.input<typeof MelraTaskJudgeInputSchema>;
+
 export const TOOL_NAMES = [
   "melra_capabilities",
   "melra_plan",
@@ -1410,6 +1442,7 @@ export const TOOL_NAMES = [
   "melra_task_status",
   "melra_task_cancel",
   "melra_receipt",
+  "melra_task_judge",
   "melra_workflow_plan",
   "melra_workflow_advance",
   "melra_workflow_status",
