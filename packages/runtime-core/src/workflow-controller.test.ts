@@ -3226,6 +3226,65 @@ describe("WorkflowController human input and delegation", () => {
     expect(next.run.nodes.ask?.status).toBe("awaiting_input");
     expect(next.run.nodes.second?.status).toBe("verified_complete");
   });
+
+  it("redacts a node's prompt in the run, its events and its snapshots, as the stored definition does", async () => {
+    const { controller, store } = await setup();
+    // Built at run time so no literal here reads as a leaked credential.
+    const token = `${"ghp"}_${"A1b2C3d4E5".repeat(4)}`;
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Rotate a key",
+        nodes: [
+          { id: "ask", type: "human_input", prompt: `Rotate it? The old key was ${token}` },
+          {
+            id: "hand",
+            type: "delegation",
+            dependsOn: ["ask"],
+            assignee: "worker-1",
+            goal: "rotate creds using DB_PASSWORD=hunter2hunter2 on db1",
+          },
+          { id: "save", type: "checkpoint", dependsOn: ["hand"] },
+        ],
+      }),
+    );
+    const waiting = await controller.advance(planned.id);
+    // Still a prompt: only the secret goes, so a person or delegate can act on it.
+    expect(waiting.run.nodes.ask?.prompt).toBe("Rotate it? The old key was [REDACTED_GITHUB_TOKEN]");
+    await controller.advance(planned.id, [], [{ nodeId: "ask", value: "yes" }]);
+    const handed = await controller.advance(planned.id);
+    expect(handed.run.nodes.hand?.prompt).toBe("worker-1: rotate creds using DB_PASSWORD=[REDACTED] on db1");
+    await controller.advance(planned.id, [], [{ nodeId: "hand", value: "rotated" }]);
+    const done = await controller.advance(planned.id);
+    expect(done.run.status).toBe("verified_complete");
+    expect(store.getLatestWorkflowSnapshot(planned.id)?.run.nodes.hand?.prompt).toBe(
+      "worker-1: rotate creds using DB_PASSWORD=[REDACTED] on db1",
+    );
+    for (const table of ["workflow_runs", "workflow_events", "workflow_snapshots"]) {
+      const rows = JSON.stringify(store.database.prepare(`SELECT data FROM ${table}`).all());
+      expect(rows).toContain("[REDACTED_GITHUB_TOKEN]");
+      expect(rows).not.toContain(token);
+      expect(rows).not.toContain("hunter2hunter2");
+    }
+  });
+
+  it("keeps a prompt that redaction lengthens within the state's cap", async () => {
+    const { controller } = await setup();
+    const prompt = `${"a".repeat(1_990)} secret=x`;
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Long prompt",
+        nodes: [{ id: "ask", type: "human_input", prompt }],
+      }),
+    );
+    const waiting = await controller.advance(planned.id);
+    expect(waiting.run.nodes.ask?.prompt).toBe(`${"a".repeat(1_990)} secret=[REDACTED]`.slice(0, 2_000));
+  });
 });
 
 describe("WorkflowController leases", () => {

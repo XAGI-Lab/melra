@@ -36,6 +36,12 @@ All notable changes are documented here. The format follows
   `executedBy` already were, so it reads the same as `executedBy`, and the
   kinds taken out are listed in the receipt's `redactions`. Receipts written
   before this are left as they were.
+- The `prompt` a `human_input` or `delegation` node records in a run's state,
+  and so in its events and snapshots, is redacted like the rest of the record,
+  as the stored definition's copy already was. Only secret shapes are taken
+  out, so a delegation's prompt still says what to do, and it stays within the
+  2,000 characters node state allows. Events and snapshots written before this
+  are left as they were.
 
 ## [0.3.0-alpha.18] - 2026-10-22
 
