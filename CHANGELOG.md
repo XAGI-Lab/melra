@@ -48,6 +48,9 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- `melra help` lists `MELRA_PAYLOAD_KEY` and `MELRA_HARNESS_TOOLS` in its
+  Environment block, and `pnpm docs:check` now fails when a variable documented
+  in `docs/INSTALLATION.md` is missing from it (#388).
 - A verdict sent in band where only an operator's counts, from a
   developer-mode process on a task that ran enforced (`melra judge` without
   `--mode enforced`, or `melra_task_judge`) or from an agent on an enforced

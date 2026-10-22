@@ -4,11 +4,14 @@
 // Every MELRA_* variable the shipped code reads must have a row in an
 // environment table in docs/INSTALLATION.md, and every row must name a variable
 // the code still reads. A variable the docs never mention is a feature nobody
-// can find; a row for one nothing reads is a knob that does nothing.
+// can find; a row for one nothing reads is a knob that does nothing. Every
+// documented variable must also be listed in the Environment block of
+// `melra help`, where a terminal user looks first.
 
 import { glob, readFile } from "node:fs/promises";
 
 const DOC = "docs/INSTALLATION.md";
+const HELP = "apps/cli/src/index.ts";
 
 // Runtime plumbing, not configuration: values MELRA sets on its own child
 // processes. Documenting them as knobs would be wrong. Keep this a literal
@@ -62,6 +65,21 @@ for (const [name, line] of documented) {
     failures.push(`${DOC}:${line}: ${name} is documented but nothing in {apps,packages}/*/src reads it; remove the row`);
   }
 }
+// The Environment block is the tail of the help() template literal: each
+// variable starts a line indented by two spaces; continuation lines are
+// indented further and never start with a name.
+const helpSource = await readFile(HELP, "utf8");
+const helpEnvironment = /\nEnvironment:\n([\s\S]*?)\n`\);/.exec(helpSource)?.[1];
+if (helpEnvironment === undefined) {
+  failures.push(`${HELP}: could not find the Environment block of help()`);
+} else {
+  const listed = new Set([...helpEnvironment.matchAll(/^ {2}(MELRA_[A-Z0-9_]+)/gm)].map(([, name]) => name));
+  for (const [name, line] of documented) {
+    if (!listed.has(name)) {
+      failures.push(`${DOC}:${line}: ${name} is documented but missing from the Environment block of 'melra help' in ${HELP}`);
+    }
+  }
+}
 for (const name of INTERNAL.keys()) {
   if (!readBy.has(name)) {
     failures.push(`${name} is allowlisted as internal in scripts/check-env-docs.mjs but no longer appears in the code; remove it`);
@@ -73,6 +91,6 @@ if (failures.length > 0) {
   process.exitCode = 1;
 } else {
   process.stdout.write(
-    `All ${readBy.size - INTERNAL.size} MELRA_* configuration variables are documented in ${DOC}.\n`,
+    `All ${readBy.size - INTERNAL.size} MELRA_* configuration variables are documented in ${DOC} and listed by 'melra help'.\n`,
   );
 }
