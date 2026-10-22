@@ -187,6 +187,55 @@ describe("melra tasks, status, and watch", { timeout: 60_000 }, () => {
     expect([status.awaitingApproval, status.expiredApprovals]).toEqual([0, 0]);
   });
 
+  it("counts a semantic wait whose question expired apart from one still waiting", async () => {
+    const { root, options, run } = await workspace();
+    const request = join(root, "tidy.json");
+    await writeFile(
+      request,
+      JSON.stringify({
+        goal: "List the workspace and ask whether it looks tidy",
+        operation: { kind: "file", action: "list", path: "." },
+        requiredEvidence: [{ type: "semantic", question: "Does the workspace look tidy?" }],
+      }),
+    );
+    const { task } = await run(request);
+    await run(request);
+    // Nothing that reads the store settles it: it stays waiting_user until a
+    // runtime opens the directory, and `melra judge` refuses it (#383).
+    const store = new SqliteStore(join(root, ".melra", "melra.sqlite"));
+    try {
+      const record = store.getTask(task.id)!;
+      const past = new Date(Date.now() - 1_000).toISOString();
+      store.saveTask({ ...record, judgements: record.judgements!.map((entry) => ({ ...entry, expiresAt: past })) });
+    } finally {
+      store.close();
+    }
+    const status = JSON.parse((await execute(process.execPath, [entry, "status", "--json"], options)).stdout) as {
+      tasks: Record<string, number>;
+      awaitingJudgement: number;
+      expiredJudgements: number;
+    };
+    expect(status.tasks).toEqual({ waiting_user: 2 });
+    expect([status.awaitingJudgement, status.expiredJudgements]).toEqual([1, 1]);
+    // The hints print only to a terminal.
+    const tty = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+    Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+    let printed = "";
+    const write = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => ((printed += String(chunk)), true));
+    try {
+      tasksCommand(
+        { workspaceRoot: root, dataDirectory: join(root, ".melra"), approver: "operator", unhinged: false, mode: "developer" },
+        { limit: 10, json: false, window: { mode: "developer" } },
+      );
+    } finally {
+      write.mockRestore();
+      if (tty === undefined) delete (process.stdout as { isTTY?: boolean }).isTTY;
+      else Object.defineProperty(process.stdout, "isTTY", tty);
+    }
+    expect(printed).toContain("1 waiting for judgement — answer with `melra judge");
+    expect(printed).toContain("1 whose judgement expired — they settle closed when a runtime next opens");
+  });
+
   it("counts an expired workflow step apart, since its next advance asks again", async () => {
     const { root, options } = await workspace();
     // An advance that stops at an approval exits non-zero, its run on stdout.

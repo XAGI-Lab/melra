@@ -1239,13 +1239,10 @@ export class TaskController {
     const operator = "operator" in by && this.enforced;
     return this.store.transaction(() => {
       const task = this.status(parsed.taskId);
-      const runEnforced = this.runMode(task) === "enforced";
-      // Every door an agent has to an enforced kernel is its harness's, and a
-      // developer process sharing the home must not settle an enforced run.
-      if (!operator && (this.enforced || runEnforced)) throw new Error("judgement_in_band_refused");
-      // Out of band only on an enforced run, as `execute` downgrades an
-      // approval: on a developer run the agent's own shell could have sent it.
-      const channel = operator && runEnforced ? "out_of_band" : "in_band";
+      // The task and its question before the channel: told to change it, a
+      // caller would only meet a settled task or a wrong id there (#384).
+      // Nothing here is news to it: `melra_task_status` and `melra inspect`
+      // show both.
       if (task.status !== "waiting_user") throw new Error(`task_not_awaiting_judgement:${task.status}`);
       const judgement = task.judgements?.find((entry) => entry.judgementId === parsed.judgementId);
       if (judgement === undefined) throw new Error("judgement_not_found");
@@ -1253,6 +1250,15 @@ export class TaskController {
       // Refused rather than settled here, which the throw would roll back:
       // the recovery pass settles it closed.
       if (Date.parse(judgement.expiresAt) <= Date.now()) throw new Error("judgement_expired");
+      const runEnforced = this.runMode(task) === "enforced";
+      // Every door an agent has to an enforced kernel is its harness's, and a
+      // developer process sharing the home must not settle an enforced run.
+      if (!operator && (this.enforced || runEnforced)) throw new Error("judgement_in_band_refused");
+      // Out of band only on an enforced run, as `execute` downgrades an
+      // approval: on a developer run the agent's own shell could have sent it.
+      const channel = operator && runEnforced ? "out_of_band" : "in_band";
+      // After the channel: where no agent's verdict counts, who it claims to
+      // be is moot.
       if ("identity" in by && judgesItself(by.identity, this.loadRequest(task.id).identity ?? LOCAL_IDENTITY, by.client)) {
         throw new Error("semantic_judge_is_actor");
       }
