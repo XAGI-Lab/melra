@@ -302,7 +302,10 @@ export function registerHarnessTools(
         const parsed = z.object(definition.input).parse(args);
         const task = runtime.controller.plan(
           TaskRequestSchema.parse({
-            goal: definition.goal(parsed),
+            // A goal is capped at 10,000 characters, and one built from an
+            // accepted input can pass that: a `recall` query of 10,000, or a
+            // non-ASCII URL that percent-encoding lengthens up to ninefold.
+            goal: definition.goal(parsed).slice(0, 10_000),
             operation: definition.operation(parsed),
             ...(definition.evidence === undefined
               ? {}

@@ -173,6 +173,15 @@ describe("harness tools in enforced mode", () => {
     expect(await readFile(join(workspace, "w.txt"), "utf8")).toBe("x");
   });
 
+  it("plans a URL or query it accepts even when its goal would pass the goal's cap", async () => {
+    // 8,018 characters, but each é is percent-encoded to six in the goal. On
+    // loopback, so policy stops it at the plan and no page is opened.
+    const held = await call(tools, "browse", { url: `http://localhost/${"é".repeat(8_000)}` });
+    expect(held.status).toBe("blocked");
+    expect(runtime.controller.status(String(held.taskId)).request.goal).toHaveLength(10_000);
+    expect((await call(tools, "recall", { query: "q".repeat(10_000) })).status).toBe("verified_success");
+  });
+
   it("asks the browser tools for the page they act on", async () => {
     for (const [name, args] of [
       ["browser_click", { target: { selector: "#go" } }],

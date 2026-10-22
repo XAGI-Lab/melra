@@ -41,6 +41,12 @@ All notable changes are documented here. The format follows
   certificates later written for those tasks and new runs of such a definition
   (bump its version to store the goal); nothing is migrated.
 
+### Fixed
+
+- The `recall` harness tool no longer fails a query it accepts that is longer
+  than 9,993 characters: the goal built from it passed the 10,000 characters a
+  goal may hold. A harness tool's goal is now cut at 10,000 (#385).
+
 ### Security
 
 - A workflow delegation node's goal was written in plaintext into the run's
