@@ -237,12 +237,12 @@ MELRA uses these environment variables:
 | `MELRA_PAYLOAD_KEY` | Optional canonical base64url 256-bit payload key | private `<MELRA_HOME>/payload.key` |
 | `MELRA_UNHINGED` | Set to `1` to remove every guardrail — see below | unset (all guardrails on) |
 | `MELRA_MODE` | `developer` or `enforced` — see [deployment modes](#deployment-modes) | `developer` |
-| `MELRA_APPROVER` | The name [`melra approve`](#approving-from-the-command-line) records as the approver, as `cli:<name>`, and [`melra console`](#approving-in-a-browser) as `console:<name>`. Letters (any script), digits, `.`, `_`, `@` and `-`, at most 64; checked when `melra approve` or `melra run` records a decision, and when `melra console` starts. Receipts carry it, and an agent can read receipts. | `operator` |
+| `MELRA_APPROVER` | The name [`melra approve`](#approving-from-the-command-line) records as the approver, as `cli:<name>`, [`melra judge`](#judging-from-the-command-line) as the judge of a verdict, also as `cli:<name>`, and [`melra console`](#approving-in-a-browser) as `console:<name>`. Letters (any script), digits, `.`, `_`, `@` and `-`, at most 64; checked when `melra approve`, `melra judge` or `melra run` records a decision, and when `melra console` starts. Receipts and certificates carry it, and an agent can read both. | `operator` |
 | `MELRA_HTTP_PORT` | Port for `melra serve --http` | `7457` |
 | `MELRA_HTTP_TOKEN` | Bearer token for `melra serve --http` | a fresh random token, printed at startup |
 | `MELRA_HTTP_OAUTH` | Set to `0` so that token is the only way in and no client can register itself | unset (clients may register, on loopback) |
 | `MELRA_SOCKET` | Unix socket path that `melra doctor` checks and `melra status` probes. It does not move `melra serve` off stdio; pass `--socket <path>` for that — see [over a Unix socket](#over-a-unix-socket). Not on Windows | unset |
-| `MELRA_HARNESS_TOOLS` | Set to `1` (or `true`, `yes`, `on`) to add thirteen plainly named tools such as `read_file` and `run_command` alongside the eleven `melra_*` tools — see [ordinary tool names](#ordinary-tool-names) | unset (only the `melra_*` tools) |
+| `MELRA_HARNESS_TOOLS` | Set to `1` (or `true`, `yes`, `on`) to add thirteen plainly named tools such as `read_file` and `run_command` alongside the twelve `melra_*` tools — see [ordinary tool names](#ordinary-tool-names) | unset (only the `melra_*` tools) |
 
 Back up `payload.key` with the SQLite files. Changing or losing it makes
 persisted task and workflow payloads unreadable. Never place it in a client
@@ -802,7 +802,7 @@ one cannot be used to act under another client's name.
 | Route | Method | What it returns |
 |---|---|---|
 | `/` | `GET` | The console |
-| `/mcp` | `POST`/`GET`/`DELETE` | MCP over Streamable HTTP — all eleven tools |
+| `/mcp` | `POST`/`GET`/`DELETE` | MCP over Streamable HTTP — all twelve tools |
 | `/.well-known/oauth-protected-resource` | `GET` | RFC 9728 metadata, unauthenticated |
 | `/.well-known/oauth-authorization-server` | `GET` | RFC 8414 metadata, unauthenticated |
 | `/oauth/register` | `POST` | RFC 7591 registration; grants nothing on its own |
@@ -960,7 +960,10 @@ closing every door it owns:
   terminal; until then the answer is `approval_awaiting_operator`, and
   `approval_expired` once the challenge has expired, which means plan the task
   again. A developer-mode `melra approve` on a task with no phrase records
-  nothing and fails with `approval_needs_enforced_mode`.
+  nothing and fails with `approval_needs_enforced_mode`. The same holds for an
+  answer to a `semantic` question: one sent with `melra_task_judge` is refused
+  with `judgement_in_band_refused`, and an operator answers with
+  [`melra judge`](#judging-from-the-command-line).
 - **Every receipt says `enforced`.** `ActionReceipt.mode` records it, and
   `melra_capabilities` publishes `policy.mode`, so an auditor never has to infer
   whether an effect was governed by the only door or by one of several.
@@ -1039,6 +1042,52 @@ refused in enforced mode, and a developer-mode `melra approve` on such a task
 still records an in-band decision the enforced kernel ignores: a workflow
 plans the step again once the challenge expires, and a single task needs
 `melra approve --deny` and planning again.
+
+## Judging from the command line
+
+A task whose evidence asks a `semantic` question waits in `waiting_user` once
+its effect has run and every other check has held. Its `judgements` list one
+`judgementId` per question. `melra tasks --status waiting_user --json` lists
+those tasks, and `melra inspect <task-id>` prints the question
+(`request.requiredEvidence[predicateIndex]`), the redacted result and the
+judgements. Answer one with:
+
+```bash
+melra judge <task-id> --judgement <judgement-id> --verdict yes|no|cannot_tell \
+  [--rationale "Reads as the summary asked for."]
+```
+
+Both ids are taken whole. A yes on every question makes the task
+`verified_success`. The first `no` ends it `partial` (`semantic_judgement_no`):
+a change stays in place, and fixing it takes a new plan. `cannot_tell` ends a
+change `recovery_required` and a read `partial`
+(`semantic_judgement_cannot_tell`). A yes while other questions are open is
+recorded, and the task keeps waiting. Nothing runs again and no receipt is
+added: the task records the verdict as `judgedBy`, and the certificate, once
+the task settles, carries it on the question's item. The `rationale` is for
+people; MELRA stores it redacted and never reads it.
+
+It prints `{ task, certificate? }` and exits 0 when the verdict is recorded,
+and 1 when it is refused, which writes nothing:
+`task_not_awaiting_judgement:<status>`, `judgement_not_found`,
+`judgement_already_answered`, `judgement_expired` (the task then settles
+closed), or `judgement_in_band_refused`.
+
+The judge is recorded as `cli:` plus [`MELRA_APPROVER`](#local-configuration).
+It is not checked against the task's principal, as `melra approve` checks no
+approver. The verdict is `out_of_band` only when this command and the server
+the task ran under are both in enforced mode; otherwise it is `in_band`, and
+the command says so. A developer-mode `melra judge` on a task that ran enforced
+is refused with `judgement_in_band_refused` and asked to rerun with
+`--mode enforced` or `MELRA_MODE=enforced`, with the same `MELRA_HOME` and
+`MELRA_WORKSPACE` as the server.
+
+An agent answers with `melra_task_judge` instead, declaring an `identity`. One
+declaring the task's own principal, or a non-human link that principal acts
+for, is refused with `semantic_judge_is_actor`. That compares declared
+identities, so an agent can still claim to be someone else, `human:` links
+included: only a `cli:` judge came through an operator surface. In enforced
+mode every verdict sent over MCP is refused.
 
 ## Approving in a browser
 
@@ -1368,7 +1417,7 @@ versions have been manually exercised; see [VALIDATION.md](VALIDATION.md).
 
 ## Ordinary tool names
 
-The eleven `melra_*` tools are the kernel’s own vocabulary. A model asked to
+The twelve `melra_*` tools are the kernel’s own vocabulary. A model asked to
 plan, read back an approval challenge, and execute for every small read spends
 most of its turn on ceremony, so there is a second surface with the names a
 harness already knows:
@@ -1377,10 +1426,10 @@ harness already knows:
 { "env": { "MELRA_HARNESS_TOOLS": "1" } }
 ```
 
-That adds thirteen tools alongside the eleven: `read_file`, `list_files`,
+That adds thirteen tools alongside the twelve: `read_file`, `list_files`,
 `write_file`, `move_file`, `delete_file`, `run_command`, `browse`,
 `browser_read`, `browser_click`, `browser_type`, `remember`, `recall`, and
-`approve`. It is off by default — a client showing all twenty-four at once buys
+`approve`. It is off by default — a client showing all twenty-five at once buys
 confusion rather than convenience.
 
 Nothing here is a shortcut past a stage. Each call builds an ordinary task and

@@ -30,12 +30,12 @@ belongs to the agent above and does not go in this repo.
 MCP over stdio is one of several interfaces onto the same runtime (MCP stdio,
 MCP over loopback HTTP or a mode-`0600` Unix socket, CLI, TypeScript SDK, Python
 SDK, read-only JSON API);
-none of them is a shortcut past a stage of the pipeline. Eleven MCP tools sit in
+none of them is a shortcut past a stage of the pipeline. Twelve MCP tools sit in
 front of five reference effect adapters (files, terminal, browser, computer, http)
 plus
-operational memory as a kernel service: six task tools (`melra_capabilities`,
+operational memory as a kernel service: seven task tools (`melra_capabilities`,
 `melra_plan`, `melra_execute`, `melra_task_status`, `melra_task_cancel`,
-`melra_receipt`) and five durable-workflow tools (`melra_workflow_plan`,
+`melra_receipt`, `melra_task_judge`) and five durable-workflow tools (`melra_workflow_plan`,
 `melra_workflow_advance`, `melra_workflow_status`, `melra_workflow_cancel`,
 `melra_workflow_control`). pnpm workspace of TypeScript packages (Node 22.13+ or 23.4+, ESM,
 strict tsc), plus two Python projects managed by `uv` (`sdk-py`,
@@ -49,12 +49,12 @@ pnpm build                  # tsc -p per package; required before tests (see bel
 pnpm typecheck              # builds, then tsc -p tsconfig.test.json per package (src + tests, no emit)
 pnpm check                  # versions:check + docs:check + scripts/release.test.mjs (release scripts and workflow wiring) + typecheck + check-dist (no tests in dist/) + README examples + test + python:check — the CI gate
 pnpm docs:check             # every relative link and #anchor in every *.md resolves; every MELRA_* variable has a row in docs/INSTALLATION.md; CHANGELOG.md is in Keep a Changelog shape, with a non-empty section for package.json's version
-pnpm evals                  # 54 deterministic policy/execution scenarios → evals/results/latest.json
+pnpm evals                  # 55 deterministic policy/execution scenarios → evals/results/latest.json
 pnpm e2e                    # packages/server/test/e2e.test.ts against a live stdio server
 pnpm pack:check              # npm pack --dry-run for the published CLI
 pnpm readme:check           # typecheck every ```ts block in every package README
 pnpm security:audit          # pnpm audit --prod + scripts/python-audit.mjs
-pnpm melra <cmd>            # run the CLI from source via tsx (setup | doctor | conformance | init | serve | run | approve | console | inspect | export | tasks | watch | status | workflow | demo | clients | policy test | version)
+pnpm melra <cmd>            # run the CLI from source via tsx (setup | doctor | conformance | init | serve | run | approve | judge | console | inspect | export | tasks | watch | status | workflow | demo | clients | policy test | version)
 ```
 
 Single test file (vitest args pass through the package script):
@@ -180,8 +180,11 @@ New evidence predicate types need `EvidencePredicateSchema` plus a `PredicateVer
 the verifier. The verifier resolves every path through `realpath` and rejects
 anything outside the workspace root, including the root itself — keep that confinement when
 adding predicates. `semantic` is the one built-in that never passes: the kernel runs no model,
-so `TaskController` parks such a task in `waiting_user` for a verdict from outside, and the
-recovery sweep settles it closed at expiry (#54).
+so `TaskController` parks such a task in `waiting_user` for a verdict from outside
+(`melra_task_judge`, or `melra judge` for an operator), and the recovery sweep settles it
+closed at expiry (#54). `judge()` acts only on the verdict enum, never reads the rationale,
+refuses a judge that declares the task's own principal (`semantic_judge_is_actor`), and
+writes only the task row and its certificate.
 
 Redaction happens at multiple layers: `redactStructuredValue` on task requests, results, and
 error messages before persistence, plus `redactMemoryValue` inside the memory package and

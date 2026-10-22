@@ -12,6 +12,7 @@ This document describes `0.3.0-alpha.17`.
 | `melra_task_status` | none | no |
 | `melra_task_cancel` | cancels task | no |
 | `melra_receipt` | none | no |
+| `melra_task_judge` | records a verdict on a waiting task | no; refused in enforced mode, where an operator uses `melra judge` |
 | `melra_workflow_plan` | stores a validated workflow | no |
 | `melra_workflow_advance` | depends on ready workflow nodes | scoped per mutation |
 | `melra_workflow_status` | none | no |
@@ -430,7 +431,7 @@ Action: `info`. Returns local runtime capability information without mutation.
 | `page_contains` | inspected page text |
 | `http_resource_matches` | a second `GET`/`HEAD` against the provider's own state |
 | `custom` | a verifier the operator registered with the runtime, by name, with flat scalar `params`; strength is always `execution` |
-| `semantic` | a yes/no `question` about meaning, with `artifacts` naming result paths, for a judge outside MELRA; strength is always `semantic`; nothing answers it in this release |
+| `semantic` | a yes/no `question` about meaning, with `artifacts` naming result paths, for a judge outside MELRA, who answers with `melra_task_judge` or `melra judge`; strength is always `semantic` |
 
 URL globs are anchored and schema-bounded. A completed action with unmet
 required evidence returns `partial`, never `verified_success`; one whose only
@@ -450,14 +451,28 @@ predicate cannot name a built-in, and its evidence is stamped
 `semantic` asks a question MELRA never answers, because the kernel runs no
 model (#54). Once the effect has run and every other predicate has held, the
 task waits in `waiting_user`, its `judgements` naming each question and when it
-expires: the approval TTL (`approvalTtlMs`). Nothing can answer one yet, so at
-expiry the task settles closed: `recovery_required` for a change, whose effect
-did happen, and `partial` for a read, with the error
-`semantic_judgement_expired`. A task with a failing predicate beside it is
-`partial` without waiting. A destructive effect whose evidence has a `semantic`
-predicate but nothing the kernel re-reads (`file_exists`, `file_absent`,
-`file_hash`) or asks another channel (`http_resource_matches`) is refused at
-planning (`semantic_only_destructive`). A task cannot declare `semantic`
+expires: the approval TTL (`approvalTtlMs`). A principal other than the one
+that planned the task answers each question with `melra_task_judge`
+(`yes`, `no` or `cannot_tell`); a judge declaring the task's own principal, or
+a non-human link it acts for, is refused (`semantic_judge_is_actor`). That
+check compares declared identities, so over MCP even a `human:` judge is the
+harness's claim; only a `cli:` judge, from `melra judge`, came through an
+operator surface. In enforced mode, and on a task that ran enforced, a verdict
+sent over MCP is refused (`judgement_in_band_refused`) and an operator answers
+with `melra judge`. A yes on every question makes the task `verified_success`.
+The first `no` ends it `partial` (`semantic_judgement_no`); `cannot_tell` ends a
+change `recovery_required` and a read `partial`
+(`semantic_judgement_cannot_tell`). Unanswered at expiry, the task settles
+closed the same way as `cannot_tell`, with the error
+`semantic_judgement_expired`, keeping any yes already given. A verdict writes
+only the task and its certificate, never a receipt. A task with a failing
+predicate beside it is `partial` without waiting. Outside unsafe-local mode, a
+destructive effect whose evidence has a `semantic` predicate but nothing the
+kernel re-reads (`file_exists`, `file_absent`, `file_hash`) or asks another
+channel (`http_resource_matches`) is refused at planning
+(`semantic_only_destructive`); under `--unsafe-local` it is not, so a yes can
+certify a destructive effect on semantic evidence alone, though the effect ran
+before anyone was asked. A task cannot declare `semantic`
 beside `reconciliation` (`semantic_evidence_not_reconcilable`), and a workflow
 cannot declare it in any node (`workflow_semantic_evidence_unsupported:<node>`). The
 question is stored and shown as written, minus secret shapes.
