@@ -6,12 +6,48 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** `--mode` with nothing after it, or with a blank value (what
+  `--mode "$MODE"` sends with `MODE` unset), is refused by every command with
+  `--mode requires developer or enforced`, instead of running in developer
+  mode. A value starting with `--`, already refused, now gets the same
+  message. A second `--mode` is refused too (`--mode given more than once`):
+  only the first was read, so `--mode developer --mode enforced` ran in
+  developer mode. An unknown value is still refused, now naming where it came
+  from and what it may be: `deployment_mode_unknown: --mode must be developer
+  or enforced`, or `MELRA_MODE` in place of `--mode` for the variable.
+- **Breaking:** `melra run`, `melra workflow` and `melra demo` exit 1 if the
+  effect or advance they wait on never returns, instead of 0, the code
+  `melra run` uses for `verified_success`.
+
 ### Fixed
 
 - `melra help` lists `MELRA_PAYLOAD_KEY` and `MELRA_HARNESS_TOOLS` in its
   Environment block. `pnpm docs:check` now fails when a variable documented in
   `docs/INSTALLATION.md` is missing from it, and when `melra help` names a
   variable that has no row there (#388).
+
+### Security
+
+- `http_resource_matches` refuses a `{{token}}` whose value is empty, as it
+  already refused `.` and `..` (`verification_token_empty:<path>`), so the
+  independent read always names the resource the URL means. The item is
+  unanswerable rather than passed, and planning a reconciliation reports it.
+- An HTTP effect, and the independent read `http_resource_matches` makes, now
+  settle however the exchange ends. A 101 Switching Protocols left the call
+  unsettled whatever its `timeoutMs`, with the task `running` and no receipt;
+  it is now `effect_outcome_unknown:http_upgrade_refused`, so a mutation is
+  left `recovery_required`, and `melra run` no longer exits 0 for a task whose
+  effect never returned. The effect is bounded by its `timeoutMs`,
+  `budget.maxDurationMs` and a cancel. The independent read is bounded only by
+  the predicate's own `timeoutMs` (at most 60 s), as before: the budget and a
+  cancel do not reach it.
+- A `--mode` with a missing or blank value, or a repeated `--mode`, no longer
+  leaves a process in developer mode, so a launcher or script that loses the
+  value or overrides it cannot start a process its operator believes is
+  enforced. Leaving `--mode` out still means developer, unless `MELRA_MODE` or
+  the policy says enforced.
 
 ## [0.3.0-alpha.19] - 2026-10-23
 

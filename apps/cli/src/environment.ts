@@ -110,6 +110,18 @@ function harPath(value: string | undefined): string | undefined {
   return resolve(value);
 }
 
+/**
+ * `deploymentMode`, refused with where the value came from and what it may
+ * be: a bare `deployment_mode_unknown` named neither.
+ */
+export function namedDeploymentMode(value: string | undefined, source: string): DeploymentMode {
+  try {
+    return deploymentMode(value);
+  } catch {
+    throw new Error(`deployment_mode_unknown: ${source} must be developer or enforced`);
+  }
+}
+
 export function parseCliEnvironment(
   source: NodeJS.ProcessEnv,
   defaults: CliEnvironmentDefaults = {
@@ -156,7 +168,7 @@ export function parseCliEnvironment(
     dataDirectory: resolve(source.MELRA_HOME?.trim() || join(defaults.home, ".melra")),
     approver: source.MELRA_APPROVER?.trim() || "operator",
     unhinged: unhingedFromEnvironment(source),
-    mode: deploymentMode(source.MELRA_MODE),
+    mode: namedDeploymentMode(source.MELRA_MODE, "MELRA_MODE"),
     ...(source.MELRA_POLICY === undefined || source.MELRA_POLICY.trim() === ""
       ? {}
       : { policyPath: resolve(source.MELRA_POLICY) }),
