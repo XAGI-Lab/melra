@@ -58,6 +58,18 @@ All notable changes are documented here. The format follows
   Environment block. `pnpm docs:check` now fails when a variable documented in
   `docs/INSTALLATION.md` is missing from it, and when `melra help` names a
   variable that has no row there (#388).
+- A workflow planned and never advanced stays `planned` when another process
+  runs startup recovery, as `melra workflow inspect` does, instead of turning
+  `running` with a `workflow.recovered` event (#406). Recovery now records
+  nothing for a run whose nodes, status and error it finds as they were left, so
+  a run between advances or waiting on an approval no longer gains an event on
+  every process start. A `recovery_required` run an advance parked without
+  naming why still gains that reason, and one event, at the next start. The
+  Durable Core evaluation now reads
+  `evals/manifests/durable-core-alpha-v2.json`: the same eight scenarios, except
+  that its planned-task, node-boundary and post-approval restarts no longer
+  expect that event. `durable-core-alpha-v1.json` stays byte-identical as the
+  record of the alpha.1 run.
 
 ### Security
 

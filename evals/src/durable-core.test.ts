@@ -50,7 +50,7 @@ function run(
 describe("MELRA Durable Core Alpha evaluation", () => {
   it("pins the immutable manifest digest", () => {
     expect(DURABLE_CORE_MANIFEST_DIGEST).toBe(
-      "b2f8e2a6819be1c18ffe799df9ce80a44301b1bc79835ea2f7c6facdf8275c38",
+      "3d9a072dad1945104edbfe2cea606d624d3df369250bd29052754fb284327986",
     );
   });
 

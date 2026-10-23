@@ -24,7 +24,7 @@ import { sha256 } from "@melra/receipt-schema";
 import { createMelraRuntime, type MelraRuntime } from "@melra/server";
 
 export const DURABLE_CORE_MANIFEST_DIGEST =
-  "b2f8e2a6819be1c18ffe799df9ce80a44301b1bc79835ea2f7c6facdf8275c38";
+  "3d9a072dad1945104edbfe2cea606d624d3df369250bd29052754fb284327986";
 
 export interface DurableCoreScenario {
   id: string;
@@ -93,8 +93,11 @@ interface ScenarioObservation {
   certificateIds: string[];
 }
 
+// v1 stays byte-identical as the record of the alpha.1 run; v2 has the same
+// eight scenarios without the `workflow.recovered` that three of them expected
+// from a restart that left the run as it was (#406).
 const manifestUrl = new URL(
-  "../manifests/durable-core-alpha-v1.json",
+  "../manifests/durable-core-alpha-v2.json",
   import.meta.url,
 );
 const repositoryRoot = resolve(fileURLToPath(new URL("../..", import.meta.url)));

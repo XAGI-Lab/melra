@@ -58,6 +58,14 @@ interrupted-mutation reconciliation, and a duplicate-advance race. Raw JSONL
 is written before the summary and records the implementation commit, runtime,
 platform, receipts, and certificates.
 
+That run used `evals/manifests/durable-core-alpha-v1.json`, which stays
+byte-identical with the digest above. After `0.3.0-alpha.19` the evaluation
+reads `durable-core-alpha-v2.json` (digest
+`3d9a072dad1945104edbfe2cea606d624d3df369250bd29052754fb284327986`): the same
+eight scenarios, crash points and terminal classes, except that three restart
+scenarios no longer expect a `workflow.recovered` event, which recovery stopped
+recording for a run it leaves as it was (#406).
+
 ### Local candidate artifacts
 
 The following artifacts were built from signed commit `72f7e21`. They are

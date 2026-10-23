@@ -1,0 +1,105 @@
+{
+  "schemaVersion": "1.0.0",
+  "suiteId": "melra-durable-core-alpha-v2",
+  "scenarios": [
+    {
+      "id": "planned_task_restart",
+      "crashPoint": "after workflow planning",
+      "expectedTerminalClass": "verified_complete",
+      "expectedMaximumAdapterCalls": 1,
+      "expectedEventTypes": [
+        "workflow.created",
+        "workflow.status_changed",
+        "workflow.node_changed"
+      ],
+      "verifierRequired": false
+    },
+    {
+      "id": "workflow_node_boundary_restart",
+      "crashPoint": "after the first verified workflow node",
+      "expectedTerminalClass": "verified_complete",
+      "expectedMaximumAdapterCalls": 2,
+      "expectedEventTypes": [
+        "workflow.created",
+        "workflow.status_changed",
+        "workflow.node_changed"
+      ],
+      "verifierRequired": false
+    },
+    {
+      "id": "post_approval_restart",
+      "crashPoint": "after approval challenge persistence",
+      "expectedTerminalClass": "verified_complete",
+      "expectedMaximumAdapterCalls": 1,
+      "expectedEventTypes": [
+        "workflow.created",
+        "workflow.status_changed",
+        "workflow.node_changed"
+      ],
+      "verifierRequired": true
+    },
+    {
+      "id": "post_adapter_pre_receipt_crash",
+      "crashPoint": "after adapter effect and before receipt persistence",
+      "expectedTerminalClass": "verified_complete",
+      "expectedMaximumAdapterCalls": 1,
+      "expectedEventTypes": [
+        "workflow.created",
+        "workflow.status_changed",
+        "workflow.node_changed",
+        "workflow.recovered"
+      ],
+      "verifierRequired": true
+    },
+    {
+      "id": "post_receipt_pre_projection_crash",
+      "crashPoint": "after receipt persistence and before workflow projection",
+      "expectedTerminalClass": "verified_complete",
+      "expectedMaximumAdapterCalls": 1,
+      "expectedEventTypes": [
+        "workflow.created",
+        "workflow.status_changed",
+        "workflow.recovered"
+      ],
+      "verifierRequired": false
+    },
+    {
+      "id": "interrupted_read_retry",
+      "crashPoint": "while a read task is running",
+      "expectedTerminalClass": "verified_complete",
+      "expectedMaximumAdapterCalls": 1,
+      "expectedEventTypes": [
+        "workflow.created",
+        "workflow.status_changed",
+        "workflow.node_changed",
+        "workflow.recovered"
+      ],
+      "verifierRequired": false
+    },
+    {
+      "id": "interrupted_mutation_reconciliation",
+      "crashPoint": "while mutation outcome is uncertain",
+      "expectedTerminalClass": "recovery_required",
+      "expectedMaximumAdapterCalls": 1,
+      "expectedEventTypes": [
+        "workflow.created",
+        "workflow.status_changed",
+        "workflow.node_changed",
+        "workflow.recovery_required"
+      ],
+      "verifierRequired": true
+    },
+    {
+      "id": "duplicate_advance_race",
+      "crashPoint": "two concurrent advances at one workflow version",
+      "expectedTerminalClass": "verified_complete",
+      "expectedMaximumAdapterCalls": 1,
+      "expectedEventTypes": [
+        "workflow.created",
+        "workflow.status_changed",
+        "workflow.node_changed"
+      ],
+      "verifierRequired": false
+    }
+  ]
+}
