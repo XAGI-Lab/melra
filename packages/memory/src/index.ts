@@ -66,10 +66,6 @@ export function tokenize(value: string): string[] {
   return value.toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
 }
 
-function termFrequency(tokens: string[], term: string): number {
-  return tokens.reduce((count, token) => count + Number(token === term), 0);
-}
-
 function jaccard(left: Set<string>, right: Set<string>): number {
   if (left.size === 0 && right.size === 0) return 1;
   let intersection = 0;
@@ -102,13 +98,18 @@ export function rankMemories(
   const queryTokens = [...new Set(tokenize(query))];
   if (queryTokens.length === 0) return [];
   const queryTokenSet = new Set(queryTokens);
-  const documents = records.map((record) => ({
-    record,
-    tokens: tokenize(`${record.key} ${record.value} ${record.tags.join(" ")}`),
-  }));
+  const queryIndex = new Map(queryTokens.map((term, index) => [term, index]));
+  const documents = records.map((record) => {
+    const tokens = tokenize(`${record.key} ${record.value} ${record.tags.join(" ")}`);
+    // Counted once, so each query term is a lookup rather than another pass
+    // over the record (#405).
+    const counts = new Map<string, number>();
+    for (const token of tokens) counts.set(token, (counts.get(token) ?? 0) + 1);
+    return { record, tokens, counts };
+  });
   const documentFrequency = new Map<string, number>();
   for (const document of documents) {
-    for (const token of new Set(document.tokens)) {
+    for (const token of document.counts.keys()) {
       documentFrequency.set(
         token,
         (documentFrequency.get(token) ?? 0) + 1,
@@ -120,20 +121,36 @@ export function rankMemories(
     Math.max(1, documents.length);
   const normalizedQuery = query.trim().toLocaleLowerCase();
   const scored = documents
-    .map(({ record, tokens }) => {
+    .map(({ record, tokens, counts }) => {
+      // The query terms the record holds, found from whichever side is
+      // smaller, so a long query over many records is not a lookup per term
+      // per record (#405). Summed in query order, as a pass over every term
+      // adds them, so the score is the same to the bit.
+      const matched: number[] = [];
+      if (counts.size < queryTokens.length) {
+        for (const token of counts.keys()) {
+          const index = queryIndex.get(token);
+          if (index !== undefined) matched.push(index);
+        }
+        matched.sort((left, right) => left - right);
+      } else {
+        queryTokens.forEach((term, index) => {
+          if (counts.has(term)) matched.push(index);
+        });
+      }
       let lexical = 0;
-      for (const term of queryTokens) {
+      for (const index of matched) {
+        const term = queryTokens[index]!;
         const containing = documentFrequency.get(term) ?? 0;
         const idf = Math.log(
           1 + (documents.length - containing + 0.5) / (containing + 0.5),
         );
-        const frequency = termFrequency(tokens, term);
+        const frequency = counts.get(term)!;
         const denominator =
           frequency +
           1.2 *
             (1 - 0.75 + 0.75 * (tokens.length / Math.max(1, averageLength)));
-        lexical +=
-          frequency === 0 ? 0 : idf * ((frequency * 2.2) / denominator);
+        lexical += idf * ((frequency * 2.2) / denominator);
       }
       const normalizedLexical = lexical / Math.max(1, queryTokens.length);
       const phrase = `${record.key} ${record.value}`

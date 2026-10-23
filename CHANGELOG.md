@@ -6,7 +6,40 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** `melra workflow cancel` exits 0 when the run it returns is
+  `cancelled` and 1 when it is not, as `melra approve --deny` does (#403). It
+  used to exit 2 for a cancel that worked and 0 for a run already
+  `verified_complete`, which it leaves as it is. The other `workflow` commands
+  keep their exit codes, now listed in the README.
+
+- **Breaking:** `melra run` exits 5, instead of 2, for a task that ran and now
+  waits in `waiting_user` for a semantic judgement, and its output's `next`
+  holds the `melra judge <task-id> --judgement <judgement-id> --verdict
+  <yes|no|cannot_tell>` command for each of the task's judgements, one per line,
+  with both ids whole and with `--mode enforced` when the task ran enforced
+  (#404). The verdict is left for the operator to fill in: as printed, a shell
+  refuses the line rather than recording a verdict. It also exits 4, instead of
+  2, when policy blocks a task after its prompt, as when a grant expired or was
+  spent while the prompt was open. `melra help` and `docs/INSTALLATION.md` list
+  its exit codes: 0, 1, 2, 3 for an approval it cannot ask for, 4 for
+  `policy_blocked`, and 5.
+
 ### Fixed
+
+- `melra inspect`, `melra export`, `melra demo`, `melra policy test` and the
+  `melra workflow` subcommands find their action and id wherever they sit
+  among the flags, as `melra approve` and `melra judge` do (#402). A flag
+  written before them, such as `--mode enforced`, was read as the id and
+  refused with `task_not_found:--mode` or `workflow_not_found`, or as the
+  action and refused as one the command does not support.
+
+- Memory search counts each record's tokens once instead of once per query
+  term, and looks up only the query terms a record could hold, from whichever
+  of the two is smaller, so a long query no longer holds the process for
+  seconds, over a few large records or many small ones (#405). Scores are
+  unchanged.
 
 - `melra help` lists `MELRA_PAYLOAD_KEY` and `MELRA_HARNESS_TOOLS` in its
   Environment block. `pnpm docs:check` now fails when a variable documented in
