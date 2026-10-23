@@ -119,7 +119,7 @@ function fileRequest(goal: string, path: string): TaskRequest {
   });
 }
 
-function definition(goal = "one-time-workflow-secret"): WorkflowDefinition {
+function definition(goal = "Inspect with password=one-time-workflow-secret"): WorkflowDefinition {
   return WorkflowDefinitionSchema.parse({
     schemaVersion: "1.0.0",
     id: definitionId,
@@ -150,9 +150,10 @@ describe("WorkflowController planning", () => {
       "workflow.created",
       "workflow.status_changed",
     ]);
+    // The step's goal keeps its words and loses its secret shapes (#385).
     expect(
       (store.getWorkflowDefinition(definitionId, 1) as WorkflowDefinition | undefined)?.nodes[0],
-    ).not.toEqual(exact.nodes[0]);
+    ).toEqual({ ...exact.nodes[0], request: { ...request("Inspect with password=[REDACTED]") } });
     expect(
       cipher.open(
         store.getWorkflowPayload(definitionId, 1)!,
@@ -174,10 +175,10 @@ describe("WorkflowController planning", () => {
     expect(second.status).toBe("planned");
     expect(store.listWorkflowEvents(second.id)).toHaveLength(2);
 
-    // The goal is redacted before storage, so the stored copies of these two
-    // look identical. The comparison is against the sealed exact definition,
-    // so a change only a secret carried is still caught.
-    expect(() => controller.plan(definition("a-different-secret"))).toThrow(
+    // The goal's secret is redacted before storage, so the stored copies of
+    // these two look identical. The comparison is against the sealed exact
+    // definition, so a change only a secret carried is still caught.
+    expect(() => controller.plan(definition("Inspect with password=a-different-secret"))).toThrow(
       /^workflow_definition_conflict:/,
     );
   });
@@ -3301,6 +3302,16 @@ describe("WorkflowController human input and delegation", () => {
     const planned = controller.plan(delegating("secret_rotator", "rotate the db credentials on db1"));
     const waiting = await controller.advance(planned.id);
     expect(waiting.run.nodes.hand?.prompt).toBe("secret_rotator: rotate the db credentials on db1");
+  });
+
+  it("stores a delegation's goal in its definition minus its secret shapes (#385)", async () => {
+    const { controller, store } = await setup();
+    // Built at run time so no literal here reads as a leaked credential.
+    const token = `${"ghp"}_${"A1b2C3d4E5".repeat(4)}`;
+    controller.plan(delegating("worker-1", `Rotate ${token}`));
+    expect(
+      (store.getWorkflowDefinition(definitionId, 1) as WorkflowDefinition | undefined)?.nodes[0],
+    ).toMatchObject({ goal: "Rotate [REDACTED_GITHUB_TOKEN]" });
   });
 
   it("redacts a delegation's prompt before cutting it, so no part of a secret is kept", async () => {

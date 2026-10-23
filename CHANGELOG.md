@@ -6,6 +6,14 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- `melra help` lists `MELRA_PAYLOAD_KEY` and `MELRA_HARNESS_TOOLS` in its
+  Environment block, and `pnpm docs:check` now fails when a variable documented
+  in `docs/INSTALLATION.md` is missing from it (#388).
+
+## [0.3.0-alpha.19] - 2026-10-23
+
 ### Added
 
 - The Python SDK gains `judge(task_id, judgement_id, verdict, *, identity,
@@ -20,14 +28,35 @@ All notable changes are documented here. The format follows
 
 ### Changed
 
-- `melra_task_judge` also refuses a judge whose declared delegation chain names
-  the task's principal, such as a grader the acting agent started
-  (`semantic_judge_is_actor`, #378). Another session under the same harness, or
-  another agent of the person the work was for, may still answer, unless the
-  task's principal is that harness or person itself. The `harness:` link an
-  OAuth client's token puts above a judge's chain is recorded in `judgedBy` but
-  not compared. The check still rests on declared identities; `melra judge` is
-  unchanged.
+- **Breaking:** `melra_task_judge` also refuses a judge whose declared
+  delegation chain names the task's principal, such as a grader the acting
+  agent started (`semantic_judge_is_actor`, #378). Another session under the
+  same harness, or another agent of the person the work was for, may still
+  answer, unless the task's principal is that harness or person itself. The
+  `harness:` link an OAuth client's token puts above a judge's chain is
+  recorded in `judgedBy` but not compared. The check still rests on declared
+  identities; `melra judge` is unchanged.
+
+- **Breaking:** `melra approve` with an empty task id, as an unset `"$ID"`
+  sends, is refused with `task_not_found:` instead of taking the one task
+  awaiting approval, if only one was; a prefix no waiting task has is refused
+  with `task_not_found:<prefix>` (#386).
+
+- A task's goal is stored as declared, with only recognisable secret shapes
+  taken out, instead of being replaced whole (#385). The stored request, the
+  certificate's `goal`, and a workflow definition's step and delegation goals
+  used to read `[REDACTED_SENSITIVE_FIELD]` whatever the goal said; they now
+  hold the goal itself, so a certificate states what its task was for. The
+  trade-off: a secret with no recognisable shape written into a goal is now
+  kept in those records, so keep secrets out of goals; the goal's schema
+  description now says so to whoever writes one. The `browse` harness tool's
+  goal no longer includes the URL's userinfo, query or fragment. Tasks planned
+  before this keep the placeholder, as do certificates later written for them.
+  A definition stored before this keeps it in its stored copy (bump its version
+  to store the goal there), but a new run of it reads the sealed definition, so
+  that run's tasks, certificates and delegation prompts hold the goal. Nothing
+  is migrated.
+
 - **Breaking:** an approval challenge's `actionDigest` (and so its phrase,
   still `APPROVE` plus its first twelve hex digits), the `renderDigest` an
   approval is bound to, and a receipt's `inputDigest`, which now also binds the
@@ -44,13 +73,28 @@ All notable changes are documented here. The format follows
   `approval_action_digest_mismatch` before anything runs, and the task waits
   for a newer process. Upgrade every process sharing a `MELRA_HOME` together
   and re-run `melra setup`
-  ([compatibility](docs/COMPATIBILITY.md#data-compatibility)).
+  ([compatibility](https://github.com/XAGI-Lab/melra/blob/main/docs/COMPATIBILITY.md#data-compatibility)).
 
 ### Fixed
 
-- `melra help` lists `MELRA_PAYLOAD_KEY` and `MELRA_HARNESS_TOOLS` in its
-  Environment block, and `pnpm docs:check` now fails when a variable documented
-  in `docs/INSTALLATION.md` is missing from it (#388).
+- `melra inspect` and `melra export` take the eight-character id prefix the
+  plain `melra tasks` table prints, in any status, as `melra approve` already
+  did. Before, they passed it on as a whole id and reported `task_not_found`. A
+  prefix two tasks share is refused with `task_id_ambiguous:<prefix>`, and one
+  no task has with `task_not_found:<prefix>`; an empty argument names no task.
+  `melra judge` still takes ids whole. (#386)
+- `examples/README.md` said the API example succeeds unauthenticated without
+  `GITHUB_TOKEN`; it fails with `credential_source_missing:github` before any
+  request is sent, as it always has. The example now says it needs the token,
+  and `docs/INSTALLATION.md#credentials` documents `credential_source_missing`
+  beside `credential_source_invalid`: a credential whose source is missing
+  fails every call to its hosts and never falls back to an unauthenticated
+  one. (#387)
+- The `recall` harness tool no longer fails a query it accepts that is longer
+  than 9,993 characters: the goal built from it passed the 10,000 characters a
+  goal may hold. A harness tool's goal that would pass that keeps only its verb,
+  as in `Recall (input too long to restate)`, rather than being cut through its
+  input; the operation still carries the input (#385).
 - A verdict sent in band where only an operator's counts, from a
   developer-mode process on a task that ran enforced (`melra judge` without
   `--mode enforced`, or `melra_task_judge`) or from an agent on an enforced
@@ -72,12 +116,24 @@ All notable changes are documented here. The format follows
   `expiredJudgements`. Before, only the stored `waiting_user` count was
   reported, so an expired wait counted as waiting until something opened the
   data directory. (#383)
+- `MelraClient.connect()` in the TypeScript SDK gives the stdio server it
+  spawns this process's whole environment except `MELRA_UNHINGED` and
+  `MELRA_SOCKET`, and except `MELRA_WORKSPACE` when `cwd` is given, with `env`
+  on top: the Python SDK's rule. It passed only `MELRA_HOME`, `MELRA_POLICY`,
+  `MELRA_MODE`, `MELRA_PAYLOAD_KEY` and `MELRA_WORKSPACE`, plus the MCP SDK's
+  `HOME`, `PATH` and a few more, so a credential a policy reads from
+  `source.env` was missing and every credentialed call failed
+  (`credential_source_missing`), `MELRA_BROWSER*` were dropped without a word,
+  and terminal commands lost `LANG`, `LC_ALL`, `CI` and `NO_COLOR`. Both SDK
+  READMEs now say what a spawned server inherits. (#382)
 
 ### Security
 
 - Digests stored beside redacted records are now keyed per home, with a key
   derived from the payload key, and a content digest stored beside redacted
-  content is masked like it. Records written before this are not rewritten.
+  content is masked like it. A workflow step's idempotency key stays plain, so
+  every version sharing a home derives it alike; the threat model lists what
+  else stays plain. Records written before this are not rewritten.
 - A receipt's `principal`, the declared delegation chain, is redacted like the
   rest of the record, as the task row, `judgedBy` and a certificate's
   `executedBy` already were, so it reads the same as `executedBy`, and the
@@ -3470,7 +3526,8 @@ All notable changes are documented here. The format follows
 - Cross-scope memory overwrite and deletion protection.
 - Patched transitive HTTP adapter enforced through a package override.
 
-[Unreleased]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.18...HEAD
+[Unreleased]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.19...HEAD
+[0.3.0-alpha.19]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.18...v0.3.0-alpha.19
 [0.3.0-alpha.18]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.17...v0.3.0-alpha.18
 [0.3.0-alpha.17]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.16...v0.3.0-alpha.17
 [0.3.0-alpha.16]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.15...v0.3.0-alpha.16

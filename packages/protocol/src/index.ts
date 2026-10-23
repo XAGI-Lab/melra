@@ -4,7 +4,7 @@
 import { z } from "zod";
 
 export const PROTOCOL_VERSION = "2025-11-25";
-export const PRODUCT_VERSION = "0.3.0-alpha.18";
+export const PRODUCT_VERSION = "0.3.0-alpha.19";
 
 const boundedPath = z.string().min(1).max(4096);
 const boundedText = z.string().max(200_000);
@@ -578,7 +578,9 @@ export const TaskRequestSchema = z
       .string()
       .min(1)
       .max(10_000)
-      .describe("Why this task is being run, in one human-readable sentence."),
+      .describe(
+        "Why this task is being run, in one human-readable sentence. It is stored as written in task records and certificates, with only recognisable secret formats removed, so never put credentials, URL query values or other secrets in it.",
+      ),
     operation: OperationSchema.describe("The one effect to run: a kind (file, terminal, browser, memory, computer, http or system), an action (melra_capabilities lists each kind's actions) and that kind's fields. MELRA classifies it as read, mutate or destructive; policy then allows it, asks for approval or denies it."),
     // These three carry the rules callers get wrong, and a description is the
     // only channel that reaches a model reading the tool's JSON Schema.
@@ -1059,7 +1061,13 @@ export const HumanInputNodeSchema = NodeBaseSchema.extend({
 export const DelegationNodeSchema = NodeBaseSchema.extend({
   type: z.literal("delegation"),
   assignee: z.string().min(1).max(200),
-  goal: z.string().min(1).max(2_000),
+  goal: z
+    .string()
+    .min(1)
+    .max(2_000)
+    .describe(
+      "What the assignee is asked to do, in human-readable words. It is stored as written in the workflow's definition and the run's state and events, with only recognisable secret formats removed, so never put credentials or other secrets in it.",
+    ),
   requiredEvidence: z.array(EvidencePredicateSchema).max(20).default([]),
 }).strict();
 

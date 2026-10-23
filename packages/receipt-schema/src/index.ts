@@ -6,8 +6,10 @@ import { createHash, randomUUID } from "node:crypto";
 // The exact names, then any name that ends in a credential word:
 // `access_token`, `clientSecret`, `x-api-key`. Not `max_tokens` or
 // `token_type`, and not `credentials`, which lists names, never values.
+// Not `goal` either: it is the record's statement of why a task ran, so like
+// `args` it keeps its words and loses only secret shapes (#385).
 const SENSITIVE_KEY =
-  /^(?:arg|authorization|constraints|content|cookie|env|goal|headers?|input|pass(?:word|wd)?|secret|std(?:out|err)|text|token|api[_-]?key|values?)$|(?:token|secret|pass(?:word|wd|phrase)|api[_-]?key|private[_-]?key)$/i;
+  /^(?:arg|authorization|constraints|content|cookie|env|headers?|input|pass(?:word|wd)?|secret|std(?:out|err)|text|token|api[_-]?key|values?)$|(?:token|secret|pass(?:word|wd|phrase)|api[_-]?key|private[_-]?key)$/i;
 /**
  * Secret shapes redacted wherever MELRA persists free text: receipts and task
  * records here, memory values, and terminal output. One list, exported, because

@@ -4,6 +4,7 @@
 import { describe, expect, it } from "vitest";
 import {
   allowsRetry,
+  DelegationNodeSchema,
   delegationChain,
   effectContract,
   LOCAL_IDENTITY,
@@ -30,6 +31,21 @@ describe("public protocol schemas", () => {
     });
     expect(request.constraints).toEqual([]);
     expect(request.requiredEvidence).toEqual([]);
+  });
+
+  it("tells whoever writes a goal that it is stored as written (#385)", () => {
+    // The schema description is the one channel that reaches a model filling
+    // in melra_plan, and a goal's secret of no recognisable shape is kept.
+    const description = TaskRequestSchema.shape.goal.description ?? "";
+    expect(description).toContain("stored as written");
+    expect(description).toContain("certificates");
+    expect(description).toContain("credentials");
+  });
+
+  it("tells whoever writes a delegation's goal that it is stored as written (#385)", () => {
+    const description = DelegationNodeSchema.shape.goal.description ?? "";
+    expect(description).toContain("stored as written");
+    expect(description).toContain("credentials");
   });
 
   it("rejects unknown fields and unknown effect names", () => {

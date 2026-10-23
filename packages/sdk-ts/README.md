@@ -70,6 +70,13 @@ const melra = await MelraClient.connect({
 });
 ```
 
+The server gets this process's environment except `MELRA_UNHINGED` and
+`MELRA_SOCKET`, and except `MELRA_WORKSPACE` when you pass `cwd`, which then
+decides the workspace. So a credential a policy reads from the environment,
+`MELRA_BROWSER*`, `LANG` and `CI` reach it, as they do from the Python SDK.
+`env` goes on top of all of it: pass any of the three left out there to mean
+it.
+
 ## Connecting to a running server
 
 `melra serve --http` and `melra serve --socket <path>` serve the same MCP tools
