@@ -6,6 +6,8 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0-alpha.19] - 2026-10-23
+
 ### Added
 
 - The Python SDK gains `judge(task_id, judgement_id, verdict, *, identity,
@@ -20,14 +22,20 @@ All notable changes are documented here. The format follows
 
 ### Changed
 
-- `melra_task_judge` also refuses a judge whose declared delegation chain names
-  the task's principal, such as a grader the acting agent started
-  (`semantic_judge_is_actor`, #378). Another session under the same harness, or
-  another agent of the person the work was for, may still answer, unless the
-  task's principal is that harness or person itself. The `harness:` link an
-  OAuth client's token puts above a judge's chain is recorded in `judgedBy` but
-  not compared. The check still rests on declared identities; `melra judge` is
-  unchanged.
+- **Breaking:** `melra_task_judge` also refuses a judge whose declared
+  delegation chain names the task's principal, such as a grader the acting
+  agent started (`semantic_judge_is_actor`, #378). Another session under the
+  same harness, or another agent of the person the work was for, may still
+  answer, unless the task's principal is that harness or person itself. The
+  `harness:` link an OAuth client's token puts above a judge's chain is
+  recorded in `judgedBy` but not compared. The check still rests on declared
+  identities; `melra judge` is unchanged.
+
+- **Breaking:** `melra approve` with an empty task id, as an unset `"$ID"`
+  sends, is refused with `task_not_found:` instead of taking the one task
+  awaiting approval, if only one was; a prefix no waiting task has is refused
+  with `task_not_found:<prefix>` (#386).
+
 - A task's goal is stored as declared, with only recognisable secret shapes
   taken out, instead of being replaced whole (#385). The stored request, the
   certificate's `goal`, and a workflow definition's step and delegation goals
@@ -59,17 +67,16 @@ All notable changes are documented here. The format follows
   `approval_action_digest_mismatch` before anything runs, and the task waits
   for a newer process. Upgrade every process sharing a `MELRA_HOME` together
   and re-run `melra setup`
-  ([compatibility](docs/COMPATIBILITY.md#data-compatibility)).
+  ([compatibility](https://github.com/XAGI-Lab/melra/blob/main/docs/COMPATIBILITY.md#data-compatibility)).
 
 ### Fixed
 
 - `melra inspect` and `melra export` take the eight-character id prefix the
   plain `melra tasks` table prints, in any status, as `melra approve` already
-  did. Before, they passed it on as a whole id and reported `task_not_found`.
-  A prefix two tasks share is refused with `task_id_ambiguous:<prefix>`, and
-  one no task has with `task_not_found:<prefix>`; an empty argument, as an
-  unset `"$ID"` sends, names no task, where `melra approve` took it for the one
-  task waiting, if only one was. `melra judge` still takes ids whole. (#386)
+  did. Before, they passed it on as a whole id and reported `task_not_found`. A
+  prefix two tasks share is refused with `task_id_ambiguous:<prefix>`, and one
+  no task has with `task_not_found:<prefix>`; an empty argument names no task.
+  `melra judge` still takes ids whole. (#386)
 - `examples/README.md` said the API example succeeds unauthenticated without
   `GITHUB_TOKEN`; it fails with `credential_source_missing:github` before any
   request is sent, as it always has. The example now says it needs the token,
@@ -118,7 +125,9 @@ All notable changes are documented here. The format follows
 
 - Digests stored beside redacted records are now keyed per home, with a key
   derived from the payload key, and a content digest stored beside redacted
-  content is masked like it. Records written before this are not rewritten.
+  content is masked like it. A workflow step's idempotency key stays plain, so
+  every version sharing a home derives it alike; the threat model lists what
+  else stays plain. Records written before this are not rewritten.
 - A receipt's `principal`, the declared delegation chain, is redacted like the
   rest of the record, as the task row, `judgedBy` and a certificate's
   `executedBy` already were, so it reads the same as `executedBy`, and the
@@ -3511,7 +3520,8 @@ All notable changes are documented here. The format follows
 - Cross-scope memory overwrite and deletion protection.
 - Patched transitive HTTP adapter enforced through a package override.
 
-[Unreleased]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.18...HEAD
+[Unreleased]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.19...HEAD
+[0.3.0-alpha.19]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.18...v0.3.0-alpha.19
 [0.3.0-alpha.18]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.17...v0.3.0-alpha.18
 [0.3.0-alpha.17]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.16...v0.3.0-alpha.17
 [0.3.0-alpha.16]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.15...v0.3.0-alpha.16
