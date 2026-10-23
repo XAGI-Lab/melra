@@ -235,4 +235,57 @@ describe("verification through a channel that did not act", () => {
     const { evidence } = await verifier.verify([predicate()], created);
     expect(evidence[0]?.inconclusive).toBeUndefined();
   });
+
+  it("marks verification unanswerable and inconclusive when cancelled by signal", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const verifier = await Verifier.create(root, {
+      probe: probeReturning({ state: "succeeded" }),
+    });
+    const { verified, evidence } = await verifier.verify([predicate()], created, { signal: controller.signal });
+    expect(verified).toBe(false);
+    expect(evidence[0]).toMatchObject({
+      passed: false,
+      inconclusive: true,
+      unanswerable: true,
+      summary: "task_cancelled",
+    });
+  });
+
+  it("marks verification unanswerable and inconclusive when budget is exhausted", async () => {
+    const controller = new AbortController();
+    controller.abort(new Error("task_budget_exhausted"));
+    const verifier = await Verifier.create(root, {
+      probe: probeReturning({ state: "succeeded" }),
+    });
+    const { verified, evidence } = await verifier.verify([predicate()], created, { signal: controller.signal });
+    expect(verified).toBe(false);
+    expect(evidence[0]).toMatchObject({
+      passed: false,
+      inconclusive: true,
+      unanswerable: true,
+      summary: "budget_exhausted",
+    });
+  });
+
+  it("forwards signal to probe and handles abort in flight", async () => {
+    const controller = new AbortController();
+    let receivedSignal: AbortSignal | undefined;
+    const verifier = await Verifier.create(root, {
+      probe: async (request) => {
+        receivedSignal = request.signal;
+        controller.abort(new Error("task_budget_exhausted"));
+        throw new Error("aborted");
+      },
+    });
+    const { verified, evidence } = await verifier.verify([predicate()], created, { signal: controller.signal });
+    expect(verified).toBe(false);
+    expect(receivedSignal).toBe(controller.signal);
+    expect(evidence[0]).toMatchObject({
+      passed: false,
+      inconclusive: true,
+      unanswerable: true,
+      summary: "budget_exhausted",
+    });
+  });
 });

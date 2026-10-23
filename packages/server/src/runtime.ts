@@ -725,6 +725,7 @@ export async function createMelraRuntime(
             url: request.url,
             timeoutMs: request.timeoutMs,
           }),
+          request.signal,
         ),
     });
   const controller = new TaskController(store, policy, router, verifier, cipher);

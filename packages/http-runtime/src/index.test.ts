@@ -169,6 +169,16 @@ describe("http runtime", () => {
     await expect(pending).rejects.toThrow("task_cancelled");
   });
 
+  it("preserves task_budget_exhausted when signal aborts with budget error", async () => {
+    const controller = new AbortController();
+    const pending = runtime().execute(
+      operation({ url: `${origin}/orders` }),
+      controller.signal,
+    );
+    controller.abort(new Error("task_budget_exhausted"));
+    await expect(pending).rejects.toThrow("task_budget_exhausted");
+  });
+
   it("marks the outcome unknown when a sent request goes unanswered", async () => {
     // The far end has the request and may already have acted on it. Claiming
     // failure here would be the kernel asserting something it cannot know.
