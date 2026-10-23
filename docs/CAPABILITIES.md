@@ -828,7 +828,7 @@ the label rather than the content.
 Every request has:
 
 - `maxSteps`: reserved for bounded composition and currently limited by schema;
-- `maxDurationMs`: authoritative wall-clock execution budget;
+- `maxDurationMs`: authoritative wall-clock execution budget covering both execution and verification;
 - `maxRetries`: retry count for read-only operations.
 
 Mutations and destructive operations have one execution attempt.
