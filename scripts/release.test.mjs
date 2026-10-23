@@ -212,14 +212,16 @@ function main(): void {
 });
 
 test("docs:check fails a name help() mentions in its prose that has no row", () => {
-  // MELRA_HOMEDIR is a typo in a description, not an Environment line.
+  // MELRA_HOMEDIR is a typo in a description and MELRA_KEYDIR one in an
+  // Environment continuation line; neither starts an Environment line.
   const cli = `function help(): void {
   process.stdout.write(\`MELRA
 
   --home DIR                       Same as MELRA_HOMEDIR=DIR
 
 Environment:
-  MELRA_HOME                       Data directory\`);
+  MELRA_HOME                       Data directory
+                                   (the key lives in <MELRA_KEYDIR>)\`);
 }
 const home = process.env.MELRA_HOME;
 `;
@@ -228,6 +230,7 @@ const home = process.env.MELRA_HOME;
     "apps/cli/src/index.ts": cli,
   }));
   assert.match(result.stderr, /'melra help' names MELRA_HOMEDIR, which has no row in docs\/INSTALLATION\.md/);
+  assert.match(result.stderr, /'melra help' names MELRA_KEYDIR, which has no row in docs\/INSTALLATION\.md/);
   assert.doesNotMatch(result.stderr, /MELRA_HOME[^D]/);
 });
 
