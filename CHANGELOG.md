@@ -6,6 +6,12 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- `melra help` lists `MELRA_PAYLOAD_KEY` and `MELRA_HARNESS_TOOLS` in its
+  Environment block, and `pnpm docs:check` now fails when a variable documented
+  in `docs/INSTALLATION.md` is missing from it (#388).
+
 ## [0.3.0-alpha.19] - 2026-10-23
 
 ### Added

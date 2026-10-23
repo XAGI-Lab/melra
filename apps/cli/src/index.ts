@@ -1255,6 +1255,10 @@ Environment:
   MELRA_BROWSER_HAR_PATH           Absolute HAR output path
   MELRA_BROWSER_HAR_REPLAY         Absolute HAR to replay; nothing hits network
   MELRA_BROWSER_PROFILE            Absolute dir keeping cookies between runs
+  MELRA_PAYLOAD_KEY                Payload key, base64url (default:
+                                   <MELRA_HOME>/payload.key); back it up
+  MELRA_HARNESS_TOOLS              Set to 1 to add read_file, run_command and
+                                   the other plain tool names
 `);
 }
 
