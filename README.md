@@ -599,6 +599,14 @@ Stop the process after any line and the next command resumes from the same
 `MELRA_HOME`. Interrupted reads may retry; interrupted changes are never silently
 repeated. They are settled by re-observation, or they park in `recovery_required`.
 
+`workflow advance` and `resume` exit 0 while the run is fine, 3 while it waits on an
+approval, 4 while it waits on an `--input`, and 2 once it has failed, ended
+`partially_complete` or `cancelled`, or needs recovery. `workflow plan`, `pause` and
+`suspend` exit 0 when they plan or halt the run; pausing or suspending a run that is
+complete, cancelled or failed is refused. `workflow inspect` exits 0 in any state.
+`workflow cancel` exits 0 when it leaves the run `cancelled` and 1 when it does not,
+as for a run already complete. Errors exit 1.
+
 <details>
 <summary><b>Everything shipped in this release</b></summary>
 

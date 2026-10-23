@@ -1002,6 +1002,22 @@ against `--url` it has no approver and stops at L2. Its first `notProven` entry
 narrows from "nothing observable rules out a second path" to naming whose word
 the remaining claim rests on. See [CONFORMANCE.md](CONFORMANCE.md).
 
+## Running one task from the command line
+
+`melra run --request task.json`, or a request piped on stdin, plans one task
+and runs it. In a terminal it asks y/N before an effect that needs approval, as
+[`melra approve`](#approving-from-the-command-line) does. It prints the result
+as JSON and exits:
+
+| Exit | When |
+| --- | --- |
+| 0 | The task is `verified_success`. |
+| 1 | An error, or a no at the prompt. |
+| 2 | It ran and did not verify: `partial`, `failed`, `recovery_required` or another outcome. |
+| 3 | It needs an approval and there is no terminal to ask in. Nothing ran; `next` says to rerun interactively. |
+| 4 | Policy blocked it (`policy_blocked`). Nothing ran. |
+| 5 | It ran and waits in `waiting_user` for a [semantic judgement](#judging-from-the-command-line). `next` holds the `melra judge` command that answers each of its judgements, one per line, with both ids whole. Replace its `<yes\|no\|cannot_tell>` with your verdict before you run it; as printed, a shell refuses it. |
+
 ## Approving from the command line
 
 `melra approve <task-id>` shows an approver the effect a task is waiting on (the
