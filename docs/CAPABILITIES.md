@@ -490,6 +490,10 @@ the call reporting on itself; `GET /refunds/rf_1` is the provider. Because the
 id is only known afterwards, the URL is completed from the recorded result —
 `{{json.id}}` reads the parsed response body, `{{status}}` the status — and each
 spliced value is percent-encoded, so a response field cannot rewrite the path.
+A value of `.`, `..` or the empty string is refused rather than spliced
+(`verification_token_dot_segment`, `verification_token_empty`), because each
+would point the read at a different resource; the item is unanswerable, not
+passed.
 The verification request is an effect like any other: same adapter, same
 destination boundary, same allowlist, same credential scope. `GET` and `HEAD`
 only, and a runtime with no HTTP channel fails the predicate rather than passing

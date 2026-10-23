@@ -15,7 +15,6 @@ import {
   WorkflowDefinitionSchema,
   WorkflowInputSchema,
   PRODUCT_VERSION,
-  deploymentMode,
   principalRef,
   type ApprovalResponse,
   type TaskRequest,
@@ -58,6 +57,7 @@ import {
 import {
   type CliEnvironment,
   approverLabel,
+  namedDeploymentMode,
   parseCliEnvironment,
   serverLaunch,
 } from "./environment.js";
@@ -1277,13 +1277,27 @@ async function main(): Promise<void> {
     );
   }
   const modeFlag = argument("--mode", args);
+  // `--mode "$MODE"` with MODE unset, or a --mode with nothing after it, read
+  // as developer: an operator who meant enforced got a normal-looking start
+  // in the mode that lets the agent approve its own effects.
+  if (
+    args.includes("--mode") &&
+    (modeFlag === undefined || modeFlag.trim() === "" || modeFlag.startsWith("--"))
+  ) {
+    throw new Error("--mode requires developer or enforced");
+  }
+  // Only the first is read, so a second one, blank or enforced, was ignored:
+  // `melra serve --mode developer "$@"` with `--mode enforced` ran developer.
+  if (args.filter((value) => value === "--mode").length > 1) {
+    throw new Error("--mode given more than once");
+  }
   const requested: CliEnvironment = {
     ...parsed,
     unhinged:
       parsed.unhinged || deprecated || args.includes("--unsafe-local"),
     // The strictest of the flag and the variable, as for the policy file below:
     // `--mode developer` does not undo MELRA_MODE=enforced.
-    ...(modeFlag === undefined || deploymentMode(modeFlag) === "developer"
+    ...(modeFlag === undefined || namedDeploymentMode(modeFlag, "--mode") === "developer"
       ? {}
       : { mode: "enforced" as const }),
   };
@@ -1437,6 +1451,10 @@ async function main(): Promise<void> {
     }
     case "run":
       rejectUnknownFlags(args, ["--request"]);
+      // Failed until the task says otherwise: an effect that never returns
+      // leaves the event loop empty, and Node exits with whatever the code is
+      // then. It was 0, the code for verified_success.
+      process.exitCode = 1;
       process.exitCode = await runTask(args, env);
       return;
     case "console": {
@@ -1533,6 +1551,8 @@ async function main(): Promise<void> {
     }
     case "workflow":
       rejectUnknownFlags(args, ["--definition", "--approval", "--input"]);
+      // As for run: an advance that never returns does not exit 0.
+      process.exitCode = 1;
       process.exitCode = await workflowCommand(args, env);
       return;
     case "demo":
@@ -1541,6 +1561,7 @@ async function main(): Promise<void> {
       if ((args[0] ?? "durable-core") !== "durable-core") {
         throw new Error("demo supports only 'durable-core'");
       }
+      process.exitCode = 1;
       process.exitCode = await durableCoreDemo(env);
       return;
     case "clients":

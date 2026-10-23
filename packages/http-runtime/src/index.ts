@@ -108,6 +108,8 @@ export class HttpRuntime {
     }
 
     let deadline: NodeJS.Timeout | undefined;
+    // Whether a response arrived: from then on its own events settle the call.
+    let answered = false;
     return await new Promise<Record<string, unknown>>((resolve, reject) => {
       const call = send(
         {
@@ -126,6 +128,7 @@ export class HttpRuntime {
           agent: false,
         },
         (response: IncomingMessage) => {
+          answered = true;
           const chunks: Buffer[] = [];
           let bytes = 0;
           let truncated = false;
@@ -225,18 +228,32 @@ export class HttpRuntime {
         }
         reject(call.writableFinished ? outcomeUnknown(error.message) : error);
       };
+      // Rejected here rather than left to `destroy()` to emit 'error': a
+      // request Node has already destroyed emits nothing more, and the call
+      // would never settle.
+      const stop = (reason: string): void => {
+        failed(new Error(reason));
+        call.destroy();
+      };
       // One deadline for the whole exchange. Node's own `timeout` only notices
       // a socket that goes quiet, so a server sending a byte at a time held the
       // call, and any verification or reconciliation waiting on it, for as
       // long as it liked.
-      deadline = setTimeout(() => call.destroy(new Error("http_timeout")), operation.timeoutMs);
+      deadline = setTimeout(() => stop("http_timeout"), operation.timeoutMs);
       deadline.unref();
       call.on("error", failed);
-      signal?.addEventListener(
-        "abort",
-        () => call.destroy(new Error("task_cancelled")),
-        { once: true },
-      );
+      // A 101 is an upgrade to Node, never a response: without this listener
+      // it drops the socket and the request ends with only 'close'. No
+      // protocol but HTTP is spoken here, so the switch is refused.
+      call.on("upgrade", (_response, socket) => {
+        socket.destroy();
+        failed(new Error("http_upgrade_refused"));
+      });
+      // Every other way the request can end without an answer or an error.
+      call.on("close", () => {
+        if (!answered) failed(new Error("http_closed_without_response"));
+      });
+      signal?.addEventListener("abort", () => stop("task_cancelled"), { once: true });
       if (operation.content !== undefined) call.write(operation.content);
       call.end();
     }).finally(() => clearTimeout(deadline));

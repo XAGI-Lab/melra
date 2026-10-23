@@ -101,6 +101,23 @@ describe("verification through a channel that did not act", () => {
     expect(asked).toEqual([]);
   });
 
+  it("refuses an empty value, which would read the parent resource", async () => {
+    const verifier = await Verifier.create(root, {
+      probe: probeReturning({ state: "succeeded" }),
+    });
+    const result = { status: 201, content: JSON.stringify({ id: "" }) };
+    const { verified, evidence } = await verifier.verify([predicate()], result);
+    expect(verified).toBe(false);
+    expect(evidence[0]).toMatchObject({
+      summary: "verification_token_empty:json.id",
+      unanswerable: true,
+    });
+    // Planning asks the same question and gets the same refusal.
+    expect(verifier.unfilledToken(predicate(), result)).toBe("verification_token_empty:json.id");
+    // Nothing was fetched: `/refunds/` is the collection, not the refund.
+    expect(asked).toEqual([]);
+  });
+
   it("fails when the token names nothing in the result", async () => {
     const verifier = await Verifier.create(root, {
       probe: probeReturning({ state: "succeeded" }),
