@@ -6,7 +6,8 @@
 // the code still reads. A variable the docs never mention is a feature nobody
 // can find; a row for one nothing reads is a knob that does nothing. Every
 // documented variable must also be listed in the Environment block of
-// `melra help`, where a terminal user looks first.
+// `melra help`, where a terminal user looks first, and every variable listed
+// there must be documented.
 
 import { glob, readFile } from "node:fs/promises";
 
@@ -45,8 +46,11 @@ const failures = [];
 let helpEnvironment;
 const withoutHelp = (source) => {
   const start = source.indexOf(HELP_START);
-  const end = start === -1 ? -1 : source.indexOf("`);", start);
-  if (end === -1) {
+  // Search within help() itself: a later "`);" in main() must not stand in for
+  // the end of its template, or the scan would blank code that reads variables.
+  const close = start === -1 ? -1 : source.indexOf("\n}\n", start);
+  const end = close === -1 ? -1 : source.lastIndexOf("`);", close);
+  if (end === -1 || end < start) {
     failures.push(`${HELP}: could not find help() and the end of its template literal`);
     return source;
   }
@@ -94,6 +98,13 @@ if (helpEnvironment === undefined) {
   for (const [name, line] of documented) {
     if (!listed.has(name)) {
       failures.push(`${DOC}:${line}: ${name} is documented but missing from the Environment block of 'melra help' in ${HELP}`);
+    }
+  }
+  // The other direction: a line for a variable with no row advertises a knob
+  // that was retired, or one the docs never describe.
+  for (const name of listed) {
+    if (!documented.has(name)) {
+      failures.push(`${HELP}: ${name} is listed in the Environment block of 'melra help' but has no row in ${DOC}; remove the line`);
     }
   }
 }

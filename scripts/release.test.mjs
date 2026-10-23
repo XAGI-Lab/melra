@@ -154,7 +154,7 @@ test("the release workflows publish in that order, gate the container, and relea
   assert.doesNotMatch(dry, /--tag alpha/);
 });
 
-test("a row the code no longer reads fails docs:check, even though melra help still lists it", () => {
+test("docs:check fails a row the code no longer reads, and a help line with no row", () => {
   const docs = (names) => `| Variable | Meaning |\n| --- | --- |\n${names.map((name) => `| \`${name}\` | x |`).join("\n")}\n`;
   // The last help line runs straight into the closing backtick.
   const cli = (reads) => `${reads}
@@ -163,6 +163,7 @@ function help(): void {
 
 Environment:
   MELRA_HOME                       Data directory
+  MELRA_RETIRED                    Its row was removed
   MELRA_GONE                       No longer read\`);
 }
 `;
@@ -177,7 +178,35 @@ Environment:
   const stale = check("const home = process.env.MELRA_HOME;");
   assert.match(stale.stderr, /MELRA_GONE is documented but nothing in \{apps,packages\}\/\*\/src reads it; remove the row/);
   assert.doesNotMatch(stale.stderr, /missing from the Environment block|could not find/);
+  const retired = /MELRA_RETIRED is listed in the Environment block of 'melra help' but has no row in docs\/INSTALLATION\.md; remove the line/;
+  assert.match(stale.stderr, retired);
 
   const read = check("const home = process.env.MELRA_HOME;\nconst gone = process.env.MELRA_GONE;");
   assert.doesNotMatch(read.stderr, /MELRA_HOME|MELRA_GONE|help\(\)/);
+  assert.match(read.stderr, retired);
+});
+
+test("docs:check stops at the end of help(), not at a later \"`);\" in the file", () => {
+  // help()'s template no longer ends in "`);", but main() below it has one.
+  // The scan must fail loudly rather than blank main() and miss its read.
+  const cli = `function help(): void {
+  process.stdout.write(\`MELRA
+
+Environment:
+  MELRA_HOME                       Data directory
+\` + "");
+}
+
+function main(): void {
+  const home = process.env.MELRA_HOME;
+  const fresh = process.env.MELRA_FRESH;
+  process.stdout.write(\`\${home}\${fresh}\`);
+}
+`;
+  const result = node("scripts/check-env-docs.mjs", [], scratch({
+    "docs/INSTALLATION.md": "| Variable | Meaning |\n| --- | --- |\n| `MELRA_HOME` | x |\n",
+    "apps/cli/src/index.ts": cli,
+  }));
+  assert.match(result.stderr, /could not find help\(\) and the end of its template literal/);
+  assert.match(result.stderr, /MELRA_FRESH \(first seen at apps\/cli\/src\/index\.ts:11\) has no row/);
 });
