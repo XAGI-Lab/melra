@@ -5,6 +5,7 @@ import { execFile, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
+import { createServer as createTcpServer, type AddressInfo, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join, parse, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -16,6 +17,7 @@ import {
   PRODUCT_VERSION,
   TaskRequestSchema,
   TerminalOperationSchema,
+  WorkflowDefinitionSchema,
 } from "@melra/protocol";
 import { OAuthProvider, approvalScreen, createMelraRuntime, printable, serveHttp } from "@melra/server";
 import { runConformance } from "../src/conformance.js";
@@ -333,6 +335,136 @@ describe("melra CLI", () => {
     } finally {
       await developer.close();
     }
+  });
+
+  it("exits 5 from run for a task waiting on a judgement, and names the commands that answer it (#404)", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-cli-")));
+    roots.push(root);
+    // The data outside the workspace, as enforced mode requires.
+    const workspace = join(root, "workspace");
+    await mkdir(workspace);
+    const env = { ...process.env, MELRA_HOME: join(root, ".melra"), MELRA_WORKSPACE: workspace };
+    const requestPath = join(root, "semantic.json");
+    await writeFile(
+      requestPath,
+      JSON.stringify({
+        goal: "List the workspace and ask about it",
+        operation: { kind: "file", action: "list", path: "." },
+        requiredEvidence: [
+          { type: "semantic", question: "Does the workspace look tidy?" },
+          { type: "semantic", question: "Is anything missing?" },
+        ],
+        identity: { principal: { kind: "human", id: "alice" } },
+      }),
+    );
+    // `melra` on the PATH, as an operator who pastes `next` into a shell has it.
+    const bin = join(root, "bin");
+    await mkdir(bin);
+    await writeFile(join(bin, "melra"), `#!/bin/sh\nexec "${process.execPath}" "${entry}" "$@"\n`);
+    await chmod(join(bin, "melra"), 0o755);
+    const shell = { ...env, PATH: `${bin}:${process.env.PATH ?? ""}` };
+    // A task that ran enforced takes a verdict only from an enforced process,
+    // so a mode given as a flag is in the commands too.
+    for (const mode of [[], ["--mode", "enforced"]]) {
+      const ran = (await execute(process.execPath, [entry, "run", ...mode, "--request", requestPath], {
+        cwd: root,
+        env,
+      }).catch((error: unknown) => error)) as { code: number; stdout: string };
+      expect(ran.code).toBe(5);
+      const { task, next } = JSON.parse(ran.stdout) as {
+        task: { id: string; status: string; judgements: { judgementId: string }[] };
+        next: string;
+      };
+      expect(task.status).toBe("waiting_user");
+      // One line per judgement, each with both ids whole, as `melra judge` takes them.
+      expect(next).toBe(
+        task.judgements
+          .map(
+            (entry) =>
+              `melra judge ${task.id} --judgement ${entry.judgementId}${mode.length === 0 ? "" : " --mode enforced"} --verdict <yes|no|cannot_tell>`,
+          )
+          .join("\n"),
+      );
+      // Pasted as printed, every line is one a shell refuses to parse. Printed
+      // as `--verdict yes|no|cannot_tell`, it ran `melra judge ... --verdict
+      // yes` and recorded a yes nobody chose.
+      if (process.platform !== "win32") {
+        for (const line of next.split("\n")) {
+          const pasted = (await execute("sh", ["-c", line], { cwd: root, env: shell }).catch(
+            (error: unknown) => error,
+          )) as { code?: number };
+          expect(pasted.code).toBe(2);
+        }
+        const unjudged = await execute(process.execPath, [entry, "inspect", task.id], { cwd: root, env });
+        expect(
+          (JSON.parse(unjudged.stdout) as { task: { judgements: { judgedBy?: unknown }[] } }).task.judgements.map(
+            (entry) => entry.judgedBy,
+          ),
+        ).toEqual([undefined, undefined]);
+      }
+      // Run with only the verdict chosen.
+      const [first] = next.split("\n");
+      const judged = await execute(
+        process.execPath,
+        [entry, ...first!.replace("<yes|no|cannot_tell>", "yes").split(" ").slice(1)],
+        { cwd: root, env },
+      );
+      expect(JSON.parse(judged.stdout).task).toMatchObject({ id: task.id, status: "waiting_user" });
+    }
+  });
+
+  it("exits 4 from run when policy blocks a task after its prompt, as when its grant is spent meanwhile (#404)", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-cli-")));
+    roots.push(root);
+    const dataDirectory = join(root, ".melra");
+    await mkdir(dataDirectory);
+    const policyPath = join(dataDirectory, "policy.json");
+    // One file write, ever.
+    await writeFile(
+      policyPath,
+      JSON.stringify({ capabilities: [{ id: "g1", capability: "file.write", effects: ["mutate"], maxOperations: 1 }] }),
+    );
+    const requestPath = join(root, "write.json");
+    await writeFile(
+      requestPath,
+      JSON.stringify({ goal: "Write the report", operation: { kind: "file", action: "write", path: "report.txt", content: "x" } }),
+    );
+    // A pipe the CLI takes for a terminal, so it asks before it runs.
+    const terminal = `data:text/javascript,${encodeURIComponent("process.stdin.isTTY = true;")}`;
+    const running = execute(process.execPath, ["--import", terminal, entry, "run", "--request", requestPath], {
+      cwd: root,
+      env: { ...process.env, MELRA_HOME: dataDirectory, MELRA_WORKSPACE: root },
+    });
+    const outcome = running.catch((error: unknown) => error) as Promise<{ code?: number; stdout: string }>;
+    await new Promise<void>((asked) => {
+      let shown = "";
+      running.child.stderr!.on("data", (chunk: Buffer) => {
+        shown += chunk.toString();
+        if (shown.includes("[y/N]")) asked();
+      });
+    });
+    // Planned, and so asked about, while the grant was unspent.
+    const server = await createMelraRuntime({ workspaceRoot: root, dataDirectory, policyPath, environment: {} });
+    try {
+      const other = server.controller.plan(
+        TaskRequestSchema.parse({
+          goal: "Write another",
+          operation: { kind: "file", action: "write", path: "other.txt", content: "y" },
+        }),
+      );
+      const spent = await server.controller.execute(other.id, {
+        approvalId: other.approval!.approvalId,
+        phrase: other.approval!.phrase!,
+      });
+      expect(spent.task.status).toBe("verified_success");
+    } finally {
+      await server.close();
+    }
+    running.child.stdin!.end("y\n");
+    const ran = await outcome;
+    expect(ran.code).toBe(4);
+    expect(JSON.parse(ran.stdout).task).toMatchObject({ status: "policy_blocked" });
+    expect(existsSync(join(root, "report.txt"))).toBe(false);
   });
 
   it("takes the approver's name from MELRA_APPROVER, and never just anything", async () => {
@@ -1007,6 +1139,89 @@ describe("melra CLI", () => {
     }
   });
 
+  it("finds the id after a process-wide flag, as approve and judge do (#402)", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-cli-")));
+    roots.push(root);
+    const dataDirectory = join(root, ".melra");
+    const server = await createMelraRuntime({ workspaceRoot: root, dataDirectory, environment: {} });
+    try {
+      const listed = server.controller.plan(
+        TaskRequestSchema.parse({ goal: "List", operation: { kind: "file", action: "list", path: "." } }),
+      );
+      const write = server.controller.plan(
+        TaskRequestSchema.parse({
+          goal: "Write the report",
+          operation: { kind: "file", action: "write", path: "report.txt", content: "x" },
+        }),
+      );
+      const planned = server.controller.plan(
+        TaskRequestSchema.parse({
+          goal: "List the workspace and ask whether it looks tidy",
+          operation: { kind: "file", action: "list", path: "." },
+          requiredEvidence: [{ type: "semantic", question: "Does the workspace look tidy?" }],
+          identity: { principal: { kind: "human", id: "alice" } },
+        }),
+      );
+      const { task: waiting } = await server.controller.execute(planned.id);
+      const workflow = server.workflows.plan(WorkflowDefinitionSchema.parse(RESTART_SAFE_WORKFLOW));
+      const env = { ...process.env, MELRA_HOME: dataDirectory, MELRA_WORKSPACE: root };
+      const run = (args: string[]) =>
+        execute(process.execPath, [entry, ...args], { cwd: root, env }).catch((error: unknown) => error) as Promise<{
+          code?: number;
+          stdout: string;
+          stderr: string;
+        }>;
+      const prefix = listed.id.slice(0, 8);
+      for (const args of [
+        ["inspect", "--mode", "developer", prefix],
+        ["export", "--unsafe-local", prefix],
+        ["inspect", "--unhinged", prefix],
+      ]) {
+        const shown = await run(args);
+        expect(shown.code).toBeUndefined();
+        expect(JSON.parse(shown.stdout).task).toMatchObject({ id: listed.id });
+      }
+      const inspected = await run(["workflow", "inspect", "--mode", "developer", workflow.id]);
+      expect(inspected.code).toBeUndefined();
+      expect(JSON.parse(inspected.stdout)).toMatchObject({ id: workflow.id });
+      const paused = await run(["workflow", "pause", "--mode", "developer", workflow.id]);
+      expect(paused.code).toBeUndefined();
+      expect(JSON.parse(paused.stdout)).toMatchObject({ id: workflow.id, status: "paused" });
+      // A valued flag's value is never the id either.
+      const asked = await run(["approve", "--mode", "developer", write.id.slice(0, 8), "--json"]);
+      expect(asked.code).toBe(3);
+      expect(JSON.parse(asked.stdout)).toMatchObject({ taskId: write.id });
+      const judged = await run([
+        "judge",
+        "--rationale",
+        "Looks tidy.",
+        "--mode",
+        "developer",
+        "--judgement",
+        waiting.judgements![0]!.judgementId,
+        "--verdict",
+        "yes",
+        waiting.id,
+      ]);
+      expect(judged.code).toBeUndefined();
+      expect(JSON.parse(judged.stdout).task).toMatchObject({ id: waiting.id, status: "verified_success" });
+      // An action after one, too.
+      const demo = await run(["demo", "--mode", "developer"]);
+      expect(demo.code).toBeUndefined();
+      expect(JSON.parse(demo.stdout)).toMatchObject({ example: "restart-safe-verified-file" });
+      const resumed = await run(["workflow", "--mode", "developer", "resume", workflow.id]);
+      expect(resumed.code).toBeUndefined();
+      expect(JSON.parse(resumed.stdout)).toMatchObject({ id: workflow.id, status: "running" });
+      const requestPath = join(root, "list.json");
+      await writeFile(requestPath, JSON.stringify({ goal: "List", operation: { kind: "file", action: "list", path: "." } }));
+      const tested = await run(["policy", "--mode", "developer", "test", "--request", requestPath]);
+      expect(tested.code).toBeUndefined();
+      expect(JSON.parse(tested.stdout).decision).toMatchObject({ outcome: "allow" });
+    } finally {
+      await server.close();
+    }
+  });
+
   it("finds a prefix `melra tasks --status` prints however many tasks are newer (#386)", async () => {
     const root = await realpath(await mkdtemp(join(tmpdir(), "melra-cli-")));
     roots.push(root);
@@ -1553,6 +1768,110 @@ describe("melra CLI", () => {
     ).rejects.toMatchObject({ stderr: expect.stringContaining("--socket replaces") });
   }, 60_000);
 
+  it("refuses a blank, missing or repeated --mode instead of running developer mode", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-cli-"));
+    roots.push(root);
+    const options = {
+      cwd: root,
+      env: { ...process.env, HOME: root, MELRA_HOME: join(root, ".melra"), MELRA_WORKSPACE: root },
+      // An unfixed serve listens until killed.
+      timeout: 10_000,
+    };
+    for (const command of [["doctor"], ["serve", "--http", "--port", "0"], ["setup", "--client", "claude-code"]]) {
+      // A --mode with nothing after it, what `--mode "$MODE"` sends with MODE
+      // unset, and a lost value with the next flag in its place.
+      for (const value of [[], [""], [" "], ["--json"]]) {
+        await expect(
+          execute(process.execPath, [entry, ...command, "--mode", ...value], options),
+        ).rejects.toMatchObject({ code: 1, stderr: expect.stringContaining("--mode requires developer or enforced") });
+      }
+      // Only the first was read, so a default a launcher put ahead of the
+      // operator's own value won: enforced, blank or trailing, it was ignored.
+      for (const value of [["enforced"], [""], []]) {
+        await expect(
+          execute(process.execPath, [entry, ...command, "--mode", "developer", "--mode", ...value], options),
+        ).rejects.toMatchObject({ code: 1, stderr: expect.stringContaining("--mode given more than once") });
+      }
+      await expect(
+        execute(process.execPath, [entry, ...command, "--mode", "bogus"], options),
+      ).rejects.toMatchObject({
+        code: 1,
+        stderr: expect.stringContaining("deployment_mode_unknown: --mode must be developer or enforced"),
+      });
+    }
+  }, 60_000);
+
+  it("does not exit 0 for a task whose request the far end answered with a protocol switch", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-cli-"));
+    roots.push(root);
+    // Answers any request with a 101 and holds the socket open.
+    const sockets = new Set<Socket>();
+    const switching = createTcpServer((socket) => {
+      sockets.add(socket);
+      socket.on("error", () => undefined);
+      socket.on("data", () =>
+        socket.write("HTTP/1.1 101 Switching Protocols\r\nUpgrade: x\r\nConnection: Upgrade\r\n\r\n"),
+      );
+    });
+    await new Promise<void>((resolve) => switching.listen(0, "127.0.0.1", resolve));
+    try {
+      const requestPath = join(root, "task.json");
+      await writeFile(
+        requestPath,
+        JSON.stringify({
+          goal: "Read a status page",
+          operation: {
+            kind: "http",
+            action: "request",
+            method: "GET",
+            url: `http://127.0.0.1:${(switching.address() as AddressInfo).port}/status`,
+            timeoutMs: 500,
+          },
+          budget: { maxDurationMs: 1_000, maxRetries: 0 },
+        }),
+      );
+      // The request never settled, the event loop drained, and the process
+      // exited 0, the code for verified_success, with the task still running.
+      await expect(
+        execute(process.execPath, [entry, "run", "--request", requestPath], {
+          cwd: root,
+          env: { ...process.env, MELRA_HOME: join(root, ".melra"), MELRA_WORKSPACE: root },
+        }),
+      ).rejects.toMatchObject({ code: 2, stdout: expect.stringContaining("http_upgrade_refused") });
+    } finally {
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>((resolve) => switching.close(() => resolve()));
+    }
+  });
+
+  it("exits 1, not 0, when the effect run waits on never returns", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-cli-"));
+    roots.push(root);
+    // A request that never emits anything at all, whatever ends it: the run's
+    // timers are unref'd, so nothing holds the event loop and Node exits.
+    const stall = `data:text/javascript,${encodeURIComponent(
+      'import http from "node:http"; import { EventEmitter } from "node:events";' +
+        'import { syncBuiltinESMExports } from "node:module";' +
+        "http.request = () => Object.assign(new EventEmitter(), { write() {}, end() {}, destroy() {} });" +
+        "syncBuiltinESMExports();",
+    )}`;
+    const requestPath = join(root, "task.json");
+    await writeFile(
+      requestPath,
+      JSON.stringify({
+        goal: "Read a status page",
+        operation: { kind: "http", action: "request", method: "GET", url: "http://127.0.0.1:9/status", timeoutMs: 500 },
+        budget: { maxDurationMs: 1_000, maxRetries: 0 },
+      }),
+    );
+    await expect(
+      execute(process.execPath, ["--import", stall, entry, "run", "--request", requestPath], {
+        cwd: root,
+        env: { ...process.env, MELRA_HOME: join(root, ".melra"), MELRA_WORKSPACE: root },
+      }),
+    ).rejects.toMatchObject({ code: 1, stdout: "" });
+  });
+
   it("serves on a socket only with --socket, and doctor reports the socket's mode", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-cli-"));
     roots.push(root);
@@ -1730,7 +2049,7 @@ describe("melra CLI", () => {
         cwd: root,
         env: { ...env, MELRA_MODE: "enfroced" },
       }),
-    ).rejects.toThrow(/deployment_mode_unknown/);
+    ).rejects.toThrow(/deployment_mode_unknown: MELRA_MODE must be developer or enforced/);
   });
 
   it("initializes a safe local policy and client configuration", async () => {
@@ -2190,14 +2509,34 @@ describe("melra CLI", () => {
     expect(
       (JSON.parse(inspected.stdout) as { status: string }).status,
     ).toBe("verified_complete");
-    const cancelled = await execute(
+    // A cancel exits 0 when it leaves the run cancelled and 1 when it does
+    // not, as `approve --deny` does, never 2 for one that worked (#403).
+    const unchanged = (await execute(
       process.execPath,
       [entry, "workflow", "cancel", run.id],
+      options,
+    ).catch((error: unknown) => error)) as { code: number; stdout: string };
+    expect(unchanged.code).toBe(1);
+    expect(
+      (JSON.parse(unchanged.stdout) as { status: string }).status,
+    ).toBe("verified_complete");
+    const second = JSON.parse(
+      (
+        await execute(
+          process.execPath,
+          [entry, "workflow", "plan", "--definition", definitionPath],
+          options,
+        )
+      ).stdout,
+    ) as { id: string };
+    const cancelled = await execute(
+      process.execPath,
+      [entry, "workflow", "cancel", second.id],
       options,
     );
     expect(
       (JSON.parse(cancelled.stdout) as { status: string }).status,
-    ).toBe("verified_complete");
+    ).toBe("cancelled");
   });
 
   it("uses stable exit codes for workflow approval and unknown IDs", async () => {
@@ -2246,13 +2585,35 @@ describe("melra CLI", () => {
       options,
     );
     const workflowId = (JSON.parse(planned.stdout) as { id: string }).id;
-    await expect(
-      execute(
-        process.execPath,
-        [entry, "workflow", "advance", workflowId],
-        options,
-      ),
-    ).rejects.toMatchObject({ code: 3 });
+    const asked = (await execute(
+      process.execPath,
+      [entry, "workflow", "advance", workflowId],
+      options,
+    ).catch((error: unknown) => error)) as { code: number; stdout: string };
+    expect(asked.code).toBe(3);
+    const { approval } = (
+      JSON.parse(asked.stdout) as {
+        run: { nodes: { write: { approval: { approvalId: string; phrase: string } } } };
+      }
+    ).run.nodes.write;
+    // Flags written before the id count as they do after it (#402).
+    const approved = await execute(
+      process.execPath,
+      [
+        entry,
+        "workflow",
+        "advance",
+        "--approval",
+        `${approval.approvalId}:${approval.phrase}`,
+        "--mode",
+        "developer",
+        workflowId,
+      ],
+      options,
+    );
+    expect(
+      (JSON.parse(approved.stdout) as { run: { status: string } }).run.status,
+    ).toBe("verified_complete");
     await expect(
       execute(
         process.execPath,

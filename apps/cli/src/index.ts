@@ -15,7 +15,6 @@ import {
   WorkflowDefinitionSchema,
   WorkflowInputSchema,
   PRODUCT_VERSION,
-  deploymentMode,
   principalRef,
   type ApprovalResponse,
   type TaskRequest,
@@ -46,7 +45,7 @@ import {
 } from "@melra/server/kernel";
 import { detectBrowserExecutable } from "@melra/browser-runtime";
 import { createSystemComputerAdapter } from "@melra/computer-runtime";
-import { capabilityUsageReader, withDefaultEvidence } from "@melra/runtime-core";
+import { capabilityUsageReader, withDefaultEvidence, type ExecutionResult } from "@melra/runtime-core";
 import { SqliteStore } from "@melra/storage-sqlite";
 import {
   classifyOperation,
@@ -58,6 +57,7 @@ import {
 import {
   type CliEnvironment,
   approverLabel,
+  namedDeploymentMode,
   parseCliEnvironment,
   serverLaunch,
 } from "./environment.js";
@@ -214,6 +214,24 @@ function argument(name: string, args: string[]): string | undefined {
 }
 
 /**
+ * The arguments that are neither a flag nor a flag's value, in order: the
+ * action and the id a command acts on, wherever they sit among the flags.
+ * Taking the first argument instead read `inspect --mode enforced <id>` as a
+ * task named `--mode` (#402). `valued` is the command's own flags that take a
+ * value; `--mode` is every command's.
+ */
+function positionals(args: readonly string[], valued: readonly string[] = []): string[] {
+  const skipped = new Set(["--mode", ...valued]);
+  const found: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const value = args[index]!;
+    if (!value.startsWith("--")) found.push(value);
+    else if (skipped.has(value)) index += 1;
+  }
+  return found;
+}
+
+/**
  * A flag this command does not know is a typo, and a typo must not be silently
  * ignored: `melra run --requst t.json` fell through to reading stdin, which in
  * a terminal prints nothing and in a pipeline that never closes hangs forever.
@@ -360,33 +378,31 @@ async function workflowCommand(
   args: string[],
   env: CliEnvironment,
 ): Promise<number> {
-  const [action, ...actionArgs] = args;
+  // The flag readers below skip the action, so they take every argument.
+  const [action, workflowId] = positionals(args, ["--definition", "--approval", "--input"]);
   const melra = await runtime(env);
   try {
     switch (action) {
       case "plan": {
         const run = melra.workflows.plan(
-          await readWorkflowDefinition(actionArgs),
+          await readWorkflowDefinition(args),
         );
         output(run);
         return workflowExitCode(run.status);
       }
       case "advance": {
-        const workflowId = actionArgs[0];
         if (workflowId === undefined) {
           throw new Error("workflow advance requires a workflow ID");
         }
-        const rest = actionArgs.slice(1);
         const result = await melra.workflows.advance(
           workflowId,
-          workflowApprovals(rest),
-          workflowInputs(rest),
+          workflowApprovals(args),
+          workflowInputs(args),
         );
         output(result);
         return workflowExitCode(result.run.status);
       }
       case "inspect": {
-        const workflowId = actionArgs[0];
         if (workflowId === undefined) {
           throw new Error("workflow inspect requires a workflow ID");
         }
@@ -394,18 +410,19 @@ async function workflowCommand(
         return 0;
       }
       case "cancel": {
-        const workflowId = actionArgs[0];
         if (workflowId === undefined) {
           throw new Error("workflow cancel requires a workflow ID");
         }
         const run = melra.workflows.cancel(workflowId);
         output(run);
-        return workflowExitCode(run.status);
+        // Whether the cancel took, as `approve --deny` reports it. Read off the
+        // run's status instead, a cancel that worked exited 2 and one that
+        // left a finished run as it was exited 0 (#403).
+        return run.status === "cancelled" ? 0 : 1;
       }
       case "pause":
       case "resume":
       case "suspend": {
-        const workflowId = actionArgs[0];
         if (workflowId === undefined) {
           throw new Error(`workflow ${action} requires a workflow ID`);
         }
@@ -886,16 +903,41 @@ async function runTask(args: string[], env: CliEnvironment): Promise<number> {
       const view = melra.controller.approvalView(task.id);
       if (!(await confirmInTerminal(view))) return 1;
       melra.controller.decide(task.id, view.renderDigest, approver);
-      const execution = await melra.controller.execute(task.id);
-      output(execution);
-      return execution.task.status === "verified_success" ? 0 : 2;
+      return printRun(await melra.controller.execute(task.id), melra.controller.enforced);
     }
-    const execution = await melra.controller.execute(task.id);
-    output(execution);
-    return execution.task.status === "verified_success" ? 0 : 2;
+    return printRun(await melra.controller.execute(task.id), melra.controller.enforced);
   } finally {
     await melra.close();
   }
+}
+
+/**
+ * Prints a task `melra run` ran and returns its exit code. One waiting on a
+ * semantic question is not a failure but a person's turn, as an approval is:
+ * it exits 5, not 2, and `next` holds the command that answers each of its
+ * judgements, one per line (#404). A task that ran enforced takes a verdict
+ * only from an enforced process, so its commands ask for one. The verdict is
+ * last and left as `<yes|no|cannot_tell>`, which a shell refuses to parse:
+ * pasted as `--verdict yes|no|cannot_tell`, it ran `melra judge ... --verdict
+ * yes` piped into two missing commands, and so recorded a yes nobody chose.
+ */
+function printRun(execution: ExecutionResult, enforced: boolean): number {
+  const { task } = execution;
+  if (task.status === "waiting_user") {
+    const mode = enforced ? " --mode enforced" : "";
+    output({
+      ...execution,
+      next: (task.judgements ?? [])
+        .map((entry) => `melra judge ${task.id} --judgement ${entry.judgementId}${mode} --verdict <yes|no|cannot_tell>`)
+        .join("\n"),
+    });
+    return 5;
+  }
+  output(execution);
+  // Execute's own policy check, as when a grant expired or was spent while
+  // the prompt was open, blocks it as plan's does: nothing ran.
+  if (task.status === "policy_blocked") return 4;
+  return task.status === "verified_success" ? 0 : 2;
 }
 
 /**
@@ -917,8 +959,7 @@ function resolveTaskId(melra: MelraRuntime, given: string, status?: TaskStatus):
  * the agent that planned it runs it, and the decision lets it.
  */
 async function approveCommand(args: string[], env: CliEnvironment): Promise<number> {
-  // `--mode` is the one flag here that takes a value.
-  const given = args.find((value, index) => !value.startsWith("--") && args[index - 1] !== "--mode");
+  const [given] = positionals(args);
   if (given === undefined) throw new Error("approve requires a task ID");
   const approver = approverLabel(env);
   const melra = await runtime(env);
@@ -963,8 +1004,7 @@ async function approveCommand(args: string[], env: CliEnvironment): Promise<numb
  * whole, so a verdict never lands on a question nobody named.
  */
 async function judgeCommand(args: string[], env: CliEnvironment): Promise<number> {
-  const valued = ["--mode", "--judgement", "--verdict", "--rationale"];
-  const taskId = args.find((value, index) => !value.startsWith("--") && !valued.includes(args[index - 1] ?? ""));
+  const [taskId] = positionals(args, ["--judgement", "--verdict", "--rationale"]);
   if (taskId === undefined) throw new Error("judge requires a task ID");
   const judgementId = argument("--judgement", args);
   const given = argument("--verdict", args);
@@ -1020,7 +1060,7 @@ async function judgeCommand(args: string[], env: CliEnvironment): Promise<number
 }
 
 async function inspectTask(args: string[], env: CliEnvironment): Promise<void> {
-  const given = args[0];
+  const [given] = positionals(args);
   if (given === undefined) throw new Error("inspect requires a task ID");
   const melra = await runtime(env);
   try {
@@ -1182,6 +1222,13 @@ Usage:
   melra policy test --request <task.json>
   melra version [--json]
 
+'melra run' exits 0 when the task is verified_success, 2 when it ran and is
+not (partial, failed, recovery_required and the like), 3 when it needs an
+approval and there is no terminal to ask in, 4 when policy blocks it, and 5
+when it waits on a semantic judgement, with 'next' holding the 'melra judge'
+command for each of its judgements, one per line, its verdict left for you to
+fill in. An error, or a no at its prompt, exits 1.
+
 'melra console', run by you in a terminal, opens an approval console in your
 browser, on a server of its own with no MCP endpoint, that approves or denies
 as 'melra approve' does. It pairs with the first page to use its code, normally
@@ -1277,13 +1324,27 @@ async function main(): Promise<void> {
     );
   }
   const modeFlag = argument("--mode", args);
+  // `--mode "$MODE"` with MODE unset, or a --mode with nothing after it, read
+  // as developer: an operator who meant enforced got a normal-looking start
+  // in the mode that lets the agent approve its own effects.
+  if (
+    args.includes("--mode") &&
+    (modeFlag === undefined || modeFlag.trim() === "" || modeFlag.startsWith("--"))
+  ) {
+    throw new Error("--mode requires developer or enforced");
+  }
+  // Only the first is read, so a second one, blank or enforced, was ignored:
+  // `melra serve --mode developer "$@"` with `--mode enforced` ran developer.
+  if (args.filter((value) => value === "--mode").length > 1) {
+    throw new Error("--mode given more than once");
+  }
   const requested: CliEnvironment = {
     ...parsed,
     unhinged:
       parsed.unhinged || deprecated || args.includes("--unsafe-local"),
     // The strictest of the flag and the variable, as for the policy file below:
     // `--mode developer` does not undo MELRA_MODE=enforced.
-    ...(modeFlag === undefined || deploymentMode(modeFlag) === "developer"
+    ...(modeFlag === undefined || namedDeploymentMode(modeFlag, "--mode") === "developer"
       ? {}
       : { mode: "enforced" as const }),
   };
@@ -1437,6 +1498,10 @@ async function main(): Promise<void> {
     }
     case "run":
       rejectUnknownFlags(args, ["--request"]);
+      // Failed until the task says otherwise: an effect that never returns
+      // leaves the event loop empty, and Node exits with whatever the code is
+      // then. It was 0, the code for verified_success.
+      process.exitCode = 1;
       process.exitCode = await runTask(args, env);
       return;
     case "console": {
@@ -1533,14 +1598,17 @@ async function main(): Promise<void> {
     }
     case "workflow":
       rejectUnknownFlags(args, ["--definition", "--approval", "--input"]);
+      // As for run: an advance that never returns does not exit 0.
+      process.exitCode = 1;
       process.exitCode = await workflowCommand(args, env);
       return;
     case "demo":
       rejectUnknownFlags(args, []);
       // One demo today, so naming it is optional.
-      if ((args[0] ?? "durable-core") !== "durable-core") {
+      if ((positionals(args)[0] ?? "durable-core") !== "durable-core") {
         throw new Error("demo supports only 'durable-core'");
       }
+      process.exitCode = 1;
       process.exitCode = await durableCoreDemo(env);
       return;
     case "clients":
@@ -1548,9 +1616,9 @@ async function main(): Promise<void> {
       process.exitCode = clientsCommand(args, env);
       return;
     case "policy":
-      if (args[0] !== "test") throw new Error("policy supports only 'test'");
-      rejectUnknownFlags(args.slice(1), ["--request"]);
-      await policyTest(args.slice(1), env);
+      if (positionals(args, ["--request"])[0] !== "test") throw new Error("policy supports only 'test'");
+      rejectUnknownFlags(args, ["--request"]);
+      await policyTest(args, env);
       return;
     case "version":
     case "--version":

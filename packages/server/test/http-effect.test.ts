@@ -11,7 +11,7 @@
 
 import { createServer, type Server } from "node:http";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import type { AddressInfo } from "node:net";
+import { createServer as createTcpServer, type AddressInfo, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -166,6 +166,37 @@ describe("a governed API call", () => {
     expect(task.status).toBe("partial");
     expect(receipt?.success).toBe(true);
     expect(receipt?.evidence[0]?.passed).toBe(false);
+  });
+
+  it("parks a POST answered with a protocol switch for recovery instead of leaving it running", async () => {
+    // Answers any request with a 101 and holds the socket open.
+    const sockets = new Set<Socket>();
+    const switching = createTcpServer((socket) => {
+      sockets.add(socket);
+      socket.on("error", () => undefined);
+      socket.on("data", () =>
+        socket.write("HTTP/1.1 101 Switching Protocols\r\nUpgrade: x\r\nConnection: Upgrade\r\n\r\n"),
+      );
+    });
+    await new Promise<void>((resolve) => switching.listen(0, "127.0.0.1", resolve));
+    try {
+      const port = (switching.address() as AddressInfo).port;
+      const planned = runtime.controller.plan(post(`http://127.0.0.1:${port}/orders`, "{}"));
+      const { task, receipt } = await runtime.controller.execute(planned.id, {
+        approvalId: planned.approval!.approvalId,
+        phrase: planned.approval!.phrase!,
+      });
+      // The request reached the far end, so it may have acted: unknown, not
+      // failed, and never a task left `running` with no receipt.
+      expect(task).toMatchObject({
+        status: "recovery_required",
+        error: "effect_outcome_unknown:http_upgrade_refused",
+      });
+      expect(receipt).toBeDefined();
+    } finally {
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>((resolve) => switching.close(() => resolve()));
+    }
   });
 
   it("denies a host outside the allowlist at plan time", () => {

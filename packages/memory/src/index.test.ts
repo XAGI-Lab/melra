@@ -322,6 +322,101 @@ describe("LocalMemory", () => {
     expect(ranked[0]?.id).toBe("00000000-0000-4000-8000-000000000022");
   });
 
+  it("reads a record's tokens a bounded number of times, however many terms the query has (#405)", () => {
+    const now = "2026-07-28T00:00:00.000Z";
+    const value = Array.from({ length: 2_000 }, (_, index) => `w${index}`).join(" ");
+    // 500 terms the record lacks and one it holds.
+    const query = `${Array.from({ length: 500 }, (_, index) => `q${index}`).join(" ")} w7`;
+    // Every token array comes from `tokenize`'s `match`, so counting the
+    // elements read from them measures the ranking's work without a clock.
+    const match = String.prototype.match;
+    let reads = 0;
+    String.prototype.match = function (this: string, matcher: RegExp) {
+      const found = match.call(this, matcher);
+      return found === null
+        ? null
+        : new Proxy(found, {
+            get(target, key, receiver) {
+              if (typeof key === "string" && /^\d+$/.test(key)) reads += 1;
+              return Reflect.get(target, key, receiver);
+            },
+          });
+    } as typeof match;
+    let ranked: RankedMemory[];
+    try {
+      ranked = rankMemories(
+        [
+          {
+            id: "00000000-0000-4000-8000-000000000031",
+            scope: "workspace",
+            key: "transcript",
+            value,
+            source: "test",
+            confidence: 1,
+            tags: [],
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+        query,
+        1,
+        Date.parse(now),
+      );
+    } finally {
+      String.prototype.match = match;
+    }
+    expect(ranked[0]?.scoreBreakdown.lexical).toBeGreaterThan(0);
+    // A few passes over the record's 2,001 tokens and the query's 501. One
+    // pass over the record per query term reads over a million. At least one
+    // pass each, or the count measured nothing.
+    expect(reads).toBeGreaterThanOrEqual(2_001 + 501);
+    expect(reads).toBeLessThan(5 * (2_001 + 501));
+  });
+
+  it("looks a record's terms up a bounded number of times, however many records and query terms there are (#405)", () => {
+    const now = "2026-07-28T00:00:00.000Z";
+    // 1,000 records of 11 tokens, and a query of 2,000 terms none of them
+    // holds plus one that one of them does.
+    const records = Array.from({ length: 1_000 }, (_, record) => ({
+      id: `00000000-0000-4000-8000-${String(record).padStart(12, "0")}`,
+      scope: "workspace" as const,
+      key: "note",
+      value: Array.from({ length: 10 }, (_, token) => `r${record}t${token}`).join(" "),
+      source: "test",
+      confidence: 1,
+      tags: [],
+      createdAt: now,
+      updatedAt: now,
+    }));
+    const query = `${Array.from({ length: 2_000 }, (_, index) => `q${index}`).join(" ")} r7t3`;
+    // A term is scored by looking it up, so counting the lookups measures the
+    // ranking's work without a clock.
+    const { get, has } = Map.prototype;
+    let lookups = 0;
+    Map.prototype.get = function (this: Map<unknown, unknown>, key: unknown) {
+      lookups += 1;
+      return get.call(this, key);
+    };
+    Map.prototype.has = function (this: Map<unknown, unknown>, key: unknown) {
+      lookups += 1;
+      return has.call(this, key);
+    };
+    let ranked: RankedMemory[];
+    try {
+      ranked = rankMemories(records, query, 1, Date.parse(now));
+    } finally {
+      Map.prototype.get = get;
+      Map.prototype.has = has;
+    }
+    expect(ranked[0]?.id).toBe("00000000-0000-4000-8000-000000000007");
+    expect(ranked[0]?.scoreBreakdown.lexical).toBeGreaterThan(0);
+    // A few lookups per record token and query term. One per query term per
+    // record is over two million. At least one per record token, or the count
+    // measured nothing.
+    expect(lookups).toBeGreaterThanOrEqual(1_000 * 11);
+    expect(lookups).toBeLessThan(5 * (1_000 * 11 + 2_001));
+  });
+
   it("edits a superseding record without losing it or the one it replaced", () => {
     store = new SqliteStore(":memory:");
     const memory = new LocalMemory(store);
