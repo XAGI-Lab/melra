@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createServer, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
+import { createServer as createTcpServer, type AddressInfo, type Socket } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { HttpOperationSchema } from "@melra/protocol";
 import type { CredentialBroker } from "@melra/policy-core";
@@ -297,6 +297,41 @@ describe("http runtime", () => {
     await expect(
       runtime().execute(operation({ method: "GET", url: `http://localhost:${port}/` })),
     ).rejects.toThrow(/ECONNREFUSED/);
+  });
+
+  describe("against a far end that answers 101 Switching Protocols", () => {
+    let switching: ReturnType<typeof createTcpServer>;
+    let switchingOrigin: string;
+    const sockets = new Set<Socket>();
+    beforeAll(async () => {
+      // Answers any request with an upgrade and holds the socket open.
+      switching = createTcpServer((socket) => {
+        sockets.add(socket);
+        socket.on("close", () => sockets.delete(socket));
+        socket.on("error", () => undefined);
+        socket.on("data", () =>
+          socket.write("HTTP/1.1 101 Switching Protocols\r\nUpgrade: x\r\nConnection: Upgrade\r\n\r\n"),
+        );
+      });
+      await new Promise<void>((resolve) => switching.listen(0, "127.0.0.1", resolve));
+      switchingOrigin = `http://127.0.0.1:${(switching.address() as AddressInfo).port}`;
+    });
+    afterAll(async () => {
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>((resolve) => switching.close(() => resolve()));
+    });
+
+    it("settles a GET and a POST instead of hanging", async () => {
+      // Node took the reply for a protocol switch and ended the request with
+      // only 'close', so neither timeoutMs nor anything above it ever fired.
+      for (const fields of [{ method: "GET" }, { method: "POST", content: "charge" }]) {
+        const started = Date.now();
+        await expect(
+          runtime().execute(operation({ ...fields, url: `${switchingOrigin}/x`, timeoutMs: 500 })),
+        ).rejects.toThrow("effect_outcome_unknown:http_upgrade_refused");
+        expect(Date.now() - started).toBeLessThan(500);
+      }
+    });
   });
 
   it("does not send a mutation down an idle connection the server has closed", async () => {

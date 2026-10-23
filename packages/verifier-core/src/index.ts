@@ -78,8 +78,8 @@ const TOKEN = /\{\{([A-Za-z0-9_.]{1,64})\}\}/gu;
  * The id of the thing to re-read is only known after the effect ran, so the
  * URL has to be completed from the result. Tokens are bounded to a dotted path
  * and each value is percent-encoded, so a response field carrying `../` or a
- * `?` cannot rewrite the path the operator wrote. An unresolved token fails the
- * predicate rather than producing a URL with a hole in it.
+ * `?` cannot rewrite the path the operator wrote. An unresolved or empty token
+ * fails the predicate rather than producing a URL with a hole in it.
  */
 function interpolate(template: string, result: Record<string, unknown>): string {
   const source = withParsedBody(result);
@@ -92,6 +92,9 @@ function interpolate(template: string, result: Record<string, unknown>): string 
     // reads `%2E%2E` as `..` too), so `{"id": ".."}` moved the probe up a
     // level onto some other resource and verified that.
     if (value === "." || value === "..") throw new Refusal(`verification_token_dot_segment:${path}`);
+    // An empty value splices nothing, which points the read at a different
+    // resource from the one the URL names.
+    if (value === "") throw new Refusal(`verification_token_empty:${path}`);
     return encodeURIComponent(String(value));
   });
 }
