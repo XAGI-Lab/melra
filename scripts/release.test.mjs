@@ -210,3 +210,42 @@ function main(): void {
   assert.match(result.stderr, /could not find help\(\) and the end of its template literal/);
   assert.match(result.stderr, /MELRA_FRESH \(first seen at apps\/cli\/src\/index\.ts:11\) has no row/);
 });
+
+test("docs:check fails a name help() mentions in its prose that has no row", () => {
+  // MELRA_HOMEDIR is a typo in a description, not an Environment line.
+  const cli = `function help(): void {
+  process.stdout.write(\`MELRA
+
+  --home DIR                       Same as MELRA_HOMEDIR=DIR
+
+Environment:
+  MELRA_HOME                       Data directory\`);
+}
+const home = process.env.MELRA_HOME;
+`;
+  const result = node("scripts/check-env-docs.mjs", [], scratch({
+    "docs/INSTALLATION.md": "| Variable | Meaning |\n| --- | --- |\n| `MELRA_HOME` | x |\n",
+    "apps/cli/src/index.ts": cli,
+  }));
+  assert.match(result.stderr, /'melra help' names MELRA_HOMEDIR, which has no row in docs\/INSTALLATION\.md/);
+  assert.doesNotMatch(result.stderr, /MELRA_HOME[^D]/);
+});
+
+test("docs:check fails loudly when help() cannot be found", () => {
+  // Renamed, help() would leave start and end both -1; the whole file must
+  // not be blanked, so the read in main() is still reported.
+  const cli = `function usage(): void {
+  process.stdout.write(\`MELRA
+
+Environment:
+  MELRA_HOME                       Data directory\`);
+}
+const fresh = process.env.MELRA_FRESH;
+`;
+  const result = node("scripts/check-env-docs.mjs", [], scratch({
+    "docs/INSTALLATION.md": "| Variable | Meaning |\n| --- | --- |\n| `MELRA_HOME` | x |\n",
+    "apps/cli/src/index.ts": cli,
+  }));
+  assert.match(result.stderr, /could not find help\(\) and the end of its template literal/);
+  assert.match(result.stderr, /MELRA_FRESH \(first seen at apps\/cli\/src\/index\.ts:7\) has no row/);
+});
