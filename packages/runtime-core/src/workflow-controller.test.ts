@@ -2864,6 +2864,8 @@ describe("WorkflowController recovery", () => {
       status: "pending",
       taskIds: [task.id],
     });
+    expect(recovered?.status).toBe("running");
+    expect(store.listWorkflowEvents(planned.id).at(-1)?.type).toBe("workflow.recovered");
 
     const completed = await restarted.advance(planned.id);
     expect(completed.run.status).toBe("verified_complete");
@@ -2933,6 +2935,84 @@ describe("WorkflowController recovery", () => {
       store.listWorkflowEvents(planned.id).at(-1)?.type,
     ).toBe("workflow.recovery_required");
     expect(execute).not.toHaveBeenCalled();
+
+    // Read again, it is as that pass left it: nothing more is recorded.
+    const events = store.listWorkflowEvents(planned.id);
+    await restarted.recoverInterrupted();
+    expect(store.listWorkflowEvents(planned.id)).toEqual(events);
+  });
+
+  it("names why an advance parked a run once, at the next start", async () => {
+    const { controller, store, tasks, cipher } = await setup(async () => {
+      throw outcomeUnknown("socket hang up");
+    });
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Write whose reply is lost",
+        nodes: [{ id: "write", type: "operation", request: mutationRequest("Write") }],
+      }),
+    );
+    const waiting = await controller.advance(planned.id);
+    const approval = waiting.run.nodes.write!.approval!;
+    const { run: parked } = await controller.advance(planned.id, [
+      { approvalId: approval.approvalId, phrase: approval.phrase! },
+    ]);
+    expect(parked.status).toBe("recovery_required");
+    expect(parked.error).toBeUndefined();
+    const before = store.listWorkflowEvents(planned.id).length;
+
+    // The advance named no reason; the next start names the one the run
+    // halted for, once.
+    await new WorkflowController(store, tasks, cipher).recoverInterrupted();
+    expect(store.getWorkflowRun(planned.id)?.error).toBe("workflow_contains_unreconciled_mutation");
+    const events = store.listWorkflowEvents(planned.id);
+    expect(events.slice(before).map((event) => event.type)).toEqual(["workflow.recovery_required"]);
+
+    await new WorkflowController(store, tasks, cipher).recoverInterrupted();
+    expect(store.listWorkflowEvents(planned.id)).toEqual(events);
+  });
+
+  it("leaves a run nobody advanced planned, with no recovery recorded (#406)", async () => {
+    const { controller, store, tasks, cipher } = await setup();
+    const planned = controller.plan(definition("Never advanced"));
+    const events = store.listWorkflowEvents(planned.id);
+
+    const restarted = new WorkflowController(store, tasks, cipher);
+    await restarted.recoverInterrupted();
+
+    expect(store.getWorkflowRun(planned.id)).toMatchObject({
+      status: "planned",
+      stateVersion: planned.stateVersion,
+    });
+    expect(store.listWorkflowEvents(planned.id)).toEqual(events);
+    expect((await restarted.advance(planned.id)).run.status).toBe("verified_complete");
+  });
+
+  it("records no recovery for a run stopped between two advances", async () => {
+    const { controller, store, tasks, cipher } = await setup();
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Between advances",
+        nodes: [
+          { id: "first", type: "operation", request: request("First") },
+          { id: "second", type: "operation", dependsOn: ["first"], request: request("Second") },
+        ],
+      }),
+    );
+    const { run } = await controller.advance(planned.id);
+    expect(run.status).toBe("running");
+    const events = store.listWorkflowEvents(planned.id);
+
+    await new WorkflowController(store, tasks, cipher).recoverInterrupted();
+
+    expect(store.getWorkflowRun(planned.id)).toEqual(run);
+    expect(store.listWorkflowEvents(planned.id)).toEqual(events);
   });
 
   it("ignores a corrupt snapshot only when full event replay succeeds", async () => {
@@ -2946,7 +3026,7 @@ describe("WorkflowController recovery", () => {
       .run(planned.id, planned.updatedAt);
 
     await expect(controller.recoverInterrupted()).resolves.toHaveLength(1);
-    expect(store.getWorkflowRun(planned.id)?.status).toBe("running");
+    expect(store.getWorkflowRun(planned.id)?.status).toBe("planned");
   });
 
   it("fails closed when workflow event history is corrupt", async () => {

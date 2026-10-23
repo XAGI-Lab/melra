@@ -392,6 +392,11 @@ interface is served.
   was during verification or finished, never with part of its outcome.
 - A verified task committed before its workflow projection is repaired from
   persisted task evidence and recorded as `workflow.recovered`.
+- A run recovery finds as it was left, such as one planned and never advanced
+  or one stopped between two advances, is not rewritten: it keeps its status
+  and records no event. A `recovery_required` run an advance parked without
+  naming why is the exception: the next start names it, recording one
+  `workflow.recovery_required`.
 - An advance whose commit failed leaves the run naming none of the tasks it
   planned or ran. The next advance takes each step's task up by its
   idempotency key, as recovery does: the one committed, else the one

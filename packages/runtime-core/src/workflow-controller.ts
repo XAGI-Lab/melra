@@ -1031,14 +1031,27 @@ export class WorkflowController {
         status = this.deriveStatus(draft, definition);
       }
       const from = draft.status;
-      draft.status = status;
       // Named the way advanceOnce names a stalled unwind, so a run reads the
       // same whether its process died or not.
-      if (status === "recovery_required") {
-        draft.error = haltReason(definition, draft.nodes) ?? "workflow_contains_unreconciled_mutation";
-      } else {
-        delete draft.error;
+      const error =
+        status === "recovery_required"
+          ? (haltReason(definition, draft.nodes) ?? "workflow_contains_unreconciled_mutation")
+          : undefined;
+      // Nothing to recover: no node moved, and the run already reads as its
+      // nodes say, or is planned with every node pending, which derives
+      // running only because nobody has advanced it (#406). Recorded anyway,
+      // every process that started logged a recovery that never happened, and
+      // a planned run read as running everywhere but where it was planned.
+      if (
+        canonicalJson(draft.nodes) === canonicalJson(stored.nodes) &&
+        (status === from || (from === "planned" && status === "running")) &&
+        error === draft.error
+      ) {
+        return;
       }
+      draft.status = status;
+      if (error === undefined) delete draft.error;
+      else draft.error = error;
       emit(
         status === "recovery_required"
           ? "workflow.recovery_required"

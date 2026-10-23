@@ -590,9 +590,9 @@ melra workflow advance <workflow-id>
 ```text
 planned            stateVersion=2
 running            stateVersion=4   inspect=verified_complete
-awaiting_approval  stateVersion=7   phrase="APPROVE <digest prefix>"   (developer mode)
-running            stateVersion=10  write=verified_complete
-verified_complete  stateVersion=14  checkpoint=verified_complete
+awaiting_approval  stateVersion=6   phrase="APPROVE <digest prefix>"   (developer mode)
+running            stateVersion=8   write=verified_complete
+verified_complete  stateVersion=11  checkpoint=verified_complete
 ```
 
 Stop the process after any line and the next command resumes from the same

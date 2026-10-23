@@ -2166,6 +2166,13 @@ describe("melra CLI", () => {
     );
     const run = JSON.parse(planned.stdout) as { id: string; status: string };
     expect(run.status).toBe("planned");
+    // Another process's startup recovery finds nothing to recover (#406).
+    const unadvanced = await execute(
+      process.execPath,
+      [entry, "workflow", "inspect", run.id],
+      options,
+    );
+    expect((JSON.parse(unadvanced.stdout) as { status: string }).status).toBe("planned");
 
     const advanced = await execute(
       process.execPath,
