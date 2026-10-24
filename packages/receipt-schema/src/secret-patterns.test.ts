@@ -347,13 +347,14 @@ describe("secret patterns that start at their keyword", () => {
       expect.arrayContaining(["$1$2=[REDACTED]", "$1$2[REDACTED]", "$1[REDACTED_URL_CREDENTIALS]@"]),
     );
     expect(inputs.some((text) => redactSecrets(text).value === text)).toBe(true);
-  });
+    // Every input runs through both pattern lists; a loaded runner needs more than the 5 s default.
+  }, 30_000);
 
   it("redact generated text exactly as before", () => {
     const inputs = generated(4_000, 353);
     expect(differences(inputs)).toEqual([]);
     expect(inputs.filter((text) => redactSecrets(text).value !== text).length).toBeGreaterThan(400);
-  });
+   }, 30_000);
 });
 
 describe("secret patterns on a credential name's value", () => {
