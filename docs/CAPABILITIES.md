@@ -314,9 +314,15 @@ Scopes: `session`, `task`, `project`, `workspace`, `user`, `procedural`.
 - Stored records include source, confidence, timestamps, and optional speaker,
   episode ID, and sequence metadata.
 - PEM and PGP private keys, AWS access key IDs, JWTs, Slack, GitHub and npm
-  tokens, common API keys, authorization headers, URL credentials, and
-  password, secret, token and API-key assignments are redacted — the same
-  `SECRET_PATTERNS` list receipts and terminal output use.
+  tokens, common API keys, authorization headers, URL credentials, and password,
+  secret, token and API-key assignments are redacted — the same
+  `SECRET_PATTERNS` list receipts and terminal output use. An assignment may use
+  `=`, `:`, `=>`, `:=` or `::=`, compare with `==`, or, for a password or secret
+  name, declare a type of letters, digits, `_`, `.`, `[]`, `<>` or `|`, up to 64
+  characters (`password: str = x`); a quoted value goes to its closing quote
+  within 256 characters, and a YAML block scalar's indented lines go, with the
+  blank lines between them (for a token or API-key name, when the token is all
+  of the first line).
 - Search is local and scoped with BM25-style lexical evidence, exact phrases,
   explicit speaker matching, bounded adjacent episode context, confidence,
   freshness, and bounded head diversity.
