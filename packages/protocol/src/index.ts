@@ -284,7 +284,7 @@ export const HttpOperationSchema = z
      * place for a bearer token or a password to be written down, and the
      * persisted copy must not hold one. `body` is taken: a `bounded_loop`
      * workflow node uses it for its step list, which must survive redaction to
-     * stay parseable.
+     * stay parseable. On a `GET` or `HEAD` it makes the call a mutation.
      */
     content: boundedText.optional(),
     /**
@@ -419,8 +419,9 @@ export const EvidencePredicateSchema = z.discriminatedUnion("type", [
    *
    * The request is an effect and gets no shortcut: it goes out through the same
    * adapter, the same destination boundary, and the same allowlist as any other
-   * HTTP call. `GET` and `HEAD` only — a verification that changes something is
-   * not a verification.
+   * HTTP call, and in enforced mode one to a host only `*` admits is shown to
+   * the operator at planning, as a read sent there is. `GET` and `HEAD` only — a
+   * verification that changes something is not a verification.
    */
   z
     .object({

@@ -859,6 +859,95 @@ describe("enforced-mode reads that leave the workspace", () => {
   });
 });
 
+describe("enforced-mode network reads", () => {
+  const enforced = { ...createDefaultPolicy(root), mode: "enforced" as const };
+  const plan = (operation: Record<string, unknown>, policy: LocalPolicy = enforced) =>
+    evaluatePolicy(
+      "00000000-0000-4000-8000-000000000000",
+      TaskRequestSchema.parse({ goal: "Read", operation }),
+      policy,
+    );
+  const get = (url: string) => ({ kind: "http", action: "request", method: "GET", url });
+  const reads = [
+    get("https://example.com/x?q=1"),
+    { kind: "http", action: "request", method: "HEAD", url: "https://example.com/" },
+    { kind: "browser", action: "navigate", url: "https://example.com/x?q=1" },
+    { kind: "browser", action: "tab_new", url: "https://example.com/" },
+  ];
+
+  it("shows a person a read to a host only the wildcard lets through", () => {
+    for (const operation of reads) {
+      const result = plan(operation);
+      expect(result.decision, JSON.stringify(operation)).toMatchObject({
+        outcome: "confirm",
+        reason: "network_read_unlisted_host",
+        effect: "read",
+      });
+      expect(result.challenge?.actionDigest).toMatch(/^[a-f0-9]{64}$/);
+      expect(result.challenge).not.toHaveProperty("phrase");
+      // Mutations being off does not turn the question into a refusal.
+      expect(plan(operation, { ...enforced, mutations: "deny" }).decision.reason).toBe("network_read_unlisted_host");
+      // Developer mode is as it was.
+      expect(plan(operation, createDefaultPolicy(root)).decision.reason).toBe("read_only_operation");
+    }
+  });
+
+  it("lets a read to a host the policy names run without one", () => {
+    const named = { ...enforced, allowedDomains: ["*", "example.com"] };
+    for (const operation of reads) {
+      expect(plan(operation, named).decision.reason, JSON.stringify(operation)).toBe("read_only_operation");
+    }
+    expect(plan(get("https://api.example.com/"), named).decision.reason).toBe("read_only_operation");
+    expect(plan(get("https://example.org/"), named).decision.reason).toBe("network_read_unlisted_host");
+    // Loopback the operator opened is named by that, and a private address is
+    // the destination guard's to refuse.
+    expect(plan(get("http://127.0.0.1:8080/"), { ...enforced, allowLocalhost: true }).decision.reason).toBe(
+      "read_only_operation",
+    );
+    expect(plan(get("http://localhost:8080/"), { ...enforced, allowLocalhost: true }).decision.reason).toBe(
+      "read_only_operation",
+    );
+  });
+
+  it("shows a person a read whose evidence is read from a host the policy does not name", () => {
+    const named = { ...enforced, allowedDomains: ["*", "example.com"] };
+    const checked = (url: string, field: string, policy: LocalPolicy = enforced) =>
+      evaluatePolicy(
+        "00000000-0000-4000-8000-000000000000",
+        TaskRequestSchema.parse({
+          goal: "Read",
+          operation: { kind: "file", action: "read", path: "notes.txt" },
+          [field]: [{ type: "http_resource_matches", url, path: "status", value: 200 }],
+        }),
+        policy,
+      ).decision.reason;
+    for (const field of ["requiredEvidence", "reconciliation"]) {
+      expect(checked("https://example.com/c?d={{content}}", field), field).toBe("network_read_unlisted_host");
+      expect(checked("https://api.example.com/c?d={{content}}", field, named), field).toBe("read_only_operation");
+      // A token in the scheme or authority leaves the host to the result.
+      for (const url of [
+        "https://{{json.host}}/c",
+        "https://{{json.sub}}.example.com/c",
+        "https://api.example.com{{json.tld}}/c",
+        "https://api.example.com:{{json.port}}/c",
+        "https://{{json.user}}@api.example.com/c",
+        "{{json.scheme}}://api.example.com/c",
+      ]) {
+        expect(checked(url, field, named), `${field} ${url}`).toBe("network_read_unlisted_host");
+      }
+      expect(checked("https://example.com/c", field, createDefaultPolicy(root)), field).toBe("read_only_operation");
+    }
+  });
+
+  it("does not ask again for a page already reached", () => {
+    for (const action of ["inspect", "screenshot", "reload", "back", "tabs"]) {
+      expect(plan({ kind: "browser", action, url: "https://example.com/" }).decision.reason, action).toBe(
+        "read_only_operation",
+      );
+    }
+  });
+});
+
 describe("enforced-mode browser actions", () => {
   const enforced = { ...createDefaultPolicy(root), mode: "enforced" as const };
   const target = { selector: "#go" };
@@ -1559,6 +1648,23 @@ describe("http destinations", () => {
         createDefaultPolicy(root),
       ).decision.outcome,
     ).toBe("confirm");
+  });
+
+  it("takes a GET or HEAD that carries content for a mutation, in every mode", () => {
+    for (const method of ["GET", "HEAD"] as const) {
+      const sends = request({ method, url: "https://api.example.com/v1/orders", content: "x" });
+      expect(classifyOperation(sends.operation).effect, method).toBe("mutate");
+      for (const mode of ["developer", "enforced"] as const) {
+        const named = { ...createDefaultPolicy(root), allowedDomains: ["api.example.com"], mode };
+        expect(evaluatePolicy(taskId, sends, named).decision, `${method} ${mode}`).toMatchObject({
+          outcome: "confirm",
+          reason: "explicit_approval_required",
+          effect: "mutate",
+        });
+      }
+      // Without content it is the read it was.
+      expect(classifyOperation(request({ method, url: "https://api.example.com/" }).operation).effect).toBe("read");
+    }
   });
 
   it("applies the domain allowlist to HTTP, not only to the browser", () => {

@@ -547,7 +547,9 @@ export async function createMelraRuntime(
       // checked against the destination boundary, the allowlist, and the
       // credential scope like any other call. A read that could reach where an
       // effect may not would be a way to make the verifier fetch things for
-      // you.
+      // you. Policy holds the rest: in enforced mode a task whose check goes
+      // to a host only `*` admits waits for the operator, and a workflow's own
+      // check there is refused at planning and advance (`unlistedProbe`).
       probe: async (request) =>
         await http.execute(
           HttpOperationSchema.parse({

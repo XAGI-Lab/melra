@@ -533,7 +533,7 @@ pipeline; an adapter that skipped it would not be an adapter.
 | 💻 | **Terminal** | Shell-free foreground and supervised background processes with allowlists, traits, timeouts, interactive input, cancellation and redaction |
 | 🌐 | **Browser** | Isolated Playwright sessions, semantic DOM targets, bounded artifacts, network and popup policy, opt-in profiles, condition-based settling, and every browser call bounded so a stalled page fails clearly |
 | 🖥️ | **Computer** | Capability discovery, accessibility-tree and OCR inspection, and governed screenshot, pointer, drag, keyboard and scroll on macOS, Windows and supported Linux/X11 setups |
-| 📡 | **HTTP** | `GET`/`HEAD` as reads and every other method as an approval-gated at-most-once mutation, pinned to the address the destination check resolved, with credentials injected by the kernel rather than handed to the caller |
+| 📡 | **HTTP** | `GET`/`HEAD` without a body as reads and every other method as an approval-gated at-most-once mutation, pinned to the address the destination check resolved, with credentials injected by the kernel rather than handed to the caller |
 | 🧠 | **Operational memory** | A kernel service, not an adapter: scoped SQLite storage of what MELRA knows about its own effects, with hybrid ranking, freshness, expiry, supersession, provenance and redaction |
 
 Database, cloud and SaaS adapters are designed and on the [roadmap](ROADMAP.md), not

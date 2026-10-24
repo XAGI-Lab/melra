@@ -11,14 +11,21 @@
 // `verified_success`. Nothing here leaves loopback.
 
 import { createServer, type Server } from "node:http";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { TaskRequestSchema } from "@melra/protocol";
 import { createMelraRuntime } from "../src/index.js";
 import type { MelraRuntime } from "../src/runtime.js";
+
+// Every name answers loopback, so a request to a public-looking host the policy
+// does not name lands on the fixture below, where it can be counted. The other
+// tests use addresses, which are never looked up.
+vi.mock("node:dns/promises", () => ({
+  lookup: async () => [{ address: "127.0.0.1", family: 4 }],
+}));
 
 let fixture: Server;
 let port: number;
@@ -161,5 +168,44 @@ describe("a provider's own state, not the provider's answer", () => {
     expect(task.status).toBe("partial");
     expect(receipt?.evidence[0]?.passed).toBe(false);
     expect(seen).toEqual(["POST /refunds"]);
+  });
+});
+
+describe("in enforced mode", () => {
+  it("does not read a task's evidence from a host the policy does not name until an operator approves", async () => {
+    const home = await mkdtemp(join(tmpdir(), "melra-independent-enforced-"));
+    let enforced: MelraRuntime | undefined;
+    try {
+      await mkdir(join(home, "workspace"));
+      await writeFile(join(home, "workspace", "notes.txt"), "workspace-note", "utf8");
+      // The default `"*"`, with loopback opened so the fixture can answer.
+      await writeFile(join(home, "policy.json"), JSON.stringify({ allowLocalhost: true }), "utf8");
+      enforced = await createMelraRuntime({
+        workspaceRoot: join(home, "workspace"),
+        dataDirectory: join(home, "data"),
+        policyPath: join(home, "policy.json"),
+        environment: { MELRA_MODE: "enforced" },
+      });
+      seen = [];
+      const read = enforced.controller.plan(
+        TaskRequestSchema.parse({
+          goal: "Read a note",
+          operation: { kind: "file", action: "read", path: "notes.txt" },
+          requiredEvidence: [
+            { type: "http_resource_matches", url: `http://unlisted.example:${port}/c?d={{content}}`, path: "status", value: 200 },
+          ],
+        }),
+      );
+      expect(read.status).toBe("awaiting_approval");
+      expect(read.policyDecision.reason).toBe("network_read_unlisted_host");
+      await expect(enforced.controller.execute(read.id)).rejects.toThrow(/approval_awaiting_operator/);
+      expect(seen).toEqual([]);
+      enforced.controller.decide(read.id, enforced.controller.approvalView(read.id).renderDigest, "cli:test");
+      expect((await enforced.controller.execute(read.id)).task.status).toBe("verified_success");
+      expect(seen).toEqual(["GET /c?d=workspace-note"]);
+    } finally {
+      await enforced?.close();
+      await rm(home, { recursive: true, force: true });
+    }
   });
 });

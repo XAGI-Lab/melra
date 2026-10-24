@@ -38,6 +38,7 @@ import {
   evaluatePolicy,
   type CapabilityUsageReader,
   type LocalPolicy,
+  unlistedProbe,
   validateApproval,
 } from "@melra/policy-core";
 import {
@@ -451,8 +452,13 @@ export class TaskController {
     ).decision;
   }
 
-  /** Refuses a predicate no registered verifier can check, or that it would refuse to. */
-  assertVerifiable(predicates: EvidencePredicate[], options: { stored?: boolean } = {}): void {
+  /**
+   * Refuses a predicate no registered verifier can check, or that it would
+   * refuse to. A workflow's own `check` is asked with no approval in front of
+   * it, so in enforced mode one that reads from a host the policy admits only
+   * by `*` is refused, where a task's evidence there is shown to a person.
+   */
+  assertVerifiable(predicates: EvidencePredicate[], options: { stored?: boolean; check?: boolean } = {}): void {
     for (const predicate of predicates) {
       if (!this.verifier.supports(predicate)) {
         throw new Error(
@@ -465,6 +471,19 @@ export class TaskController {
       if (options.stored !== true && this.verifier.outsideWorkspace(predicate)) {
         throw new Error("evidence_path_outside_workspace");
       }
+    }
+    if (options.check === true) this.assertCheckListed(predicates);
+  }
+
+  /**
+   * Refuses, in enforced mode, a workflow check that reads from a host the
+   * policy admits only by `*`. Asked again each time a check is, since a run
+   * planned in developer mode, or before the planning check, can be advanced
+   * by an enforced process, as a task's policy is evaluated again at execute.
+   */
+  assertCheckListed(predicates: EvidencePredicate[]): void {
+    if (this.enforced && predicates.some((predicate) => unlistedProbe(predicate, this.policy))) {
+      throw new Error("workflow_check_unlisted_host");
     }
   }
 
@@ -922,6 +941,7 @@ export class TaskController {
     taskId: string,
     predicates: EvidencePredicate[],
   ): Promise<{ verified: boolean; evidence: EvidenceItem[] }> {
+    this.assertCheckListed(predicates);
     const sealed = this.store.getTaskResult(taskId);
     const result =
       sealed === undefined
@@ -939,6 +959,7 @@ export class TaskController {
   async verifyStandalone(
     predicates: EvidencePredicate[],
   ): Promise<{ verified: boolean; evidence: EvidenceItem[] }> {
+    this.assertCheckListed(predicates);
     return await this.verifier.verify(predicates, {});
   }
 

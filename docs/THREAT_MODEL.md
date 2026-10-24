@@ -65,6 +65,7 @@ The residual risk is the assertion itself. See
 | Shell injection | direct process spawn; shell and privilege commands denied; a bare program name is looked up only in `PATH` entries outside the workspace, never an empty or relative one, and the program is given that `PATH`; the file capability never writes into a git directory, so a program named in a repository's config, attributes or hooks is one a person approved; a `git` read is also spawned with system and global config nulled and fsmonitor, hooks, signature verifiers, fetching of missing objects, external diff and textconv off | an allowed executable can interpret dangerous arguments; interpreters and approved programs can read files their arguments do not name; developer mode reads outside the workspace without approval; external diff and textconv are consequently not applied to git reads MELRA runs |
 | Process escape | cwd confinement, environment allowlist, time/output bounds | processes are not OS-sandboxed outside the container profile |
 | SSRF and metadata access | URL validation, DNS resolution, per-request interception; loopback closed in enforced mode unless the policy opens it | malicious public endpoints remain reachable when domains allow them; loopback services are reachable in developer mode by default |
+| Unapproved outbound data | in enforced mode an HTTP `GET`/`HEAD` or a browser `navigate`/`tab_new` to a public host the policy admits only through `"*"` waits for an operator (`network_read_unlisted_host`), and so does a read whose `http_resource_matches` evidence is checked there, while a workflow check there is refused (`workflow_check_unlisted_host`); a `GET` or `HEAD` that carries content is a mutation in every mode, and outside unsafe-local mode is approved like one | in developer mode, and to any host `allowedDomains` names, a read's URL reaches its host without approval, so name only hosts a task needs; a page already open can make requests of its own |
 | DNS rebinding | the checked answer is pinned: requests go through a loopback proxy that connects to the address validation accepted | an attached CDP browser and unsafe-local mode resolve names themselves, so the window stays open there |
 | Redirects in an attached browser | with an attached CDP browser there is no pinning proxy and Chromium follows redirect hops unseen, so a page or frame whose final address the guard refuses is blanked and never read back, and WebSockets are checked | the redirected request itself still reaches that address; use an owned browser where that matters |
 | Malicious downloads/uploads | path confinement and artifact hashes | file content is not malware-scanned |
@@ -186,6 +187,10 @@ Browser requests reject:
 - loopback, unless `allowLocalhost` enables it: left out of the policy file,
   it is enabled in developer mode and not in enforced mode;
 - private, link-local, multicast, and unspecified addresses;
+- IPv6 outside global unicast (`2000::/3`), other than the IPv4-mapped and
+  NAT64 forms, which are judged by the IPv4 address they carry, and the
+  special-purpose and transition blocks inside global unicast, whatever IPv4
+  address they embed;
 - cloud metadata endpoints;
 - hostnames resolving to a disallowed address;
 - redirects and subresources that cross the same checks.
@@ -195,7 +200,10 @@ address it checked, and does not follow redirects.
 
 A domain allowlist controls intended public destinations. Wildcard domain
 access is convenient for local experimentation but should be replaced with
-specific domains in reviewed policies.
+specific domains in reviewed policies. In enforced mode a read sent to a host
+only the wildcard admits, or whose evidence is checked there, needs an
+operator's approval, so a reviewed policy that names its hosts is also the one
+whose reads run unattended.
 
 ## Non-goals for `0.3`
 

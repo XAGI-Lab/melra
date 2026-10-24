@@ -145,6 +145,7 @@ export class WorkflowController {
             : node.type === "delegation"
               ? node.requiredEvidence
               : [],
+        { check: true },
       );
     }
 
@@ -1876,6 +1877,8 @@ export class WorkflowController {
     approvals: ApprovalResponse[],
     workflowId: string,
   ): Promise<NodeAdvance> {
+    // Refused before an iteration runs, rather than once one has.
+    if (node.until !== undefined) this.tasks.assertCheckListed([node.until]);
     const taskIds = [...state.taskIds];
     const tasks: TaskRecord[] = [];
     let iterations = state.iterations ?? 0;

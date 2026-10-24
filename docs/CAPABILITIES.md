@@ -284,8 +284,12 @@ Actions: `navigate`, `back`, `forward`, `reload`, `inspect`, `wait`, `click`,
   because the page may already have acted.
 - Resolves and checks the destination and every intercepted request.
 - Blocks private, link-local, multicast, unspecified, and cloud-metadata
-  addresses. Localhost is open in developer mode and opt-in in enforced
-  mode (`allowLocalhost`).
+  addresses, and any IPv6 address outside global unicast other than the
+  IPv4-mapped or NAT64 form of a public IPv4 address. Localhost is open in
+  developer mode and opt-in in enforced mode (`allowLocalhost`).
+- In enforced mode, `navigate` and `tab_new` to a public host that
+  `allowedDomains` admits only through `"*"` need an operator's approval
+  (`network_read_unlisted_host`); a host the policy names needs none.
 - Confines uploaded files to the workspace, never MELRA's own data directory
   except its artifacts, nor the browser profile, an HTTP archive or a
   credential's file, and downloaded files to the artifact directory.
@@ -388,9 +392,13 @@ and official task-benchmark evidence remain roadmap work.
 Action: `request`. Fields: `method`, `url`, `headers`, `content`,
 `idempotencyKey`, `spend`, `maxResponseBytes`, `timeoutMs`.
 
-- `GET` and `HEAD` classify as reads. Every other method is a mutation: it needs
-  declared evidence and an exact scoped approval, and it runs at most once —
+- `GET` and `HEAD` without `content` classify as reads. Every other method, and
+  a `GET` or `HEAD` that carries `content`, is a mutation: it needs declared
+  evidence and an exact scoped approval, and it runs at most once —
   `budget.maxRetries` does not apply to it.
+- In enforced mode a read to a public host that `allowedDomains` admits only
+  through `"*"` needs an operator's approval (`network_read_unlisted_host`); a
+  host the policy names needs none.
 - The destination goes through the same checks and the same `allowedDomains`
   allowlist a browser navigation does, and the socket then connects to the
   address that was checked rather than resolving the name a second time.
@@ -506,9 +514,14 @@ A value of `.`, `..` or the empty string is refused rather than spliced
 would point the read at a different resource; the item is unanswerable, not
 passed.
 The verification request is an effect like any other: same adapter, same
-destination boundary, same allowlist, same credential scope. `GET` and `HEAD`
-only, and a runtime with no HTTP channel fails the predicate rather than passing
-it. It is the only predicate carrying `strength: "independent"`.
+destination boundary, same allowlist, same credential scope. In enforced mode a
+read whose verification request goes to a host `allowedDomains` admits only
+through `"*"`, or takes its host from the result, needs an operator's approval
+(`network_read_unlisted_host`), as a read sent there does, and a workflow check
+like that is refused at planning and when an advance reaches it
+(`workflow_check_unlisted_host`). `GET` and `HEAD` only, and a runtime with no
+HTTP channel fails the predicate rather than passing it. It is the only
+predicate carrying `strength: "independent"`.
 
 A task request carries a second predicate list, `reconciliation`, drawn from the
 same schema but asked only when a mutation's outcome is unknown — the request

@@ -15,9 +15,9 @@ const http = new HttpRuntime({ allowedDomains: ["api.example.com"], allowLocalho
 ```
 
 One action, `http.request`, with a method, a URL, optional headers and body, a
-response-size cap, and a timeout. `GET` and `HEAD` classify as reads; every
-other method is a mutation and needs declared evidence and an approval like any
-other mutation.
+response-size cap, and a timeout. `GET` and `HEAD` without a body classify as
+reads; every other method, and a `GET` or `HEAD` with a body, is a mutation and
+needs declared evidence and an approval like any other mutation.
 
 ## The destination boundary
 

@@ -26,7 +26,9 @@ tab_switch, and close.
 - DNS is resolved first, then **every** resolved address is checked — so a public
   hostname that resolves to a private address is refused rather than rebound
 - private, loopback, link-local, and cloud-metadata ranges are blocked, IPv4 and
-  IPv6, including IPv4-mapped IPv6 forms
+  IPv6, including IPv4-mapped IPv6 forms, and so is any IPv6 address outside
+  global unicast that is not the IPv4-mapped or NAT64 form of a public IPv4
+  address
 
 A domain allowlist narrows this further, but the allowlist is not what makes it
 safe — the address checks are, and they hold even with `allowedDomains: ["*"]`.
