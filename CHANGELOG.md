@@ -6,6 +6,8 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0-alpha.20] - 2026-10-24
+
 ### Changed
 
 - **Breaking:** `melra workflow cancel` exits 0 when the run it returns is
@@ -91,7 +93,6 @@ All notable changes are documented here. The format follows
   value or overrides it cannot start a process its operator believes is
   enforced. Leaving `--mode` out still means developer, unless `MELRA_MODE` or
   the policy says enforced.
-
 - Overrides raise two transitive floors that `pnpm audit --prod` reported
   through `@modelcontextprotocol/sdk`: `body-parser` to 2.4.0 (a denial of
   service through bytes after a compressed request body) and `fast-uri` to
@@ -3612,7 +3613,8 @@ All notable changes are documented here. The format follows
 - Cross-scope memory overwrite and deletion protection.
 - Patched transitive HTTP adapter enforced through a package override.
 
-[Unreleased]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.19...HEAD
+[Unreleased]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.20...HEAD
+[0.3.0-alpha.20]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.19...v0.3.0-alpha.20
 [0.3.0-alpha.19]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.18...v0.3.0-alpha.19
 [0.3.0-alpha.18]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.17...v0.3.0-alpha.18
 [0.3.0-alpha.17]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.16...v0.3.0-alpha.17
