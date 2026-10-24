@@ -6,6 +6,8 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0-alpha.20] - 2026-10-24
+
 ### Changed
 
 - **Breaking:** `melra workflow cancel` exits 0 when the run it returns is
@@ -83,15 +85,16 @@ All notable changes are documented here. The format follows
   it is now `effect_outcome_unknown:http_upgrade_refused`, so a mutation is
   left `recovery_required`, and `melra run` no longer exits 0 for a task whose
   effect never returned. The effect is bounded by its `timeoutMs`,
-  `budget.maxDurationMs` and a cancel. The independent read is bounded only by
-  the predicate's own `timeoutMs` (at most 60 s), as before: the budget and a
-  cancel do not reach it.
+  `budget.maxDurationMs` and a cancel. Each independent read is bounded only by
+  its predicate's own `timeoutMs` (at most 60 s), as before: the budget and a
+  cancel do not reach it, and a task's reads run one after another, so
+  verification can outlast the budget, and hold a cancel, by up to that much
+  per read (#407).
 - A `--mode` with a missing or blank value, or a repeated `--mode`, no longer
   leaves a process in developer mode, so a launcher or script that loses the
   value or overrides it cannot start a process its operator believes is
   enforced. Leaving `--mode` out still means developer, unless `MELRA_MODE` or
   the policy says enforced.
-
 - Overrides raise two transitive floors that `pnpm audit --prod` reported
   through `@modelcontextprotocol/sdk`: `body-parser` to 2.4.0 (a denial of
   service through bytes after a compressed request body) and `fast-uri` to
@@ -3612,7 +3615,8 @@ All notable changes are documented here. The format follows
 - Cross-scope memory overwrite and deletion protection.
 - Patched transitive HTTP adapter enforced through a package override.
 
-[Unreleased]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.19...HEAD
+[Unreleased]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.20...HEAD
+[0.3.0-alpha.20]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.19...v0.3.0-alpha.20
 [0.3.0-alpha.19]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.18...v0.3.0-alpha.19
 [0.3.0-alpha.18]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.17...v0.3.0-alpha.18
 [0.3.0-alpha.17]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.16...v0.3.0-alpha.17
