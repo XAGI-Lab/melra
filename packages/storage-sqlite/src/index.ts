@@ -878,14 +878,16 @@ export class SqliteStore {
   listWorkflowEvents(
     id: string,
     afterSequence = 0,
+    limit = -1,
   ): WorkflowEvent[] {
     const rows = this.database
       .prepare(`
         SELECT data FROM workflow_events
         WHERE aggregate_id = ? AND sequence > ?
         ORDER BY sequence
+        LIMIT ?
       `)
-      .all(id, afterSequence) as unknown as JsonRow[];
+      .all(id, afterSequence, limit) as unknown as JsonRow[];
     return rows.map((row) =>
       parseStored(
         row.data,

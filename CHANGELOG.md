@@ -38,6 +38,23 @@ All notable changes are documented here. The format follows
   `Origin` header (`403 origin_not_allowed`) and one whose body is not
   `application/json` (`415 json_required`). An MCP client registering from its
   own process sends JSON and no `Origin`, so it is unaffected.
+- **Breaking:** Over loopback HTTP, a client signed in with OAuth acts only on
+  the tasks and workflow runs it planned: an id another client planned is
+  refused with `task_belongs_to_another_client` or
+  `workflow_belongs_to_another_client`, and `/api/*` and the console page answer
+  the operator's token only (`403 operator_token_required`). The operator's
+  token, stdio and the CLI are refused nothing, and a task or run planned
+  before this release, like the steps such a run plans later, names no client
+  and stays open to any caller.
+- **Breaking:** `melra_execute` no longer runs a workflow step's task while its
+  run is paused or suspended, in any mode (`workflow_halted:<status>`): resume
+  the run first. In enforced mode `melra_workflow_control` no longer resumes a
+  run an operator halted with `melra workflow pause` or `suspend`
+  (`workflow_resume_needs_operator`), whichever mode that command ran in; a
+  halt only the agent made is still its own to lift, and developer mode is
+  otherwise unchanged. `melra workflow pause`, `suspend` and `resume` now
+  record `MELRA_APPROVER` as who acted, and fail on a value it does not
+  accept.
 
 ### Security
 
@@ -63,6 +80,13 @@ All notable changes are documented here. The format follows
 - A web page open in the operator's browser can no longer register OAuth
   clients on a loopback HTTP server, so it cannot fill the client list or push
   out a client still waiting for approval.
+- A task or workflow run id is bound to the caller that planned it, so one
+  approved OAuth client can no longer run, cancel, judge, advance, halt or read
+  another client's tasks and runs, nor list them through the read API.
+- In enforced mode an operator's workflow pause or suspend now holds until an
+  operator lifts it, including one made from a developer-mode shell or on a
+  run the agent had already halted, and halt and resume events record who
+  acted.
 
 ## [0.3.0-alpha.20] - 2026-10-24
 

@@ -16,7 +16,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { Principal, TaskRecord, WorkflowRun } from "@melra/protocol";
-import { principalRef } from "@melra/protocol";
+import { callerRef } from "@melra/protocol";
 import type { SqliteStore } from "@melra/storage-sqlite";
 import { capabilitiesPayload, createMcpServer } from "./mcp-server.js";
 import type { MelraRuntime } from "./runtime.js";
@@ -204,11 +204,6 @@ async function readText(request: IncomingMessage): Promise<string> {
     chunks.push(buffer);
   }
   return Buffer.concat(chunks).toString("utf8");
-}
-
-/** How a session records who opened it; the operator's token has no name. */
-function callerRef(client: Principal | undefined): string {
-  return client === undefined ? "operator" : principalRef(client);
 }
 
 /** Loopback is where "approve this in your browser" means anything. */
@@ -520,6 +515,12 @@ export async function serveHttp(
         response,
         caller === "operator" ? undefined : caller,
       );
+      return;
+    }
+    // The read API lists every caller's tasks and runs. A client reaches its
+    // own through its MCP session, which is bound to it.
+    if (caller !== "operator") {
+      json(response, 403, { error: "operator_token_required" });
       return;
     }
     await handleApi(request, response, url);

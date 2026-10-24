@@ -240,6 +240,149 @@ describe("melra oauth", () => {
     }
   });
 
+  const connect = async (token: string) => {
+    const client = new Client({ name: "oauth-owner", version: "0.0.0" });
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL(`${base}/mcp`), {
+        requestInit: { headers: { authorization: `Bearer ${token}` } },
+      }) as unknown as Transport,
+    );
+    return client;
+  };
+  const call = async (client: Client, name: string, args: Record<string, unknown>) => {
+    const result = (await client.callTool({ name, arguments: args })) as {
+      isError?: boolean;
+      content: { text: string }[];
+    };
+    return { refused: result.isError === true, text: result.content[0]!.text };
+  };
+
+  it("keeps each client to the tasks and runs it planned, and the read API to the operator", async () => {
+    const otherToken = await authorize("Other Harness");
+    const [owner, other, operator] = [
+      await connect(await authorize("Owner Harness")),
+      await connect(otherToken),
+      await connect("operator-token"),
+    ];
+    try {
+      const listing = { goal: "List the workspace for its owner", operation: { kind: "file", action: "list", path: "." } };
+      const task = JSON.parse((await call(owner, "melra_plan", listing)).text) as { id: string };
+      const run = JSON.parse(
+        (
+          await call(owner, "melra_workflow_plan", {
+            definition: {
+              schemaVersion: "1.0.0",
+              id: "22222222-2222-4222-8222-222222222222",
+              version: 1,
+              name: "Owned",
+              nodes: [{ id: "list", type: "operation", request: listing }],
+            },
+          })
+        ).text,
+      ) as { id: string };
+      const refusedAll = async (calls: [string, Record<string, unknown>][], error: string) => {
+        for (const [name, args] of calls) {
+          const answer = await call(other, name, args);
+          expect(answer.refused, name).toBe(true);
+          expect(answer.text, name).toContain(error);
+        }
+      };
+      const onTask = (taskId: string): [string, Record<string, unknown>][] => [
+        ["melra_execute", { taskId }],
+        ["melra_task_status", { taskId }],
+        ["melra_task_cancel", { taskId }],
+        ["melra_receipt", { taskId }],
+        [
+          "melra_task_judge",
+          {
+            taskId,
+            judgementId: "33333333-3333-4333-8333-333333333333",
+            verdict: "yes",
+            identity: { principal: { kind: "agent", id: "grader" } },
+          },
+        ],
+      ];
+      await refusedAll(onTask(task.id), "task_belongs_to_another_client");
+      await refusedAll(
+        [
+          ["melra_workflow_advance", { workflowId: run.id }],
+          ["melra_workflow_status", { workflowId: run.id }],
+          ["melra_workflow_cancel", { workflowId: run.id }],
+          ["melra_workflow_control", { workflowId: run.id, action: "pause" }],
+        ],
+        "workflow_belongs_to_another_client",
+      );
+      // Nothing ran, was cancelled or halted, and no receipt was written.
+      expect(runtime.controller.status(task.id).status).toBe("planned");
+      expect(runtime.controller.receipts({ taskId: task.id }).receipts).toEqual([]);
+      expect(runtime.workflows.status(run.id).status).toBe("planned");
+
+      // The operator's token is refused nothing; the owner, nothing of its own.
+      const ran = JSON.parse((await call(operator, "melra_execute", { taskId: task.id })).text) as {
+        task: { status: string };
+        receipt: { receiptId: string };
+      };
+      expect(ran.task.status).toBe("verified_success");
+      expect((await call(operator, "melra_workflow_status", { workflowId: run.id })).refused).toBe(false);
+      const advanced = JSON.parse((await call(owner, "melra_workflow_advance", { workflowId: run.id })).text) as {
+        run: { status: string; nodes: { list: { taskIds: string[] } } };
+      };
+      expect(advanced.run.status).toBe("verified_complete");
+      // A run's steps are its planner's, and a receipt is its task's.
+      await refusedAll(onTask(advanced.run.nodes.list.taskIds[0]!), "task_belongs_to_another_client");
+      await refusedAll([["melra_receipt", { receiptId: ran.receipt.receiptId }]], "task_belongs_to_another_client");
+      expect((await call(owner, "melra_receipt", { receiptId: ran.receipt.receiptId })).refused).toBe(false);
+
+      // The read API lists every caller's ids, so only the operator reads it.
+      for (const path of ["/", "/api/tasks", `/api/tasks/${task.id}`, "/api/workflows", `/api/workflows/${run.id}`]) {
+        const answer = await fetch(`${base}${path}`, { headers: { authorization: `Bearer ${otherToken}` } });
+        expect(answer.status, path).toBe(403);
+      }
+      expect((await fetch(`${base}/api/tasks`, { headers: { authorization: "Bearer operator-token" } })).status).toBe(200);
+    } finally {
+      for (const client of [owner, other, operator]) await client.close();
+    }
+  });
+
+  it("leaves a task or run that names no planner open to any caller, and the run's later steps too", async () => {
+    const [owner, other] = [await connect(await authorize("Earlier Owner")), await connect(await authorize("Earlier Other"))];
+    try {
+      const listing = { goal: "List the workspace for an earlier release", operation: { kind: "file", action: "list", path: "." } };
+      const task = JSON.parse((await call(owner, "melra_plan", listing)).text) as { id: string };
+      const run = JSON.parse(
+        (
+          await call(owner, "melra_workflow_plan", {
+            definition: {
+              schemaVersion: "1.0.0",
+              id: "44444444-4444-4444-8444-444444444444",
+              version: 1,
+              name: "Earlier",
+              nodes: [{ id: "list", type: "operation", request: listing }],
+            },
+          })
+        ).text,
+      ) as { id: string };
+      // As a release that recorded no callers wrote them.
+      runtime.store.database.prepare("UPDATE tasks SET data = json_remove(data, '$.client') WHERE id = ?").run(task.id);
+      runtime.store.database
+        .prepare("UPDATE workflow_events SET data = json_remove(data, '$.data.client') WHERE aggregate_id = ? AND sequence = 1")
+        .run(run.id);
+
+      expect((await call(other, "melra_task_status", { taskId: task.id })).refused).toBe(false);
+      expect((await call(other, "melra_workflow_status", { workflowId: run.id })).refused).toBe(false);
+      const advanced = JSON.parse((await call(owner, "melra_workflow_advance", { workflowId: run.id })).text) as {
+        run: { nodes: { list: { taskIds: string[] } } };
+      };
+      // A step planned now names no one either, rather than the operator.
+      const step = advanced.run.nodes.list.taskIds[0]!;
+      for (const client of [owner, other]) {
+        expect((await call(client, "melra_task_status", { taskId: step })).refused).toBe(false);
+      }
+    } finally {
+      for (const client of [owner, other]) await client.close();
+    }
+  });
+
   it("refuses a code that fails PKCE, and never lets one be spent twice", async () => {
     const registered = await fetch(`${base}/oauth/register`, {
       method: "POST",

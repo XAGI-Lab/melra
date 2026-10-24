@@ -3,6 +3,7 @@
 
 import { randomUUID } from "node:crypto";
 import {
+  callerRef,
   WorkflowDefinitionSchema,
   WorkflowEventSchema,
   WorkflowRunSchema,
@@ -40,6 +41,9 @@ type EmitEvent = (
   type: string,
   data: Record<string, unknown>,
 ) => void;
+
+/** Who halts or resumes a run: an operator by their `cli:` label, or the agent. */
+export type WorkflowActor = { operator: string } | { agent: string };
 
 export interface WorkflowAdvanceResult {
   run: WorkflowRun;
@@ -116,7 +120,8 @@ export class WorkflowController {
     private readonly leaseDurationMs = 60_000,
   ) {}
 
-  plan(definition: WorkflowDefinition): WorkflowRun {
+  /** `client` is who is planning it, as `callerRef` names them. */
+  plan(definition: WorkflowDefinition, client = callerRef()): WorkflowRun {
     const parsed = WorkflowDefinitionSchema.parse(definition);
     const graph = validateWorkflow(parsed);
     for (const node of graph.nodes.values()) {
@@ -160,7 +165,9 @@ export class WorkflowController {
       createdAt,
       updatedAt: createdAt,
     });
-    const created = makeEvent(draft, 1, "workflow.created", { run: draft });
+    // On the event rather than the run, whose strict shape an older MELRA
+    // sharing this home still parses.
+    const created = makeEvent(draft, 1, "workflow.created", { run: draft, client });
     const plannedEvent = makeEvent(draft, 2, "workflow.status_changed", {
       from: "draft",
       to: "planned",
@@ -202,6 +209,23 @@ export class WorkflowController {
   events(workflowId: string, afterSequence = 0): WorkflowEvent[] {
     this.status(workflowId);
     return this.store.listWorkflowEvents(workflowId, afterSequence);
+  }
+
+  /**
+   * Refuses an authenticated client a run someone else planned, as
+   * `TaskController.assertCaller` refuses a task: the operator is refused
+   * nothing, nor is anyone a run planned before callers were recorded.
+   */
+  assertCaller(workflowId: string, caller: string): void {
+    const planner = this.plannedBy(workflowId);
+    if (caller !== callerRef() && planner !== undefined && planner !== caller) {
+      throw new Error("workflow_belongs_to_another_client");
+    }
+  }
+
+  private plannedBy(workflowId: string): string | undefined {
+    const client = this.store.listWorkflowEvents(workflowId, 0, 1)[0]?.data.client;
+    return typeof client === "string" ? client : undefined;
   }
 
   /**
@@ -1070,18 +1094,28 @@ export class WorkflowController {
   // indefinitely. Neither touches node state, so resuming picks the graph up
   // exactly where it stopped — that is why `advance` refuses to run while a
   // workflow sits in either status instead of quietly continuing.
-  pause(workflowId: string): WorkflowRun {
-    return this.halt(workflowId, "paused", "workflow.paused");
+  //
+  // `by` is who acts, recorded on the event: an operator by their `cli:`
+  // label, or the agent by its principal. An operator's halt is marked as
+  // one, and is out of band when its process is enforced, as its approval
+  // would be. An enforced kernel lets only an operator lift it, whatever mode
+  // the process that made it ran in, since holding a run is the side to err
+  // on; the agent may lift a halt only it made, and in developer mode any.
+  pause(workflowId: string, by: WorkflowActor = { agent: "agent" }): WorkflowRun {
+    return this.halt(workflowId, "paused", "workflow.paused", by);
   }
 
-  suspend(workflowId: string): WorkflowRun {
-    return this.halt(workflowId, "suspended", "workflow.suspended");
+  suspend(workflowId: string, by: WorkflowActor = { agent: "agent" }): WorkflowRun {
+    return this.halt(workflowId, "suspended", "workflow.suspended", by);
   }
 
-  resume(workflowId: string): WorkflowRun {
+  resume(workflowId: string, by: WorkflowActor = { agent: "agent" }): WorkflowRun {
     return this.underLease(workflowId, (current) => {
       if (!["paused", "suspended"].includes(current.status)) {
         throw new Error("workflow_not_paused");
+      }
+      if (!("operator" in by) && this.tasks.enforced && this.heldByOperator(workflowId)) {
+        throw new Error("workflow_resume_needs_operator");
       }
       const definition = this.loadDefinition(current);
       return this.transition(current, (draft, emit) => {
@@ -1095,19 +1129,44 @@ export class WorkflowController {
         emit("workflow.resumed", {
           from,
           to: draft.status,
+          ...this.actor(by),
           ...(draft.error === undefined ? {} : { error: draft.error }),
         });
       });
     });
   }
 
+  private actor(by: WorkflowActor): { actor: string; operator?: true; channel: "in_band" | "out_of_band" } {
+    return "operator" in by
+      ? { actor: by.operator, operator: true, channel: this.tasks.enforced ? "out_of_band" : "in_band" }
+      : { actor: by.agent, channel: "in_band" };
+  }
+
+  /**
+   * Whether an operator's halt is among those since the run was last resumed:
+   * switching it between paused and suspended does not lift it.
+   */
+  private heldByOperator(workflowId: string): boolean {
+    const events = this.store.listWorkflowEvents(workflowId);
+    for (let index = events.length - 1; index >= 0; index -= 1) {
+      const { type, data } = events[index]!;
+      if (type === "workflow.resumed") return false;
+      if ((type === "workflow.paused" || type === "workflow.suspended") && data.operator === true) return true;
+    }
+    return false;
+  }
+
   private halt(
     workflowId: string,
     to: "paused" | "suspended",
     eventType: string,
+    by: WorkflowActor,
   ): WorkflowRun {
     return this.underLease(workflowId, (current) => {
-      if (current.status === to) return current;
+      // Already so halted, it is left alone unless an operator's halt would
+      // hold where none does: a run the agent halted is still the agent's to
+      // lift, so the operator's is recorded, from and to the same status.
+      if (current.status === to && (!("operator" in by) || this.heldByOperator(workflowId))) return current;
       if (
         ["verified_complete", "cancelled", "failed"].includes(current.status)
       ) {
@@ -1118,7 +1177,7 @@ export class WorkflowController {
         draft.status = to;
         // Kept: a run halted while it needed recovery still needs it, and the
         // reducer drops an error the event does not carry.
-        emit(eventType, { from, to, ...(draft.error === undefined ? {} : { error: draft.error }) });
+        emit(eventType, { from, to, ...this.actor(by), ...(draft.error === undefined ? {} : { error: draft.error }) });
       });
     });
   }
@@ -1614,6 +1673,13 @@ export class WorkflowController {
   ): Promise<NodeAdvance> {
     this.assertAdvanceLease(identity.workflowId);
     const key = taskIdempotencyKey(identity, request);
+    // The run's caller, so its steps are its planner's as the run is.
+    const planner = this.plannedBy(identity.workflowId);
+    const step = {
+      stored: true,
+      workflowId: identity.workflowId,
+      ...(planner === undefined ? {} : { client: planner }),
+    };
     let task: TaskRecord;
     if (existingTaskId !== undefined) {
       task = this.tasks.status(existingTaskId);
@@ -1626,7 +1692,7 @@ export class WorkflowController {
       // Planned only when its key holds no task at all.
       task =
         this.takenUp(key) ??
-        this.tasks.plan(request, { idempotencyKey: key, attempt: 1, stored: true });
+        this.tasks.plan(request, { idempotencyKey: key, attempt: 1, ...step });
     }
     // A challenge this run asked again after it expired leaves its first
     // attempt cancelled; when the advance that asked again did not commit, the
@@ -1657,7 +1723,7 @@ export class WorkflowController {
           : this.tasks.plan(request, {
               idempotencyKey: key,
               attempt: (task.attempt ?? 1) + 1,
-              stored: true,
+              ...step,
             });
     }
     if (task.status === "awaiting_approval") {

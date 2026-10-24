@@ -237,7 +237,7 @@ MELRA uses these environment variables:
 | `MELRA_PAYLOAD_KEY` | Optional canonical base64url 256-bit payload key | private `<MELRA_HOME>/payload.key` |
 | `MELRA_UNHINGED` | Set to `1` to remove every guardrail — see below | unset (all guardrails on) |
 | `MELRA_MODE` | `developer` or `enforced` — see [deployment modes](#deployment-modes) | `developer` |
-| `MELRA_APPROVER` | The name [`melra approve`](#approving-from-the-command-line) records as the approver, as `cli:<name>`, [`melra judge`](#judging-from-the-command-line) as the judge of a verdict, also as `cli:<name>`, and [`melra console`](#approving-in-a-browser) as `console:<name>`. Letters (any script), digits, `.`, `_`, `@` and `-`, at most 64; checked when `melra approve`, `melra judge` or `melra run` records a decision, and when `melra console` starts. Receipts and certificates carry it, and an agent can read both. | `operator` |
+| `MELRA_APPROVER` | The name [`melra approve`](#approving-from-the-command-line) records as the approver, as `cli:<name>`, [`melra judge`](#judging-from-the-command-line) as the judge of a verdict, also as `cli:<name>`, and [`melra console`](#approving-in-a-browser) as `console:<name>`, and `melra workflow pause`, `suspend` and `resume` as who halted or resumed the run, as `cli:<name>`. Letters (any script), digits, `.`, `_`, `@` and `-`, at most 64; checked when `melra approve`, `melra judge` or `melra run` records a decision, when `melra workflow pause`, `suspend` or `resume` runs, and when `melra console` starts. Receipts and certificates carry it, and an agent can read both. | `operator` |
 | `MELRA_HTTP_PORT` | Port for `melra serve --http` | `7457` |
 | `MELRA_HTTP_TOKEN` | Bearer token for `melra serve --http` | a fresh random token, printed at startup |
 | `MELRA_HTTP_OAUTH` | Set to `0` so that token is the only way in and no client can register itself | unset (clients may register, on loopback) |
@@ -826,6 +826,19 @@ must be loopback or a private scheme so a code cannot be delivered off the
 machine, and an MCP session id is bound to the caller that opened it so a leaked
 one cannot be used to act under another client's name.
 
+Task and workflow run ids are bound the same way. Each task and run records the
+caller that planned it, and a run's steps record the run's, so a client can
+execute, cancel, judge, advance, halt, resume or read (status and receipts)
+only its own. Another client's id is refused with
+`task_belongs_to_another_client` or `workflow_belongs_to_another_client`,
+before anything is read, run or written. The operator's token, stdio and the
+CLI are the operator, which every client's tasks and runs answer to. The
+`/api/*` routes and the console page answer the operator's token only (`403
+operator_token_required` for an OAuth token), since they list every caller's
+ids. A task or run planned before callers were recorded names no one, nor do
+the steps such a run plans later, and each stays open to any caller holding its
+id, as before.
+
 | Route | Method | What it returns |
 |---|---|---|
 | `/` | `GET` | The console |
@@ -846,11 +859,11 @@ one cannot be used to act under another client's name.
 | `/api/workflows/:id/events?after=<sequence>` | `GET` | Append-only events after a cursor |
 | `/api/workflows/:id/stream?after=<sequence>` | `GET` | The same events as SSE, replayed from the cursor and then followed live |
 
-The JSON API is read-only and answers `405` to anything but `GET`. Planning and
-advancing stay on the MCP and CLI paths, so nothing reachable from a browser tab
-can start work policy has not seen. Each SSE frame carries the event's
-`sequence`, so a client that reconnects with `after=<last sequence>` resumes
-without gaps.
+The JSON API is read-only, answers `405` to anything but `GET`, and answers only
+the operator's token. Planning and advancing stay on the MCP and CLI paths, so
+nothing reachable from a browser tab can start work policy has not seen. Each
+SSE frame carries the event's `sequence`, so a client that reconnects with
+`after=<last sequence>` resumes without gaps.
 
 The console is one self-contained page with no build step and no external
 requests, in three views:
@@ -1012,6 +1025,20 @@ closing every door it owns:
   recorded (one on a question still waiting is refused with
   `judgement_in_band_refused`), and an operator answers with
   [`melra judge`](#judging-from-the-command-line).
+- **Only an operator lifts an operator's halt.** A run halted with `melra
+  workflow pause` or `melra workflow suspend` is resumed only with `melra
+  workflow resume`: `melra_workflow_control` answers `resume` with
+  `workflow_resume_needs_operator`, whatever halt follows it. That holds
+  whichever mode the `melra workflow` command ran in, and on a run the agent
+  had already halted. The agent can still pause, suspend and resume a run
+  only it halted. In every mode, a step's task does not run while its run is
+  halted: `melra_execute` answers `workflow_halted:paused` (or `:suspended`)
+  until the run is resumed. Halt and resume events record who acted
+  (`cli:<name>`, from [`MELRA_APPROVER`](#local-configuration), the OAuth
+  client's principal, or `agent`), whether an operator did, and the channel,
+  `out_of_band` only for an operator in an enforced process. `melra approve
+  <task-id> --deny` and `melra workflow cancel` stay the stops the agent
+  cannot undo at all.
 - **Every receipt says `enforced`.** `ActionReceipt.mode` records it, and
   `melra_capabilities` publishes `policy.mode`, so an auditor never has to infer
   whether an effect was governed by the only door or by one of several.

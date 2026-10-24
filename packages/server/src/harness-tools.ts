@@ -17,6 +17,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
   attributeTo,
+  callerRef,
   type EvidencePredicate,
   OperationSchema,
   type Principal,
@@ -317,6 +318,7 @@ export function registerHarnessTools(
               ? {}
               : { identity: attributeTo(client) }),
           }),
+          { client: callerRef(client) },
         );
         if (task.status === "policy_blocked") {
           return toolResult({
@@ -368,6 +370,7 @@ export function registerHarnessTools(
       },
     },
     async ({ taskId, phrase }) => {
+      runtime.controller.assertCaller(taskId, callerRef(client));
       const held = runtime.controller.status(taskId);
       if (held.approval === undefined) {
         return toolResult({ status: "blocked", taskId, reason: "no_approval_pending" });

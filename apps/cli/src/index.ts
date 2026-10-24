@@ -426,12 +426,15 @@ async function workflowCommand(
         if (workflowId === undefined) {
           throw new Error(`workflow ${action} requires a workflow ID`);
         }
+        // As the operator, recorded on the event: in enforced mode only an
+        // operator lifts a halt an operator made.
+        const by = { operator: approverLabel(env) };
         const run =
           action === "pause"
-            ? melra.workflows.pause(workflowId)
+            ? melra.workflows.pause(workflowId, by)
             : action === "suspend"
-              ? melra.workflows.suspend(workflowId)
-              : melra.workflows.resume(workflowId);
+              ? melra.workflows.suspend(workflowId, by)
+              : melra.workflows.resume(workflowId, by);
         output(run);
         return workflowExitCode(run.status);
       }
@@ -1291,8 +1294,9 @@ Environment:
   MELRA_POLICY     Optional local policy JSON
   MELRA_UNHINGED   Set to 1 to disable every guardrail (see --unsafe-local)
   MELRA_MODE       developer (default) or enforced (see --mode)
-  MELRA_APPROVER   Name 'melra approve', 'melra judge' and 'melra console'
-                   record as the approver or judge (default: operator)
+  MELRA_APPROVER   Name 'melra approve', 'melra judge', 'melra console' and
+                   'melra workflow pause|suspend|resume' record as the
+                   approver, judge or actor (default: operator)
   MELRA_HTTP_PORT  Port for 'serve --http' (default: 7457)
   MELRA_HTTP_TOKEN Fixed bearer token for 'serve --http' (default: random)
   MELRA_HTTP_OAUTH Set to 0 so only that token gets in; no client can register

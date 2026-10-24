@@ -17,7 +17,7 @@ This document describes `0.3.0-alpha.20`.
 | `melra_workflow_advance` | depends on ready workflow nodes | scoped per mutation |
 | `melra_workflow_status` | none | no |
 | `melra_workflow_cancel` | cancels nonterminal workflow work | no |
-| `melra_workflow_control` | pauses, resumes, or suspends a run | no |
+| `melra_workflow_control` | pauses, resumes, or suspends a run | no; in enforced mode `resume` is refused on a halt an operator made with `melra workflow` |
 
 With `MELRA_HARNESS_TOOLS=1`, thirteen more appear alongside these, carrying the
 names a harness already knows. Each builds an ordinary task and runs the same
@@ -40,6 +40,13 @@ mode no phrase is issued: an operator approves with `melra approve <task-id>`
 or in [`melra console`](INSTALLATION.md#approving-in-a-browser), and `approve`
 then takes the task id alone. A policy
 denial comes back as a result with `status: "blocked"` and a reason.
+
+Over loopback HTTP, every tool here that takes a task, receipt or workflow run
+id answers only the client that planned it, or the operator: another
+authenticated client is refused with `task_belongs_to_another_client` or
+`workflow_belongs_to_another_client`. A task or run planned before callers were
+recorded is open to anyone holding its id, and so are the steps such a run plans
+later.
 
 ## Durable workflows
 

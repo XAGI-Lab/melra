@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { TOOL_NAMES } from "@melra/protocol";
+import { TOOL_NAMES, type Principal } from "@melra/protocol";
 import { createMcpServer, harnessToolsEnabled, SERVER_INSTRUCTIONS } from "./mcp-server.js";
 import { HARNESS_TOOLS, registerHarnessTools } from "./harness-tools.js";
 import { createMelraRuntime, type MelraRuntime } from "./runtime.js";
@@ -17,7 +17,7 @@ type Handler = (args: Record<string, unknown>) => Promise<{
 }>;
 
 /** Enough of an `McpServer` to collect handlers; the transport proves nothing here. */
-function collect(runtime: MelraRuntime): Map<string, Handler> {
+function collect(runtime: MelraRuntime, client?: Principal): Map<string, Handler> {
   const handlers = new Map<string, Handler>();
   registerHarnessTools(
     {
@@ -25,6 +25,7 @@ function collect(runtime: MelraRuntime): Map<string, Handler> {
         handlers.set(name, handler),
     } as never,
     runtime,
+    client,
   );
   return handlers;
 }
@@ -171,6 +172,80 @@ describe("harness tools in enforced mode", () => {
     runtime.controller.decide(task.id, runtime.controller.approvalView(task.id).renderDigest, "cli:test");
     expect((await call(tools, "approve", { taskId: held.taskId })).status).toBe("verified_success");
     expect(await readFile(join(workspace, "w.txt"), "utf8")).toBe("x");
+  });
+
+  it("runs a held task only for the client that asked for it", async () => {
+    const owner = collect(runtime, { kind: "harness", id: "owner" });
+    const held = await call(owner, "write_file", { path: "owned.txt", content: "x" });
+    runtime.controller.decide(String(held.taskId), runtime.controller.approvalView(String(held.taskId)).renderDigest, "cli:test");
+    await expect(
+      call(collect(runtime, { kind: "harness", id: "other" }), "approve", { taskId: held.taskId }),
+    ).rejects.toThrow("task_belongs_to_another_client");
+    await expect(readFile(join(workspace, "owned.txt"), "utf8")).rejects.toThrow();
+    expect((await call(owner, "approve", { taskId: held.taskId })).status).toBe("verified_success");
+  });
+
+  it("holds an operator's pause against the agent: no resume, and no run of the waiting step", async () => {
+    const [left, right] = InMemoryTransport.createLinkedPair();
+    await createMcpServer(runtime).connect(right);
+    const agent = new Client({ name: "t", version: "1" });
+    await agent.connect(left);
+    const call = async (name: string, args: Record<string, unknown>) => {
+      const result = (await agent.callTool({ name, arguments: args })) as { isError?: boolean; content: { text: string }[] };
+      return { refused: result.isError === true, body: result.content[0]!.text };
+    };
+    try {
+      const write = { kind: "file", action: "write", path: "held.txt", content: "x" };
+      const run = JSON.parse(
+        (
+          await call("melra_workflow_plan", {
+            definition: {
+              schemaVersion: "1.0.0",
+              id: "44444444-4444-4444-8444-444444444444",
+              version: 1,
+              name: "Held",
+              nodes: [
+                {
+                  id: "write",
+                  type: "operation",
+                  request: { goal: "Write held.txt", operation: write, requiredEvidence: [{ type: "file_exists", path: "held.txt" }] },
+                },
+              ],
+            },
+          })
+        ).body,
+      ) as { id: string };
+      const waiting = JSON.parse((await call("melra_workflow_advance", { workflowId: run.id })).body) as {
+        run: { status: string; nodes: { write: { taskIds: string[] } } };
+      };
+      expect(waiting.run.status).toBe("awaiting_approval");
+      const taskId = waiting.run.nodes.write.taskIds[0]!;
+      // What `melra approve <task> --yes`, then `melra workflow pause`, record.
+      runtime.controller.decide(taskId, runtime.controller.approvalView(taskId).renderDigest, "cli:alice");
+      runtime.workflows.pause(run.id, { operator: "cli:alice" });
+
+      for (const [name, args, error] of [
+        ["melra_workflow_control", { workflowId: run.id, action: "resume" }, "workflow_resume_needs_operator"],
+        ["melra_execute", { taskId }, "workflow_halted:paused"],
+      ] as const) {
+        const refused = await call(name, args);
+        expect(refused.refused, name).toBe(true);
+        expect(refused.body, name).toContain(error);
+      }
+      await expect(readFile(join(workspace, "held.txt"), "utf8")).rejects.toThrow();
+      expect(runtime.workflows.status(run.id).status).toBe("paused");
+
+      // Lifted by the operator, the run is the agent's again, and so is a halt it makes.
+      runtime.workflows.resume(run.id, { operator: "cli:alice" });
+      expect(JSON.parse((await call("melra_workflow_control", { workflowId: run.id, action: "pause" })).body).status).toBe("paused");
+      expect(JSON.parse((await call("melra_workflow_control", { workflowId: run.id, action: "resume" })).body).status).toBe(
+        "awaiting_approval",
+      );
+      expect(JSON.parse((await call("melra_workflow_advance", { workflowId: run.id })).body).run.status).toBe("verified_complete");
+      expect(await readFile(join(workspace, "held.txt"), "utf8")).toBe("x");
+    } finally {
+      await agent.close();
+    }
   });
 
   it("plans a URL or query it accepts even when its goal would pass the goal's cap", async () => {
