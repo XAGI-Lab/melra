@@ -1044,7 +1044,7 @@ export class TaskController {
    * provider could not be reached and the task stays exactly where it was. A
    * miss inside the settle window is the third too.
    */
-  async reconcile(taskId: string, signal?: AbortSignal): Promise<ExecutionResult> {
+  async reconcile(taskId: string): Promise<ExecutionResult> {
     const task = this.status(taskId);
     if (task.status !== "recovery_required") {
       throw new Error(`task_not_reconcilable:${task.status}`);
@@ -1078,7 +1078,6 @@ export class TaskController {
     const verification = await this.verifier.verify(
       request.reconciliation,
       reconciliationFacts(task.id, request.operation),
-      signal === undefined ? {} : { signal },
     );
     // Refused by the kernel itself, it is refused again however often it is
     // asked: the declaration needs fixing, which waiting on the provider will

@@ -123,6 +123,15 @@ export interface HttpRuntimeOptions extends NetworkPolicy {
   credentials?: CredentialBroker;
 }
 
+function abortReason(signal?: AbortSignal): string {
+  const reason = signal?.reason;
+  return reason instanceof Error && reason.name !== "AbortError"
+    ? reason.message
+    : typeof reason === "string"
+      ? reason
+      : "task_cancelled";
+}
+
 /**
  * One governed HTTP call.
  *
@@ -133,15 +142,6 @@ export interface HttpRuntimeOptions extends NetworkPolicy {
  * reason: a resolver that answers public once and private the second time
  * would otherwise make the check meaningless. TLS still verifies the name.
  */
-function abortReason(signal?: AbortSignal): string {
-  const reason = signal?.reason;
-  return reason instanceof Error && reason.name !== "AbortError"
-    ? reason.message
-    : typeof reason === "string"
-      ? reason
-      : "task_cancelled";
-}
-
 export class HttpRuntime {
   constructor(private readonly options: HttpRuntimeOptions) {}
 
@@ -197,6 +197,7 @@ export class HttpRuntime {
     }
 
     let deadline: NodeJS.Timeout | undefined;
+    let onAbort: (() => void) | undefined;
     // Whether a response arrived: from then on its own events settle the call.
     let answered = false;
     return await new Promise<Record<string, unknown>>((resolve, reject) => {
@@ -342,9 +343,15 @@ export class HttpRuntime {
       call.on("close", () => {
         if (!answered) failed(new Error("http_closed_without_response"));
       });
-      signal?.addEventListener("abort", () => stop(abortReason(signal)), { once: true });
+      if (signal !== undefined) {
+        onAbort = () => stop(abortReason(signal));
+        signal.addEventListener("abort", onAbort, { once: true });
+      }
       if (operation.content !== undefined) call.write(operation.content);
       call.end();
-    }).finally(() => clearTimeout(deadline));
+    }).finally(() => {
+      clearTimeout(deadline);
+      if (onAbort !== undefined) signal?.removeEventListener("abort", onAbort);
+    });
   }
 }

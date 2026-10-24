@@ -236,7 +236,7 @@ describe("verification through a channel that did not act", () => {
     expect(evidence[0]?.inconclusive).toBeUndefined();
   });
 
-  it("marks verification unanswerable and inconclusive when cancelled by signal", async () => {
+  it("marks verification inconclusive when cancelled by signal", async () => {
     const controller = new AbortController();
     controller.abort();
     const verifier = await Verifier.create(root, {
@@ -247,12 +247,12 @@ describe("verification through a channel that did not act", () => {
     expect(evidence[0]).toMatchObject({
       passed: false,
       inconclusive: true,
-      unanswerable: true,
-      summary: "task_cancelled",
     });
+    expect(evidence[0]?.unanswerable).toBeUndefined();
+    expect(evidence[0]?.summary).toContain("independent read unavailable");
   });
 
-  it("marks verification unanswerable and inconclusive when budget is exhausted", async () => {
+  it("marks verification inconclusive when budget is exhausted", async () => {
     const controller = new AbortController();
     controller.abort(new Error("task_budget_exhausted"));
     const verifier = await Verifier.create(root, {
@@ -263,9 +263,9 @@ describe("verification through a channel that did not act", () => {
     expect(evidence[0]).toMatchObject({
       passed: false,
       inconclusive: true,
-      unanswerable: true,
-      summary: "budget_exhausted",
+      summary: "independent read unavailable: task_budget_exhausted",
     });
+    expect(evidence[0]?.unanswerable).toBeUndefined();
   });
 
   it("forwards signal to probe and handles abort in flight", async () => {
@@ -284,8 +284,37 @@ describe("verification through a channel that did not act", () => {
     expect(evidence[0]).toMatchObject({
       passed: false,
       inconclusive: true,
-      unanswerable: true,
-      summary: "budget_exhausted",
+      summary: "independent read unavailable: task_budget_exhausted",
+    });
+    expect(evidence[0]?.unanswerable).toBeUndefined();
+  });
+
+  it("enforces signal on custom registered verifiers using context.probe", async () => {
+    const controller = new AbortController();
+    controller.abort(new Error("task_budget_exhausted"));
+    let probeCalled = false;
+    const verifier = await Verifier.create(root, {
+      probe: async () => {
+        probeCalled = true;
+        return { success: true };
+      },
+      verifiers: [
+        {
+          type: "custom_check",
+          async check(_input, _result, context) {
+            await context.probe!({ url: "https://example.com", method: "GET", timeoutMs: 1000 });
+            return { passed: true };
+          },
+        },
+      ],
+    });
+    const { verified, evidence } = await verifier.verify([{ type: "custom_check" }], created, { signal: controller.signal });
+    expect(verified).toBe(false);
+    expect(probeCalled).toBe(false);
+    expect(evidence[0]).toMatchObject({
+      passed: false,
+      inconclusive: true,
+      summary: "task_budget_exhausted",
     });
   });
 });

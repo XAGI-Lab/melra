@@ -401,12 +401,6 @@ const httpResourceMatches: Built<"http_resource_matches"> = {
       // strongest evidence type the easiest one to claim.
       throw new Refusal("verification_probe_unavailable");
     }
-    if (context.signal?.aborted) {
-      const reason = context.signal.reason;
-      const msg = reason instanceof Error ? reason.message : typeof reason === "string" ? reason : "task_cancelled";
-      const refusal = msg === "task_budget_exhausted" || msg === "budget_exhausted" ? "budget_exhausted" : "task_cancelled";
-      throw new Refusal(refusal);
-    }
     const url = interpolate(predicate.url, result);
     // What the item names is stored in receipts, so without the query and
     // userinfo a stored request drops too: either can carry a token. The
@@ -423,16 +417,9 @@ const httpResourceMatches: Built<"http_resource_matches"> = {
           url,
           method: predicate.method,
           timeoutMs: predicate.timeoutMs,
-          ...(context.signal === undefined ? {} : { signal: context.signal }),
         }),
       );
     } catch (error) {
-      if (context.signal?.aborted) {
-        const reason = context.signal.reason;
-        const msg = reason instanceof Error ? reason.message : typeof reason === "string" ? reason : "task_cancelled";
-        const refusal = msg === "task_budget_exhausted" || msg === "budget_exhausted" ? "budget_exhausted" : "task_cancelled";
-        throw new Refusal(refusal);
-      }
       return {
         passed: false,
         inconclusive: true,
@@ -758,12 +745,37 @@ export class Verifier {
     // with, and none once this returns: a verifier that keeps the context and
     // asks again later gets a check of its own.
     let call: object | undefined;
+    const probe = this.probe;
+    const signal = options?.signal;
     const context: VerificationContext = {
       workspacePath: (input, options) =>
         options?.mayBeAbsent === true ? this.potentiallyAbsentFilePath(input, call) : this.filePath(input, call),
       relative: (path) => relative(this.root, path),
-      ...(this.probe === undefined ? {} : { probe: this.probe }),
-      ...(options?.signal === undefined ? {} : { signal: options.signal }),
+      ...(probe === undefined
+        ? {}
+        : {
+            probe: async (request) => {
+              signal?.throwIfAborted();
+              try {
+                return await probe(
+                  signal === undefined
+                    ? request
+                    : {
+                        ...request,
+                        signal:
+                          request.signal === undefined
+                            ? signal
+                            : AbortSignal.any([request.signal, signal]),
+                      },
+                );
+              } catch (error) {
+                // Name the budget or the cancel, not the HTTP channel's generic abort.
+                if (signal?.aborted === true) throw signal.reason;
+                throw error;
+              }
+            },
+          }),
+      ...(signal === undefined ? {} : { signal }),
     };
     const evidence: EvidenceItem[] = [];
     for (const predicate of predicates) {
