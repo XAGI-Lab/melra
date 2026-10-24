@@ -413,7 +413,11 @@ export class SqliteStore {
       this.database.exec("COMMIT");
       return result;
     } catch (error) {
-      this.database.exec("ROLLBACK");
+      // SQLite may have rolled it back already (a full disk does), and the
+      // ROLLBACK's own "no transaction is active" would then hide why.
+      try {
+        this.database.exec("ROLLBACK");
+      } catch {}
       throw error;
     }
   }
@@ -631,6 +635,24 @@ export class SqliteStore {
       )
       .all() as unknown as Array<{ status: string; count: number }>;
     return Object.fromEntries(rows.map((row) => [row.status, Number(row.count)]));
+  }
+
+  /**
+   * One task or workflow payload sealed here, with the context it was sealed
+   * under, for a start to check its key against; undefined while none is.
+   */
+  sealedPayloadSample(): { context: string; payload: EncryptedPayload } | undefined {
+    const row = this.database
+      .prepare(`
+        SELECT 'task:' || task_id || ':request' AS context, request_payload AS data FROM task_payloads
+        UNION ALL
+        SELECT 'workflow:' || workflow_id || ':' || workflow_version || ':definition', payload FROM workflow_payloads
+        LIMIT 1
+      `)
+      .get() as (JsonRow & { context: string }) | undefined;
+    return row === undefined
+      ? undefined
+      : { context: row.context, payload: parseStored(row.data, EncryptedPayloadSchema, "stored_payload_invalid") };
   }
 
   saveTaskPayload(

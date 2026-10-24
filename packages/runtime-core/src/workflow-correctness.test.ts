@@ -1713,6 +1713,28 @@ describe("a step whose advance lost its commit (#319)", () => {
   });
 });
 
+describe("a step whose sealed request could not be written (#416)", () => {
+  it("leaves no task behind, so the next advance plans the step again", async () => {
+    const { controller, store, done } = await setup();
+    // The stored row keeps no `value`, so only the sealed request is large.
+    const step = put("step");
+    const request = { ...step, operation: { ...step.operation, value: "x".repeat(190_000) } };
+    const planned = controller.plan(workflow([{ id: "step", type: "operation", request }]));
+    // A disk with room for the row but not the request; the error says so.
+    const { page_count } = store.database.prepare("PRAGMA page_count").get() as { page_count: number };
+    store.database.exec(`PRAGMA max_page_count = ${page_count + 8}`);
+    await expect(controller.advance(planned.id)).rejects.toThrow("database or disk is full");
+    expect(store.listTasks(10)).toEqual([]);
+    store.database.exec("PRAGMA max_page_count = 1073741823");
+
+    let run = (await controller.advance(planned.id)).run;
+    expect(run.nodes.step?.status).toBe("awaiting_approval");
+    run = (await controller.advance(planned.id, approvalsFor(run))).run;
+    expect(run.status).toBe("verified_complete");
+    expect(done).toEqual(["step"]);
+  });
+});
+
 describe("a step's task looked up by its key", () => {
   it("does not read every task in the home for each step an advance plans", async () => {
     const { controller, store, root, done } = await setup({ policy: { unhinged: true } });

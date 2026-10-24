@@ -206,11 +206,22 @@ The 256-bit key comes from one of two sources:
 
 - `MELRA_PAYLOAD_KEY`, encoded as canonical base64url; or
 - `<MELRA_HOME>/payload.key`, created atomically with mode `0600` inside a
-  mode-`0700` data directory.
+  mode-`0700` data directory, and only while the database holds no sealed
+  payloads. A start without `MELRA_PAYLOAD_KEY` that finds sealed payloads and
+  no key file is refused with `payload_key_missing` rather than given a new key
+  that could open none of them.
 
-On Unix, an existing key with group/other permissions is rejected. Symlinks
-and non-regular key files are rejected. Losing or changing the key makes
-existing payloads unreadable. MELRA does not escrow or recover keys.
+On Unix, an existing key with group/other permissions is rejected. Symlinks and
+non-regular key files are rejected. A key from either source that cannot open
+the one sealed payload a start samples is refused with `payload_key_mismatch`,
+so a start on a home sealed under one key never seals under another. The check
+runs only at start: two processes that both start on a home with nothing sealed
+yet, one with `MELRA_PAYLOAD_KEY` and one without, which creates `payload.key`,
+both pass it and can then seal under different keys, and a home already split
+between two keys, by that or by an earlier release, is caught only for a key
+that misses the sampled payload. Give every process on a home the same key.
+Losing or changing the key makes existing payloads unreadable. MELRA does not
+escrow or recover keys.
 
 Status, events, logs, receipts, and certificates contain redacted projections,
 not executable plaintext. A field that holds content, typed values, headers,
@@ -399,7 +410,9 @@ may be ignored only when full event replay succeeds.
 At startup, task recovery runs before workflow recovery and before any public
 interface is served.
 
-- Planned and approval-waiting payloads remain executable after restart.
+- Planned and approval-waiting payloads remain executable after restart. A
+  task's row and its sealed request commit in one transaction, so a failed
+  write leaves neither, never a task that cannot run.
 - Interrupted reads return to `planned` and may retry within their original
   budget and idempotency identity, unless the read had already verified and
   committed its key: then it recovers as `verified_success`

@@ -1239,7 +1239,8 @@ as 'melra approve' does. It pairs with the first page to use its code, normally
 the tab it opens. Its one-time pairing code is never printed: it reaches the
 browser on its opener's command line, and reloading or leaving the page ends
 the pairing. Run it with the MELRA_HOME, MELRA_WORKSPACE and mode your agent's
-server uses. Without a terminal or a browser to open, it refuses to start.
+server uses, and its MELRA_PAYLOAD_KEY if it sets one. Without a terminal or a
+browser to open, it refuses to start.
 
 In a terminal, doctor, setup, init, and version print a readable report, and
 'melra setup' with no --client asks which detected client to set up. Piped or

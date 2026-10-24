@@ -402,9 +402,31 @@ export async function createMelraRuntime(
   const runtimeRoot = unhinged
     ? unconfinedRoot(workspaceRoot)
     : policy.workspaceRoot;
-  const key = await loadPayloadKey({ dataDirectory, environment });
-  const cipher = new PayloadCipher(key);
   const store = new SqliteStore(join(dataDirectory, "melra.sqlite"));
+  let cipher: PayloadCipher;
+  try {
+    // The one place a key is loaded, `serve`, `run`, `approve` and the rest
+    // alike, so none of them mints one for a home sealed under another, or
+    // starts with one that cannot open what is sealed there: that process
+    // would seal under it too, splitting the home between two keys (#417).
+    const sample = store.sealedPayloadSample();
+    cipher = new PayloadCipher(
+      await loadPayloadKey({ dataDirectory, environment, sealed: sample !== undefined }),
+    );
+    if (sample !== undefined) {
+      try {
+        cipher.open(sample.payload, sample.context);
+      } catch {
+        throw new Error(
+          `payload_key_mismatch: ${dataDirectory} holds payloads sealed under another key; ` +
+            "set MELRA_PAYLOAD_KEY to the key they were sealed under, or restore payload.key from its backup.",
+        );
+      }
+    }
+  } catch (error) {
+    store.close();
+    throw error;
+  }
   // What this process holds open or locked. A workspace can contain the data
   // directory (`serve` started from home), and an adapter opening and closing
   // one of these would drop this process's POSIX locks on it: SQLite's on the

@@ -53,7 +53,8 @@ later.
 Node types: `operation`, `approval`, `condition`, `parallel`, `bounded_loop`,
 `checkpoint`, `compensation`, `human_input`, and `delegation`.
 
-- Exact definitions and task payloads survive restart in encrypted envelopes.
+- Exact definitions and task payloads survive restart in encrypted envelopes,
+  each task's written with its record in one transaction.
 - Each advance executes one deterministic ready wave.
 - Workflow events and the current projection commit atomically.
 - Interrupted reads may retry. Mutations are never silently repeated: they
