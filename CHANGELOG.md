@@ -85,9 +85,11 @@ All notable changes are documented here. The format follows
   it is now `effect_outcome_unknown:http_upgrade_refused`, so a mutation is
   left `recovery_required`, and `melra run` no longer exits 0 for a task whose
   effect never returned. The effect is bounded by its `timeoutMs`,
-  `budget.maxDurationMs` and a cancel. The independent read is bounded only by
-  the predicate's own `timeoutMs` (at most 60 s), as before: the budget and a
-  cancel do not reach it.
+  `budget.maxDurationMs` and a cancel. Each independent read is bounded only by
+  its predicate's own `timeoutMs` (at most 60 s), as before: the budget and a
+  cancel do not reach it, and a task's reads run one after another, so
+  verification can outlast the budget, and hold a cancel, by up to that much
+  per read (#407).
 - A `--mode` with a missing or blank value, or a repeated `--mode`, no longer
   leaves a process in developer mode, so a launcher or script that loses the
   value or overrides it cannot start a process its operator believes is
