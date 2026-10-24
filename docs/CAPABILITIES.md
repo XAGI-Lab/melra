@@ -129,7 +129,11 @@ Actions: `run`, `start`, `status`, `output`, `stop`, `send`.
   manager call is a read, `npm ls` included: each takes settings from files in
   the workspace that policy never sees, and they can make it write elsewhere.
   Everything else is a mutation and needs approval; `melra policy test` shows
-  how a command is classified.
+  how a command is classified. In enforced mode `git branch`, `diff`, `log`,
+  `rev-parse`, `show`, `status` and `tag`, with the subcommand first, approved
+  or not, use only a repository inside the workspace (a global option before
+  the subcommand makes the call a mutation that needs approval)
+  ([deployment modes](INSTALLATION.md#deployment-modes)).
 - Background jobs are supervised only for the life of the server process.
 
 A job started with `interactive: true` keeps stdin open, and `send` writes a line
@@ -521,6 +525,12 @@ userinfo; the request itself goes out as declared.
 Free-form task constraints fail closed because they cannot be enforced
 deterministically. `forbiddenEffects` accepts only `read`, `mutate`, and
 `destructive` and is enforced during planning and again during execution.
+Forbidding `mutate` forbids `destructive` too, as `"mutations": "deny"` does;
+forbidding `destructive` alone leaves every other mutation. `destructive` is
+only a file `delete` and a memory `delete` or `clear`. Every other change is a
+`mutate`, including a terminal command that deletes (`rm`, `git clean`,
+`git reset --hard`) and an HTTP request other than `GET` or `HEAD`, `DELETE`
+included, so a task that must delete nothing forbids `mutate`.
 
 ## Identity and capability grants
 
@@ -542,6 +552,13 @@ A file target is matched as the file runtime will resolve it, so `docs/../.env`
 is `.env` and falls outside a `docs/*` grant, and a move needs its destination
 granted as well as its source. Matching is on the path, not on what it resolves
 to on disk: a symlink inside a granted directory reaches wherever it points.
+
+A memory target is `<scope>:<action>:<id>`, or `<key>` for a `put` or `delete`
+that names no id. `list`, `search` and `clear` act on the whole scope, so their
+target is `<scope>:<action>:*` whatever key or id the request carries, and only
+a grant covering the whole scope covers them. A `put` with `supersedesId` hides
+that record, so the grant has to cover `<scope>:put:<supersedesId>` as well: a
+grant scoped to keys, such as `project:*:scratch-*`, cannot supersede.
 
 `validUntil` bounds a window; two optional fields bound what happens inside it.
 

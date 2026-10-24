@@ -6,6 +6,49 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** In enforced mode a `git` call whose first argument is the
+  subcommand `branch`, `diff`, `log`, `rev-parse`, `show`, `status` or `tag`
+  uses only a repository inside the workspace, approved or not, one that creates
+  a branch or tag included. git no longer looks for one above the workspace, so
+  a workspace that is only a directory inside a larger repository reads as `not
+  a git repository`, even for a read an operator approved: point
+  `MELRA_WORKSPACE` at the repository's top level. The call is refused with
+  `terminal_git_repository_outside_workspace` where a `.git` between where it
+  runs and the workspace root leads out, as a link or as a gitfile (a linked
+  worktree's, or a submodule's kept in an enclosing repository), or where a
+  directory above the workspace has the path delimiter (`:`, `;` on Windows) in
+  its name, and with `terminal_git_environment_not_allowed:<name>` where its
+  environment says where the repository is or hands git config. Developer mode,
+  and other `git` commands (`commit`, `checkout`, ...), are unchanged.
+- **Breaking:** A memory `list`, `search` or `clear` is matched against
+  capability grants as `<scope>:<action>:*`, whatever key or id it names, so
+  only a grant covering the whole scope covers it, and a `put` with
+  `supersedesId` needs its grant to cover `<scope>:put:<supersedesId>` as
+  well. A grant scoped to keys used to cover both.
+- **Breaking:** `forbiddenEffects: ["mutate"]` also refuses a `destructive`
+  effect (a file `delete`, a memory `delete` or `clear`) in every mode,
+  unsafe-local included, as `"mutations": "deny"` already did. Forbidding
+  `destructive` alone is unchanged. A terminal command or HTTP request that
+  deletes is a mutation, as before, so only forbidding `mutate` excludes it;
+  the `forbiddenEffects` description, CAPABILITIES.md and INSTALLATION.md now
+  say which operations each label covers.
+
+### Security
+
+- In enforced mode a `git` read no longer reaches a repository outside the
+  workspace, such as one enclosing it or one its `.git` or its environment
+  points to: it is refused or finds no repository, so a read that needs no
+  approval stays inside the workspace, as enforced mode promises.
+- A memory capability grant scoped to some keys no longer covers an action on
+  the whole scope, or a write that hides a record the grant does not cover, so
+  a grant's target, and what an approver is shown, names what the effect
+  touches.
+- `forbiddenEffects: ["mutate"]` now keeps a task from deleting through file
+  and memory operations too, including in unsafe-local mode, where the
+  caller's own limits are the ones left.
+
 ## [0.3.0-alpha.20] - 2026-10-24
 
 ### Changed

@@ -651,7 +651,10 @@ export function classifyOperation(operation: Operation): {
   traits: CapabilityTrait[];
   /** What the caller declared this operation moves, when it declared one. */
   spend?: DeclaredSpend;
-  /** Where a move puts the file; a grant has to cover it as well as `target`. */
+  /**
+   * What else the effect changes: where a move puts the file, or the record a
+   * memory put supersedes. A grant has to cover it as well as `target`.
+   */
   destination?: string;
 } {
   switch (operation.kind) {
@@ -766,9 +769,16 @@ export function classifyOperation(operation: Operation): {
         effect: destructive ? "destructive" : read ? "read" : "mutate",
         risk: destructive ? "high" : read ? "low" : "medium",
         capability: `memory.${operation.action}`,
+        // `list`, `search` and `clear` act on the whole scope whatever key or
+        // id is sent, so only a grant covering the whole scope covers them.
         target: `${operation.scope}:${operation.action}:${
-          operation.id ?? operation.key ?? "*"
+          read || operation.action === "clear" ? "*" : operation.id ?? operation.key ?? "*"
         }`,
+        // A put that supersedes a record hides it, so the grant has to cover
+        // that record too, named as a put editing it by its id names it.
+        ...(operation.action === "put" && operation.supersedesId !== undefined
+          ? { destination: `${operation.scope}:put:${operation.supersedesId}` }
+          : {}),
         traits: [],
       };
     }
@@ -1209,7 +1219,13 @@ export function evaluatePolicy(
     };
   }
 
-  if (request.forbiddenEffects.includes(classified.effect)) {
+  // A destructive effect is a kind of mutation, as `"mutations": "deny"`
+  // counts it, so forbidding `mutate` forbids it too. Forbidding
+  // `destructive` alone leaves the other mutations.
+  if (
+    request.forbiddenEffects.includes(classified.effect) ||
+    (classified.effect === "destructive" && request.forbiddenEffects.includes("mutate"))
+  ) {
     return { decision: decide("deny", "effect_forbidden_by_request") };
   }
 

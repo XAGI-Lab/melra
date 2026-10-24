@@ -460,6 +460,10 @@ for any run of characters. `principal` is matched against the immediate caller
 in the request's `identity`, written `kind:id`; a request that declares no
 identity is the local principal, `agent:local`. Add `policyVersion` to a grant
 to have it refused rather than reinterpreted after the policy changes under it.
+A memory target is `<scope>:<action>:<id or key>`, except that `list`,
+`search` and `clear`, which act on the whole scope, are `<scope>:<action>:*`
+whatever key or id they name, so a grant scoped to keys does not cover them (see
+[CAPABILITIES.md](CAPABILITIES.md#identity-and-capability-grants)).
 
 A grant may also carry a size. `validUntil` bounds a window; `maxOperations`
 bounds how many times the grant may ever be spent inside it, and a `provider`
@@ -929,11 +933,30 @@ closing every door it owns:
 - **A read that leaves the workspace is shown to a person first.** A
   read-only terminal command whose argument or option value names a path
   outside the workspace plans as `confirm` with reason `read_outside_workspace`
-  and runs only once an operator approves it. Developer mode lets those reads
+  and runs only once an operator approves it; a `git` read still finds only a
+  repository inside the workspace (see below). Developer mode lets those reads
   through, as before.
 - **An argument that only looks inside the workspace is refused if it links
   out**, on its way, where it ends, or where a program that folds `..` as text
   lands, with `terminal_path_outside_workspace`, approved or not.
+- **A git read stays in a repository inside the workspace.** git finds its
+  repository from where it runs, not from an argument, so a `git` call whose
+  first argument is the subcommand `branch`, `diff`, `log`, `rev-parse`, `show`,
+  `status` or `tag`, approved or not, one that creates a branch or tag included,
+  does not look for one above the workspace, nor take a directory shaped like a
+  bare repository for one. It is refused with
+  `terminal_git_repository_outside_workspace` where a `.git` between where it
+  runs and the workspace root leads out, as a link or as a gitfile naming a git
+  directory elsewhere (a linked worktree's, or a submodule's kept in an
+  enclosing repository), or where a directory above the workspace has the path
+  delimiter (`:`, `;` on Windows) in its name, and with
+  `terminal_git_environment_not_allowed:<name>` where its environment says where
+  the repository is or hands git config. A workspace that is only a directory
+  inside a larger repository has no repository of its own, so git there reports
+  `not a git repository`, even for a read an operator approved: point
+  `MELRA_WORKSPACE` at the repository's top level. Developer mode, other `git`
+  commands (`commit`, `checkout`, ...), and an approved call with a global
+  option before the subcommand use whatever repository git finds.
 - **A browser action that drives a page names it.** `click`, `type`,
   `fill_form`, `select`, `press`, `upload`, `download`, `close` and
   `tab_switch` without a `url` are refused at planning with
@@ -1281,6 +1304,10 @@ What stays on, and why:
 
 - Limits you declare on your own request. `forbiddenEffects` and `constraints`
   are your bound on your own task, not MELRA's guardrail, so they still deny.
+  Forbidding `mutate` forbids `destructive` too. `destructive` is only a file
+  `delete` and a memory `delete` or `clear`: a terminal command that deletes
+  (`rm`, `git clean`) and an HTTP `DELETE` are mutations, so forbid `mutate` to
+  keep a task from deleting anything.
 - Checks on the request's own shape. `semantic` evidence beside
   `reconciliation` (`semantic_evidence_not_reconcilable`), or in a workflow
   node (`workflow_semantic_evidence_unsupported`), is a contract nothing could
