@@ -34,6 +34,10 @@ All notable changes are documented here. The format follows
   deletes is a mutation, as before, so only forbidding `mutate` excludes it;
   the `forbiddenEffects` description, CAPABILITIES.md and INSTALLATION.md now
   say which operations each label covers.
+- **Breaking:** `POST /oauth/register` refuses a request that carries an
+  `Origin` header (`403 origin_not_allowed`) and one whose body is not
+  `application/json` (`415 json_required`). An MCP client registering from its
+  own process sends JSON and no `Origin`, so it is unaffected.
 
 ### Security
 
@@ -48,6 +52,17 @@ All notable changes are documented here. The format follows
 - `forbiddenEffects: ["mutate"]` now keeps a task from deleting through file
   and memory operations too, including in unsafe-local mode, where the
   caller's own limits are the ones left.
+- `melra serve --http --open` no longer puts the standing HTTP token on the
+  browser opener's command line, where other users of the machine can read it.
+  The opener gets a link that opens the console once, within a minute of
+  startup; the server exposes it as `openUrl`. Brought again, the link says it
+  was already used (`open_code_used`), so an operator whose link was used first
+  by someone else is told so; past the minute, or with a wrong code, it is
+  refused (`open_code_invalid`). The Console URL printed on the operator's
+  terminal still carries the token.
+- A web page open in the operator's browser can no longer register OAuth
+  clients on a loopback HTTP server, so it cannot fill the client list or push
+  out a client still waiting for approval.
 
 ## [0.3.0-alpha.20] - 2026-10-24
 

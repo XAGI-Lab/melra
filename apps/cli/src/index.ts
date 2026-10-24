@@ -1159,11 +1159,12 @@ function clientsCommand(args: string[], env: CliEnvironment): number {
  * Hands the console URL to whatever opens links here, and says whether anything
  * took it: the helper ran and, if it finished within a few seconds, succeeded.
  *
- * The URL carries the token, so this is the difference between copying a secret
- * out of a terminal and the console simply being open. `serve --open` ignores a
- * failure on purpose: the URL is already on screen, and a server that refused
- * to start because a desktop helper is missing would be worse than one you
- * click into. `melra console` prints no URL, so it has to know.
+ * The URL goes on the helper's command line, which other local users can read,
+ * so it carries a code that opens the console once, never the standing token:
+ * `serve`'s `openUrl`, or `melra console`'s pairing code. `serve --open`
+ * ignores a failure on purpose: the URL is already on screen, and a server
+ * that refused to start because a desktop helper is missing would be worse
+ * than one you click into. `melra console` prints no URL, so it has to know.
  */
 function openInBrowser(url: string): Promise<boolean> {
   const [command, ...prefix] =
@@ -1485,7 +1486,7 @@ async function main(): Promise<void> {
               : "") +
             `Loopback only. Anyone who can read this token can drive this machine.\n`,
         );
-        if (args.includes("--open")) void openInBrowser(endpoint.url);
+        if (args.includes("--open") && endpoint.openUrl !== undefined) void openInBrowser(endpoint.openUrl);
       }
       const close = async () => {
         await server?.close();

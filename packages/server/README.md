@@ -53,8 +53,9 @@ const http = await serveHttp({ runtime, port: 7457 });
 console.error(http.mcpUrl, http.token);
 ```
 
-Every route wants that token. A client that cannot be handed it can instead
-register itself over OAuth 2.1 and ask a person to approve it in a browser;
+Every route but sign-in (the OAuth routes and `--open`'s one-time link) wants
+that token. A client that cannot be handed it can instead register itself over
+OAuth 2.1 and ask a person to approve it in a browser;
 after that its own name — `harness:<name>#<id prefix>` — leads the delegation
 chain on every receipt it produces, rather than the anonymous `agent:local`.
 That flow is offered on loopback only, and `MELRA_HTTP_OAUTH=0` removes it.

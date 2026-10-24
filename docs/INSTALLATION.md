@@ -673,8 +673,20 @@ are named on every receipt. Set MELRA_HTTP_OAUTH=0 to allow only the token.
 Loopback only. Anyone who can read this token can drive this machine.
 ```
 
-Every route needs that token, as `Authorization: Bearer <token>` or `?token=`
-(the query form exists because `EventSource` cannot set headers). Set
+`--open` does not hand the browser that URL. A program's command line can be
+read by other users of the machine (`ps`), and the token is good for as long as
+the server runs, so the opener gets `http://127.0.0.1:7457/open?code=<code>`
+instead: a link that sends the browser on to the console URL once, and is
+refused after that (`403 open_code_used`) or once a minute has passed since
+startup (`403 open_code_invalid`). If the browser was slower than that, open
+the printed Console URL yourself. If it says the link was already used and you
+did not use it, someone else has the token: restart the server so the token
+changes (set a new `MELRA_HTTP_TOKEN` if you fixed one), and revoke any client
+in `melra clients` you did not approve (`melra clients --revoke <id>`, or
+`all`), since an approved client keeps its access across restarts.
+
+Every other route needs that token, as `Authorization: Bearer <token>` or
+`?token=` (the query form exists because `EventSource` cannot set headers). Set
 `MELRA_HTTP_TOKEN` to keep it stable across restarts; otherwise a fresh one is
 generated each start. **Anyone who can read the token can drive this machine** —
 the server binds loopback only, and putting it behind a proxy on a reachable
@@ -771,7 +783,13 @@ The sign-in routes (`/.well-known/*` and `/oauth/*`) also answer only when
 `Host` is a loopback name (`127.0.0.1`, `localhost`, `[::1]`, or the address
 the server is bound to), on any port, so an SSH tunnel still works but a web
 page that re-resolves its own name to `127.0.0.1` cannot drive the flow from
-your browser. Every other route needs the token, whatever the name.
+your browser. Registration also refuses a request that carries an `Origin`
+header (`403 origin_not_allowed`), which a browser puts on every POST a page
+makes and an MCP client registering from its own process does not, and a body
+that is not `application/json` (`415 json_required`), so no web page you have
+open can register clients either. `/open` (what `--open` opens) likewise
+answers only to loopback names and needs no token. Every other route needs the
+token, whatever the name.
 
 After that the client is a principal. It becomes `harness:<name>#<id prefix>` —
 the name it registered under, plus part of the id MELRA minted, so two clients
@@ -811,10 +829,11 @@ one cannot be used to act under another client's name.
 | Route | Method | What it returns |
 |---|---|---|
 | `/` | `GET` | The console |
+| `/open?code=<code>` | `GET` | What `--open` opens: a redirect to the console, once, within a minute of startup; unauthenticated, loopback names only |
 | `/mcp` | `POST`/`GET`/`DELETE` | MCP over Streamable HTTP — all twelve tools |
 | `/.well-known/oauth-protected-resource` | `GET` | RFC 9728 metadata, unauthenticated |
 | `/.well-known/oauth-authorization-server` | `GET` | RFC 8414 metadata, unauthenticated |
-| `/oauth/register` | `POST` | RFC 7591 registration; grants nothing on its own |
+| `/oauth/register` | `POST` | RFC 7591 registration, JSON only and never with an `Origin` header; grants nothing on its own |
 | `/oauth/authorize` | `GET`/`POST` | The consent page, and your decision |
 | `/oauth/token` | `POST` | Authorization code exchange, PKCE S256 |
 | `/api/capabilities` | `GET` | The same payload `melra_capabilities` returns |

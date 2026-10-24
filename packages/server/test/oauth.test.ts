@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createHash, randomBytes } from "node:crypto";
-import { mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -390,6 +390,32 @@ describe("melra oauth", () => {
       });
       expect(response.status, uri).toBe(400);
     }
+  });
+
+  it("refuses a registration a web page could send, and leaves the client list alone", async () => {
+    const register = (headers: Record<string, string>) =>
+      fetch(`${base}/oauth/register`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ client_name: "From a page", redirect_uris: [REDIRECT] }),
+      });
+    const clients = () =>
+      (JSON.parse(readFileSync(join(home, "oauth.json"), "utf8")) as { clients: unknown[] }).clients.length;
+    // What an MCP client registering from its own process sends.
+    expect((await register({ "content-type": "application/json" })).status).toBe(201);
+    const before = clients();
+    // A page's POST without a preflight: text, with the page's own Origin.
+    for (const origin of ["https://evil.example", "null", base]) {
+      for (const type of ["text/plain;charset=UTF-8", "application/json"]) {
+        const refused = await register({ "content-type": type, origin });
+        expect(refused.status, `${origin} ${type}`).toBe(403);
+        expect(await refused.json()).toMatchObject({ error: "origin_not_allowed" });
+      }
+    }
+    const text = await register({ "content-type": "text/plain" });
+    expect(text.status).toBe(415);
+    expect(await text.json()).toMatchObject({ error: "json_required" });
+    expect(clients()).toBe(before);
   });
 
   it("keeps issued tokens in a file only the operator can read", () => {
