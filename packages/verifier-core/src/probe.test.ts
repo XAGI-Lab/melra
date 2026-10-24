@@ -303,7 +303,7 @@ describe("verification through a channel that did not act", () => {
           type: "custom_check",
           async check(_input, _result, context) {
             await context.probe!({ url: "https://example.com", method: "GET", timeoutMs: 1000 });
-            return { passed: true };
+            return { passed: true, summary: "probe passed" };
           },
         },
       ],
