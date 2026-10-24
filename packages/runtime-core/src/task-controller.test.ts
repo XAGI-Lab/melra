@@ -778,6 +778,34 @@ describe("TaskController", () => {
     expect(store.getCertificateForTask(leaky.id)?.goal).toBe("Deploy with [REDACTED_GITHUB_TOKEN]");
   });
 
+  it("keeps no value of a credential a goal binds with `:=` or `=>`", async () => {
+    const { controller, store } = await setup({
+      async execute() {
+        return { success: true };
+      },
+    });
+    // Built at run time so no literal here reads as a leaked credential.
+    const secret = `S3cr3t${"Passw0rd"}`;
+    const task = controller.plan(
+      TaskRequestSchema.parse({
+        goal: `set password := "${secret}" in main.go and 'secret' => '${secret} too' in config.php`,
+        operation: { kind: "system", action: "info" },
+      }),
+    );
+    const execution = await controller.execute(task.id);
+    for (const text of [
+      JSON.stringify(store.getTask(task.id)),
+      JSON.stringify(store.getCertificateForTask(task.id)),
+      JSON.stringify(store.getReceiptsForTask(task.id)),
+      JSON.stringify(execution.receipt),
+    ]) {
+      expect(text).not.toContain(secret);
+    }
+    expect(store.getTask(task.id)?.request.goal).toBe(
+      "set password=[REDACTED]\" in main.go and 'secret'=[REDACTED]' in config.php",
+    );
+  });
+
   it("shows the live caller the approval input without retaining it", async () => {
     const { controller, store } = await setup({
       async execute() {
