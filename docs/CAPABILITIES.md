@@ -1,6 +1,6 @@
 # Capabilities and limits
 
-This document describes `0.3.0-alpha.20`.
+This document describes `0.3.0-alpha.21`.
 
 ## MCP tools
 

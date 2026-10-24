@@ -6,6 +6,8 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0-alpha.21] - 2026-10-25
+
 ### Changed
 
 - **Breaking:** In enforced mode a `git` call whose first argument is the
@@ -20,8 +22,10 @@ All notable changes are documented here. The format follows
   worktree's, or a submodule's kept in an enclosing repository), or where a
   directory above the workspace has the path delimiter (`:`, `;` on Windows) in
   its name, and with `terminal_git_environment_not_allowed:<name>` where its
-  environment says where the repository is or hands git config. Developer mode,
-  and other `git` commands (`commit`, `checkout`, ...), are unchanged.
+  environment says where the repository is or hands git config. A bare
+  repository is not found either, even inside the workspace: git finds one only
+  through a `.git` (with git 2.38 or later). Developer mode, and other `git`
+  commands (`commit`, `checkout`, ...), are unchanged.
 - **Breaking:** A memory `list`, `search` or `clear` is matched against
   capability grants as `<scope>:<action>:*`, whatever key or id it names, so
   only a grant covering the whole scope covers it, and a `put` with
@@ -29,15 +33,16 @@ All notable changes are documented here. The format follows
   well. A grant scoped to keys used to cover both.
 - **Breaking:** `forbiddenEffects: ["mutate"]` also refuses a `destructive`
   effect (a file `delete`, a memory `delete` or `clear`) in every mode,
-  unsafe-local included, as `"mutations": "deny"` already did. Forbidding
-  `destructive` alone is unchanged. A terminal command or HTTP request that
-  deletes is a mutation, as before, so only forbidding `mutate` excludes it;
-  the `forbiddenEffects` description, CAPABILITIES.md and INSTALLATION.md now
-  say which operations each label covers.
+  unsafe-local included, counting it as a mutation the way `"mutations": "deny"`
+  already does. Forbidding `destructive` alone is unchanged. A terminal command
+  or HTTP request that deletes is a mutation, as before, so only forbidding
+  `mutate` excludes it; the `forbiddenEffects` description, CAPABILITIES.md and
+  INSTALLATION.md now say which operations each label covers.
 - **Breaking:** `POST /oauth/register` refuses a request that carries an
-  `Origin` header (`403 origin_not_allowed`) and one whose body is not
+  `Origin` header (`403 origin_not_allowed`) and one whose `Content-Type` is not
   `application/json` (`415 json_required`). An MCP client registering from its
-  own process sends JSON and no `Origin`, so it is unaffected.
+  own process sends `Content-Type: application/json` and no `Origin`, so it is
+  unaffected.
 - **Breaking:** Over loopback HTTP, a client signed in with OAuth acts only on
   the tasks and workflow runs it planned: an id another client planned is
   refused with `task_belongs_to_another_client` or
@@ -84,7 +89,7 @@ All notable changes are documented here. The format follows
   name the fix: set the variable to the key they were sealed under, or restore
   the file. The first used to create a new key and carry on, the second to start
   and fail on each payload it read. A home with nothing sealed yet still gets
-  its key created on first start.
+  its key created on first start (#417).
 
 ### Fixed
 
@@ -96,13 +101,9 @@ All notable changes are documented here. The format follows
 - A write that fails inside a transaction, as on a full disk, reports its own
   error, such as `database or disk is full`, rather than `cannot rollback - no
   transaction is active`.
-- `melra approve`, `run`, `serve` or any other command no longer creates a new
-  `payload.key` in a home whose payloads are sealed under another key, or
-  starts with a key that cannot open them, a `payload.key` created before
-  anything was sealed included. Either split the home so that neither key
-  could read all of it (#417). INSTALLATION.md now says to run
-  `melra approve`, `console` or `judge` with the server's `MELRA_PAYLOAD_KEY`
-  when it sets one, and `melra help` says so for `console`.
+- INSTALLATION.md now says to run `melra approve`, `console` or `judge` with the
+  server's `MELRA_PAYLOAD_KEY` when it sets one, and `melra help` says so for
+  `console` (#417).
 
 ### Security
 
@@ -137,9 +138,9 @@ All notable changes are documented here. The format follows
   acted.
 - In enforced mode an HTTP read or browser navigation addressed to a host only
   `"*"` admits, or a read whose evidence is checked at one, waits for an
-  operator's approval, and a workflow check that would read from one is refused;
-  an HTTP read that sends content counts as the mutation it is, and outside
-  unsafe-local mode is approved as one.
+  operator's approval, and a workflow check that would read from one is refused.
+  In every mode an HTTP read that sends content counts as the mutation it is,
+  and outside unsafe-local mode is approved as one.
 - The network destination check counts an IPv6 address as public only inside
   global unicast, or as the IPv4-mapped or NAT64 form of a public IPv4 address,
   so special-purpose and legacy transition addresses, including those that embed
@@ -3763,7 +3764,8 @@ All notable changes are documented here. The format follows
 - Cross-scope memory overwrite and deletion protection.
 - Patched transitive HTTP adapter enforced through a package override.
 
-[Unreleased]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.20...HEAD
+[Unreleased]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.21...HEAD
+[0.3.0-alpha.21]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.20...v0.3.0-alpha.21
 [0.3.0-alpha.20]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.19...v0.3.0-alpha.20
 [0.3.0-alpha.19]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.18...v0.3.0-alpha.19
 [0.3.0-alpha.18]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.17...v0.3.0-alpha.18
