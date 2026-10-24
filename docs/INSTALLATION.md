@@ -360,7 +360,12 @@ private and link-local ranges, and cloud metadata (`169.254/16`), and it resolve
 DNS before allowing a navigation so a public name cannot be rebound to a private
 address. To restrict which public sites are reachable, replace `"*"` with the
 domains a task actually needs — `examples/04-browser-inspection/policy.json` is
-a worked example that allows only `example.com`.
+a worked example that allows only `example.com`. In enforced mode `"*"` still
+admits any public host, but an HTTP `GET` or `HEAD`, or a browser `navigate` or
+`tab_new`, to a host only `"*"` admits plans as `confirm` with reason
+`network_read_unlisted_host`, and so does a read whose `http_resource_matches`
+evidence is checked there. A host an entry names (`example.com` also covers its
+subdomains) needs no approval for a read.
 
 `allowLocalhost` decides whether HTTP and browser effects may reach this
 machine's loopback names and addresses (`localhost`, `127.0.0.0/8`, `::1`).
@@ -968,6 +973,18 @@ closing every door it owns:
   and runs only once an operator approves it; a `git` read still finds only a
   repository inside the workspace (see below). Developer mode lets those reads
   through, as before.
+- **A read sent to a host the policy does not name is shown to a person
+  first.** An HTTP `GET` or `HEAD`, or a browser `navigate` or `tab_new`, to a
+  public host that `allowedDomains` admits only through `"*"` plans as
+  `confirm` with reason `network_read_unlisted_host` and runs only once an
+  operator approves it, since what its URL carries goes to that host. So does
+  a read whose `http_resource_matches` evidence or reconciliation is checked
+  there or takes its host from the result, and a workflow `condition`, `until`
+  or `delegation` check like that is refused at planning and when an advance
+  reaches it (`workflow_check_unlisted_host`). Name the hosts tasks need in
+  `allowedDomains` and reads to them run without approval; other reads on a
+  page already open are unchanged. Developer mode lets those reads through, as
+  before.
 - **An argument that only looks inside the workspace is refused if it links
   out**, on its way, where it ends, or where a program that folds `..` as text
   lands, with `terminal_path_outside_workspace`, approved or not.

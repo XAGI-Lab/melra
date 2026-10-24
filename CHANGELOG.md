@@ -55,6 +55,28 @@ All notable changes are documented here. The format follows
   otherwise unchanged. `melra workflow pause`, `suspend` and `resume` now
   record `MELRA_APPROVER` as who acted, and fail on a value it does not
   accept.
+- **Breaking:** In enforced mode an HTTP `GET` or `HEAD`, or a browser
+  `navigate` or `tab_new`, to a public host that `allowedDomains` admits only
+  through `"*"`, the default, plans as `confirm` with reason
+  `network_read_unlisted_host` and runs once an operator approves it. A host an
+  entry names, itself or as a parent domain, needs no approval. Developer mode
+  is unchanged.
+- **Breaking:** In enforced mode a read whose `http_resource_matches` evidence
+  or reconciliation is read from a host only `"*"` admits, or takes its host
+  from the result, also plans as `confirm` with reason
+  `network_read_unlisted_host`. A workflow `condition`, `until` or `delegation`
+  check like that is refused with `workflow_check_unlisted_host`, at planning
+  and again when an enforced process advances a run to it, so a run planned in
+  developer mode does not send it either.
+- **Breaking:** An HTTP `GET` or `HEAD` that carries `content` is a mutation in
+  every mode, so it is never retried and `forbiddenEffects: ["mutate"]` excludes
+  it, and outside unsafe-local mode it needs evidence and an approval like any
+  other; without `content` it is a read, as before.
+- **Breaking:** HTTP and browser destinations refuse an IPv6 address outside
+  global unicast (`2000::/3`) and the special-purpose and transition blocks
+  inside it, such as documentation, benchmarking, 6to4 and Teredo addresses. The
+  IPv4-mapped and NAT64 forms are judged by the IPv4 address they carry, as
+  before.
 
 ### Security
 
@@ -87,6 +109,15 @@ All notable changes are documented here. The format follows
   operator lifts it, including one made from a developer-mode shell or on a
   run the agent had already halted, and halt and resume events record who
   acted.
+- In enforced mode an HTTP read or browser navigation addressed to a host only
+  `"*"` admits, or a read whose evidence is checked at one, waits for an
+  operator's approval, and a workflow check that would read from one is refused;
+  an HTTP read that sends content counts as the mutation it is, and outside
+  unsafe-local mode is approved as one.
+- The network destination check counts an IPv6 address as public only inside
+  global unicast, or as the IPv4-mapped or NAT64 form of a public IPv4 address,
+  so special-purpose and legacy transition addresses, including those that embed
+  an IPv4 address it would refuse, are refused as well.
 
 ## [0.3.0-alpha.20] - 2026-10-24
 

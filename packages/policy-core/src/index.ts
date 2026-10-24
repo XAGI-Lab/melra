@@ -4,8 +4,9 @@
 import { readFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, normalize, relative, resolve, sep } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
+import { isIP } from "node:net";
 import { evidenceStrength } from "@melra/receipt-schema";
-import { hostOf } from "./network-policy.js";
+import { hostOf, isPrivateAddress } from "./network-policy.js";
 import type {
   ApprovalChallenge,
   ApprovalResponse,
@@ -211,7 +212,10 @@ const ALWAYS_DENIED_COMMANDS = new Set([
  *
  * Defaulting it to `[]` made every single navigation fail with
  * `destination_domain_not_allowed` out of the box, which is why browser use was
- * reported as unusable. Operators who want an allowlist set one explicitly.
+ * reported as unusable. Operators who want an allowlist set one explicitly. In
+ * enforced mode a read sent to a host only `*` admits waits for the operator
+ * (`network_read_unlisted_host`), so there the list is also what reads run
+ * unattended against.
  */
 /**
  * Reduce a command to the name the allowlist is written in.
@@ -811,8 +815,10 @@ export function classifyOperation(operation: Operation): {
       // The method is the classification. A GET that a server treats as a write
       // is that server misusing HTTP, and MELRA cannot see it — which is why a
       // read still gets no approval but also no retry-into-a-duplicate: the
-      // guarantee comes from the effect, and the effect comes from here.
-      const read = operation.method === "GET" || operation.method === "HEAD";
+      // guarantee comes from the effect, and the effect comes from here. A GET
+      // or HEAD that carries content is not a read: it sends what the caller
+      // wrote, so it is approved like any other call that does.
+      const read = (operation.method === "GET" || operation.method === "HEAD") && operation.content === undefined;
       const target = new URL(operation.url);
       target.search = "";
       target.hash = "";
@@ -948,7 +954,10 @@ function domainAllowed(operation: Operation, policy: LocalPolicy): boolean {
   // `close` and `tab_switch` go nowhere: their url names the tab they act on,
   // which can be `about:blank` or a page that redirected off the allowlist.
   if (operation.kind === "browser" && (operation.action === "close" || operation.action === "tab_switch")) return true;
-  const url = new URL(raw);
+  return urlAllowed(new URL(raw), policy);
+}
+
+function urlAllowed(url: URL, policy: LocalPolicy): boolean {
   if (!["http:", "https:"].includes(url.protocol)) return false;
   const host = hostOf(url);
   if (host === "localhost" || host.endsWith(".localhost")) return localhostAllowed(policy);
@@ -959,6 +968,45 @@ function domainAllowed(operation: Operation, policy: LocalPolicy): boolean {
       // ends with it.
       (domain !== "" && (host === domain.toLowerCase() || host.endsWith(`.${domain.toLowerCase()}`))),
   );
+}
+
+/**
+ * Whether a read sends a request to a public host the policy admits only by
+ * `*`. Only `navigate` and `tab_new` go where their url says; on any other
+ * browser action it names a page already reached. A private address is the
+ * destination guard's to refuse, or to reach when the operator opened loopback.
+ */
+function unlistedHost(operation: Operation, policy: LocalPolicy): boolean {
+  const url =
+    operation.kind === "http" || (operation.kind === "browser" && ["navigate", "tab_new"].includes(operation.action))
+      ? operation.url
+      : undefined;
+  return url !== undefined && unlistedUrl(new URL(url), policy);
+}
+
+function unlistedUrl(url: URL, policy: LocalPolicy): boolean {
+  const host = hostOf(url);
+  if (isIP(host) !== 0 && isPrivateAddress(host)) return false;
+  return !urlAllowed(url, { ...policy, allowedDomains: policy.allowedDomains.filter((domain) => domain !== "*") });
+}
+
+/**
+ * Whether an `http_resource_matches` check reads from a host the policy admits
+ * only by `*`. The verifier sends that request after the effect, with what the
+ * result filled into its url, so it is held to the same test as a read sent
+ * there. A `{{token}}` in the scheme or authority leaves the host to the
+ * result, so the policy cannot have named it.
+ */
+export function unlistedProbe(predicate: EvidencePredicate, policy: LocalPolicy): boolean {
+  if (predicate.type !== "http_resource_matches") return false;
+  const token = "melra-token";
+  let url: URL;
+  try {
+    url = new URL(predicate.url.replace(/\{\{[^{}]*\}\}/gu, token));
+  } catch {
+    return true;
+  }
+  return `${url.protocol}${url.username}${url.password}${url.host}`.includes(token) || unlistedUrl(url, policy);
 }
 
 /**
@@ -1317,10 +1365,16 @@ export function evaluatePolicy(
     return { decision: decide("deny", "semantic_only_destructive") };
   }
 
+  // Enforced mode asserts MELRA is the only door, so a read that leaves the
+  // workspace is shown to a person first, and so is one whose url, or whose
+  // evidence's, carries whatever it carries to a host the operator never named.
+  const unlisted =
+    policy.mode === "enforced" &&
+    classified.effect === "read" &&
+    (unlistedHost(request.operation, policy) ||
+      [...request.requiredEvidence, ...request.reconciliation].some((predicate) => unlistedProbe(predicate, policy)));
   if (classified.effect === "read") {
-    // Enforced mode asserts MELRA is the only door, so a read that leaves the
-    // workspace is shown to a person first.
-    if (policy.mode !== "enforced" || !namesPathOutside(request.operation, policy.workspaceRoot)) {
+    if (policy.mode !== "enforced" || (!unlisted && !namesPathOutside(request.operation, policy.workspaceRoot))) {
       return { decision: decide("allow", "read_only_operation"), ...metered };
     }
   } else if (policy.mutations === "deny") {
@@ -1333,7 +1387,11 @@ export function evaluatePolicy(
   return {
     decision: decide(
       "confirm",
-      classified.effect === "read" ? "read_outside_workspace" : "explicit_approval_required",
+      classified.effect !== "read"
+        ? "explicit_approval_required"
+        : unlisted
+          ? "network_read_unlisted_host"
+          : "read_outside_workspace",
     ),
     ...metered,
     challenge: {

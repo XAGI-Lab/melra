@@ -45,7 +45,12 @@ never reaches a runtime.
 - Browser and HTTP destinations default to `allowedDomains: ["*"]` with localhost
   allowed, because the allowlist is a narrowing control, not the safety boundary
   — `assertSafeDestination`, exported from this package, is what blocks private
-  and metadata destinations, and it holds even with `allowedDomains: ["*"]`.
+  and metadata destinations, and it holds even with `allowedDomains: ["*"]`. In
+  enforced mode an HTTP `GET`/`HEAD` or a browser `navigate`/`tab_new` to a
+  public host only `"*"` admits is a `confirm` (`network_read_unlisted_host`),
+  as is a read whose `http_resource_matches` evidence is checked there
+  (`unlistedProbe`), and in every mode a `GET` or `HEAD` that carries `content`
+  is a mutation.
 - `classifyOperation` is the single place effect and risk are decided. An action
   that is not classified there is mis-classified, not unclassified.
 
@@ -55,8 +60,11 @@ never reaches a runtime.
 opens a socket shares one implementation. It rejects non-`http(s)` protocols and
 URL credentials, resolves DNS first and checks **every** answer, and blocks
 private, loopback, link-local, and cloud-metadata ranges in IPv4, IPv6, and
-IPv4-mapped IPv6 form. It returns the address it checked so the caller can pin
-the socket to it instead of letting the name resolve a second time.
+IPv4-mapped IPv6 form. An IPv6 address counts as public only inside global
+unicast (`2000::/3`) and outside the special-purpose blocks there, or as the
+IPv4-mapped or NAT64 form of a public IPv4 address. It returns the address it
+checked so the caller can pin the socket to it instead of letting the name
+resolve a second time.
 
 ## Capability grants
 

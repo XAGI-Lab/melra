@@ -33,6 +33,40 @@ describe("browser network policy", () => {
     expect(isPrivateAddress("8.8.8.8")).toBe(false);
   });
 
+  // Only global unicast IPv6 is public; the special-purpose and legacy
+  // transition blocks are refused, wherever their embedded IPv4 points.
+  it.each([
+    "::7f00:1",
+    "::10.0.0.5",
+    "::a9fe:a9fe",
+    "::ffff:0:7f00:1",
+    "2002:7f00:1::1",
+    "2001::1",
+    "100::1",
+    "100:0:0:1::1",
+    "2001:2::1",
+    "2001:10::1",
+    "2001:db8::1",
+    "3fff::1",
+    "fec0::1",
+    "5f00::1",
+    "FE80::1",
+    "ff02::1",
+  ])("refuses the non-global IPv6 address %s", (address) => {
+    expect(isPrivateAddress(address)).toBe(true);
+  });
+
+  it.each([
+    "2606:4700:4700::1111",
+    "2001:4860:4860::8888",
+    "2a00:1450:4001::1",
+    "2001:20::1",
+    "64:ff9b::808:808",
+    "::ffff:808:808",
+  ])("still allows the public IPv6 address %s", (address) => {
+    expect(isPrivateAddress(address)).toBe(false);
+  });
+
   it("blocks credentials and localhost by default", async () => {
     const policy = { allowedDomains: ["*"], allowLocalhost: false };
     await expect(assertSafeUrl("http://127.0.0.1", policy)).rejects.toThrow(

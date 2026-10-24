@@ -342,6 +342,89 @@ describe("WorkflowController planning", () => {
     ).toEqual({ count: 0 });
   });
 
+  it("refuses, in enforced mode, a condition, until or delegation check read from a host the policy does not name", async () => {
+    const enforced = await setup(undefined, { mode: "enforced" });
+    const named = await setup(undefined, { mode: "enforced", allowedDomains: ["*", "example.com"] });
+    const developer = await setup();
+    const probe = (url: string) => ({ type: "http_resource_matches", url, path: "status", value: 200 });
+    let version = 0;
+    // Nobody approves a check, so there is no one to show it to.
+    for (const make of [
+      (predicate: object) => ({ type: "condition", sourceNodeId: "inspect", predicate }),
+      (predicate: object) => ({ type: "bounded_loop", body: [request("Poll")], maxIterations: 3, until: predicate }),
+      (predicate: object) => ({ type: "delegation", assignee: "outside-worker", goal: "issue the refund", requiredEvidence: [predicate] }),
+    ]) {
+      const workflow = (url: string) =>
+        WorkflowDefinitionSchema.parse({
+          schemaVersion: "1.0.0",
+          id: definitionId,
+          version: ++version,
+          name: "Checked elsewhere",
+          nodes: [
+            { id: "inspect", type: "operation", request: request("Inspect first") },
+            { id: "check", dependsOn: ["inspect"], ...make(probe(url)) },
+          ],
+        });
+      const kind = make({}).type;
+      expect(() => enforced.controller.plan(workflow("https://example.com/c")), kind).toThrow("workflow_check_unlisted_host");
+      expect(() => named.controller.plan(workflow("https://{{json.host}}/c")), kind).toThrow("workflow_check_unlisted_host");
+      expect(named.controller.plan(workflow("https://api.example.com/c")).status, kind).toBe("planned");
+      expect(developer.controller.plan(workflow("https://example.com/c")).status, kind).toBe("planned");
+    }
+    expect(
+      enforced.store.database.prepare("SELECT count(*) AS count FROM workflow_runs").get(),
+    ).toEqual({ count: 0 });
+  });
+
+  it("refuses, in an enforced process, a check a developer-mode run would read from a host the policy does not name", async () => {
+    const probe = { type: "http_resource_matches", url: "https://example.com/c", path: "status", value: 200 };
+    let version = 0;
+    for (const make of [
+      () => ({ type: "condition", sourceNodeId: "inspect", predicate: probe }),
+      () => ({ type: "bounded_loop", body: [request("Poll")], maxIterations: 3, until: probe }),
+      () => ({ type: "delegation", assignee: "outside-worker", goal: "issue the refund", requiredEvidence: [probe] }),
+    ]) {
+      let ran = 0;
+      let asked = 0;
+      const execute = async () => (ran++, { success: true });
+      const answer = async () => (asked++, { success: true, status: 200 });
+      // Planned and started in developer mode, which sends a check anywhere.
+      const { root, store, cipher, controller } = await setup(execute, {}, answer);
+      const planned = controller.plan(
+        WorkflowDefinitionSchema.parse({
+          schemaVersion: "1.0.0",
+          id: definitionId,
+          version: ++version,
+          name: "Checked elsewhere",
+          nodes: [
+            { id: "inspect", type: "operation", request: request("Inspect first") },
+            { id: "check", dependsOn: ["inspect"], ...make() },
+          ],
+        }),
+      );
+      await controller.advance(planned.id);
+      const enforced = new WorkflowController(
+        store,
+        new TaskController(
+          store,
+          { ...createDefaultPolicy(root), mode: "enforced" },
+          { execute },
+          await Verifier.create(root, { probe: answer }),
+          cipher,
+        ),
+        cipher,
+      );
+      const kind = make().type;
+      await expect(
+        enforced.advance(planned.id, [], [{ nodeId: "check", value: "done" }]),
+        kind,
+      ).rejects.toThrow("workflow_check_unlisted_host");
+      // Nothing asked, and no loop iteration run ahead of a refused `until`.
+      expect([asked, ran], kind).toEqual([0, 1]);
+      expect(enforced.status(planned.id).nodes.check?.status, kind).toBe("pending");
+    }
+  });
+
   it("reads status and events and rejects unknown workflow IDs", async () => {
     const { controller } = await setup();
     const run = controller.plan(definition());

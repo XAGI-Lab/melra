@@ -1,7 +1,7 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
-import { isIP, type LookupFunction } from "node:net";
+import { BlockList, isIP, type LookupFunction } from "node:net";
 import { lookup as dnsLookup } from "node:dns";
 import { lookup } from "node:dns/promises";
 
@@ -68,6 +68,31 @@ function nat64(address: string): { ipv4?: string; localUse: boolean } | undefine
   return { ipv4: [high >>> 8, high & 0xff, low >>> 8, low & 0xff].join("."), localUse: false };
 }
 
+/**
+ * IPv6 that is not global unicast. Only `2000::/3` is allocated for it, so
+ * everything outside is refused (loopback, unique-local, link-local,
+ * site-local, multicast, the IPv4-compatible `::/96` and IPv4-translated
+ * `::ffff:0:0:0/96` forms, and any special block assigned there later), and so
+ * are the blocks inside it that the IANA special-purpose registry marks as not
+ * globally reachable or that carry an IPv4 address this check cannot vouch
+ * for. The IPv4-mapped and NAT64 forms never get here: `isPrivateAddress`
+ * judges them by the IPv4 address they carry.
+ */
+const NON_GLOBAL_IPV6 = new BlockList();
+for (const [network, bits] of [
+  ["::", 3],
+  ["4000::", 2],
+  ["8000::", 1],
+  ["2001::", 32], // Teredo
+  ["2001:2::", 48], // benchmarking
+  ["2001:10::", 28], // ORCHID
+  ["2001:db8::", 32], // documentation
+  ["2002::", 16], // 6to4
+  ["3fff::", 20], // documentation
+] as const) {
+  NON_GLOBAL_IPV6.addSubnet(network, bits, "ipv6");
+}
+
 export function isPrivateAddress(address: string): boolean {
   const version = isIP(address);
   if (version === 4) {
@@ -93,17 +118,7 @@ export function isPrivateAddress(address: string): boolean {
     if (translated !== undefined) {
       return translated.localUse || isPrivateAddress(translated.ipv4!);
     }
-    return (
-      normalized === "::" ||
-      normalized === "::1" ||
-      normalized.startsWith("fc") ||
-      normalized.startsWith("fd") ||
-      normalized.startsWith("fe8") ||
-      normalized.startsWith("fe9") ||
-      normalized.startsWith("fea") ||
-      normalized.startsWith("feb") ||
-      normalized.startsWith("ff")
-    );
+    return NON_GLOBAL_IPV6.check(normalized, "ipv6");
   }
   return false;
 }

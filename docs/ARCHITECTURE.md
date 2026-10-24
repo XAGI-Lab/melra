@@ -231,6 +231,10 @@ before persistence. Every nested task is capability- and policy-preflighted
 before the workflow is accepted, and a `condition`, `until` or `delegation`
 check no registered verifier can ask (`evidence_verifier_unavailable`), or on a
 file path outside the workspace (`evidence_path_outside_workspace`), is refused.
+In enforced mode so is one read from a host `allowedDomains` admits only
+through `"*"` (`workflow_check_unlisted_host`), at planning and again before an
+advance asks it, since a run planned in developer mode can be advanced by an
+enforced process.
 
 | Node | Implemented semantics and bounds |
 |---|---|
@@ -274,7 +278,13 @@ asks of each iteration's new result, so it reads such a check as a no and runs
 the next iteration, up to `maxIterations`. Either way the call fails, but a
 `condition` under which an advance that lost its commit already ran a step
 whose outcome is unknown neither waits nor fails: it halts on that step
-(`recovery_required`, as after a restart), so nothing unwinds past it.
+(`recovery_required`, as after a restart), so nothing unwinds past it. In an
+enforced-mode process a check that would read from a host only `"*"` admits is
+refused at planning and again when an advance reaches it
+(`workflow_check_unlisted_host`): nothing is asked, the node stays pending, a
+loop runs no iteration and the run neither unwinds nor completes, so every later
+advance refuses again until the policy names the host or `workflow cancel` ends
+the run.
 
 A `condition` takes one branch, once. A branch with a committed step is the
 one taken, even when the advance that took it lost its commit (a pause landed
@@ -775,7 +785,9 @@ autonomous effects performed through those resources.
 ## Verification boundary
 
 Filesystem predicates independently re-read the workspace (level 1), and
-`http_resource_matches` asks the provider over a second request (level 2).
+`http_resource_matches` asks the provider over a second request (level 2),
+which in enforced mode goes to a host only `"*"` admits once an operator has
+approved the task, and never from a workflow check.
 Result, terminal, URL, and page predicates evaluate adapter-returned
 observations (level 0). Predicates are caller-authored, so a weak predicate can
 prove too little. Models and adapters cannot approve actions or mark a workflow
