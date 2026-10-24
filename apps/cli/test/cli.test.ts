@@ -235,6 +235,58 @@ describe("melra CLI", () => {
     }
   });
 
+  it("pauses a workflow as the operator, so in enforced mode only the operator resumes it", async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), "melra-cli-")));
+    roots.push(base);
+    const root = join(base, "workspace");
+    await mkdir(root);
+    const dataDirectory = join(base, "data");
+    const server = await createMelraRuntime({ workspaceRoot: root, dataDirectory, environment: { MELRA_MODE: "enforced" } });
+    try {
+      const run = server.workflows.plan(
+        WorkflowDefinitionSchema.parse({
+          schemaVersion: "1.0.0",
+          id: "55555555-5555-4555-8555-555555555555",
+          version: 1,
+          name: "Held",
+          nodes: [
+            {
+              id: "write",
+              type: "operation",
+              request: {
+                goal: "Write the report",
+                operation: { kind: "file", action: "write", path: "report.txt", content: "x" },
+                requiredEvidence: [{ type: "file_exists", path: "report.txt" }],
+              },
+            },
+          ],
+        }),
+      );
+      const taskId = (await server.workflows.advance(run.id)).run.nodes.write!.taskIds[0]!;
+      const env = { ...process.env, MELRA_HOME: dataDirectory, MELRA_WORKSPACE: root, MELRA_MODE: "enforced", MELRA_APPROVER: "alice" };
+      await execute(process.execPath, [entry, "approve", taskId, "--yes"], { cwd: root, env });
+      await execute(process.execPath, [entry, "workflow", "pause", run.id], { cwd: root, env });
+      expect(server.workflows.events(run.id).at(-1)).toMatchObject({
+        type: "workflow.paused",
+        data: { actor: "cli:alice", channel: "out_of_band" },
+      });
+      // The agent's side: neither lifts the halt nor runs the approved step.
+      expect(() => server.workflows.resume(run.id)).toThrow("workflow_resume_needs_operator");
+      await expect(server.controller.execute(taskId)).rejects.toThrow("workflow_halted:paused");
+      expect(existsSync(join(root, "report.txt"))).toBe(false);
+
+      // Exit 3: awaiting the approval it already has, for the next advance.
+      const resumed = (await execute(process.execPath, [entry, "workflow", "resume", run.id], { cwd: root, env }).catch(
+        (error: unknown) => error,
+      )) as { code: number; stdout: string };
+      expect(resumed.code).toBe(3);
+      expect(JSON.parse(resumed.stdout)).toMatchObject({ id: run.id, status: "awaiting_approval" });
+      expect((await server.workflows.advance(run.id)).run.status).toBe("verified_complete");
+    } finally {
+      await server.close();
+    }
+  });
+
   it("judges a waiting task as the named operator, out of band only when enforced", async () => {
     const base = await realpath(await mkdtemp(join(tmpdir(), "melra-cli-")));
     roots.push(base);

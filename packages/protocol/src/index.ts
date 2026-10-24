@@ -537,6 +537,15 @@ export function principalRef(principal: Principal): string {
 }
 
 /**
+ * Who a transport says is calling: a client it authenticated, by principal, or
+ * `operator` for whoever holds the machine's own key (the standing HTTP token,
+ * stdio, the CLI), which has no name.
+ */
+export function callerRef(client?: Principal): string {
+  return client === undefined ? "operator" : principalRef(client);
+}
+
+/**
  * Records a caller the transport authenticated above whatever the request
  * declared.
  *
@@ -1239,7 +1248,7 @@ export const WorkflowIdInputSchema = z
 export const WorkflowControlInputSchema = z
   .object({
     workflowId: z.string().uuid().describe("The run id melra_workflow_plan returned, not the definition's id. An unknown id fails with workflow_not_found; workflow_lease_held means an advance holds the run's lease, so retry once it returns."),
-    action: z.enum(["pause", "resume", "suspend"]).describe("pause or suspend halts the run (same effect; only the status name differs) and fails with workflow_not_haltable on a verified_complete, cancelled or failed run. resume lifts either halt and runs nothing; on a run not halted it fails with workflow_not_paused."),
+    action: z.enum(["pause", "resume", "suspend"]).describe("pause or suspend halts the run (same effect; only the status name differs) and fails with workflow_not_haltable on a verified_complete, cancelled or failed run. resume lifts either halt and runs nothing; on a run not halted it fails with workflow_not_paused, and in enforced mode, on a halt an operator made, with workflow_resume_needs_operator."),
   })
   .strict();
 
@@ -1363,6 +1372,15 @@ export interface TaskRecord {
   certificateId?: string;
   /** The semantic questions a `waiting_user` task waits on (#54). */
   judgements?: SemanticJudgement[];
+  /**
+   * Who planned it, as `callerRef` names them; a workflow step's task names
+   * its run's. Another authenticated client may not act on it or read it. A
+   * task planned before callers were recorded names nobody, and stays open to
+   * anyone.
+   */
+  client?: string;
+  /** The run a workflow step's task was planned for: it waits while that run is halted. */
+  workflowId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -1410,7 +1428,7 @@ export const MelraCapabilitiesInputSchema = z.object({}).strict();
 export const MelraPlanInputSchema = TaskRequestSchema;
 export const MelraExecuteInputSchema = z
   .object({
-    taskId: z.string().uuid().describe("The id melra_plan returned. Only a planned or awaiting_approval task can run; a policy_blocked one comes back unchanged, a recovery_required one is reconciled rather than re-run, and any other status fails with task_not_executable:<status>. Unknown ids fail with task_not_found."),
+    taskId: z.string().uuid().describe("The id melra_plan returned. Only a planned or awaiting_approval task can run; a policy_blocked one comes back unchanged, a recovery_required one is reconciled rather than re-run, and any other status fails with task_not_executable:<status>. A workflow step's task fails with workflow_halted:<status> while its run is paused or suspended. Unknown ids fail with task_not_found."),
     approval: ApprovalResponseSchema.optional().describe("The awaiting_approval task's challenge as {approvalId, phrase}, phrase copied exactly. Omit it for a planned task, or once an operator has approved with `melra approve`. In enforced mode never send it: for a task that needs approval it is refused (approval_in_band_refused)."),
   })
   .strict();

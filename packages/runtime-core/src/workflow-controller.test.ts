@@ -57,6 +57,7 @@ async function setup(
     cipher,
   );
   return {
+    root,
     store,
     cipher,
     tasks,
@@ -3097,6 +3098,103 @@ describe("WorkflowController operator controls", () => {
     expect(() => controller.pause(planned.id)).toThrow(
       "workflow_not_haltable",
     );
+  });
+
+  it("holds an operator's enforced halt against the agent until the operator lifts it", async () => {
+    const operator = { operator: "cli:alice" };
+    const { controller, tasks } = await setup(async () => ({ stored: true }), { mode: "enforced" });
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: definitionId,
+        version: 1,
+        name: "Held",
+        nodes: [{ id: "put", type: "operation", request: mutationRequest("Store the project") }],
+      }),
+    );
+    const taskId = (await controller.advance(planned.id)).run.nodes.put!.taskIds[0]!;
+    // Approved, then halted to look again before it runs.
+    tasks.decide(taskId, tasks.approvalView(taskId).renderDigest, "cli:alice");
+    controller.pause(planned.id, operator);
+
+    expect(() => controller.resume(planned.id)).toThrow("workflow_resume_needs_operator");
+    // Switched to suspended by the agent, it is still the operator's halt.
+    controller.suspend(planned.id);
+    expect(() => controller.resume(planned.id)).toThrow("workflow_resume_needs_operator");
+    // Nor does the waiting step run on its own.
+    await expect(tasks.execute(taskId)).rejects.toThrow("workflow_halted:suspended");
+    expect(tasks.status(taskId).status).toBe("awaiting_approval");
+    expect(
+      controller.events(planned.id).filter((event) => event.type === "workflow.paused").map((event) => event.data),
+    ).toMatchObject([{ actor: "cli:alice", channel: "out_of_band" }]);
+
+    expect(controller.resume(planned.id, operator).status).toBe("awaiting_approval");
+    expect((await controller.advance(planned.id)).run.status).toBe("verified_complete");
+  });
+
+  it("lets the agent lift its own halt, and any halt in developer mode", async () => {
+    for (const [mode, by] of [
+      ["enforced", { agent: "agent:a" }],
+      ["developer", { operator: "cli:alice" }],
+    ] as const) {
+      const { controller } = await setup(undefined, { mode });
+      const planned = controller.plan(definition(`Halted in ${mode}`));
+      controller.pause(planned.id, by);
+      const resumed = controller.resume(planned.id, { agent: "agent:a" });
+      expect(resumed.status, mode).toBe("running");
+      expect(controller.events(planned.id).at(-1)?.data, mode).toMatchObject({ actor: "agent:a", channel: "in_band" });
+    }
+  });
+
+  it("records an operator's halt on a run the agent halted the same way, so it holds", async () => {
+    const operator = { operator: "cli:alice" };
+    for (const [verb, status] of [
+      ["pause", "paused"],
+      ["suspend", "suspended"],
+    ] as const) {
+      const { controller } = await setup(undefined, { mode: "enforced" });
+      const planned = controller.plan(definition(`Halted by the agent, then the operator: ${verb}`));
+      controller[verb](planned.id);
+      controller[verb](planned.id, operator);
+      // Once the operator's holds it, another adds nothing.
+      controller[verb](planned.id, operator);
+
+      expect(() => controller.resume(planned.id), verb).toThrow("workflow_resume_needs_operator");
+      expect(
+        controller.events(planned.id).filter((event) => event.type === `workflow.${status}`).map((event) => event.data),
+        verb,
+      ).toMatchObject([
+        { to: status, actor: "agent" },
+        { from: status, to: status, actor: "cli:alice", operator: true, channel: "out_of_band" },
+      ]);
+      expect(controller.resume(planned.id, operator).status, verb).toBe("running");
+    }
+  });
+
+  it("holds an operator's halt in an enforced kernel, whatever mode the process that made it ran in", async () => {
+    const operator = { operator: "cli:alice" };
+    const { root, store, cipher, controller } = await setup(undefined, { mode: "enforced" });
+    // The same home in a developer-mode process, as an operator's shell
+    // without MELRA_MODE is.
+    const developer = new WorkflowController(
+      store,
+      new TaskController(store, createDefaultPolicy(root), { execute: async () => ({}) }, await Verifier.create(root), cipher),
+      cipher,
+    );
+    const planned = controller.plan(definition("Halted from either mode"));
+
+    developer.pause(planned.id, operator);
+    expect(controller.events(planned.id).at(-1)?.data).toMatchObject({
+      actor: "cli:alice",
+      operator: true,
+      channel: "in_band",
+    });
+    expect(() => controller.resume(planned.id)).toThrow("workflow_resume_needs_operator");
+    expect(controller.resume(planned.id, operator).status).toBe("running");
+
+    // A developer kernel, the other way round, lets the agent lift any halt.
+    controller.pause(planned.id, operator);
+    expect(developer.resume(planned.id).status).toBe("running");
   });
 });
 

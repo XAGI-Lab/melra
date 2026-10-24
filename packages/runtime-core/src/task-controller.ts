@@ -20,6 +20,7 @@ import type {
 } from "@melra/protocol";
 import {
   allowsRetry,
+  callerRef,
   delegationChain,
   effectContract,
   executionGuaranteeFor,
@@ -80,6 +81,14 @@ export interface TaskPlanOptions {
    * again, so a run accepted before a check existed does not stop mid-way.
    */
   stored?: boolean;
+  /**
+   * Who is planning it, as `callerRef` names them; the operator when unset,
+   * but for a workflow step, which names its run's planner or, for a run
+   * planned before callers were recorded, nobody.
+   */
+  client?: string;
+  /** The run a workflow step is planned for. */
+  workflowId?: string;
 }
 
 function now(): string {
@@ -366,6 +375,12 @@ export class TaskController {
       ...(options.attempt === undefined ? {} : { attempt: options.attempt }),
       ...(policy.challenge === undefined ? {} : { approval: this.keyedChallenge(policy.challenge) }),
       receiptIds: [],
+      // A step of a run that names no planner names none either, so it stays
+      // open to anyone, as its run does.
+      ...(options.client === undefined && options.workflowId !== undefined
+        ? {}
+        : { client: options.client ?? callerRef() }),
+      ...(options.workflowId === undefined ? {} : { workflowId: options.workflowId }),
       createdAt: timestamp,
       updatedAt: timestamp,
     };
@@ -459,6 +474,19 @@ export class TaskController {
     return task;
   }
 
+  /**
+   * Refuses an authenticated client a task someone else planned: an id is a
+   * handle, not a credential. `caller` is as `callerRef` names it; the
+   * operator is refused nothing, and an id naming no task is left for the
+   * call itself to refuse.
+   */
+  assertCaller(taskId: string, caller: string): void {
+    const planner = this.store.getTask(taskId)?.client;
+    if (caller !== callerRef() && planner !== undefined && planner !== caller) {
+      throw new Error("task_belongs_to_another_client");
+    }
+  }
+
   async execute(
     taskId: string,
     approval?: ApprovalResponse,
@@ -476,6 +504,10 @@ export class TaskController {
     if (!UNSTARTED.includes(task.status)) {
       throw new Error(`task_not_executable:${task.status}`);
     }
+    // A halt stops the run, not only its advance: a step's task, in any mode,
+    // runs only once its run is resumed, however its id was come by.
+    const halted = task.workflowId === undefined ? undefined : this.store.getWorkflowRun(task.workflowId)?.status;
+    if (halted === "paused" || halted === "suspended") throw new Error(`workflow_halted:${halted}`);
     if (
       task.idempotencyKey !== undefined &&
       this.store.getIdempotencyCommit(task.idempotencyKey) !== undefined

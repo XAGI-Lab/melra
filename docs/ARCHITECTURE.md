@@ -119,7 +119,12 @@ is recorded as `harness:<name>#<id prefix>` at the outermost end of the chain,
 ahead of whatever the request declared — because anything a client names, a
 session or a subagent, is inside it and never above it. Every other link is a
 claim the layer above makes, worth exactly what that layer's own boundary is
-worth, which over stdio is nothing. Enforced mode
+worth, which over stdio is nothing. The same caller is recorded on each task
+and workflow run it plans (and on a run's steps), and every tool that takes a
+task, receipt or run id refuses another authenticated client with
+`task_belongs_to_another_client` or `workflow_belongs_to_another_client`; the
+operator (the standing token, stdio, the CLI) is refused nothing, and the JSON
+API answers only the operator's token. Enforced mode
 ([P2](../ROADMAP.md#p2--hard-capability-boundary)) is where the rest of the
 chain becomes fact rather than claim.
 
@@ -318,27 +323,35 @@ draft → planned → running → verified_complete
 ```
 
 `paused` and `suspended` are entered by the operator commands `workflow pause`
-and `workflow suspend`, and left by `workflow resume`; an `advance` against
-either is refused rather than queued. These three and `workflow cancel` take
-the run's lease for the moment they write, as recovery does, so none lands
-under an advance, whose commit would then fail and leave the effects it ran
-out of the run: while an advance holds the lease, in any process, each is
-refused with `workflow_lease_held` and changes nothing, so retry once it
-returns. An advance whose lease lapsed (it stalled, as across a laptop's
-sleep) is taken over: it stops with `workflow_lease_lost` before its next step.
-A halt or resume leaves its expired lease in place, so whoever advances the run
-next recovers it first; a cancel, which ends the run for good, recovers it
-itself before cancelling it, reading each step's tasks under its keys, so what
-that advance (or one that died holding the lease, or lost its commit) ran is
-recorded on the cancelled run, and a task still running there is cancelled as
-the run's own. Its step is recorded as still in flight (`recovery_required`,
-`task_still_in_flight`), not as cancelled: in another process, or one that
-died mid-effect, the effect may still land. One running in this process is
-recorded as it ended (cancelled, or done all the same) once it stops, tried
-again while another holder has the run's lease, and cancelling the run again
-records any such step whose task has since ended, in any process. The
-public schema also reserves `partially_complete`, which no command enters
-today.
+and `workflow suspend`, or by `melra_workflow_control`, and left by `workflow
+resume` (or that tool's `resume`); an `advance` against either is refused
+rather than queued, and so is `melra_execute` on one of the run's step tasks
+(`workflow_halted:<status>`), in every mode. Each halt and resume event records
+its `actor` (`cli:<name>`, the OAuth client's principal, or `agent`), `operator:
+true` when an operator acted, and `channel`, `out_of_band` only for an operator
+in an enforced process. Until a resume lifts an operator's halt, an enforced
+kernel lets only an operator resume the run (`workflow_resume_needs_operator`),
+whatever mode the process that halted it ran in; an operator's halt on a run
+the agent had already halted the same way is still recorded. The agent may lift
+a halt only it made, and in a developer-mode kernel any halt. A pause, suspend
+or resume and `workflow cancel` take the run's lease for the moment they write,
+as recovery does, so none lands under an advance, whose commit would then fail
+and leave the effects it ran out of the run: while an advance holds the lease,
+in any process, each is refused with `workflow_lease_held` and changes nothing,
+so retry once it returns. An advance whose lease lapsed (it stalled, as across a
+laptop's sleep) is taken over: it stops with `workflow_lease_lost` before its
+next step. A halt or resume leaves its expired lease in place, so whoever
+advances the run next recovers it first; a cancel, which ends the run for good,
+recovers it itself before cancelling it, reading each step's tasks under its
+keys, so what that advance (or one that died holding the lease, or lost its
+commit) ran is recorded on the cancelled run, and a task still running there is
+cancelled as the run's own. Its step is recorded as still in flight
+(`recovery_required`, `task_still_in_flight`), not as cancelled: in another
+process, or one that died mid-effect, the effect may still land. One running in
+this process is recorded as it ended (cancelled, or done all the same) once it
+stops, tried again while another holder has the run's lease, and cancelling the
+run again records any such step whose task has since ended, in any process. The
+public schema also reserves `partially_complete`, which no command enters today.
 
 `cancelled` is entered only by `workflow cancel`. A step whose task is denied
 before it runs (`melra approve --deny`, the console's Deny, or
@@ -468,7 +481,7 @@ same durable record; none of them is a shortcut past a stage of the lifecycle.
 | CLI | argv | Humans, scripts, CI |
 | TypeScript SDK | stdio subprocess, or a running server over loopback HTTP or the Unix socket | Node applications and custom harnesses |
 | Python SDK | stdio subprocess, or a running server over loopback HTTP or the Unix socket | Python applications and custom harnesses |
-| JSON API | loopback HTTP or the Unix socket, read-only | Consoles and dashboards |
+| JSON API | loopback HTTP or the Unix socket, read-only, the operator's token only | Consoles and dashboards |
 | Approval console | `melra console`: its own loopback HTTP server, no MCP endpoint | An operator approving or denying in a browser tab paired with it |
 
 The MCP surface is exactly twelve tools:

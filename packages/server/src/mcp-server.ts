@@ -5,6 +5,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
   attributeTo,
+  callerRef,
   IdentitySchema,
   type Principal,
   MelraCapabilitiesInputSchema,
@@ -16,6 +17,7 @@ import {
   MelraTaskStatusInputSchema,
   OperationSchema,
   PRODUCT_VERSION,
+  principalRef,
   PROTOCOL_VERSION,
   TaskRequestSchema,
   TOOL_NAMES,
@@ -242,6 +244,14 @@ export function createMcpServer(
         runtime.policy.mode === "enforced" ? `${SERVER_INSTRUCTIONS}\n${ENFORCED_APPROVAL}` : SERVER_INSTRUCTIONS,
     },
   );
+  // Every id this server is handed is checked against who planned it, so an
+  // authenticated client acts only on its own tasks and runs: an id is a
+  // handle, not a credential. A halt from here is the agent's, whoever holds
+  // the session; an operator's comes only through `melra workflow`.
+  const caller = callerRef(client);
+  const agent = { agent: client === undefined ? "agent" : principalRef(client) };
+  const ownTask = (taskId: string) => runtime.controller.assertCaller(taskId, caller);
+  const ownRun = (workflowId: string) => runtime.workflows.assertCaller(workflowId, caller);
 
   server.registerTool(
     "melra_capabilities",
@@ -278,6 +288,7 @@ export function createMcpServer(
       toolResult(
         runtime.controller.plan(
           TaskRequestSchema.parse(attributed(input, client)),
+          { client: caller },
         ),
       ),
   );
@@ -287,7 +298,7 @@ export function createMcpServer(
     {
       title: "Execute a planned MELRA task",
       description:
-        "Run one task melra_plan returned, by taskId: MELRA re-evaluates policy, so a plan made under a looser policy is still refused, then runs the operation, checks its requiredEvidence and records a receipt. If the plan returned an approval challenge with a phrase, pass approval with its approvalId and exact phrase; the phrase is scoped to that one task and expires. Only reads are retried, and a recovery_required task is reconciled, never re-run: it stays recovery_required while its provider cannot be reached (task.error reconciliation_inconclusive, ask again later) or while MELRA refuses to ask its reconciliation (reconciliation_unanswerable:<reason>, which asking again will not change). Returns { task, output?, receipt?, certificate? } with the outcome in task.status. For workflow steps use melra_workflow_advance instead." +
+        "Run one task melra_plan returned, by taskId: MELRA re-evaluates policy, so a plan made under a looser policy is still refused, then runs the operation, checks its requiredEvidence and records a receipt. If the plan returned an approval challenge with a phrase, pass approval with its approvalId and exact phrase; the phrase is scoped to that one task and expires. Only reads are retried, and a recovery_required task is reconciled, never re-run: it stays recovery_required while its provider cannot be reached (task.error reconciliation_inconclusive, ask again later) or while MELRA refuses to ask its reconciliation (reconciliation_unanswerable:<reason>, which asking again will not change). Returns { task, output?, receipt?, certificate? } with the outcome in task.status. For workflow steps use melra_workflow_advance instead; a step of a paused or suspended run fails with workflow_halted:<status> until the run is resumed." +
         (runtime.policy.mode === "enforced" ? ` ${ENFORCED_APPROVAL}` : ""),
       inputSchema: MelraExecuteInputSchema,
       annotations: {
@@ -299,6 +310,7 @@ export function createMcpServer(
     },
     async (input) => {
       const parsed = MelraExecuteInputSchema.parse(input);
+      ownTask(parsed.taskId);
       return toolResult(
         await runtime.controller.execute(parsed.taskId, parsed.approval),
       );
@@ -321,6 +333,7 @@ export function createMcpServer(
     },
     async (input) => {
       const parsed = MelraTaskStatusInputSchema.parse(input);
+      ownTask(parsed.taskId);
       return toolResult(runtime.controller.status(parsed.taskId));
     },
   );
@@ -341,6 +354,7 @@ export function createMcpServer(
     },
     async (input) => {
       const parsed = MelraTaskCancelInputSchema.parse(input);
+      ownTask(parsed.taskId);
       return toolResult(runtime.controller.cancel(parsed.taskId));
     },
   );
@@ -361,6 +375,10 @@ export function createMcpServer(
     },
     async (input) => {
       const parsed = MelraReceiptInputSchema.parse(input);
+      // receiptId wins, so the task it names is the one checked.
+      const owner =
+        parsed.receiptId === undefined ? parsed.taskId : runtime.store.getReceipt(parsed.receiptId)?.taskId;
+      if (owner !== undefined) ownTask(owner);
       return toolResult(
         runtime.controller.receipts({
           ...(parsed.taskId === undefined ? {} : { taskId: parsed.taskId }),
@@ -395,6 +413,7 @@ export function createMcpServer(
       const { identity, ...judgement } = MelraTaskJudgeInputSchema.parse(
         attributed(MelraTaskJudgeInputSchema.parse(input), client),
       );
+      ownTask(judgement.taskId);
       return toolResult(
         runtime.controller.judge(judgement, { identity, ...(client === undefined ? {} : { client }) }),
       );
@@ -419,7 +438,7 @@ export function createMcpServer(
       const parsed = WorkflowPlanInputSchema.parse(input);
       const definition = WorkflowDefinitionSchema.parse(parsed.definition);
       if (client !== undefined) attributeRequests(definition, client);
-      return toolResult(runtime.workflows.plan(definition));
+      return toolResult(runtime.workflows.plan(definition, caller));
     },
   );
 
@@ -439,6 +458,7 @@ export function createMcpServer(
     },
     async (input) => {
       const parsed = WorkflowAdvanceInputSchema.parse(input);
+      ownRun(parsed.workflowId);
       return toolResult(
         await runtime.workflows.advance(
           parsed.workflowId,
@@ -465,6 +485,7 @@ export function createMcpServer(
     },
     async (input) => {
       const parsed = WorkflowIdInputSchema.parse(input);
+      ownRun(parsed.workflowId);
       return toolResult(runtime.workflows.status(parsed.workflowId));
     },
   );
@@ -485,6 +506,7 @@ export function createMcpServer(
     },
     async (input) => {
       const parsed = WorkflowIdInputSchema.parse(input);
+      ownRun(parsed.workflowId);
       return toolResult(runtime.workflows.cancel(parsed.workflowId));
     },
   );
@@ -494,7 +516,10 @@ export function createMcpServer(
     {
       title: "Pause, resume, or suspend a MELRA workflow",
       description:
-        "Halt a workflow run or lift the halt, without changing node state. action pause or suspend (same behaviour; only the status name differs) sets the run's status to paused or suspended unless it is verified_complete, cancelled or failed; melra_workflow_advance then fails with workflow_halted:<status> while the run is halted. Halt between advances: while an advance holds the run's lease, in this process or another, pause, suspend and resume fail with workflow_lease_held and change nothing, so retry once it returns. resume needs a paused or suspended run, sets the status its nodes imply and runs nothing, so call melra_workflow_advance next. Returns the updated run. To end a run instead, use melra_workflow_cancel.",
+        "Halt a workflow run or lift the halt, without changing node state. action pause or suspend (same behaviour; only the status name differs) sets the run's status to paused or suspended unless it is verified_complete, cancelled or failed; melra_workflow_advance then fails with workflow_halted:<status> while the run is halted. Halt between advances: while an advance holds the run's lease, in this process or another, pause, suspend and resume fail with workflow_lease_held and change nothing, so retry once it returns. resume needs a paused or suspended run, sets the status its nodes imply and runs nothing, so call melra_workflow_advance next. Returns the updated run. To end a run instead, use melra_workflow_cancel." +
+        (runtime.policy.mode === "enforced"
+          ? " Enforced mode: a halt an operator made with `melra workflow pause` or `suspend` is lifted only by the operator, so resume fails with workflow_resume_needs_operator, even on a run this tool had halted first; a halt made only here can be resumed here."
+          : ""),
       inputSchema: WorkflowControlInputSchema,
       annotations: {
         readOnlyHint: false,
@@ -505,12 +530,13 @@ export function createMcpServer(
     },
     async (input) => {
       const parsed = WorkflowControlInputSchema.parse(input);
+      ownRun(parsed.workflowId);
       return toolResult(
         parsed.action === "pause"
-          ? runtime.workflows.pause(parsed.workflowId)
+          ? runtime.workflows.pause(parsed.workflowId, agent)
           : parsed.action === "suspend"
-            ? runtime.workflows.suspend(parsed.workflowId)
-            : runtime.workflows.resume(parsed.workflowId),
+            ? runtime.workflows.suspend(parsed.workflowId, agent)
+            : runtime.workflows.resume(parsed.workflowId, agent),
       );
     },
   );
