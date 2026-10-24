@@ -92,6 +92,12 @@ All notable changes are documented here. The format follows
   enforced. Leaving `--mode` out still means developer, unless `MELRA_MODE` or
   the policy says enforced.
 
+- Overrides raise two transitive floors that `pnpm audit --prod` reported
+  through `@modelcontextprotocol/sdk`: `body-parser` to 2.4.0 (a denial of
+  service through bytes after a compressed request body) and `fast-uri` to
+  3.1.9 (scheme spoofing and host confusion). The SDK's ranges already allow
+  both; only the lockfile pinned the vulnerable releases.
+
 ## [0.3.0-alpha.19] - 2026-10-23
 
 ### Added
