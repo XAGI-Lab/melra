@@ -46,7 +46,7 @@ interface ClientIdentity {
 
 /**
  * `budget.maxDurationMs`'s cap, then 20 evidence predicates at the 60 s probe
- * cap (verification is not timed by the budget), with a minute to answer in.
+ * cap (for tasks without a budget or unbudgeted reads), with a minute to answer in.
  */
 const RUN_TIMEOUT_MS = 900_000 + 20 * 60_000 + 60_000;
 

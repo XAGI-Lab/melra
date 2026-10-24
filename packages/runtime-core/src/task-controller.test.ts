@@ -715,9 +715,9 @@ describe("TaskController", () => {
       type: "http_resource_matches",
       passed: false,
       inconclusive: true,
-      unanswerable: true,
-      summary: "budget_exhausted",
+      summary: "independent read unavailable: task_budget_exhausted",
     });
+    expect(result.receipt?.evidence[0]?.unanswerable).toBeUndefined();
   });
 
   it("threads cancel signal to verification probe when task is cancelled", async () => {
@@ -766,9 +766,9 @@ describe("TaskController", () => {
       type: "http_resource_matches",
       passed: false,
       inconclusive: true,
-      unanswerable: true,
-      summary: "task_cancelled",
+      summary: "independent read unavailable: task_cancelled",
     });
+    expect(result.receipt?.evidence[0]?.unanswerable).toBeUndefined();
   });
 
   it("redacts executor secrets before task or receipt persistence", async () => {
