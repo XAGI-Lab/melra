@@ -795,9 +795,9 @@ the server is bound to), on any port, so an SSH tunnel still works but a web
 page that re-resolves its own name to `127.0.0.1` cannot drive the flow from
 your browser. Registration also refuses a request that carries an `Origin`
 header (`403 origin_not_allowed`), which a browser puts on every POST a page
-makes and an MCP client registering from its own process does not, and a body
-that is not `application/json` (`415 json_required`), so no web page you have
-open can register clients either. `/open` (what `--open` opens) likewise
+makes and an MCP client registering from its own process does not, and a
+`Content-Type` other than `application/json` (`415 json_required`), so no web
+page you have open can register clients either. `/open` (what `--open` opens) likewise
 answers only to loopback names and needs no token. Every other route needs the
 token, whatever the name.
 
