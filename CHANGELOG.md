@@ -43,6 +43,13 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- `http_resource_matches` verification reads, and task reconciliation, now
+  inherit the task's execution budget and abort signal (#407). A slow or
+  hanging probe read aborts when the task is cancelled or its budget is
+  exhausted, marking the evidence item inconclusive and unanswerable rather
+  than waiting out the probe's longer timeout.
+
+
 - `melra inspect`, `melra export`, `melra demo`, `melra policy test` and the
   `melra workflow` subcommands find their action and id wherever they sit
   among the flags, as `melra approve` and `melra judge` do (#402). A flag

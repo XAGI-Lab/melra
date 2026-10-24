@@ -53,6 +53,15 @@ export interface HttpRuntimeOptions extends NetworkPolicy {
  * reason: a resolver that answers public once and private the second time
  * would otherwise make the check meaningless. TLS still verifies the name.
  */
+function abortReason(signal?: AbortSignal): string {
+  const reason = signal?.reason;
+  return reason instanceof Error && reason.name !== "AbortError"
+    ? reason.message
+    : typeof reason === "string"
+      ? reason
+      : "task_cancelled";
+}
+
 export class HttpRuntime {
   constructor(private readonly options: HttpRuntimeOptions) {}
 
@@ -68,7 +77,7 @@ export class HttpRuntime {
     // an await, and a cancel that lands inside that window would otherwise be
     // lost and the request would go out anyway.
     const cancelled = (): boolean => signal?.aborted === true;
-    if (cancelled()) throw new Error("task_cancelled");
+    if (cancelled()) throw new Error(abortReason(signal));
     const secure = url.protocol === "https:";
     const send = secure ? httpsRequest : httpRequest;
     // Brokered against the host that was *checked*: the name, or an IPv6
@@ -82,7 +91,7 @@ export class HttpRuntime {
     });
     // Again: reading a credential from a file is an await too, and the abort
     // listener below only hears an abort that comes after it is added.
-    if (cancelled()) throw new Error("task_cancelled");
+    if (cancelled()) throw new Error(abortReason(signal));
 
     const headers: Record<string, string> = {
       // Lowercased before the merge, or `Authorization: guess` from the caller
@@ -253,7 +262,7 @@ export class HttpRuntime {
       call.on("close", () => {
         if (!answered) failed(new Error("http_closed_without_response"));
       });
-      signal?.addEventListener("abort", () => stop("task_cancelled"), { once: true });
+      signal?.addEventListener("abort", () => stop(abortReason(signal)), { once: true });
       if (operation.content !== undefined) call.write(operation.content);
       call.end();
     }).finally(() => clearTimeout(deadline));
