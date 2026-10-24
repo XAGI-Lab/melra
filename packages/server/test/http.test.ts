@@ -6,7 +6,7 @@ import { request as httpRequest } from "node:http";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
@@ -147,6 +147,38 @@ describe("melra http server", () => {
     // page without it still gets a 401.
     expect(await status("host.docker.internal:7457", "/api/capabilities?token=test-token")).toBe(200);
     expect(await status("attacker.example", "/api/capabilities")).toBe(401);
+    expect(await status("attacker.example", "/open?code=x")).toBe(421);
+  });
+
+  it("opens the console once from a link that carries no token", async () => {
+    // What `serve --open` puts on the opener's command line.
+    const link = http.openUrl!;
+    expect(link).not.toContain("test-token");
+    const visit = (address: string) => fetch(address, { redirect: "manual" });
+    // A wrong code spends nothing, and the right one is refused after a minute.
+    expect((await visit(`${base}/open?code=nope`)).status).toBe(403);
+    const now = Date.now();
+    const later = vi.spyOn(Date, "now").mockReturnValue(now + 61_000);
+    try {
+      const expired = await visit(link);
+      expect(expired.status).toBe(403);
+      expect(await expired.json()).toMatchObject({ error: "open_code_invalid" });
+    } finally {
+      later.mockRestore();
+    }
+    const opened = await visit(link);
+    expect(opened.status).toBe(303);
+    expect(opened.headers.get("location")).toBe("/?token=test-token");
+    expect((await fetch(new URL(opened.headers.get("location")!, base))).status).toBe(200);
+    // Spent: whoever brings the link afterwards gets nothing from it, and is
+    // told it was used, so an operator who did not use it knows someone did.
+    const again = await visit(link);
+    expect(again.status).toBe(403);
+    expect(await again.json()).toMatchObject({ error: "open_code_used" });
+    // A wrong code still learns nothing.
+    expect(await (await visit(`${base}/open?code=nope`)).json()).toMatchObject({
+      error: "open_code_invalid",
+    });
   });
 
   it("accepts the token in the query string, for EventSource", async () => {

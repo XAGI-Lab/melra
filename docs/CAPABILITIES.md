@@ -628,9 +628,11 @@ Mutations and destructive operations have one execution attempt.
   event stream, and the Community console. `melra serve --socket <path>` serves
   the same surface on a mode-`0600` Unix socket, token still required, OAuth
   off; not on Windows.
-- Supported over loopback HTTP: OAuth 2.1 client registration, browser approval,
-  and per-client identity — an approved client is named at the head of the
-  delegation chain on every receipt. `MELRA_HTTP_OAUTH=0` turns it off.
+- Supported over loopback HTTP: OAuth 2.1 client registration from a client's
+  own process (a request carrying an `Origin`, as every browser page's does, is
+  refused), browser approval, and per-client identity — an approved client is
+  named at the head of the delegation chain on every receipt.
+  `MELRA_HTTP_OAUTH=0` turns it off.
 - `melra console`: an operator's approval console, a separate loopback HTTP
   server with no MCP endpoint, paired with the first page to use its one-time
   code, normally the browser tab it opens. It

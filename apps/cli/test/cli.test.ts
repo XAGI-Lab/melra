@@ -2446,6 +2446,53 @@ describe("melra CLI", () => {
     }
   });
 
+  it("hands the browser opener a one-time link, never the standing token", async () => {
+    // `cmd /c start` cannot be stood in for from PATH.
+    if (process.platform === "win32") return;
+    const root = await mkdtemp(join(tmpdir(), "melra-cli-open-"));
+    roots.push(root);
+    const bin = join(root, "bin");
+    await mkdir(bin);
+    // Stands in for open and xdg-open, writing down the arguments they were given.
+    for (const name of ["open", "xdg-open"]) {
+      await writeFile(join(bin, name), `#!/bin/sh\nprintf '%s\\n' "$@" > "$OPENED.tmp" && mv "$OPENED.tmp" "$OPENED"\n`);
+      await chmod(join(bin, name), 0o755);
+    }
+    const opened = join(root, "opened");
+    const server = spawn(process.execPath, [entry, "serve", "--http", "--port", "0", "--open"], {
+      cwd: root,
+      env: {
+        ...process.env,
+        MELRA_HOME: join(root, ".melra"),
+        MELRA_WORKSPACE: root,
+        OPENED: opened,
+        PATH: `${bin}:${process.env.PATH ?? ""}`,
+      },
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    let stderr = "";
+    server.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
+    try {
+      for (let attempt = 0; attempt < 100 && !(existsSync(opened) && stderr.includes("Loopback only")); attempt += 1) {
+        await new Promise((resolveWait) => setTimeout(resolveWait, 100));
+      }
+      const token = /Token: +(\S+)/.exec(stderr)?.[1];
+      expect(token).toBeDefined();
+      const argv = await readFile(opened, "utf8");
+      expect(argv).not.toContain(token);
+      // And the console still opens from it, once.
+      const link = argv.trim();
+      const first = await fetch(link, { redirect: "manual" });
+      expect(first.status).toBe(303);
+      expect(first.headers.get("location")).toBe(`/?token=${token}`);
+      expect((await fetch(link, { redirect: "manual" })).status).toBe(403);
+    } finally {
+      const exited = new Promise((resolveExit) => server.once("exit", resolveExit));
+      server.kill("SIGTERM");
+      await exited;
+    }
+  }, 60_000);
+
   it("plans, advances, inspects, and cancels a durable workflow", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-cli-workflow-"));
     roots.push(root);

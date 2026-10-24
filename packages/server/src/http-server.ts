@@ -60,6 +60,9 @@ export function workflowStepJudge(
  */
 const MAX_MCP_SESSIONS = 256;
 
+/** How long `openUrl` opens the console for, if nothing has used it yet. */
+const OPEN_CODE_MS = 60_000;
+
 export interface MelraHttpOptions {
   runtime: MelraRuntime;
   /** Loopback by default. Anything else exposes a machine-control API. */
@@ -100,6 +103,12 @@ export interface MelraHttpServer {
    * Referer carries.
    */
   url: string;
+  /**
+   * The console URL to hand a browser opener, whose arguments other local
+   * users can read: it carries a code that opens the console once, within a
+   * minute, instead of the token. Only on a TCP agent endpoint.
+   */
+  openUrl?: string;
   /** MCP endpoint for a Streamable HTTP client. */
   mcpUrl: string;
   /** The bearer token; for an approval console, the one-time pairing code. */
@@ -353,6 +362,15 @@ export async function serveHttp(
     options.token ??
     (environment.MELRA_HTTP_TOKEN?.trim() || randomUUID().replaceAll("-", ""));
   if (token.trim() === "") throw new Error("http_token_empty");
+  // The token is good for the life of the server, so `--open` never puts it
+  // on the opener's command line. `openUrl` carries this instead; using it
+  // once spends it.
+  const openCode =
+    pairing === undefined && options.socketPath === undefined
+      ? randomBytes(16).toString("hex")
+      : undefined;
+  const openBy = Date.now() + OPEN_CODE_MS;
+  let openSpent = false;
   // Least recently used first. `busy` counts requests in flight, an open event
   // stream included, so a session is never ended under a call it is serving.
   const sessions = new Map<
@@ -440,6 +458,37 @@ export async function serveHttp(
       return;
     }
     if (await handleOAuth(request, response, url)) return;
+    if (url.pathname === "/open" && request.method === "GET") {
+      if (!hostAllowed(request, response)) return;
+      const right =
+        openCode !== undefined && tokenMatches(openCode, url.searchParams.get("code") ?? undefined);
+      // Only the right code learns it was spent: an operator whose link was
+      // used first is told so, rather than sent on as if it had expired.
+      if (right && openSpent) {
+        json(response, 403, {
+          error: "open_code_used",
+          detail:
+            "This link was already used. If not by you, someone else has this server's token: stop the server, change MELRA_HTTP_TOKEN if you set one, and revoke any client in 'melra clients' you did not approve.",
+        });
+        return;
+      }
+      // A wrong code spends nothing, so no page can use up the operator's.
+      if (!right || Date.now() > openBy) {
+        json(response, 403, {
+          error: "open_code_invalid",
+          detail:
+            "This link opens the console once, within a minute of startup, and has been used or has expired. Use the Console URL the server printed.",
+        });
+        return;
+      }
+      openSpent = true;
+      response.writeHead(303, {
+        location: `/?token=${encodeURIComponent(token)}`,
+        "cache-control": "no-store",
+      });
+      response.end();
+      return;
+    }
     const caller = authenticate(suppliedToken(request, url));
     if (caller === undefined) {
       json(
@@ -521,6 +570,15 @@ export async function serveHttp(
         return true;
       }
       if (url.pathname === "/oauth/register" && method === "POST") {
+        // An MCP client registers from its own process and sends no Origin; a
+        // browser puts one on every POST a page makes. So no page the operator
+        // has open can fill the client list, pushing out one still waiting
+        // for approval.
+        if (request.headers.origin !== undefined) {
+          json(response, 403, { error: "origin_not_allowed" });
+          return true;
+        }
+        if (!jsonOnly(request, response)) return true;
         const body = (await readBody(request)) ?? {};
         json(response, 201, oauth.register(body as Record<string, unknown>));
         return true;
@@ -587,14 +645,21 @@ export async function serveHttp(
    * Whether a POST came from the console page itself. A browser puts the
    * page's origin on every POST it sends and no page can change it, so this
    * refuses every other page, another port on this machine included: same
-   * site, never the same origin. JSON on top, which no other origin can send
-   * without a CORS preflight that this server never answers.
+   * site, never the same origin. JSON on top.
    */
   function fromConsole(request: IncomingMessage, response: ServerResponse): boolean {
     if (request.headers.origin !== `http://${request.headers.host ?? ""}`) {
       json(response, 403, { error: "origin_not_allowed" });
       return false;
     }
+    return jsonOnly(request, response);
+  }
+
+  /**
+   * Whether a POST is JSON, which no other origin can send without a CORS
+   * preflight that this server never answers.
+   */
+  function jsonOnly(request: IncomingMessage, response: ServerResponse): boolean {
     const type = (request.headers["content-type"] ?? "").split(";")[0]!.trim().toLowerCase();
     if (type !== "application/json") {
       json(response, 415, { error: "json_required" });
@@ -999,6 +1064,7 @@ export async function serveHttp(
   return {
     // No `&` in it: Windows' `start` would read one as a second command.
     url: pairing === undefined ? `${origin}/?token=${token}` : `${origin}/#pair=${token}`,
+    ...(openCode === undefined ? {} : { openUrl: `${origin}/open?code=${openCode}` }),
     mcpUrl: `${origin}/mcp`,
     token,
     host,
