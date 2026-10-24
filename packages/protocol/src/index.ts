@@ -596,7 +596,7 @@ export const TaskRequestSchema = z
       .max(3)
       .default([])
       .describe(
-        "Effects this task must never take. Denied before the adapter runs, and honoured even in unhinged mode.",
+        "Effects this task must never take. Denied before the adapter runs, and honoured even in unhinged mode. Forbidding mutate also forbids destructive. destructive is only a file delete and a memory delete or clear; every other change is mutate, including a terminal command that deletes (rm, git clean) and an HTTP request other than GET or HEAD (DELETE too), so forbid mutate to exclude those.",
       ),
     budget: TaskBudgetSchema.default({
       maxSteps: 10,

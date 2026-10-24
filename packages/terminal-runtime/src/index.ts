@@ -3,7 +3,7 @@
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readlink, realpath } from "node:fs/promises";
+import { readFile, readlink, realpath, stat } from "node:fs/promises";
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { outcomeUnknown, terminalArgumentPaths, terminalArgumentReferences, type TerminalOperation } from "@melra/protocol";
 import { redactSecrets } from "@melra/receipt-schema";
@@ -25,7 +25,11 @@ export interface TerminalRuntimeOptions {
   reserved?: (path: string, call?: object) => Promise<boolean>;
   /** Whether a path is a directory holding one of them, which a recursive reader given it reaches unnamed. Absent, none is. `call` as for `reserved`. */
   holdsReserved?: (path: string, call?: object) => Promise<boolean>;
-  /** Refuse an argument spelled inside the root that leads out: policy asked approval only for ones spelled outside. */
+  /**
+   * Refuse an argument spelled inside the root that leads out: policy asked
+   * approval only for ones spelled outside. A git read is held to a
+   * repository inside the root too (see `confineGitRead`).
+   */
   confineArguments?: boolean;
   /**
    * The workspace no PATH entry may lead into, as spelled or through links: a
@@ -197,6 +201,25 @@ const GIT_READ_SWITCHES = [
 ];
 
 /**
+ * What tells git where its repository, work tree, index or objects are, or
+ * hands it config, without any argument naming it. A confined read refuses
+ * each, so the repository it reads is the one found from where it runs.
+ */
+const GIT_LOCATION_VARIABLES = new Set([
+  "GIT_DIR",
+  "GIT_WORK_TREE",
+  "GIT_COMMON_DIR",
+  "GIT_INDEX_FILE",
+  "GIT_OBJECT_DIRECTORY",
+  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+  "GIT_CONFIG_PARAMETERS",
+  "GIT_CONFIG_COUNT",
+]);
+
+/** A gitfile holds one line naming a git directory; a longer one is not read to find out where. */
+const MAX_GITFILE_BYTES = 4_096;
+
+/**
  * Policy classifies several `git` subcommands (diff, show, log, status, ...) as
  * approval-free reads, but git runs programs the repository's own config and
  * attributes name while serving one. Those live in the git directory, not in
@@ -209,9 +232,17 @@ const GIT_READ_SWITCHES = [
  * defence in depth on top: a read-shaped call (subcommand first, as policy
  * requires for a read) spawns with system and global config nulled, the
  * switches above, and external diff and textconv off on the subcommands that
- * emit diffs (the only ones that accept the flags). Mutations — commit, push,
- * or a global option before the subcommand — are left untouched, so a
- * committer's identity and credentials from global config still apply.
+ * emit diffs (the only ones that accept the flags). The runtime cannot tell
+ * whether a call was approved, so a read-shaped one that writes (`git branch
+ * <name>`, `git tag <name>`) is hardened too. Other calls — commit, push, or a
+ * global option before the subcommand — are left untouched, so a committer's
+ * identity and credentials from global config still apply.
+ *
+ * Given a `ceiling`, git does not look for the repository there or above it,
+ * and finds one only through a `.git`: a directory shaped like a bare
+ * repository is not taken for one.
+ *
+ * ponytail: safe.bareRepository needs git 2.38; an older git ignores it.
  *
  * Pure and exported for unit testing. The caller's `operation.args` are never
  * touched, only the spawned argv, so receipts still quote what was asked.
@@ -219,6 +250,7 @@ const GIT_READ_SWITCHES = [
 export function hardenGitRead(
   command: string,
   args: readonly string[],
+  ceiling?: string,
 ): { args: string[]; env: Record<string, string> } | undefined {
   if (!isGitCommand(command)) return undefined;
   const first = args[0];
@@ -227,8 +259,19 @@ export function hardenGitRead(
     ? ["--no-ext-diff", "--no-textconv"]
     : [];
   return {
-    args: [...GIT_READ_SWITCHES, first, ...diffFlags, ...args.slice(1)],
-    env: { GIT_CONFIG_SYSTEM: GIT_NULL_CONFIG, GIT_CONFIG_GLOBAL: GIT_NULL_CONFIG, GIT_NO_LAZY_FETCH: "1" },
+    args: [
+      ...GIT_READ_SWITCHES,
+      ...(ceiling === undefined ? [] : ["-c", "safe.bareRepository=explicit"]),
+      first,
+      ...diffFlags,
+      ...args.slice(1),
+    ],
+    env: {
+      GIT_CONFIG_SYSTEM: GIT_NULL_CONFIG,
+      GIT_CONFIG_GLOBAL: GIT_NULL_CONFIG,
+      GIT_NO_LAZY_FETCH: "1",
+      ...(ceiling === undefined ? {} : { GIT_CEILING_DIRECTORIES: ceiling }),
+    },
   };
 }
 
@@ -506,6 +549,43 @@ export class TerminalRuntime {
     }
   }
 
+  /**
+   * A read-shaped git call (one `hardenGitRead` hardens, approved or not, a
+   * `branch` or `tag` that creates one included) reads git's repository,
+   * which no argument names: git finds it from where it runs. The ceiling
+   * keeps that search inside the root; this refuses a ceiling git cannot
+   * read as one directory, and the other ways out: an environment saying
+   * where the repository is or handing git config, and a `.git` between `cwd`
+   * and the root that leads out, as a link or as a gitfile naming a git
+   * directory elsewhere (a linked worktree's, or a submodule's kept in an
+   * enclosing repository).
+   */
+  private async confineGitRead(cwd: string, environment: NodeJS.ProcessEnv): Promise<void> {
+    // git splits the ceiling into a list on the path delimiter, so a parent
+    // whose path holds one bounds nothing.
+    if (dirname(this.root).includes(delimiter)) throw new Error("terminal_git_repository_outside_workspace");
+    const named = Object.keys(environment).find((name) => GIT_LOCATION_VARIABLES.has(name.toUpperCase()));
+    if (named !== undefined) throw new Error(`terminal_git_environment_not_allowed:${named}`);
+    for (let at = cwd; inside(this.root, at); at = dirname(at)) {
+      const dotGit = join(at, ".git");
+      const found = await stat(dotGit).catch(() => undefined);
+      let leads = found === undefined ? undefined : await realpath(dotGit);
+      // Never opened outside the root: a link there is refused as it stands.
+      if (leads !== undefined && inside(this.root, leads) && found?.isFile() === true) {
+        if (found.size > MAX_GITFILE_BYTES) throw new Error("terminal_git_repository_outside_workspace");
+        // `gitdir: <path>`, relative to the directory holding it, its `..`
+        // taken through links as git takes them. Not there, git finds no
+        // repository through it either.
+        const path = /^gitdir: (.*)/.exec(await readFile(leads, "utf8"))?.[1]?.trimEnd();
+        if (path !== undefined) {
+          leads = await realpath(isAbsolute(path) ? path : `${at}${sep}${path}`).catch(() => undefined);
+        }
+      }
+      if (leads !== undefined && !inside(this.root, leads)) throw new Error("terminal_git_repository_outside_workspace");
+      if (relative(this.root, at) === "") break;
+    }
+  }
+
   private async prepare(operation: TerminalOperation): Promise<PreparedCommand> {
     if (operation.command === undefined) {
       throw new Error(`terminal_${operation.action}_requires_command`);
@@ -557,12 +637,15 @@ export class TerminalRuntime {
       comspec: this.baseEnvironment["COMSPEC"],
     });
     // Disable git's config-defined program channels on a read at the spawn
-    // boundary, since policy cannot see .git/config (see hardenGitRead).
+    // boundary, since policy cannot see .git/config (see hardenGitRead), and,
+    // confined, keep it to a repository inside the root, which policy cannot
+    // see either. The ceiling is the root's parent, so the root is searched.
     // Skipped when resolveCommand wrapped the call in cmd.exe, where `args` is an
     // already-quoted command line rather than git's own arguments.
     const hardened = resolved.windowsVerbatimArguments
       ? undefined
-      : hardenGitRead(resolved.executable, resolved.args);
+      : hardenGitRead(resolved.executable, resolved.args, this.confineArguments ? dirname(this.root) : undefined);
+    if (hardened !== undefined && this.confineArguments) await this.confineGitRead(cwd, environment);
     return {
       command: operation.command,
       args: operation.args,

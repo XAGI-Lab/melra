@@ -846,7 +846,91 @@ describe("arguments", () => {
       await expect(git(action, "--", "l3/../../missing/y"), action).rejects.toThrow(/terminal_path_outside_workspace/);
     }
     expect(await readFile(join(repo, "missing", "y"), "utf8")).toBe("edited\n");
-    await expect(git("diff", "--", "l3/../deep")).resolves.toMatchObject({ success: true });
+    // Not refused: it stays inside. The read runs, and finds no repository in
+    // the workspace (see the next test).
+    await expect(git("diff", "--", "l3/../deep")).resolves.toMatchObject({ command: "git" });
+  });
+
+  it.skipIf(process.platform === "win32")("in enforced mode, keeps a git read in a repository inside the workspace", async () => {
+    // The workspace sits in an enclosing repository, with a committed file and
+    // an uncommitted change outside it.
+    const repo = await realpath(await mkdtemp(join(tmpdir(), "melra-terminal-")));
+    roots.push(repo);
+    const ws = join(repo, "ws");
+    await mkdir(join(ws, "sub"), { recursive: true });
+    const commit = (cwd: string) => {
+      for (const args of [["init", "-q"], ["add", "."], ["commit", "-qm", "x"]]) {
+        spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], { cwd });
+      }
+    };
+    await writeFile(join(repo, "outside.txt"), "committed\n");
+    commit(repo);
+    await writeFile(join(repo, "outside.txt"), "edited\n");
+    const read = (runtime: TerminalRuntime, args: string[], cwd = ".") =>
+      runtime.execute(TerminalOperationSchema.parse({ kind: "terminal", action: "run", command: "git", args, cwd }));
+    const confined = await TerminalRuntime.create({ root: ws, confineArguments: true });
+    const reads = [["status", "--short"], ["diff"], ["log", "-p"], ["show", "HEAD:outside.txt"], ["rev-parse", "--show-toplevel"]];
+    for (const args of reads) {
+      for (const cwd of [".", "sub"]) {
+        await expect(read(confined, args, cwd), `${cwd}: git ${args.join(" ")}`).resolves.toMatchObject({ success: false, stdout: "" });
+      }
+    }
+    // Developer mode reads outside the workspace without approval anyway.
+    await expect(read(await TerminalRuntime.create({ root: ws }), ["show", "HEAD:outside.txt"])).resolves.toMatchObject({
+      stdout: "committed\n",
+    });
+    // A directory written to look like a bare repository sharing the enclosing one's.
+    await mkdir(join(ws, "bare", "objects"), { recursive: true });
+    await mkdir(join(ws, "bare", "refs"));
+    await writeFile(join(ws, "bare", "HEAD"), await readFile(join(repo, ".git", "HEAD")));
+    await writeFile(join(ws, "bare", "commondir"), join(repo, ".git"));
+    await expect(read(confined, ["log"], "bare")).resolves.toMatchObject({ success: false, stdout: "" });
+    // A `.git` that leads out: a gitfile, however it spells the way, or a link.
+    for (const gitfile of [`gitdir: ${join(repo, ".git")}\n`, "gitdir: ../.git"]) {
+      await writeFile(join(ws, ".git"), gitfile);
+      for (const cwd of [".", "sub"]) {
+        await expect(read(confined, ["status"], cwd), gitfile).rejects.toThrow(/terminal_git_repository_outside_workspace/);
+      }
+    }
+    await rm(join(ws, ".git"));
+    await symlink(join(repo, ".git"), join(ws, "sub", ".git"));
+    await expect(read(confined, ["status"], "sub")).rejects.toThrow(/terminal_git_repository_outside_workspace/);
+    await rm(join(ws, "sub", ".git"));
+    // An environment that says where the repository is.
+    const told = await TerminalRuntime.create({
+      root: ws,
+      confineArguments: true,
+      allowedEnvironment: ["GIT_DIR", "GIT_WORK_TREE"],
+      baseEnvironment: { PATH: process.env["PATH"], GIT_WORK_TREE: repo },
+    });
+    await expect(read(told, ["status"])).rejects.toThrow(/terminal_git_environment_not_allowed:GIT_WORK_TREE/);
+    // A repository inside the workspace still reads, and git's own syntax for
+    // a path above where it runs stays inside it.
+    await rm(join(ws, "bare"), { recursive: true });
+    await writeFile(join(ws, "in.txt"), "inside\n");
+    commit(ws);
+    await expect(read(confined, ["show", "HEAD:../in.txt"], "sub")).resolves.toMatchObject({ stdout: "inside\n" });
+    await expect(read(confined, ["status", "--short"])).resolves.toMatchObject({ success: true, stdout: "" });
+    await expect(read(confined, ["show", "HEAD:../outside.txt"])).resolves.toMatchObject({ success: false, stdout: "" });
+  });
+
+  it.skipIf(process.platform === "win32")("in enforced mode, refuses a git read below a directory whose name holds the path delimiter", async () => {
+    // git could not be kept from searching above such a workspace.
+    const repo = await realpath(await mkdtemp(join(tmpdir(), "melra-terminal-")));
+    roots.push(repo);
+    const ws = join(repo, `a${delimiter}b`, "ws");
+    await mkdir(ws, { recursive: true });
+    await writeFile(join(repo, "outside.txt"), "committed\n");
+    for (const args of [["init", "-q"], ["add", "."], ["commit", "-qm", "x"]]) {
+      spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], { cwd: repo });
+    }
+    const confined = await TerminalRuntime.create({ root: ws, confineArguments: true });
+    for (const args of [["show", "HEAD:outside.txt"], ["status", "--short"]]) {
+      await expect(
+        confined.execute(TerminalOperationSchema.parse({ kind: "terminal", action: "run", command: "git", args })),
+        args.join(" "),
+      ).rejects.toThrow(/terminal_git_repository_outside_workspace/);
+    }
   });
 
   it.skipIf(process.platform === "win32")("follows a link to a missing name once per command, and not around a loop", async () => {
@@ -995,6 +1079,14 @@ describe("hardenGitRead", () => {
         env,
       });
     }
+  });
+
+  it("given a ceiling, looks for the repository below it and only through a `.git`", () => {
+    const ceiling = join(tmpdir(), "parent");
+    expect(hardenGitRead("git", ["status"], ceiling)).toEqual({
+      args: [...switches, "-c", "safe.bareRepository=explicit", "status"],
+      env: { ...env, GIT_CEILING_DIRECTORIES: ceiling },
+    });
   });
 
   it("hardens a path-qualified git, since it is still the git program", () => {

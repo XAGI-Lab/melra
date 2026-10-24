@@ -1061,6 +1061,33 @@ describe("unhinged mode", () => {
     ).toBe("freeform_constraints_not_enforceable");
   });
 
+  it("counts a destructive effect as a mutation the caller forbade, in every mode", () => {
+    const deletions = [
+      [{ kind: "file", action: "delete", path: "src", recursive: true }, { type: "file_absent", path: "src" }],
+      [{ kind: "memory", action: "clear", scope: "project" }, { type: "result_equals", path: "scope", value: "project" }],
+    ] as const;
+    for (const policy of [createDefaultPolicy(root), unhinged]) {
+      for (const [operation, evidence] of deletions) {
+        expect(
+          plan({ goal: "Stay read-only", operation, forbiddenEffects: ["mutate"], requiredEvidence: [evidence] }, policy)
+            .decision,
+          `${operation.kind}.${operation.action}, unhinged: ${policy.unhinged}`,
+        ).toMatchObject({ outcome: "deny", effect: "destructive", reason: "effect_forbidden_by_request" });
+      }
+    }
+    // A command that deletes is a mutation, not a destructive effect: only
+    // forbidding `mutate` excludes it.
+    const clean = (forbiddenEffects: string[]) =>
+      plan({
+        goal: "Clean",
+        operation: { kind: "terminal", action: "run", command: "git", args: ["clean", "-fdx"] },
+        forbiddenEffects,
+        requiredEvidence: [{ type: "exit_code", value: 0 }],
+      }).decision;
+    expect(clean(["destructive"])).toMatchObject({ outcome: "allow", effect: "mutate" });
+    expect(clean(["mutate"]).reason).toBe("effect_forbidden_by_request");
+  });
+
   it("changes nothing for a policy that did not ask for it", () => {
     expect(
       plan(
@@ -1390,6 +1417,38 @@ describe("capability grants", () => {
     expect(decide(move("docs/../src/index.ts"), docs).reason).toBe(
       "capability_not_granted:file.move",
     );
+  });
+
+  it("matches a memory grant against what the action touches", () => {
+    const effects = ["read", "mutate", "destructive"];
+    const scratch = [grant({ capability: "memory.*", effects, target: "project:*:scratch-*" })];
+    const scope = [grant({ capability: "memory.*", effects, target: "project:*" })];
+    const memory = (operation: Record<string, unknown>) =>
+      read({
+        identity,
+        operation: { kind: "memory", scope: "project", ...operation },
+        requiredEvidence: [{ type: "result_equals", path: "scope", value: "project" }],
+      });
+    // These act on the whole scope, whatever key or id they carry.
+    for (const action of ["list", "search", "clear"]) {
+      for (const named of [{ key: "scratch-1" }, { id: "9b2f4c1e-8a7d-4e3b-9c6f-2d1e0a5b7c84" }, {}]) {
+        const request = memory({ action, query: "notes", ...named });
+        expect(decide(request, scratch).reason, `${action} ${JSON.stringify(named)}`).toBe(
+          `capability_not_granted:memory.${action}`,
+        );
+        expect(decide(request, scope).outcome, `${action} ${JSON.stringify(named)}`).not.toBe("deny");
+      }
+    }
+    // A put names its key, and the record it supersedes has to be covered too.
+    expect(decide(memory({ action: "put", key: "scratch-2", value: "v" }), scratch).outcome).not.toBe("deny");
+    const superseding = memory({
+      action: "put",
+      key: "scratch-2",
+      value: "v",
+      supersedesId: "9b2f4c1e-8a7d-4e3b-9c6f-2d1e0a5b7c84",
+    });
+    expect(decide(superseding, scratch).reason).toBe("capability_not_granted:memory.put");
+    expect(decide(superseding, scope).outcome).not.toBe("deny");
   });
 
   it("refuses a grant that has expired or names another policy version", () => {
