@@ -385,14 +385,17 @@ export class TaskController {
       createdAt: timestamp,
       updatedAt: timestamp,
     };
-    this.store.saveTask(task);
-    if (task.status !== "policy_blocked") {
-      this.store.saveTaskPayload(
-        id,
-        this.payloadCipher.seal(parsedRequest, `task:${id}:request`),
-        timestamp,
-      );
-    }
+    const sealed =
+      task.status === "policy_blocked"
+        ? undefined
+        : this.payloadCipher.seal(parsedRequest, `task:${id}:request`);
+    // The row lands with its request or not at all: written apart, a failed
+    // second write left a task that could never run, and a workflow step that
+    // took it up again on every advance (#416).
+    this.store.transaction(() => {
+      this.store.saveTask(task);
+      if (sealed !== undefined) this.store.saveTaskPayload(id, sealed, timestamp);
+    });
     // The plaintext request goes back to the caller with the contract derived
     // from it, so what a caller reads before approving is the same object the
     // execution path will load.

@@ -245,8 +245,13 @@ MELRA uses these environment variables:
 | `MELRA_HARNESS_TOOLS` | Set to `1` (or `true`, `yes`, `on`) to add thirteen plainly named tools such as `read_file` and `run_command` alongside the twelve `melra_*` tools — see [ordinary tool names](#ordinary-tool-names) | unset (only the `melra_*` tools) |
 
 Back up `payload.key` with the SQLite files. Changing or losing it makes
-persisted task and workflow payloads unreadable. Never place it in a client
-configuration committed to source control.
+persisted task and workflow payloads unreadable. MELRA creates it only for a
+home with nothing sealed yet: a start without `MELRA_PAYLOAD_KEY` that finds
+sealed payloads but no key file stops with `payload_key_missing`, and a start
+whose key, from either source, cannot open the sealed payload it samples stops
+with `payload_key_mismatch`. Either way, set the variable to the key they were
+sealed under or restore the file. Never place it in a client configuration
+committed to source control.
 
 These four variables exist for benchmark and diagnostic harnesses. Leave them
 unset for normal use, which keeps the default isolated browser behavior:
@@ -1138,7 +1143,8 @@ In enforced mode an operator's decision, recorded this way, in
 is the only way a mutation gets approved: the agent is
 given no phrase, and one it sends is refused. Run `melra approve` in enforced
 mode too (`MELRA_MODE=enforced` or `--mode enforced`), with the `MELRA_HOME`
-and `MELRA_WORKSPACE` the agent's server uses (see
+and `MELRA_WORKSPACE` the agent's server uses, and its `MELRA_PAYLOAD_KEY` if
+it sets one (see
 [`melra console`](#approving-in-a-browser) for why the workspace matters). A developer-mode
 `melra approve` on a task with no phrase is refused with
 `approval_needs_enforced_mode` and records nothing, because the enforced kernel
@@ -1202,7 +1208,7 @@ the command says so. A developer-mode `melra judge` on a task that ran enforced,
 once the checks before it have held, is refused with
 `judgement_in_band_refused` and asked to rerun with
 `--mode enforced` or `MELRA_MODE=enforced`, with the same `MELRA_HOME` and
-`MELRA_WORKSPACE` as the server.
+`MELRA_WORKSPACE` as the server, and its `MELRA_PAYLOAD_KEY` if it sets one.
 
 An agent answers with `melra_task_judge` instead, declaring an `identity`. One
 declaring the task's own principal, or a non-human link that principal acts
@@ -1220,8 +1226,9 @@ mode every verdict sent over MCP is refused.
 
 `melra console` is [`melra approve`](#approving-from-the-command-line) on a
 page instead of a y/N prompt. Run it yourself, in a terminal, with the same
-`MELRA_HOME`, `MELRA_WORKSPACE` and mode as the server your agent uses. A stdio
-client sets those in its own config, not in your shell, so set them here too:
+`MELRA_HOME`, `MELRA_WORKSPACE` and mode as the server your agent uses, and its
+`MELRA_PAYLOAD_KEY` if it sets one. A stdio client sets those in its own
+config, not in your shell, so set them here too:
 
 ```bash
 MELRA_MODE=enforced MELRA_WORKSPACE=/path/to/agent/workspace melra console

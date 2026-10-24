@@ -77,6 +77,32 @@ All notable changes are documented here. The format follows
   inside it, such as documentation, benchmarking, 6to4 and Teredo addresses. The
   IPv4-mapped and NAT64 forms are judged by the IPv4 address they carry, as
   before.
+- **Breaking:** A start without `MELRA_PAYLOAD_KEY` whose `MELRA_HOME` holds
+  sealed task or workflow payloads but no `payload.key` is refused with
+  `payload_key_missing`, and a start whose key, from either source, cannot open
+  the sealed payload it samples is refused with `payload_key_mismatch`. Both
+  name the fix: set the variable to the key they were sealed under, or restore
+  the file. The first used to create a new key and carry on, the second to start
+  and fail on each payload it read. A home with nothing sealed yet still gets
+  its key created on first start.
+
+### Fixed
+
+- Planning a task writes its record and its sealed request in one transaction
+  (#416). A failed second write, such as on a full disk, used to leave a task
+  that could never run, and a workflow step that took it up on every advance
+  and failed with `task_payload_not_found`; now neither is written, and the
+  next advance plans the step again.
+- A write that fails inside a transaction, as on a full disk, reports its own
+  error, such as `database or disk is full`, rather than `cannot rollback - no
+  transaction is active`.
+- `melra approve`, `run`, `serve` or any other command no longer creates a new
+  `payload.key` in a home whose payloads are sealed under another key, or
+  starts with a key that cannot open them, a `payload.key` created before
+  anything was sealed included. Either split the home so that neither key
+  could read all of it (#417). INSTALLATION.md now says to run
+  `melra approve`, `console` or `judge` with the server's `MELRA_PAYLOAD_KEY`
+  when it sets one, and `melra help` says so for `console`.
 
 ### Security
 

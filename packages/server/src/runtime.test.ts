@@ -931,3 +931,64 @@ describe("git read hardening", () => {
     }
   });
 });
+
+describe("the payload key (#417)", () => {
+  let base: string;
+
+  beforeEach(async () => {
+    base = await mkdtemp(join(tmpdir(), "melra-payload-key-"));
+    await mkdir(join(base, "workspace"));
+  });
+
+  afterEach(async () => {
+    await rm(base, { recursive: true, force: true });
+  });
+
+  const start = (home: string, environment: NodeJS.ProcessEnv) =>
+    createMelraRuntime({ workspaceRoot: join(base, "workspace"), dataDirectory: join(base, home), environment });
+  const keyed = { MELRA_PAYLOAD_KEY: Buffer.alloc(32, 9).toString("base64url") };
+
+  it("is minted for a fresh home", async () => {
+    await (await start("fresh", {})).close();
+    expect(existsSync(join(base, "fresh", "payload.key"))).toBe(true);
+  });
+
+  it("is never minted for a home already sealed under another key", async () => {
+    const runtime = await start("sealed", keyed);
+    runtime.controller.plan(request({ operation: { kind: "system", action: "info" } }));
+    await runtime.close();
+
+    await expect(start("sealed", {})).rejects.toThrow(/^payload_key_missing: .*MELRA_PAYLOAD_KEY/);
+    expect(existsSync(join(base, "sealed", "payload.key"))).toBe(false);
+  });
+
+  it("is never minted for a home whose only sealed payload is a workflow's", async () => {
+    const runtime = await start("workflow", keyed);
+    runtime.workflows.plan({
+      schemaVersion: "1.0.0",
+      id: "22222222-2222-4222-8222-222222222222",
+      version: 1,
+      name: "sealed-definition",
+      nodes: [
+        { id: "info", type: "operation", request: { goal: "Inspect", operation: { kind: "system", action: "info" } } },
+      ],
+    } as Parameters<typeof runtime.workflows.plan>[0]);
+    expect(runtime.store.listTasks(10)).toEqual([]);
+    await runtime.close();
+
+    await expect(start("workflow", {})).rejects.toThrow(/^payload_key_missing: /);
+    expect(existsSync(join(base, "workflow", "payload.key"))).toBe(false);
+    await (await start("workflow", keyed)).close();
+  });
+
+  it("is refused when it cannot open what the home already holds sealed", async () => {
+    // Minted while the home held nothing, before a keyed process sealed there.
+    await (await start("split", {})).close();
+    const runtime = await start("split", keyed);
+    runtime.controller.plan(request({ operation: { kind: "system", action: "info" } }));
+    await runtime.close();
+
+    await expect(start("split", {})).rejects.toThrow(/^payload_key_mismatch: .*MELRA_PAYLOAD_KEY/);
+    await (await start("split", keyed)).close();
+  });
+});

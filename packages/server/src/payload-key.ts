@@ -16,6 +16,8 @@ import { join } from "node:path";
 export interface PayloadKeyOptions {
   dataDirectory: string;
   environment: NodeJS.ProcessEnv;
+  /** The home's database already holds payloads sealed under some key. */
+  sealed?: boolean;
 }
 
 function errorCode(error: unknown): string | undefined {
@@ -84,6 +86,21 @@ export async function loadPayloadKey(
 
   await mkdir(options.dataDirectory, { recursive: true, mode: 0o700 });
   const path = join(options.dataDirectory, "payload.key");
+  // Only a home with nothing sealed yet gets a new key. One minted beside
+  // sealed payloads could open none of them, and every later process without
+  // the variable would seal under it, splitting the home between two keys
+  // (#417).
+  if (options.sealed === true) {
+    try {
+      return await readKeyFile(path);
+    } catch (error) {
+      if (errorCode(error) !== "ENOENT") throw error;
+      throw new Error(
+        `payload_key_missing: ${options.dataDirectory} holds sealed payloads but no payload.key; ` +
+          "set MELRA_PAYLOAD_KEY to the key they were sealed under, or restore payload.key from its backup.",
+      );
+    }
+  }
   const key = randomBytes(32);
 
   // Written in full under a private name first, then linked into place. The

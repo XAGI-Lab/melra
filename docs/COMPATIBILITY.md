@@ -163,7 +163,8 @@ from future alpha versions are not guaranteed. Back up both `melra.sqlite*`
 and `payload.key` before upgrading.
 
 Changing or losing `MELRA_PAYLOAD_KEY` or `payload.key` makes existing
-executable payloads unreadable. The key is installation state, not a
+executable payloads unreadable, and a start with a changed key is refused
+with `payload_key_mismatch`. The key is installation state, not a
 reproducible package artifact.
 
 Releases after `0.3.0-alpha.18` key the digests stored beside redacted
