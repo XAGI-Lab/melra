@@ -118,6 +118,15 @@ All notable changes are documented here. The format follows
   global unicast, or as the IPv4-mapped or NAT64 form of a public IPv4 address,
   so special-purpose and legacy transition addresses, including those that embed
   an IPv4 address it would refuse, are refused as well.
+- Secret redaction in memory, terminal output and stored records, a task's goal
+  and arguments included, now takes the whole value of a password, secret, token
+  or API-key name bound with `=>`, `:=` or `::=`, compared with `==`, given a
+  quoted value with spaces (within 256 characters), or written as a YAML block
+  scalar of one or more lines, blank lines between its lines included (for a
+  token or API-key name, when the token is all of the first line), and of a
+  password or secret name declared with a type of letters, digits, `_`, `.`,
+  `[]`, `<>` or `|`, up to 64 characters (`password: str = ...`). Comparing such
+  a name with an empty `''` or `""` no longer lists a redaction.
 
 ## [0.3.0-alpha.20] - 2026-10-24
 

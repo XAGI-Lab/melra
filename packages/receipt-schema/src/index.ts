@@ -52,9 +52,18 @@ export const SECRET_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
   // A match starts at the word, so text without one is skipped, and the part of
   // the name before the word stays as it was. Only a name's last such word is
   // read on to the end of the name, so a long run of `password_` costs one
-  // pass, not a minute.
+  // pass, not a minute. The name may be bound with `=>`, `:=` or Make's `::=`,
+  // compared with `==`, or declared with a type of letters, digits, `_`, `.`,
+  // `[]`, `<>` or `|`, up to 64 characters (`password: str = x`). The operator is read whole, and
+  // neither what is left of it before a space, a quote or the end nor a YAML
+  // block-scalar indicator (`|`, `>-`) counts as the value, so `password===""`
+  // has none: under an indicator the indented lines below go, each line that
+  // starts with the first one's indent, with the blank lines between them. A
+  // quoted value goes to its closing quote, spaces and escaped quotes included,
+  // looked for within 256 characters of one line, so a quote that never closes
+  // costs one bounded look and only its first word goes, as before.
   [
-    /(?<![A-Za-z0-9])((?:password|passwd|passphrase|secret)(?![A-Za-z0-9])(?:_(?!(?:password|passwd|passphrase|secret)(?![A-Za-z0-9]))[A-Za-z0-9]*)*)(["']?)\s*[:=]\s*["']?[^\s"',;}]+/gi,
+    /(?<![A-Za-z0-9])((?:password|passwd|passphrase|secret)(?![A-Za-z0-9])(?:_(?!(?:password|passwd|passphrase|secret)(?![A-Za-z0-9]))[A-Za-z0-9]*)*)(["']?)\s*(?::[ \t]*[A-Za-z_][\w.\[\]<>|]{0,63}[ \t]*=(?![=>])|=>|:{1,3}=|={1,3}|:)\s*(?:(["'])(?:\\.|(?!\3)[^\\\r\n]){1,256}(?=\3)|[|>][-+1-9]{0,2}[ \t]*\r?\n([ \t]+)\S[^\r\n]*(?:(?:\r?\n[ \t]*)*\r?\n\4[^\r\n]*)*|["']?(?!(?:[:=]{1,3}|[|>][-+1-9]{0,2})(?:\s|$|["']))[^\s"',;}]+)/gi,
     "$1$2=[REDACTED]",
   ],
   // A name ending in a token or key word: `access_token=x`, `x-api-key: x`,
@@ -63,8 +72,15 @@ export const SECRET_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
   // `token: string`, `tokens[0]`, a CSS `#00ff00ab` and the host after
   // `x-access-token:<token>@` stay. Read from the word, which ends the name,
   // and the digit looked for only so far, so a long run of text costs one pass.
+  // Bound and compared as a password is. A value that opens with a quote goes
+  // to its closing quote; one that does not ends with its characters, so an
+  // escape after it (`\n` in JSON text) stays. Under a block-scalar indicator
+  // the lines below that start with the first one's indent go too, with the
+  // blank lines between them, when the token is all of the first line; with no
+  // indicator that indent is empty and the space looked for after it is not
+  // there, so the line after the value stays.
   [
-    /(token|api[_-]?key|access[_-]?key)(["']?\s*[:=]\s*["']?)(?=[A-Za-z0-9._~+/=%-]{0,63}\d)[A-Za-z0-9._~+/=%-]{8,}/gi,
+    /(token|api[_-]?key|access[_-]?key)(["']?\s*(?:=>|:{1,3}=|={1,3}|:)\s*(?:[|>][-+1-9]{0,2}[ \t]*\r?\n([ \t]+))?(["']?))(?=[A-Za-z0-9._~+/=%-]{0,63}\d)[A-Za-z0-9._~+/=%-]{8,}(?:(?:(?!\4)(?:\\.|[^\\\r\n])){0,256}(?=\4))?(?:(?:\r?\n[ \t]*)*\r?\n\3(?<=[ \t])[^\r\n]*)*/gi,
     "$1$2[REDACTED]",
   ],
   // Userinfo in a URL or connection string anywhere in text: `postgres://app:pw@db`,

@@ -10,6 +10,12 @@ type Patterns = ReadonlyArray<readonly [RegExp, string]>;
 // URL-userinfo patterns were made to start at their keyword (#353). That change
 // was for speed only, so the list must still redact exactly as this one does.
 // A later change that means to redact differently replaces this copy.
+// Replaced once since, on purpose, when the value parts of the password and
+// token patterns changed so that a credential name bound with `=>`, `:=` or
+// `::=`, compared with `==`, declared with a type, or given a quoted value with
+// spaces or a YAML block scalar of one or more lines loses its whole value.
+// Those value parts are copied below; the name parts are still the ones from
+// before #353.
 const BEFORE: Patterns = [
   [
     /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----[\s\S]*?-----END (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----/g,
@@ -28,11 +34,11 @@ const BEFORE: Patterns = [
     "$1[REDACTED_TOKEN]",
   ],
   [
-    /(?<![A-Za-z0-9_])(?=(?:[A-Za-z0-9]*_)*(?:password|passwd|passphrase|secret)(?![A-Za-z0-9]))([A-Za-z0-9_]+)(["']?)\s*[:=]\s*["']?[^\s"',;}]+/gi,
+    /(?<![A-Za-z0-9_])(?=(?:[A-Za-z0-9]*_)*(?:password|passwd|passphrase|secret)(?![A-Za-z0-9]))([A-Za-z0-9_]+)(["']?)\s*(?::[ \t]*[A-Za-z_][\w.\[\]<>|]{0,63}[ \t]*=(?![=>])|=>|:{1,3}=|={1,3}|:)\s*(?:(["'])(?:\\.|(?!\3)[^\\\r\n]){1,256}(?=\3)|[|>][-+1-9]{0,2}[ \t]*\r?\n([ \t]+)\S[^\r\n]*(?:(?:\r?\n[ \t]*)*\r?\n\4[^\r\n]*)*|["']?(?!(?:[:=]{1,3}|[|>][-+1-9]{0,2})(?:\s|$|["']))[^\s"',;}]+)/gi,
     "$1$2=[REDACTED]",
   ],
   [
-    /(?<![A-Za-z0-9_-])((?:[A-Za-z0-9]*[_-])*[A-Za-z0-9]*(?:token|api[_-]?key|access[_-]?key))(["']?\s*[:=]\s*["']?)(?=[A-Za-z0-9._~+/=%-]{0,63}\d)[A-Za-z0-9._~+/=%-]{8,}/gi,
+    /(?<![A-Za-z0-9_-])((?:[A-Za-z0-9]*[_-])*[A-Za-z0-9]*(?:token|api[_-]?key|access[_-]?key))(["']?\s*(?:=>|:{1,3}=|={1,3}|:)\s*(?:[|>][-+1-9]{0,2}[ \t]*\r?\n([ \t]+))?(["']?))(?=[A-Za-z0-9._~+/=%-]{0,63}\d)[A-Za-z0-9._~+/=%-]{8,}(?:(?:(?!\4)(?:\\.|[^\\\r\n])){0,256}(?=\4))?(?:(?:\r?\n[ \t]*)*\r?\n\3(?<=[ \t])[^\r\n]*)*/gi,
     "$1$2[REDACTED]",
   ],
   [
@@ -72,6 +78,50 @@ function differences(inputs: readonly string[]): string[] {
 // Synthetic, and assembled at run time so no literal here reads as a leaked
 // credential to a secret scanner.
 const fill = (n: number) => "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0".repeat(3).slice(0, n);
+
+// Credential names in the syntaxes they are written in, and names that only
+// look like one, each with a few kinds of value.
+const names = [
+  "password", "PASSWORD", "Password", "db_password", "DB_PASSWORD_FILE", "passwd", "passphrase",
+  "secret", "client_secret", "SECRET_KEY", "secret__password", "password_secret_x", "_secret",
+  "a-password", "password_hash", "pass_word", "secretive", "xpassword", "password1", "my_secret_token",
+  "token", "access_token", "refresh-token", "x-auth-token", "apiKey", "api_key", "API-KEY",
+  "accesskey", "aws_access_key", "token_type", "max_tokens", "tokens", "mytoken", "a.token",
+];
+const syntaxes = [
+  (n: string, v: string) => `${n}=${v}`,
+  (n: string, v: string) => `export ${n}="${v}"`,
+  (n: string, v: string) => `${n}: ${v}`,
+  (n: string, v: string) => `  ${n}: '${v}'`,
+  (n: string, v: string) => `"${n}": "${v}"`,
+  (n: string, v: string) => `{"${n}":"${v}","next":1}`,
+  (n: string, v: string) => `--${n}=${v}`,
+  (n: string, v: string) => `--${n} ${v}`,
+  (n: string, v: string) => `${n} = "${v}"`,
+  (n: string, v: string) => `X-${n}: ${v}\r\n`,
+  (n: string, v: string) => `GET /cb?${n}=${v}&next=1`,
+  (n: string, v: string) => `Server=db;${n}=${v};`,
+  (n: string, v: string) => `${n} := ${v}`,
+  (n: string, v: string) => `'${n}' => '${v}',`,
+  (n: string, v: string) => `${n}:${v}@host`,
+  (n: string, v: string) => `${n}=${v}_${n}=${v}`,
+  // Bound or compared with an operator of more than one character, declared
+  // with a type, a quoted value with spaces or an escaped quote in it, and YAML
+  // block scalars of one line, of two, and of two with a blank line between.
+  (n: string, v: string) => `:${n} => ${v}`,
+  (n: string, v: string) => `${n} := "${v}"`,
+  (n: string, v: string) => `${n} ::= ${v}`,
+  (n: string, v: string) => `if ${n} == "${v}" {`,
+  (n: string, v: string) => `${n} === '${v}'`,
+  (n: string, v: string) => `${n} = "${v} ${v}"`,
+  (n: string, v: string) => `"${n}": "${v}\\" ${v}"`,
+  (n: string, v: string) => `${n}: |\n  ${v}\n`,
+  (n: string, v: string) => `  ${n}: >-\n    ${v}\nnext: 1`,
+  (n: string, v: string) => `${n}: str = "${v}"`,
+  (n: string, v: string) => `${n}: |\n  ${v}\n  ${v}\n`,
+  (n: string, v: string) => `${n}: |\n  ${v}\n\n  ${v}\n`,
+];
+const values = [fill(16), "hunter2", "12345678", "abc", "${VAR}", `${fill(8)}/+=%2F`, "é" + fill(9)];
 
 function corpus(): string[] {
   const basic = Buffer.from(`user:${fill(12)}`).toString("base64");
@@ -219,34 +269,6 @@ function corpus(): string[] {
       "type: Opaque",
     ].join("\n"),
   ];
-  // Credential names in the syntaxes they are written in, and names that only
-  // look like one, each with a few kinds of value.
-  const names = [
-    "password", "PASSWORD", "Password", "db_password", "DB_PASSWORD_FILE", "passwd", "passphrase",
-    "secret", "client_secret", "SECRET_KEY", "secret__password", "password_secret_x", "_secret",
-    "a-password", "password_hash", "pass_word", "secretive", "xpassword", "password1", "my_secret_token",
-    "token", "access_token", "refresh-token", "x-auth-token", "apiKey", "api_key", "API-KEY",
-    "accesskey", "aws_access_key", "token_type", "max_tokens", "tokens", "mytoken", "a.token",
-  ];
-  const syntaxes = [
-    (n: string, v: string) => `${n}=${v}`,
-    (n: string, v: string) => `export ${n}="${v}"`,
-    (n: string, v: string) => `${n}: ${v}`,
-    (n: string, v: string) => `  ${n}: '${v}'`,
-    (n: string, v: string) => `"${n}": "${v}"`,
-    (n: string, v: string) => `{"${n}":"${v}","next":1}`,
-    (n: string, v: string) => `--${n}=${v}`,
-    (n: string, v: string) => `--${n} ${v}`,
-    (n: string, v: string) => `${n} = "${v}"`,
-    (n: string, v: string) => `X-${n}: ${v}\r\n`,
-    (n: string, v: string) => `GET /cb?${n}=${v}&next=1`,
-    (n: string, v: string) => `Server=db;${n}=${v};`,
-    (n: string, v: string) => `${n} := ${v}`,
-    (n: string, v: string) => `'${n}' => '${v}',`,
-    (n: string, v: string) => `${n}:${v}@host`,
-    (n: string, v: string) => `${n}=${v}_${n}=${v}`,
-  ];
-  const values = [fill(16), "hunter2", "12345678", "abc", "${VAR}", `${fill(8)}/+=%2F`, "é" + fill(9)];
   const assignments = names.flatMap((n) => syntaxes.flatMap((write) => values.map((v) => write(n, v))));
   // Userinfo in URLs, bare and in the places they turn up.
   const urls = [
@@ -331,5 +353,24 @@ describe("secret patterns that start at their keyword", () => {
     const inputs = generated(4_000, 353);
     expect(differences(inputs)).toEqual([]);
     expect(inputs.filter((text) => redactSecrets(text).value !== text).length).toBeGreaterThan(400);
+  });
+});
+
+describe("secret patterns on a credential name's value", () => {
+  it("never report a redaction and leave the value in place", () => {
+    let reported = 0;
+    for (const n of names) {
+      for (const write of syntaxes) {
+        for (const v of values) {
+          const text = write(n, v);
+          const { value, redactions } = redactSecrets(text);
+          if (redactions.length === 0) continue;
+          reported += 1;
+          expect(value, text).not.toContain(v);
+        }
+      }
+    }
+    // Most of the corpus is a credential name with a value.
+    expect(reported).toBeGreaterThan(3_000);
   });
 });

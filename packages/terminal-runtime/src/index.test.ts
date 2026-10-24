@@ -299,6 +299,30 @@ describe("TerminalRuntime", () => {
     ).not.toContain("hunter2");
   });
 
+  it("redacts a credential bound with `=>` or `:=` in what a command prints", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-terminal-"));
+    roots.push(root);
+    const runtime = await TerminalRuntime.create({ root });
+    // Synthetic, and assembled at run time so no literal reads as a credential.
+    const secret = `S3cr3t${"Passw0rd"}`;
+    const token = "A1b2C3d4E5f6G7h8".repeat(2);
+    const result = await runtime.execute(
+      TerminalOperationSchema.parse({
+        kind: "terminal",
+        action: "run",
+        command: process.execPath,
+        args: [
+          "-e",
+          "process.stdout.write(process.argv[1])",
+          `aws_secret_access_key => "${secret}"\naccess_token := ${token}\n`,
+        ],
+      }),
+    );
+    expect(result.success).toBe(true);
+    expect(result.stdout).not.toContain(secret);
+    expect(result.stdout).not.toContain(token);
+  });
+
   it("stops commands at the configured timeout, as an outcome it cannot know", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-terminal-"));
     roots.push(root);

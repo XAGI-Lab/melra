@@ -100,6 +100,28 @@ describe("LocalMemory", () => {
     expect(persisted?.tags).toContain("ops");
   });
 
+  it("stores no value of a credential bound with `=>` or `:=`", () => {
+    store = new SqliteStore(":memory:");
+    const memory = new LocalMemory(store);
+    // Synthetic, and assembled at run time so no literal reads as a credential.
+    const password = `S3cr3t${"Passw0rd"}`;
+    const token = "A1b2C3d4E5f6G7h8".repeat(2);
+    const result = memory.execute(
+      MemoryOperationSchema.parse({
+        kind: "memory",
+        action: "put",
+        id: "00000000-0000-4000-8000-000000000043",
+        scope: "workspace",
+        key: "config",
+        value: `Laravel config: 'password' => '${password}', 'api_key' => '${token}'; Go: apiKey := "${token}"`,
+      }),
+    ) as { redactions: string[] };
+    const persisted = JSON.stringify(store.getMemory("00000000-0000-4000-8000-000000000043"));
+    expect(persisted).not.toContain(password);
+    expect(persisted).not.toContain(token);
+    expect(result.redactions.length).toBeGreaterThan(0);
+  });
+
   it("keeps memory isolated by scope", () => {
     store = new SqliteStore(":memory:");
     const memory = new LocalMemory(store);

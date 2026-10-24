@@ -188,6 +188,64 @@ describe("receipt and certificate primitives", () => {
     expect(redactSecrets("the secret ingredient is love").value).toBe("the secret ingredient is love");
   });
 
+  it("takes the whole value of a credential name bound with `=>`, `:=` or `==`, typed, quoted, or in a block scalar", () => {
+    // Synthetic, and assembled at run time so no literal here reads as a
+    // leaked credential to a secret scanner.
+    const password = `S3cr3t${"Passw0rd"}`;
+    const token = "A1b2C3d4E5f6G7h8".repeat(2);
+    for (const [name, value] of [
+      ["password", password],
+      ["client_secret", password],
+      ["api_key", token],
+      ["access_token", token],
+    ] as const) {
+      for (const text of [
+        `'${name}' => '${value}',`,
+        `${name} := "${value}"`,
+        `if ${name} == "${value}" {`,
+        `${name} = "${value} and ${value}"`,
+        `${name}: |\n  ${value}\n`,
+        `${name}: >-\n  ${value}\n`,
+        `  ${name}: |\n    ${value}\n    ${value}\n  next: 1`,
+      ]) {
+        const redacted = redactSecrets(text);
+        expect(redacted.value, text).not.toContain(value);
+        expect(redacted.redactions, text).not.toEqual([]);
+      }
+    }
+    for (const text of [`const password: string = "${password}";`, `client_secret: Optional[str] = '${password}'`]) {
+      const redacted = redactSecrets(text);
+      expect(redacted.value, text).not.toContain(password);
+      expect(redacted.redactions, text).not.toEqual([]);
+    }
+    // A block scalar's lines go whole, blank lines in it too, and an empty
+    // comparison has no value, with or without a space after the operator.
+    expect(redactSecrets("password: >\n  correct horse battery staple\nuser: app").value).toBe(
+      "password=[REDACTED]\nuser: app",
+    );
+    expect(redactSecrets("  passphrase: |\n    correct horse\n    battery staple\n  user: app").value).toBe(
+      "  passphrase=[REDACTED]\n  user: app",
+    );
+    expect(redactSecrets("password: |\n  a1\n\n  b2secret\nuser: x").value).toBe("password=[REDACTED]\nuser: x");
+    expect(redactSecrets(`api_key: |\n  ${token}\n\n  ${token}\nnext: 1`).value).toBe(
+      "api_key: |\n  [REDACTED]\nnext: 1",
+    );
+    for (const text of [
+      'if password == "" {',
+      'if (password === "") {',
+      "password ::= ''",
+      'if (password==="") {',
+      "'password'=>'',",
+    ]) {
+      expect(redactSecrets(text), text).toEqual({ value: text, redactions: [] });
+    }
+    // Only a value that opened with a quote reads on to one, so an escape after
+    // an unquoted token stays.
+    expect(redactSecrets(`{"script":"export API_TOKEN=${token}\\nexport DEBUG=1"}`).value).toBe(
+      '{"script":"export API_TOKEN=[REDACTED]\\nexport DEBUG=1"}',
+    );
+  });
+
   it("redacts the credential formats issuers hand out, and leaves ordinary text alone", () => {
     // Synthetic, and assembled at run time so no literal in this file reads as
     // a leaked credential to a secret scanner.
@@ -336,6 +394,15 @@ describe("receipt and certificate primitives", () => {
       "a-".repeat(50_000),
       "a_".repeat(50_000),
       "a1_".repeat(33_000),
+      // A quoted value that never closes, read up to its bound from every name,
+      // a block scalar read to its last line, blank lines in it, and blank
+      // lines after a token with no block scalar, looked through and left.
+      ('password: "' + "a ".repeat(140) + "\n").repeat(750),
+      ("secret => '" + "a ".repeat(140) + "\n").repeat(750),
+      ('api_key="abcd1234' + "x ".repeat(140) + "\n").repeat(750),
+      "password: |\n" + "  a\n".repeat(100_000),
+      "password: |\n" + "  a\n\n".repeat(50_000),
+      ("api_key: abcd1234\n" + "\n".repeat(50)).repeat(3_000),
       "npm_".repeat(25_000),
       "authorization: digest ".repeat(5_000),
     ]) {
