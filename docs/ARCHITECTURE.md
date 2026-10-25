@@ -869,6 +869,13 @@ Those are operating-system primitives; MELRA should use them rather than
 reinvent them. Linux governs access to machine resources. MELRA governs
 autonomous effects performed through those resources.
 
+One door MELRA does own, in every mode, is its own file writer: it never
+changes the settings files a coding agent's harness loads its permissions,
+hooks and MCP servers from when a session starts (`path_harness_config`; the
+list is under [Files](CAPABILITIES.md#files)). That bounds the file writer
+only: other files a harness loads, such as agent and skill definitions, stay
+writable, and an approved terminal command can still write any of them.
+
 ## Verification boundary
 
 Filesystem predicates independently re-read the workspace (level 1), and

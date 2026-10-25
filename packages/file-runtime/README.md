@@ -19,6 +19,11 @@ following symlinks first — so a link pointing outside the workspace is refused
 rather than followed. Relative paths resolve against the root; absolute paths
 outside it are an error, not a fallback.
 
+Nothing that changes a file may land in a git directory (`path_git_metadata`)
+or change a coding agent's own configuration, such as `.mcp.json`,
+`.claude/settings.json` or `.vscode/settings.json` (`path_harness_config`),
+whatever the root. Reading them is unchanged.
+
 `maxFileBytes` bounds how much a single read pulls into memory. It is a
 resource limit rather than a permission check: an unbounded read of a huge file
 takes the host down regardless of who was allowed to read it.

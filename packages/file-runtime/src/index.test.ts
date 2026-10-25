@@ -294,6 +294,198 @@ describe("FileRuntime", () => {
     await run({ action: "write", path: ".gitattributes", content: "* text=auto\n" });
   });
 
+  it("never changes a coding agent's own configuration, however the path reaches it", async () => {
+    // A harness loads its permissions, hooks and MCP servers from these when
+    // its next session starts; nothing the file capability does may change one.
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-file-")));
+    roots.push(root);
+    const listed = [
+      ".mcp.json",
+      ".claude/settings.json",
+      ".claude/settings.local.json",
+      ".vscode/settings.json",
+      ".vscode/tasks.json",
+      ".vscode/mcp.json",
+      ".codex/config.toml",
+      ".codex/managed_config.toml",
+      ".codex/requirements.toml",
+      ".codex/hooks.json",
+      ".codex/rules/default.rules",
+      // Every file in these folders is loaded, whatever its name.
+      ".codex/rules/extra.rules",
+      ".gemini/settings.json",
+      ".cursor/mcp.json",
+      // Where `melra setup` writes for the other clients, as under a home.
+      "home/Library/Application Support/Claude/claude_desktop_config.json",
+      "home/.codeium/windsurf/mcp_config.json",
+      "home/.kiro/settings/mcp.json",
+      "home/.config/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json",
+      "home/.config/zed/settings.json",
+      "home/.config/opencode/opencode.json",
+      "home/.config/goose/config.yaml",
+      "home/AppData/Roaming/Block/goose/config/config.yaml",
+      ".continue/mcpServers/melra.yaml",
+      ".continue/mcpServers/other.yaml",
+      "home/.config/amp/settings.json",
+      "home/.config/amp/settings.jsonc",
+      "home/.openclaw/openclaw.json",
+      "home/.hermes/config.yaml",
+      "home/AppData/Local/hermes/config.yaml",
+      "home/.copilot/mcp-config.json",
+      "home/.qwen/settings.json",
+      "home/.augment/settings.json",
+      "home/.warp/.mcp.json",
+      "home/.junie/mcp/mcp.json",
+      "home/.factory/mcp.json",
+      "home/.kimi-code/mcp.json",
+      "home/.config/kilo/kilo.jsonc",
+      "home/.config/kilo/kilo.json",
+      "home/.lmstudio/mcp.json",
+      "home/.cache/lm-studio/mcp.json",
+      // A nested project's own.
+      "packages/app/.claude/settings.json",
+    ];
+    for (const path of listed) {
+      await mkdir(join(root, path, ".."), { recursive: true });
+      await writeFile(join(root, path), "{}");
+    }
+    await writeFile(join(root, "notes.txt"), "fine");
+    await mkdir(join(root, "staged"));
+    await writeFile(join(root, "staged", "settings.json"), "{}");
+    await symlink(join(root, ".claude"), join(root, "harness"));
+    await symlink(join(root, ".vscode", "tasks.json"), join(root, "tasks-link.json"));
+    const runtime = await FileRuntime.create({ root });
+    const run = (operation: Record<string, unknown>) =>
+      runtime.execute(FileOperationSchema.parse({ kind: "file", ...operation }));
+    for (const path of listed) {
+      for (const operation of [
+        { action: "write", path, content: "x" },
+        { action: "mkdir", path, recursive: true },
+        { action: "delete", path },
+        { action: "move", path, destination: "moved.json" },
+        { action: "move", path: "notes.txt", destination: path },
+      ]) {
+        await expect(run(operation), JSON.stringify(operation)).rejects.toThrow("path_harness_config");
+      }
+    }
+    for (const operation of [
+      // The folder one sits in, removed or moved whole, or moved into place.
+      { action: "delete", path: ".claude", recursive: true },
+      { action: "move", path: ".vscode", destination: "old-vscode" },
+      { action: "move", path: "staged", destination: "packages/web/.claude" },
+      { action: "move", path: "staged", destination: "home/.config/opencode" },
+      { action: "delete", path: ".codex/rules", recursive: true },
+      { action: "delete", path: "home/.config/zed", recursive: true },
+      // The folder a one-name entry sits in, where its client keeps it.
+      { action: "delete", path: "home/.openclaw", recursive: true },
+      { action: "move", path: "home/.config/kilo", destination: "gone-kilo" },
+      { action: "delete", path: "home/Library/Application Support/Claude", recursive: true },
+      // Through a link to the folder or to the file, and in another case,
+      // which a case-insensitive filesystem opens as the same file.
+      { action: "write", path: "harness/settings.json", content: "x" },
+      { action: "write", path: "tasks-link.json", content: "x" },
+      { action: "write", path: ".Claude/Settings.JSON", content: "x" },
+      { action: "write", path: ".VSCODE/tasks.json", content: "x" },
+    ]) {
+      await expect(run(operation), JSON.stringify(operation)).rejects.toThrow("path_harness_config");
+    }
+    if (process.platform !== "win32") {
+      // A link to a folder that does not exist yet is judged where it leads.
+      await symlink(join(root, "packages", "web", ".gemini"), join(root, "planned"));
+      await expect(run({ action: "write", path: "planned/settings.json", content: "x" })).rejects.toThrow(
+        "path_harness_config",
+      );
+    }
+    // The refusal names the file and says where to change it.
+    await expect(run({ action: "write", path: ".mcp.json", content: "x" })).rejects.toThrow(
+      /^path_harness_config: \.mcp\.json .*edit it yourself, outside the agent$/,
+    );
+    // Rooted where unsafe-local mode roots it, the same: this is not policy.
+    const unconfined = await FileRuntime.create({ root: parse(root).root });
+    await expect(
+      unconfined.execute(
+        FileOperationSchema.parse({ kind: "file", action: "write", path: join(root, ".claude", "settings.json"), content: "x" }),
+      ),
+    ).rejects.toThrow("path_harness_config");
+    for (const path of listed) expect(await readFile(join(root, path), "utf8"), path).toBe("{}");
+    // Reading them stays ordinary, and so do files and folders that only look like them.
+    expect((await run({ action: "read", path: ".claude/settings.json" })).content).toBe("{}");
+    expect((await run({ action: "hash", path: "harness/settings.json" })).size).toBe(2);
+    await run({ action: "stat", path: ".mcp.json" });
+    await run({ action: "list", path: ".vscode" });
+    await run({ action: "write", path: ".claude/agents/reviewer.md", content: "x" });
+    await run({ action: "move", path: ".claude/agents", destination: ".claude/reviewers" });
+    await run({ action: "mkdir", path: ".cursor/rules", recursive: true });
+    await run({ action: "write", path: ".claude/settings.json.bak", content: "{}" });
+    await run({ action: "write", path: "settings.json", content: "{}" });
+    await run({ action: "write", path: ".vscode/launch.json", content: "{}" });
+    await run({ action: "write", path: "docs/example.mcp.json", content: "{}" });
+    await run({ action: "write", path: "config.toml", content: "" });
+    // A client's folder name under any other parent is not that client's.
+    await run({ action: "write", path: "assets/zed/settings.json", content: "{}" });
+    await run({ action: "write", path: "fixtures/goose/config.yaml", content: "" });
+    await run({ action: "mkdir", path: "src/amp", recursive: true });
+    await run({ action: "delete", path: "src/amp", recursive: true });
+    await run({ action: "mkdir", path: "node_modules/.cache/lm-tools", recursive: true });
+    await run({ action: "delete", path: "node_modules/.cache", recursive: true });
+    await run({ action: "delete", path: "staged", recursive: true });
+  });
+
+  it("follows a link from a listed name back to where it leads", async () => {
+    // A listed name at the root or in the home folder that is a link: where it
+    // leads is the harness's configuration too, under another name.
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-file-")));
+    roots.push(root);
+    await mkdir(join(root, "shared", "claude", "agents"), { recursive: true });
+    await writeFile(join(root, "shared", "claude", "settings.json"), "{}");
+    await symlink(join(root, "shared", "claude"), join(root, ".claude"));
+    await mkdir(join(root, "config"));
+    await writeFile(join(root, "config", "mcp.json"), "{}");
+    await symlink(join(root, "config", "mcp.json"), join(root, ".mcp.json"));
+    // A home whose settings folders a dotfile manager links elsewhere.
+    const home = join(root, "home");
+    await mkdir(join(home, "dotfiles", "claude"), { recursive: true });
+    await writeFile(join(home, "dotfiles", "claude", "settings.json"), "{}");
+    await symlink(join(home, "dotfiles", "claude"), join(home, ".claude"));
+    await mkdir(join(home, "dotfiles", "config", "zed"), { recursive: true });
+    await writeFile(join(home, "dotfiles", "config", "zed", "settings.json"), "{}");
+    await symlink(join(home, "dotfiles", "config"), join(home, ".config"));
+    vi.stubEnv("HOME", home);
+    vi.stubEnv("USERPROFILE", home);
+    try {
+      const runtime = await FileRuntime.create({ root });
+      const run = (operation: Record<string, unknown>) =>
+        runtime.execute(FileOperationSchema.parse({ kind: "file", ...operation }));
+      for (const operation of [
+        { action: "write", path: "shared/claude/settings.json", content: "x" },
+        { action: "delete", path: "shared/claude", recursive: true },
+        { action: "move", path: "shared", destination: "elsewhere" },
+        { action: "write", path: "config/mcp.json", content: "x" },
+        { action: "delete", path: "config/mcp.json" },
+        { action: "delete", path: "config", recursive: true },
+        { action: "write", path: "home/dotfiles/claude/settings.json", content: "x" },
+        { action: "write", path: "home/dotfiles/config/zed/settings.json", content: "x" },
+        { action: "delete", path: "home/dotfiles", recursive: true },
+      ]) {
+        await expect(run(operation), JSON.stringify(operation)).rejects.toThrow("path_harness_config");
+      }
+      for (const path of [
+        "shared/claude/settings.json",
+        "config/mcp.json",
+        "home/dotfiles/claude/settings.json",
+        "home/dotfiles/config/zed/settings.json",
+      ]) {
+        expect(await readFile(join(root, path), "utf8"), path).toBe("{}");
+      }
+      // The rest of where they lead stays ordinary.
+      await run({ action: "write", path: "shared/claude/agents/reviewer.md", content: "x" });
+      await run({ action: "write", path: "config/other.json", content: "{}" });
+      await run({ action: "write", path: "home/dotfiles/config/git/config", content: "" });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("knows the reserved files by where they are, not how they are spelled", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-file-"));
     roots.push(root);

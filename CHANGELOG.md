@@ -94,6 +94,23 @@ All notable changes are documented here. The format follows
   `melra.sqlite` can still add rows, update a certificate in place (the old one
   is kept) or drop the triggers, so it is not tamper-evidence, as
   ARCHITECTURE.md and THREAT_MODEL.md now say.
+- **Breaking:** The file capability refuses to change the settings files a
+  coding agent's harness loads its permissions, hooks, tasks or MCP servers
+  from when a session starts (`.mcp.json`, `.claude/settings.json` and
+  `settings.local.json`, `.vscode/settings.json`, `tasks.json` and `mcp.json`,
+  `.codex/config.toml` with the Codex directory's other config files, every
+  file in `.codex/rules` and `.continue/mcpServers`, `.gemini/settings.json`,
+  `.cursor/mcp.json`, and every file `melra setup` writes for a client at its
+  default location; a client home moved by its own variable is recognised only
+  while it keeps the default folder name). A `write`, `mkdir`, `delete` or
+  either end of a `move` naming one is refused in every mode with
+  `path_harness_config`, which names the path: edit the file yourself, outside
+  the agent. They are known by name, at any depth, in any case and through a
+  link, so a file of the same name in an unrelated folder is refused too, and
+  so is a `delete` or `move` of a folder named like one that holds them
+  (`.claude`, `.vscode`, `.codex`, a client's own folder), even an empty one;
+  not the project folder holding `.mcp.json`. Reading them, and the rest of
+  `.claude` or `.vscode`, is unchanged.
 
 ### Fixed
 
@@ -137,6 +154,13 @@ All notable changes are documented here. The format follows
   is masked too, not only the password. A body cut at the size cap is masked to
   the length of the longest such form. A shorter credential is still masked only
   as sent.
+- MELRA's file capability no longer changes the settings files listed under
+  Changed, which a coding agent's harness loads at the next session start, so
+  an agent cannot use it to rewrite them for its next session. The refusal is
+  a fixed check, not policy, so it holds in every mode, unsafe-local included.
+  It covers those files only: other files a harness loads, such as agent, skill
+  and command definitions, are not refused, and an approved terminal command
+  can still write any of them.
 
 ## [0.3.0-alpha.21] - 2026-10-25
 
