@@ -12,7 +12,7 @@
 # so this file and what CI checks cannot drift apart.
 
 [Unit]
-Description=MELRA autonomy kernel for %i
+Description=MELRA autonomy kernel for the effects %i routes through it
 After=network-online.target
 
 [Service]

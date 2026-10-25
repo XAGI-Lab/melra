@@ -668,10 +668,10 @@ could not observe should be settled. That is a different promise from
 which, so the plan states it separately.
 
 Beside it, every receipt carries `mode` — `developer` or `enforced`. It says
-nothing about the request; it records how the kernel that ran the effect was
-deployed, which is the difference between "governed by the only door" and
-"governed by one of several". That is not recoverable after the fact, so it is
-written at the same time as the outcome rather than left for an auditor to infer.
+nothing about the request; it records the deployment the operator declared for
+the kernel that ran the effect; it is not evidence that no other path existed.
+That is not recoverable after the fact, so it is written at the same time as
+the outcome rather than left for an auditor to infer.
 See [deployment modes](INSTALLATION.md#deployment-modes).
 
 `policyDecision` names the policy as well as the outcome: `policyVersion`, the
@@ -862,12 +862,26 @@ a harness that also has an unrestricted native terminal can simply not use it.
 That is a useful convenience, not a trust boundary, and this repository does not
 claim otherwise.
 
-Enforced mode makes MELRA the only path by taking the alternatives away —
+Enforced mode assumes the operator has taken the alternatives away —
 containers, separate OS users, filesystem ACLs, namespaces, network isolation,
 sandbox profiles, credential isolation, Unix sockets, service identities.
 Those are operating-system primitives; MELRA should use them rather than
 reinvent them. Linux governs access to machine resources. MELRA governs
-autonomous effects performed through those resources.
+autonomous effects performed through those resources. MELRA closes its own
+doors; it does not remove the harness's.
+
+The one exception is a session MELRA starts itself. `melra launch claude-code`
+starts Claude Code with Read, Glob and Grep as its only built-in tools, melra
+as its only MCP server, and its user, project and local settings files
+ignored, so the only tools it has that change anything are MELRA's. That holds
+for that session only, in either mode: a `claude` started any other way keeps
+its own tools, and a program MELRA's policy lets the agent run has the OS
+user's rights, whichever allowed command starts it. The server launch starts
+leaves `node`, `npm`, `npx` and `pnpm` out of its default `allowedCommands`,
+which narrows that list without closing it; in developer mode the agent
+approves its own changes, so enforced mode is how a person decides each one.
+See
+[launching an agent](INSTALLATION.md#launch-an-agent-with-melra-as-its-only-tool).
 
 One door MELRA does own, in every mode, is its own file writer: it never
 changes the settings files a coding agent's harness loads its permissions,

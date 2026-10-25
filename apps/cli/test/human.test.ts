@@ -320,6 +320,8 @@ describe("conformance and setup output", () => {
       note: "",
     };
     expect(renderInit(result)).toContain("approve the 'melra' server");
+    // And the way to start it with no other tool that changes anything.
+    expect(renderInit(result)).toContain("Or start it with 'melra launch claude-code'");
     // The directory the agent gets, written or printed.
     expect(renderInit(result)).toMatch(/^ {2}\S+\s+Workspace\s+\/w$/m);
     const { written: _written, ...printedOnly } = result;

@@ -298,9 +298,8 @@ describe("enforced mode", () => {
       request({ operation: { kind: "system", action: "info" } }),
     );
     const { receipt } = await runtime.controller.execute(task.id);
-    // An auditor holding a receipt should not have to ask which deployment
-    // produced it — that is the difference between "the only door" and "one of
-    // several", and it is not recoverable after the fact.
+    // An auditor holding a receipt should not have to ask which deployment the
+    // operator declared for it, and that is not recoverable after the fact.
     expect(receipt?.mode).toBe("enforced");
   });
 
@@ -428,6 +427,50 @@ describe("policy digest", () => {
     const after = await write(["git", "cat"]);
     expect(after).not.toBe(before);
     expect(await digests(policyPath)).toEqual([after, after, after]);
+  });
+});
+
+describe("a server melra launch started", () => {
+  let base: string;
+  let runtime: MelraRuntime | undefined;
+
+  beforeEach(async () => {
+    base = await mkdtemp(join(tmpdir(), "melra-launched-"));
+    await mkdir(join(base, "workspace"));
+  });
+
+  afterEach(async () => {
+    await runtime?.close();
+    runtime = undefined;
+    await rm(base, { recursive: true, force: true });
+  });
+
+  const start = async (environment: NodeJS.ProcessEnv, policy?: object) => {
+    const policyPath = join(base, "policy.json");
+    if (policy !== undefined) await writeFile(policyPath, JSON.stringify(policy), "utf8");
+    runtime = await createMelraRuntime({
+      workspaceRoot: join(base, "workspace"),
+      dataDirectory: join(base, "data"),
+      environment,
+      ...(policy === undefined ? {} : { policyPath }),
+    });
+    return runtime.policy.allowedCommands;
+  };
+
+  it("leaves node, npm, npx and pnpm out of the default commands", async () => {
+    const launched = await start({ MELRA_LAUNCHED: "1" });
+    for (const command of ["node", "npm", "npx", "pnpm"]) expect(launched).not.toContain(command);
+    expect(launched).toContain("git");
+    await runtime?.close();
+    // Every other setup keeps the defaults it had.
+    expect(await start({})).toContain("node");
+  });
+
+  it("narrows only a default: a policy file's own list is kept", async () => {
+    // A file that sets other keys still gets the narrowed defaults.
+    expect(await start({ MELRA_LAUNCHED: "1" }, { maxFileBytes: 1024 })).not.toContain("npm");
+    await runtime?.close();
+    expect(await start({ MELRA_LAUNCHED: "1" }, { allowedCommands: ["git", "node"] })).toEqual(["git", "node"]);
   });
 });
 

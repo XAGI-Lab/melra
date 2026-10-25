@@ -71,6 +71,107 @@ outside a terminal (or choosing `generic`), paste the printed `mcpServers.melra`
 configuration and you are done. The rest of this page covers the other install
 paths, every environment variable, and the hardened Docker invocation.
 
+## Launch an agent with MELRA as its only tool
+
+`setup` adds MELRA beside a client's own tools, so the agent keeps its own
+shell and editor, and you have to ask it to use MELRA. For Claude Code there
+is a way to start it without them:
+
+```bash
+cd ~/project
+npx @melra/cli@alpha launch claude-code
+```
+
+Claude Code 2.1.296 or later starts with Read, Glob and Grep as its only
+built-in tools, melra as its only MCP server, and its user, project and local
+settings files ignored (`--restricted`), so the only tools it has that change
+anything are MELRA's: no Bash, Edit, Write or WebFetch. It needs no container.
+Before claude starts, `launch` says on stderr what the session can and cannot
+do:
+
+```text
+Starting Claude Code. MELRA's tools are the only ones it has that change anything.
+  Mode       developer
+  Workspace  /home/you/project
+  Policy     safe built-in defaults
+  Agent has  Read, Glob, Grep, which only read the workspace, and MELRA's tools for everything else
+  Off        Bash, Edit, Write, WebFetch and the other built-in tools, every other MCP server, and your user, project and local Claude Code settings
+  Commands   cat, echo, findstr, git, head, ls, pwd, rg, tail, tasklist, wc, where; node, npm, npx and pnpm only if the policy file lists them
+  Approve    the agent can echo MELRA's phrase itself, and an approved command runs with your rights; launch with --mode enforced to approve each change yourself
+```
+
+Under `--unsafe-local` the summary says so on every row: no policy, any
+program, nothing asked.
+
+It uses what every other `melra` command reads: the workspace is
+`MELRA_WORKSPACE` or the current directory (asked about first, as in `setup`,
+when that is home or holds it), the policy is `MELRA_POLICY` or the
+`policy.json` in `MELRA_HOME` when there is one, and the mode is the strictest of
+`--mode`, `MELRA_MODE` and the policy file, developer by default. In developer
+mode the agent can echo MELRA's approval phrase itself. With `--mode
+enforced`, or `"mode": "enforced"` in the policy file, it cannot, and you
+approve each change with [`melra approve`](#approving-from-the-command-line) or
+[`melra console`](#approving-in-a-browser) in another terminal, in enforced
+mode with the same `MELRA_HOME`. Before the summary, `launch` opens and closes
+the server it configures, so a setup that server would refuse to start (in
+enforced mode, `MELRA_HOME` inside the workspace, say) stops `launch` with that
+refusal before claude starts.
+
+The MCP server it names is this same `melra`, by absolute path, never a bare
+`melra` or `npx`, with [`MELRA_HARNESS_TOOLS=1`](#ordinary-tool-names) and
+`MELRA_LAUNCHED=1`. The second leaves `node`, `npm`, `npx` and `pnpm` out of
+the default `allowedCommands`, because each runs whatever program it is handed,
+with your rights. A policy file whose own `allowedCommands` lists one keeps it,
+and the summary warns about it; a `policy.json` that `melra init` or `melra
+setup` wrote lists all four, so remove the ones the agent does not need. This
+narrows the list without making the rest harmless: any allowed command run as
+an approved change has your rights, and in developer mode the agent approves its
+own changes, so `--mode enforced` is how you decide each one.
+
+After `--`, `launch` passes claude a prompt, `-p`/`--print`, `--model <model>`,
+`--output-format <format>`, `--verbose`, `-c`/`--continue` and `-r`/`--resume
+[id]`, and nothing else: any other argument is refused with
+`launch_argument_refused`, and so is a one-word prompt, which claude can read
+as one of its own subcommands. It exits with claude's exit code.
+
+```bash
+melra launch claude-code -- -p "list the TODO comments in src" --output-format json
+```
+
+What stays outside it: a `claude` started any other way keeps its own tools; a
+program MELRA's policy lets the agent run, whichever allowed command starts it,
+has your OS user's rights and is not limited to MELRA's tools; desktop clients
+are not covered; and whether plugin hooks still load under `--restricted` has
+not been verified.
+
+To try it and to test it locally:
+
+- `melra launch claude-code --dry-run [-- <claude arguments>]` prints the
+  summary, then the claude command, its arguments, working directory and MCP
+  config as JSON on stdout, and exits 0 without starting anything. A real
+  launch writes that config to a private temporary file, passes its path where
+  `<mcp-config.json>` stands, and removes it when claude exits; a SIGTERM or
+  SIGHUP to `launch` stops claude first.
+- `CLAUDE_BIN=<path>` or `--claude-bin <path>` picks the claude to run
+  (default: `claude` on `PATH`). A relative path is taken from the current
+  directory, and a bare name is looked up only in `PATH`'s absolute
+  directories, never from the directory claude starts in; on Windows that
+  finds `claude.exe`, and a `claude.cmd` or `.bat` is refused
+  (`claude_not_runnable`), since it needs a shell. `--dry-run` prints the
+  absolute path it found. A stand-in script there that records its
+  arguments and the file after `--mcp-config` is how
+  `pnpm --filter @melra/cli test test/launch.test.ts` checks the exact flags,
+  the melra-only config, the refused arguments and the dropped runtimes with no
+  Claude Code, login or network.
+- With Claude Code installed and signed in, the first line of a stream-json
+  run lists what the session has. Its `tools` should be only `Glob`, `Grep`,
+  `Read` and `mcp__melra__*`, and its `mcp_servers` only `melra`,
+  `connected`. Unlike the two above, this sends the prompt to the model:
+
+  ```bash
+  melra launch claude-code -- -p "list the files here" --output-format stream-json --verbose | head -n 1
+  ```
+
 ## Requirements
 
 - Node.js 22.13 or newer, or 23.4 or newer.
@@ -245,6 +346,7 @@ MELRA uses these environment variables:
 | `MELRA_HTTP_OAUTH` | Set to `0` so that token is the only way in and no client can register itself | unset (clients may register, on loopback) |
 | `MELRA_SOCKET` | Unix socket path that `melra doctor` checks and `melra status` probes. It does not move `melra serve` off stdio; pass `--socket <path>` for that — see [over a Unix socket](#over-a-unix-socket). Not on Windows | unset |
 | `MELRA_HARNESS_TOOLS` | Set to `1` (or `true`, `yes`, `on`) to add thirteen plainly named tools such as `read_file` and `run_command` alongside the twelve `melra_*` tools — see [ordinary tool names](#ordinary-tool-names) | unset (only the `melra_*` tools) |
+| `MELRA_LAUNCHED` | Set to `1` by [`melra launch`](#launch-an-agent-with-melra-as-its-only-tool) on the server it starts, which then leaves `node`, `npm`, `npx` and `pnpm` out of the default `allowedCommands`; a policy file's own `allowedCommands` is kept as written | unset (the full default list) |
 
 Back up `payload.key` with the SQLite files. Changing or losing it makes
 persisted task and workflow payloads unreadable. MELRA creates it only for a
@@ -366,7 +468,8 @@ the SHA-256 of the file's bytes, which `sha256sum policy.json` reproduces, or
 receipts governed by different files say so even when the label did not move. It
 covers the file's bytes only. A key the file leaves out takes the running MELRA
 version's default, so the same digest can stand for other rules under another
-version. The workspace root comes from `MELRA_WORKSPACE`, else a `MELRA_POLICY`
+version, and under `melra launch`, whose defaults leave out node, npm, npx and
+pnpm. The workspace root comes from `MELRA_WORKSPACE`, else a `MELRA_POLICY`
 file's `workspaceRoot` (relative to the file), else the current directory (a
 policy file's `workspaceRoot` can also only narrow it to a folder inside), and
 is in neither the digest nor any receipt. The receipt records the mode beside
@@ -1117,8 +1220,8 @@ closing every door it owns:
   whatever it says: no later node reads it, so gate a step on an approval, not
   on a question.
 - **Every receipt says `enforced`.** `ActionReceipt.mode` records it, and
-  `melra_capabilities` publishes `policy.mode`, so an auditor never has to infer
-  whether an effect was governed by the only door or by one of several.
+  `melra_capabilities` publishes `policy.mode`: the deployment the operator
+  declared; it is not evidence that no other path existed.
 
 Deliberately not refused: running as root. Enforced mode exists for containers,
 and a container process is usually root inside it.

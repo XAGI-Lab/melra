@@ -321,10 +321,10 @@ export interface ActionReceipt {
    */
   executionGuarantee?: string;
   /**
-   * How the kernel that ran this effect was deployed — `developer` or
-   * `enforced`. An auditor reading a receipt should not have to ask whether the
-   * boundary that governed it was the only door or one of several. A string for
-   * the same reason as `executionGuarantee`: `protocol` owns the vocabulary.
+   * The deployment the operator declared for the kernel that ran this effect —
+   * `developer` or `enforced`: a declaration, not evidence that no other path
+   * existed. A string for the same reason as `executionGuarantee`: `protocol`
+   * owns the vocabulary.
    */
   mode?: string;
   policyDecision: {

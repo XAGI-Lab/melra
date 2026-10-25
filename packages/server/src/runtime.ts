@@ -366,8 +366,12 @@ export async function createMelraRuntime(
   const workspaceRoot = resolve(options.workspaceRoot);
   const dataDirectory = resolve(options.dataDirectory);
   const environment = options.environment ?? process.env;
+  // `melra launch` sets this on the server it starts for an agent with no
+  // shell of its own, so the defaults leave out node, npm, npx and pnpm; a
+  // policy file that lists them keeps them.
+  const runtimes = environment.MELRA_LAUNCHED !== "1";
   // Through `loadPolicy` either way, so the defaults carry their digest too.
-  const loaded = await loadPolicy(options.policyPath, workspaceRoot);
+  const loaded = await loadPolicy(options.policyPath, workspaceRoot, runtimes);
   // Either channel is enough to ask for it, and the resolved policy is the one
   // place that answers "is this server unhinged" — so a policy file that sets
   // the flag still raises every warning the environment variable does.

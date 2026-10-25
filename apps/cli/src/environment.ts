@@ -1,8 +1,10 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
+import { constants } from "node:fs";
+import { access, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { basename, delimiter, extname, isAbsolute, join, resolve } from "node:path";
 import { isSea } from "node:sea";
 import type { DeploymentMode } from "@melra/protocol";
 import { deploymentMode } from "@melra/protocol";
@@ -59,6 +61,100 @@ export function serverLaunch(
   return /[\\/]_npx[\\/]/.test(moduleDirectory)
     ? { command: "npx", args: ["-y", `@melra/cli@${version}`, "serve"] }
     : { command: "melra", args: ["serve"] };
+}
+
+/**
+ * This very `melra`, by absolute path, for a child to run: Node and the entry
+ * script with its loaders, so it works from `dist/bin.js` and from `tsx
+ * src/index.ts` alike, or a single executable on its own. Never a bare name or
+ * `npx`, which run whatever `PATH` finds when the child starts.
+ */
+export function selfCommand(singleExecutable = isSea()): { command: string; args: string[] } {
+  return { command: process.execPath, args: singleExecutable ? [] : [...process.execArgv, process.argv[1] ?? ""] };
+}
+
+/**
+ * The claude `melra launch` runs, by absolute path. It starts in the
+ * workspace, where a spawn would look for a bare or relative name first:
+ * Windows always does, POSIX for a relative path or an empty or relative
+ * `PATH` entry. So a name with a directory in it is taken from where it was
+ * typed, and a bare one is looked up only in `PATH`'s absolute directories,
+ * with `PATHEXT` on Windows, whose batch files need a shell and are refused.
+ */
+export async function claudeProgram(
+  name: string,
+  environment: NodeJS.ProcessEnv = process.env,
+  windows = process.platform === "win32",
+): Promise<string> {
+  if (basename(name) !== name) return resolve(name);
+  // Windows tries the name as given only when it has an extension, as a spawn
+  // does, so the extensionless script npm puts beside `claude.cmd` is skipped.
+  const names = windows
+    ? [
+        ...(extname(name) === "" ? [] : [name]),
+        ...(environment.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean).map((extension) => name + extension),
+      ]
+    : [name];
+  for (const directory of (environment.PATH ?? "").split(delimiter).filter((entry) => isAbsolute(entry))) {
+    for (const candidate of names.map((each) => join(directory, each))) {
+      if (!(await stat(candidate).catch(() => undefined))?.isFile()) continue;
+      if (!(await access(candidate, constants.X_OK).then(() => true, () => false))) continue;
+      if (/\.(bat|cmd)$/i.test(candidate)) {
+        throw new Error(`claude_not_runnable: ${candidate} is a batch file, which needs a shell; name claude.exe with CLAUDE_BIN or --claude-bin`);
+      }
+      return candidate;
+    }
+  }
+  throw new Error(
+    `claude_not_found: ${name} is in no absolute PATH directory; install Claude Code 2.1.296 or later, or name it with CLAUDE_BIN or --claude-bin`,
+  );
+}
+
+/** The built-in tools `melra launch claude-code` leaves Claude Code: it can read, and change nothing. */
+export const CLAUDE_TOOLS = "Read,Glob,Grep";
+
+// The only flags passed on to claude: none can hand back a tool, a settings
+// file or an MCP server. `--resume` takes an optional session id.
+const CLAUDE_FLAGS = new Set(["-p", "--print", "-c", "--continue", "-r", "--resume", "--verbose"]);
+const CLAUDE_VALUED = new Set(["--model", "--output-format"]);
+
+/**
+ * The arguments `melra launch claude-code` starts claude with. `--tools`
+ * leaves it no built-in tool that changes anything, `--strict-mcp-config`
+ * and `--mcp-config` no MCP server but melra, and `--restricted` turns off
+ * the code-running tools and ignores the user, project and local settings
+ * files, where hooks, permissions and servers would come from. The flags
+ * that take a list come first and a plain one last, so a prompt after them is
+ * not read as one more tool or config file.
+ *
+ * Of `passed`, the caller's own, only a prompt and `CLAUDE_FLAGS` and
+ * `CLAUDE_VALUED` go through; anything else is refused rather than dropped.
+ */
+export function claudeLaunchArgv(mcpConfig: string, passed: readonly string[]): string[] {
+  let prompt = false;
+  for (let index = 0; index < passed.length; index += 1) {
+    const value = passed[index]!;
+    if (CLAUDE_VALUED.has(value)) {
+      const next = passed[index + 1];
+      if (next === undefined || next.startsWith("-")) throw new Error(`${value} requires a value`);
+      index += 1;
+    } else if (["-r", "--resume"].includes(value) && !(passed[index + 1] ?? "-").startsWith("-")) {
+      index += 1;
+    } else if (value.startsWith("-") && !CLAUDE_FLAGS.has(value)) {
+      throw new Error(
+        `launch_argument_refused: ${value}; melra launch passes claude only a prompt, ` +
+          "-p/--print, --model <model>, --output-format <format>, --verbose, -c/--continue and -r/--resume [id]",
+      );
+    } else if (!value.startsWith("-") && !prompt) {
+      // claude reads a first word it has a subcommand for (`mcp`, `plugin`,
+      // `purge`, ...) as that subcommand, which no session restricts.
+      if (/^[a-z][a-z-]*$/.test(value)) {
+        throw new Error(`launch_argument_refused: ${value}; a one-word prompt can name a claude subcommand, so say more`);
+      }
+      prompt = true;
+    }
+  }
+  return ["--tools", CLAUDE_TOOLS, "--mcp-config", mcpConfig, "--strict-mcp-config", "--restricted", ...passed];
 }
 
 /**
