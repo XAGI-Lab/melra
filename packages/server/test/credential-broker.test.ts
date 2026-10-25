@@ -14,10 +14,27 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import type { ComputerRuntimeOptions } from "@melra/computer-runtime";
 import { TaskRequestSchema } from "@melra/protocol";
 import { createMelraRuntime } from "../src/index.js";
 import type { MelraRuntime } from "../src/runtime.js";
+
+// What the kernel tells the computer runtime, whose own tests show its helpers
+// start without the variables it names.
+const computerOptions = vi.hoisted((): ComputerRuntimeOptions[] => []);
+vi.mock("@melra/computer-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@melra/computer-runtime")>();
+  return {
+    ...actual,
+    ComputerRuntime: class extends actual.ComputerRuntime {
+      constructor(options: ComputerRuntimeOptions) {
+        super(options);
+        computerOptions.push(options);
+      }
+    },
+  };
+});
 
 const SECRET = "sk_live_kernel_held_never_agent_held";
 const OTHER_SECRET = "sk_live_for_a_host_this_test_never_calls";
@@ -146,6 +163,12 @@ describe("a credential the agent never holds", () => {
     expect(JSON.stringify({ planned, task, output, receipt })).not.toContain(SECRET);
     expect(JSON.stringify(runtime.store.getTask(task.id))).not.toContain(SECRET);
     expect(JSON.stringify(runtime.store.getReceiptsForTask(task.id))).not.toContain(SECRET);
+  });
+
+  it("is kept from the programs the computer runtime starts", () => {
+    // Both: a helper has no host, so a credential scoped elsewhere is no less
+    // out of place there.
+    expect(computerOptions.at(-1)?.withheldEnvironment).toEqual(["MELRA_TEST_BILLING_KEY", "MELRA_TEST_PARTNER_KEY"]);
   });
 
   it("is not in the database either", async () => {

@@ -1,7 +1,7 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -199,6 +199,17 @@ describe("ComputerRuntime", () => {
     );
     expect(adapter.calls).toEqual(["inspect", "drag"]);
   });
+
+  it.runIf(["darwin", "linux", "win32"].includes(process.platform))(
+    "hands the names it withholds to the platform adapter it builds",
+    () => {
+      // The platform helpers cannot be stood in for, so this reads the set
+      // their environment is filtered by.
+      const runtime = new ComputerRuntime({ artifactDirectory: "/tmp", withheldEnvironment: ["melra_test_key"] });
+      const { adapter } = runtime as unknown as { adapter: { withheld: ReadonlySet<string> } };
+      expect([...adapter.withheld]).toEqual(["MELRA_PAYLOAD_KEY", "MELRA_HTTP_TOKEN", "MELRA_TEST_KEY"]);
+    },
+  );
 });
 
 describe("an input helper stopped mid-run", () => {
@@ -341,6 +352,43 @@ describe.skipIf(process.platform === "win32")("reading the screen when no tree c
       )) as { elements?: DesktopElement[] };
       expect(observed.elements?.map(({ name }) => name)).toEqual(["Save"]);
     } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("starts the OCR program without the server's secrets", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "melra-ocr-"));
+    const seen = join(directory, "environment");
+    const program = join(directory, "ocr");
+    writeFileSync(program, `#!/bin/sh\nenv > '${seen}'\nprintf '${TSV}'\n`, { mode: 0o755 });
+    const planted = {
+      MELRA_PAYLOAD_KEY: "planted-payload-key",
+      MELRA_HTTP_TOKEN: "planted-http-token",
+      MELRA_TEST_BILLING_KEY: "planted-billing-key",
+      // POSIX names are case-sensitive, so this one is distinct; it is withheld
+      // as written all the same.
+      melra_test_lower_key: "planted-lower-key",
+      MELRA_TEST_KEPT: "kept",
+    };
+    const before = Object.fromEntries(Object.keys(planted).map((name) => [name, process.env[name]]));
+    Object.assign(process.env, planted);
+    try {
+      const runtime = new ComputerRuntime({
+        artifactDirectory: directory,
+        adapter: new BlindAdapter(directory),
+        ocrProgram: program,
+        withheldEnvironment: ["MELRA_TEST_BILLING_KEY", "melra_test_lower_key"],
+      });
+      await runtime.execute(ComputerOperationSchema.parse({ kind: "computer", action: "inspect" }));
+      const environment = readFileSync(seen, "utf8");
+      expect(environment).not.toContain("planted-");
+      // The rest arrives: helpers need display, D-Bus and tessdata settings.
+      expect(environment).toContain("MELRA_TEST_KEPT=kept");
+    } finally {
+      for (const [name, value] of Object.entries(before)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
       rmSync(directory, { recursive: true, force: true });
     }
   });

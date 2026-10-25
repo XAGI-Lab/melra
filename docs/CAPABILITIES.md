@@ -399,6 +399,14 @@ Actions: `capabilities`, `inspect`, `screenshot`, `click`, `move`, `drag`,
   compile a small P/Invoke shim, because .NET exposes no cursor or wheel API.
   That cost is per-process, so `timeoutMs` may need raising above its 10s
   default on a slow or loaded machine; `capabilities` reports this too.
+- The helpers these actions start (`osascript`, `screencapture`, `ioreg`,
+  `xdotool`, `gnome-screenshot` or `scrot`, PowerShell, and `tesseract` or the
+  named OCR program) get the server's environment without `MELRA_PAYLOAD_KEY`,
+  `MELRA_HTTP_TOKEN` or any variable a credential's `source.env` names, matched
+  ignoring case. Everything else still reaches them, since they need display,
+  D-Bus, tessdata and Windows settings; a library embedder names more with
+  `ComputerRuntimeOptions.withheldEnvironment`, or, for an adapter it passes
+  in, with `createSystemComputerAdapter`'s argument.
 
 Focus verification, multi-display normalization, per-monitor DPI compensation,
 and official task-benchmark evidence remain roadmap work.
@@ -437,9 +445,20 @@ Action: `request`. Fields: `method`, `url`, `headers`, `content`,
   by name under `credentials`, never their values, and a caller-supplied header
   cannot shadow one. A value the far end echoes back in the reason phrase, a
   header or the body is replaced with `[REDACTED_CREDENTIAL]` and listed under
-  `redactions`; `bytes` still counts what arrived. A body cut at the size cap
-  on such a call always ends in the marker in place of its last few
-  characters, whatever they held, and lists it too.
+  `redactions`; `bytes` still counts what arrived. So is one of 8 characters or
+  more echoed in a fixed encoding: base64 (padded or not), base64url, hex in
+  either case, or percent-encoded the way `encodeURIComponent`, RFC 3986 (Go,
+  PHP) or Python's `quote` spell it, with upper- or lower-case escapes. Inside a
+  longer base64 or base64url string, such as the encoding of the header it went
+  out in or of an HTTP Basic pair, the characters it alone decides are replaced,
+  leaving at most the one at either edge it shares with its neighbours. One sent
+  under the `Basic` scheme, configured as the base64 of a printable
+  `user:password`, is masked too as the decoded pair, as its password and as its
+  user name, each when it is 8 characters or more, so a long user name is masked
+  as well as the password. A shorter one is masked only as sent, since the
+  encodings of so few bytes turn up in ordinary text. A body cut at the size cap
+  on such a call always ends in the marker in place of its last few characters,
+  as many as the longest of those forms, whatever they held, and lists it too.
 - `spend` declares what the call moves — `{ provider, account?, amount, currency }`,
   the amount in minor units. It is optional and means nothing until a grant with
   a `provider` block exists; from then on that grant covers declared spends only.

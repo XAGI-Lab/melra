@@ -28,6 +28,11 @@ All notable changes are documented here. The format follows
   to start while that run is planned, running, awaiting approval or
   `recovery_required`. Upgrade every process sharing the home together before
   declaring it.
+- `ComputerRuntimeOptions.withheldEnvironment` names environment variables,
+  matched ignoring case, that the helpers computer actions start go without,
+  beyond `MELRA_PAYLOAD_KEY` and `MELRA_HTTP_TOKEN`, which none ever gets. The
+  server sets it to every variable a credential's `source.env` names; a library
+  embedder can name more. (#420)
 
 ### Changed
 
@@ -42,6 +47,11 @@ All notable changes are documented here. The format follows
 - **Breaking:** `melra workflow advance --input` now records `MELRA_APPROVER`
   as who answered, and fails on a value it does not accept before answering
   anything (#419). Without `--input` it does not read the variable, as before.
+- **Breaking:** `createSystemComputerAdapter` in `@melra/computer-runtime`
+  requires the environment variables its helpers start without, beyond
+  `MELRA_PAYLOAD_KEY` and `MELRA_HTTP_TOKEN`; pass `[]` for none. An adapter
+  passed as `ComputerRuntimeOptions.adapter` withholds only what it was built
+  with, not the runtime's `withheldEnvironment`.
 
 ### Fixed
 
@@ -56,12 +66,31 @@ All notable changes are documented here. The format follows
   `maxLength` and `choices` completes the node and releases what depends on
   it, so a "no" stops nothing. The schema, `melra_workflow_advance` and
   ARCHITECTURE.md now say so; gate a step on an approval instead.
+- The programs computer actions start (`osascript`, `screencapture`, `ioreg`,
+  `xdotool`, `gnome-screenshot`, `scrot`, PowerShell, and `tesseract` or a
+  configured OCR program) no longer inherit `MELRA_PAYLOAD_KEY`,
+  `MELRA_HTTP_TOKEN` or the variables credentials are read from (#420). The
+  rest of the server's environment still reaches them.
 
 ### Security
 
 - In enforced mode a workflow question meant for an operator can no longer be
   answered by the agent, and every answer to a workflow question records who
   gave it and through which channel.
+- Computer-use helper programs no longer receive the payload key, the HTTP
+  token or credential values from the server's environment.
+- A brokered credential of 8 characters or more that the far end echoes back in
+  a common fixed encoding (base64, base64url, hex, or percent-encoded the way
+  `encodeURIComponent`, RFC 3986 (Go, PHP) or Python's `quote` spell it, with
+  upper- or lower-case escapes) is now masked in the result like an unchanged
+  copy. Inside a longer base64 string, such as an encoded header value or HTTP
+  Basic pair, all of it goes but the character at either edge it shares with its
+  neighbours. One configured for the `Basic` scheme, as the base64 of a
+  printable `user:password`, is also masked as the decoded pair, as its password
+  and as its user name, each when it is 8 characters or more: a long user name
+  is masked too, not only the password. A body cut at the size cap is masked to
+  the length of the longest such form. A shorter credential is still masked only
+  as sent.
 
 ## [0.3.0-alpha.21] - 2026-10-25
 

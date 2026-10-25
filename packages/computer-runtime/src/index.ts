@@ -347,6 +347,18 @@ export interface ComputerRuntimeOptions {
    * it makes reading the screen available wherever screenshots are.
    */
   ocrProgram?: string;
+  /**
+   * Environment variables the helpers this runtime starts must not inherit,
+   * beyond `MELRA_PAYLOAD_KEY` and `MELRA_HTTP_TOKEN`, which none ever does:
+   * the ones credentials are read from, say. Matched ignoring case. An
+   * `adapter` passed in withholds only what it was built with.
+   */
+  withheldEnvironment?: readonly string[];
+}
+
+/** The names a helper is started without, upper-cased: Windows ignores case. */
+function withheldNames(names: readonly string[] = []): ReadonlySet<string> {
+  return new Set(["MELRA_PAYLOAD_KEY", "MELRA_HTTP_TOKEN", ...names].map((name) => name.toUpperCase()));
 }
 
 const ALLOWED_KEYS: Record<string, number> = {
@@ -392,8 +404,9 @@ async function run(
   file: string,
   args: string[],
   timeoutMs: number,
-  signal?: AbortSignal,
-  env?: Record<string, string>,
+  signal: AbortSignal | undefined,
+  withheld: ReadonlySet<string>,
+  env: Record<string, string> = {},
 ): Promise<{ stdout: string; stderr: string }> {
   if (signal?.aborted === true) throw new HelperNotStarted(abortReason(signal));
   try {
@@ -402,7 +415,16 @@ async function run(
       maxBuffer: 1_000_000,
       windowsHide: true,
       ...(signal === undefined ? {} : { signal }),
-      ...(env === undefined ? {} : { env: { ...process.env, ...env } }),
+      // Always an environment of its own. Inherited whole, every helper held
+      // the payload key and each credential read from the environment, and a
+      // failing one has the first line of its stderr repeated to the caller.
+      // A denylist, not the terminal's allowlist: xdotool, the screenshot
+      // tools, tesseract and PowerShell need display, D-Bus, tessdata and
+      // Windows settings no list here could name in advance.
+      env: {
+        ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !withheld.has(name.toUpperCase()))),
+        ...env,
+      },
     });
     return {
       stdout: result.stdout,
@@ -581,7 +603,8 @@ export function parseSecureInput(stdout: string): boolean | undefined {
  */
 async function macSecureInput(
   timeoutMs: number,
-  signal?: AbortSignal,
+  signal: AbortSignal | undefined,
+  withheld: ReadonlySet<string>,
 ): Promise<boolean | undefined> {
   try {
     const { stdout } = await run(
@@ -589,6 +612,7 @@ async function macSecureInput(
       ["-l", "-d", "1", "-w", "0", "-r", "-c", "IOResources"],
       Math.min(timeoutMs, 5_000),
       signal,
+      withheld,
     );
     return parseSecureInput(stdout);
   } catch {
@@ -597,6 +621,8 @@ async function macSecureInput(
 }
 
 class MacOsAdapter implements ComputerAdapter {
+  constructor(private readonly withheld: ReadonlySet<string>) {}
+
   async capabilities(): Promise<ComputerCapabilities> {
     const osascript = await executable("/usr/bin/osascript");
     const screencapture = await executable("/usr/sbin/screencapture");
@@ -636,7 +662,7 @@ class MacOsAdapter implements ComputerAdapter {
     operation: ComputerOperation,
     signal?: AbortSignal,
   ): Promise<void> {
-    if ((await macSecureInput(operation.timeoutMs, signal)) === true) {
+    if ((await macSecureInput(operation.timeoutMs, signal, this.withheld)) === true) {
       throw new Error("computer_secure_input_active");
     }
   }
@@ -660,6 +686,7 @@ class MacOsAdapter implements ComputerAdapter {
           ["-x", path],
           operation.timeoutMs,
           signal,
+          this.withheld,
         );
         const bytes = await readFile(path);
         return {
@@ -676,8 +703,9 @@ class MacOsAdapter implements ComputerAdapter {
           ["-l", "JavaScript", "-e", MACOS_INSPECT_SCRIPT],
           operation.timeoutMs,
           signal,
+          this.withheld,
         );
-        const secureInput = await macSecureInput(operation.timeoutMs, signal);
+        const secureInput = await macSecureInput(operation.timeoutMs, signal, this.withheld);
         return {
           success: true,
           action: "inspect",
@@ -694,6 +722,7 @@ class MacOsAdapter implements ComputerAdapter {
           ["-l", "JavaScript", "-e", coordinateScript(operation)],
           operation.timeoutMs,
           signal,
+          this.withheld,
         );
         return {
           success: true,
@@ -724,6 +753,7 @@ class MacOsAdapter implements ComputerAdapter {
           ],
           operation.timeoutMs,
           signal,
+          this.withheld,
         );
         return { success: true, action: "type", characters: operation.text.length };
       }
@@ -740,6 +770,7 @@ class MacOsAdapter implements ComputerAdapter {
           ],
           operation.timeoutMs,
           signal,
+          this.withheld,
         );
         return { success: true, action: "key", key };
       }
@@ -755,6 +786,7 @@ $.CGEventPost($.kCGHIDEventTap, event);
           ["-l", "JavaScript", "-e", script],
           operation.timeoutMs,
           signal,
+          this.withheld,
         );
         return { success: true, action: "scroll", deltaY };
       }
@@ -763,6 +795,8 @@ $.CGEventPost($.kCGHIDEventTap, event);
 }
 
 class LinuxXdotoolAdapter implements ComputerAdapter {
+  constructor(private readonly withheld: ReadonlySet<string>) {}
+
   private async command(name: string): Promise<string | undefined> {
     for (const prefix of ["/usr/bin", "/bin", "/usr/local/bin"]) {
       const path = join(prefix, name);
@@ -808,7 +842,7 @@ class LinuxXdotoolAdapter implements ComputerAdapter {
   ): Promise<{ stdout: string; stderr: string }> {
     const executablePath = await this.command("xdotool");
     if (executablePath === undefined) throw new Error("computer_input_unavailable");
-    return await run(executablePath, args, operation.timeoutMs, signal);
+    return await run(executablePath, args, operation.timeoutMs, signal, this.withheld);
   }
 
   private async xdotool(
@@ -883,9 +917,9 @@ class LinuxXdotoolAdapter implements ComputerAdapter {
         const gnome = await this.command("gnome-screenshot");
         const scrot = await this.command("scrot");
         if (gnome !== undefined) {
-          await run(gnome, ["-f", path], operation.timeoutMs, signal);
+          await run(gnome, ["-f", path], operation.timeoutMs, signal, this.withheld);
         } else if (scrot !== undefined) {
-          await run(scrot, [path], operation.timeoutMs, signal);
+          await run(scrot, [path], operation.timeoutMs, signal, this.withheld);
         } else {
           throw new Error("computer_screenshot_unavailable");
         }
@@ -1236,6 +1270,8 @@ class WindowsAdapter implements ComputerAdapter {
     "powershell.exe",
   );
 
+  constructor(private readonly withheld: ReadonlySet<string>) {}
+
   async capabilities(): Promise<ComputerCapabilities> {
     // Windows PowerShell 5.1 ships with the OS, so this is present unless the
     // install has been trimmed. `pwsh` is deliberately not consulted: it is an
@@ -1289,6 +1325,7 @@ class WindowsAdapter implements ComputerAdapter {
       ],
       operation.timeoutMs,
       signal,
+      this.withheld,
       env,
     );
     return stdout;
@@ -1505,18 +1542,25 @@ export class ReplayComputerAdapter implements ComputerAdapter {
   }
 }
 
-export function createSystemComputerAdapter(): ComputerAdapter {
-  if (process.platform === "darwin") return new MacOsAdapter();
-  if (process.platform === "linux") return new LinuxXdotoolAdapter();
-  if (process.platform === "win32") return new WindowsAdapter();
+/**
+ * `withheld` names environment variables its helpers start without. Required,
+ * so a caller that holds credentials in its environment cannot leave it out.
+ */
+export function createSystemComputerAdapter(withheld: readonly string[]): ComputerAdapter {
+  const names = withheldNames(withheld);
+  if (process.platform === "darwin") return new MacOsAdapter(names);
+  if (process.platform === "linux") return new LinuxXdotoolAdapter(names);
+  if (process.platform === "win32") return new WindowsAdapter(names);
   return new UnavailableAdapter();
 }
 
 export class ComputerRuntime {
   private readonly adapter: ComputerAdapter;
+  private readonly withheld: ReadonlySet<string>;
 
   constructor(private readonly options: ComputerRuntimeOptions) {
-    this.adapter = options.adapter ?? createSystemComputerAdapter();
+    this.withheld = withheldNames(options.withheldEnvironment);
+    this.adapter = options.adapter ?? createSystemComputerAdapter(options.withheldEnvironment ?? []);
   }
 
   async execute(
@@ -1709,6 +1753,7 @@ export class ComputerRuntime {
         [path, "stdout", "tsv"],
         operation.timeoutMs,
         signal,
+        this.withheld,
       );
       return parseOcrElements(stdout, displayWidth);
     } finally {
