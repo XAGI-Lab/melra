@@ -539,6 +539,11 @@ export async function createMelraRuntime(
   const memory = new LocalMemory(store, policy.memoryRetention);
   const computer = new ComputerRuntime({
     artifactDirectory: artifacts,
+    // Every helper it starts inherits this process's environment, which holds
+    // these as the broker reads them, whatever host each is scoped to.
+    withheldEnvironment: Object.values(policy.credentials).flatMap((definition) =>
+      "env" in definition.source ? [definition.source.env] : [],
+    ),
     ...(options.computerAdapter === undefined
       ? {}
       : { adapter: options.computerAdapter }),

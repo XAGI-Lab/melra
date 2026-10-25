@@ -64,7 +64,7 @@ describe.runIf(onWindows)("Windows computer adapter", () => {
   it("reports itself as available rather than unavailable", async () => {
     const runtime = new ComputerRuntime({
       artifactDirectory: await workspace(),
-      adapter: createSystemComputerAdapter(),
+      adapter: createSystemComputerAdapter([]),
     });
     const observed = await runtime.execute(
       ComputerOperationSchema.parse({ kind: "computer", action: "capabilities" }),
@@ -82,7 +82,7 @@ describe.runIf(onWindows)("Windows computer adapter", () => {
     const artifactDirectory = join(await workspace(), "artifacts");
     const runtime = new ComputerRuntime({
       artifactDirectory,
-      adapter: createSystemComputerAdapter(),
+      adapter: createSystemComputerAdapter([]),
     });
     const observed = await runtime.execute(
       ComputerOperationSchema.parse({
@@ -102,7 +102,7 @@ describe.runIf(onWindows)("Windows computer adapter", () => {
   it("resolves a normalized coordinate against the virtual desktop", async () => {
     const runtime = new ComputerRuntime({
       artifactDirectory: await workspace(),
-      adapter: createSystemComputerAdapter(),
+      adapter: createSystemComputerAdapter([]),
     });
     // A pointer move is the P/Invoke path — the part most likely to be wrong —
     // and moving the cursor on a headless runner has no side effect worth
@@ -127,7 +127,7 @@ describe.runIf(onWindows)("Windows computer adapter", () => {
   it("names a timeout as a timeout instead of echoing the script", async () => {
     const runtime = new ComputerRuntime({
       artifactDirectory: await workspace(),
-      adapter: createSystemComputerAdapter(),
+      adapter: createSystemComputerAdapter([]),
     });
     /**
      * This is how the screenshot failure first presented: Node builds the

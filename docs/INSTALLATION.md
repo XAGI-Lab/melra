@@ -583,12 +583,20 @@ whole feature:
 Nothing else changes: the call is still classified, still policy-checked, still
 approval-gated, still verified. The caller's receipt records which credential
 authorised the effect by name; the value reaches the socket and nowhere else —
-not the plan, not the result, not the receipt, not the database. A provider
-that echoes the value back, in its reason phrase, a header or the body, has it
-replaced with `[REDACTED_CREDENTIAL]` before the result reaches anyone; only a
-copy as sent is recognised, not one the provider encoded or altered. `melra_capabilities`
-publishes the names so a caller knows not to go looking for a key it will never
-be given.
+not the plan, not the result, not the receipt, not the database. A provider that
+echoes the value back, in its reason phrase, a header or the body, has it
+replaced with `[REDACTED_CREDENTIAL]` before the result reaches anyone. A copy
+as sent is recognised. So, for a value of 8 characters or more, are its base64,
+base64url, hex and percent-encoded forms (the way `encodeURIComponent`, RFC 3986
+(Go, PHP) or Python's `quote` spell it, with upper- or lower-case escapes), and
+the value inside a longer base64 string, such as an encoded header or HTTP Basic
+pair, all but the character at either edge it shares with its neighbours. For a
+credential sent under the `Basic` scheme, the `user:password` it encodes, its
+password and its user name are recognised too, each from 8 characters up. One
+the provider altered or encoded some other way is not. A variable named in
+`source.env` is also kept from the programs computer actions start.
+`melra_capabilities` publishes the names so a caller knows not to go looking for
+a key it will never be given.
 
 Host and capability scoping stay on in `--unsafe-local` mode. That flag lifts the
 guardrails MELRA imposes on the caller; a credential's scope is the operator

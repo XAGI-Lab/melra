@@ -242,9 +242,76 @@ describe("http runtime", () => {
       operation({ url: `${origin}/echo`, maxResponseBytes: body.indexOf(secret) + secret.length - 1 }),
     );
     expect(cut.truncated).toBe(true);
-    // The end goes the full length of the longest secret, one character more
-    // than arrived of it here.
-    expect(cut.content).toBe(`${body.slice(0, body.indexOf(secret) - 1)}[REDACTED_CREDENTIAL]`);
+    // The end goes the full length of the secret's longest form, its hex, twice
+    // as long as the secret and more than arrived of it here.
+    expect(cut.content).toBe(`${body.slice(0, body.indexOf(secret) - secret.length - 1)}[REDACTED_CREDENTIAL]`);
+  });
+
+  it("takes a credential of eight characters or more out in its fixed encodings too", async () => {
+    // What the far end says back, reflected from the path, with `secret` brokered.
+    const echoed = async (secret: string, text: string, scheme = "Bearer") => {
+      const credentials = {
+        headersFor: async () => ({ headers: { authorization: `${scheme} ${secret}` }, used: ["key"], secrets: [secret] }),
+      } as unknown as CredentialBroker;
+      const result = await new HttpRuntime({ allowedDomains: ["*"], allowLocalhost: true, credentials }).execute(
+        operation({ url: `${origin}/customers/${encodeURIComponent(text)}` }),
+      );
+      return String(result.content).slice(NOT_FOUND.length, -1);
+    };
+    // Eight characters, whose base64 is padded and differs from base64url, and
+    // which percent-encoding changes.
+    const secret = "k?y~~~/+";
+    const base64 = (text: string) => Buffer.from(text).toString("base64");
+    const hex = Buffer.from(secret).toString("hex");
+    const encodings = {
+      base64: base64(secret),
+      unpadded: base64(secret).replace(/=+$/, ""),
+      base64url: Buffer.from(secret).toString("base64url"),
+      hex,
+      upperHex: hex.toUpperCase(),
+      percent: encodeURIComponent(secret),
+      basicUser: base64(`${secret}:`),
+      basicPassword: base64(`:${secret}`),
+    };
+    for (const [name, encoded] of Object.entries(encodings)) {
+      // Padding stays, which says nothing about the secret.
+      expect(await echoed(secret, `id ${encoded} end`), name).toMatch(/^id \[REDACTED_CREDENTIAL\]=* end$/);
+    }
+    // Inside a longer base64 string, the encoding of the header it went out in
+    // or of a pair, its bytes can start partway into a group. What stays is at
+    // most the character at either edge it shares with its neighbours, at
+    // every length modulo three.
+    for (const long of [secret, `${secret}a`, `${secret}ab`]) {
+      for (const wrapped of [`Bearer ${long}`, JSON.stringify({ token: long }), `${long}:pw`, `user:${long}`]) {
+        const encoded = base64(wrapped);
+        const at = wrapped.indexOf(long);
+        const [before = "", after = "", ...rest] = (await echoed(long, encoded)).split("[REDACTED_CREDENTIAL]");
+        expect(rest, wrapped).toEqual([]);
+        expect(encoded.startsWith(before) && encoded.endsWith(after), wrapped).toBe(true);
+        expect(before.length, wrapped).toBeLessThanOrEqual(Math.ceil((4 * at) / 3));
+        expect(after.length, wrapped).toBeLessThanOrEqual(encoded.length - Math.floor((4 * (at + long.length)) / 3));
+      }
+    }
+    // Other encoders spell it differently: lower-case escapes, `!` escaped
+    // too (RFC 3986, Go, PHP), or `/` left as it is (Python's quote).
+    const other = "k?y~~~/+!abc";
+    for (const spelled of ["k%3fy~~~%2f%2b!abc", "k%3Fy~~~%2F%2B%21abc", "k%3Fy~~~/%2B%21abc", "k%3fy~~~/%2b%21abc"]) {
+      expect(await echoed(other, `id ${spelled} end`), spelled).toBe("id [REDACTED_CREDENTIAL] end");
+    }
+    // A `Basic` credential is configured already encoded; a far end may echo
+    // the pair it decoded, or either half long enough to mask.
+    const basic = base64("acct_12345678:correct-horse-battery");
+    for (const text of ["acct_12345678:correct-horse-battery", "correct-horse-battery", "acct_12345678"]) {
+      expect(await echoed(basic, `id ${text} end`, "Basic"), text).toBe("id [REDACTED_CREDENTIAL] end");
+    }
+    expect(await echoed(base64("ab:correct-horse-battery"), "id ab end", "Basic")).toBe("id ab end");
+    // One character shorter, only the value itself goes: the encodings of so
+    // few bytes are ordinary text, and masking them would mask that.
+    const short = secret.slice(0, -1);
+    expect(await echoed(short, `id ${short} end`)).toBe("id [REDACTED_CREDENTIAL] end");
+    for (const encoded of [base64(short), Buffer.from(short).toString("hex"), encodeURIComponent(short)]) {
+      expect(await echoed(short, encoded)).toBe(encoded);
+    }
   });
 
   it("ends a body cut at the size cap the same way whatever it held", async () => {
@@ -271,8 +338,9 @@ describe("http runtime", () => {
       const differs = `${begins.slice(0, -1)}${begins.endsWith("x") ? "y" : "x"}`;
       expect(await reflected(begins), begins).toEqual(await reflected(differs));
     }
+    // The secret's longest form, its hex, is twice its length.
     expect(await reflected("A")).toEqual({
-      content: `${`${NOT_FOUND}A`.slice(0, -secret.length)}[REDACTED_CREDENTIAL]`,
+      content: `${`${NOT_FOUND}A`.slice(0, -2 * secret.length)}[REDACTED_CREDENTIAL]`,
       redactions: ["[REDACTED_CREDENTIAL]"],
     });
   });

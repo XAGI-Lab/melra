@@ -671,7 +671,7 @@ async function doctor(env: CliEnvironment): Promise<{
             "Chrome, Chromium, or Edge not found; non-browser capabilities remain available",
         },
   );
-  const computer = await createSystemComputerAdapter().capabilities();
+  const computer = await createSystemComputerAdapter([]).capabilities();
   checks.push({
     name: "computer",
     status: computer.available ? "pass" : "warn",

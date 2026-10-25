@@ -68,7 +68,10 @@ secrets an operator configured under `policy.credentials` are injected by the
 kernel at send time, scoped by host and capability, and never returned to the
 caller ([P4](../ROADMAP.md#p4--credentials-and-api-effects)). Other adapters
 still use the ambient process environment, so an agent that can reach the
-kernel can reach whatever the kernel's process can. Authenticating identity is
+kernel can reach whatever the kernel's process can. Its programs see less of
+it: the terminal passes an allowlist, and the computer adapter's helpers start
+without `MELRA_PAYLOAD_KEY`, `MELRA_HTTP_TOKEN` or any variable a credential is
+read from. Authenticating identity is
 [P2](../ROADMAP.md#p2--hard-capability-boundary) work, listed here because the
 lifecycle is the contract even where the implementation is still one step.
 

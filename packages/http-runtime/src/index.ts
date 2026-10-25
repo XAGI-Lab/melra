@@ -17,21 +17,101 @@ import {
 const REDACTED_CREDENTIAL = "[REDACTED_CREDENTIAL]";
 
 /**
- * `text` with every brokered value the far end echoed replaced. Exact matches
- * only: a credential echoed transformed (encoded, masked, split) is not caught.
+ * Below this many characters a secret is masked only as itself: the hex or
+ * base64 of a few bytes is short enough to turn up in an ordinary body.
+ */
+const MIN_ENCODED_SECRET_LENGTH = 8;
+
+/**
+ * `secret` and, from `MIN_ENCODED_SECRET_LENGTH` up, the fixed encodings a far
+ * end may echo it in: base64 (padding dropped, so either way matches),
+ * base64url, hex in either case, percent-encoded, and the base64 of an HTTP
+ * Basic pair with it as the user or the password and the other half empty.
+ * Inside a longer base64 string, such as the encoding of the header value it
+ * went out in, its bytes can start a third or two thirds of the way into a
+ * group, so for both alphabets it also yields the characters the secret alone
+ * decides at each of the three offsets; at most the one at either edge, which
+ * it shares with its neighbours, stays.
+ */
+function forms(secret: string): string[] {
+  if (secret.length < MIN_ENCODED_SECRET_LENGTH) return [secret];
+  const base64 = (text: string): string => Buffer.from(text).toString("base64").replace(/=+$/, "");
+  const hex = Buffer.from(secret).toString("hex");
+  // Character i holds bits 6i to 6i + 5, so with k bytes before it the secret
+  // alone decides characters ceil(4k / 3) up to floor(4(k + length) / 3).
+  const cores = (encoding: "base64" | "base64url"): string[] =>
+    [0, 1, 2].map((k) =>
+      Buffer.from("\0".repeat(k) + secret)
+        .toString(encoding)
+        .slice(Math.ceil((4 * k) / 3), Math.floor((4 * (k + secret.length)) / 3)),
+    );
+  return [
+    secret,
+    base64(secret),
+    Buffer.from(secret).toString("base64url"),
+    ...cores("base64"),
+    ...cores("base64url"),
+    hex,
+    hex.toUpperCase(),
+    ...percentForms(secret),
+    base64(`${secret}:`),
+    base64(`:${secret}`),
+    ...basicPair(secret),
+  ];
+}
+
+/**
+ * The spellings common URL encoders give `secret`: encodeURIComponent's, one
+ * that also escapes `!'()*` (RFC 3986, Go's and PHP's), and one that leaves `/`
+ * as it is (Python's `quote`), each with upper- and lower-case escapes.
+ */
+function percentForms(secret: string): string[] {
+  const spell = (safe: RegExp, lower: boolean): string =>
+    [...Buffer.from(secret)]
+      .map((byte) => {
+        const char = String.fromCharCode(byte);
+        if (byte < 0x80 && safe.test(char)) return char;
+        const escape = byte.toString(16).padStart(2, "0");
+        return `%${lower ? escape : escape.toUpperCase()}`;
+      })
+      .join("");
+  const sets = [/[A-Za-z0-9_.~-]/, /[A-Za-z0-9_.~!'()*-]/, /[A-Za-z0-9_.~/-]/];
+  return [...new Set(sets.flatMap((safe) => [spell(safe, false), spell(safe, true)]))];
+}
+
+/**
+ * When `secret` is the base64 of a printable `user:password` pair, as one sent
+ * under the `Basic` scheme is configured, the pair and each half as long as
+ * `MIN_ENCODED_SECRET_LENGTH`: a far end may echo what it decoded.
+ */
+function basicPair(secret: string): string[] {
+  const pair = Buffer.from(secret, "base64").toString("latin1");
+  const colon = pair.indexOf(":");
+  if (colon < 0 || !/^[ -~]+$/.test(pair) || Buffer.from(pair, "latin1").toString("base64") !== secret) return [];
+  return [pair, pair.slice(0, colon), pair.slice(colon + 1)].filter(
+    (part) => part.length >= MIN_ENCODED_SECRET_LENGTH,
+  );
+}
+
+/**
+ * `text` with every brokered value the far end echoed replaced, as sent or in
+ * one of its `forms`. A credential echoed otherwise transformed (masked, split,
+ * encoded some other way) is not caught.
  */
 function scrubbed(text: string, { headers, secrets }: BrokeredHeaders, cut: boolean): string {
   let out = text;
+  const masked = secrets.flatMap(forms);
   // Longest first, so a whole header value goes as one marker.
-  for (const value of [...Object.values(headers), ...secrets].sort((a, b) => b.length - a.length)) {
+  for (const value of [...new Set([...Object.values(headers), ...masked])].sort((a, b) => b.length - a.length)) {
     out = out.replaceAll(value, REDACTED_CREDENTIAL);
   }
   if (!cut || secrets.length === 0) return out;
   // A body cut at the size cap can end partway through a secret, so its end
   // goes whatever it holds. Deciding by whether it looks like the start of one
   // would tell the caller something about the secret. The whole length of the
-  // longest; the broker passes only printable ASCII, so a character is a byte.
-  const tail = Math.max(...secrets.map((secret) => secret.length));
+  // longest form; the broker passes only printable ASCII, so a character is a
+  // byte.
+  const tail = Math.max(...masked.map((form) => form.length));
   return `${out.slice(0, Math.max(0, out.length - tail))}${REDACTED_CREDENTIAL}`;
 }
 
