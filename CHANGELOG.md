@@ -702,6 +702,12 @@ All notable changes are documented here. The format follows
   and command definitions, are not refused, and an approved terminal command
   can still write any of them.
 
+- A step that took effect under an undecided condition but failed its evidence
+  (partial) is no longer left off the workflow run's record when its advance
+  lost its commit and a sibling step failed. Compensations remain parked while
+  the condition is undecided, and the condition is offered for resolution so
+  its branch is decided and its effect recorded before unwinding (#331).
+
 ## [0.3.0-alpha.21] - 2026-10-25
 
 ### Changed
