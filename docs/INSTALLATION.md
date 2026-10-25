@@ -173,6 +173,110 @@ To try it and to test it locally:
   melra launch claude-code -- -p "list the files here" --output-format stream-json --verbose | head -n 1
   ```
 
+## Check an agent's box
+
+`launch` takes the agent's own tools away; it does not put the agent in an
+operating-system box, and neither does enforced mode. When you do (a
+container, a sandbox profile, a separate OS user), `melra probe` checks the box
+from inside, before the agent starts. Run it there as the agent will run, with
+its user, mounts, network and environment, plus `MELRA_HOME` set to the home of
+the MELRA running outside the box, as the box would see it:
+
+```bash
+MELRA_HOME=<the server's MELRA_HOME> melra probe --socket /run/melra/melra.sock
+```
+
+It tries five things the box should stop, each in a harmless form, and reports
+each as `confined` or `open`:
+
+| Check | What it tries | Open when |
+|---|---|---|
+| `workspace-write` | creates an empty `.melra-probe-<random>` in the workspace (`MELRA_WORKSPACE`, else the current directory, as the box sees it), then removes it | the file was created |
+| `melra-home-read` | opens `melra.sqlite` and `payload.key` in `MELRA_HOME` for reading, and closes them unread | either one opened, or `MELRA_HOME` is not set |
+| `public-connect` | a TCP connection to `--public <host:port>`, default `1.1.1.1:443` (Cloudflare's resolver): an address, so a box that resolves no names is still tested | the connection completed |
+| `local-connect` | a TCP connection to another port on this machine: one the probe listens on itself on 127.0.0.1, or `--local <host:port>` | the connection completed |
+| `program-start` | starts `/bin/sh -c "exit 0"` (on Windows, `%ComSpec% /d /c exit 0`) | it started |
+
+Then the MELRA running outside the box has to answer, on the endpoint the box
+was given:
+
+- `--socket <path>`, or `MELRA_SOCKET` when it is set: a `GET /mcp` and a
+  `GET /` over the socket, with no token, each get MELRA's own
+  `401 unauthorized`. The approval console, which has no MCP endpoint, serves
+  its page at `/`, so it is not taken for MELRA.
+- `--url <loopback-url>`: the same over loopback HTTP. Only an `http://` URL
+  on `localhost`, `127.x.x.x` or `[::1]`, with no credentials, is accepted,
+  and only its origin is used, so a console URL's `?token=` is never sent.
+
+With neither, it refuses to run (`probe_endpoint_missing`): a MELRA started
+inside the box would open its `MELRA_HOME` there, so the box would either let
+the agent read it too or stop MELRA, and the probe could never pass.
+
+It exits 0 only when every check is confined and MELRA answers, and 1
+otherwise. In a terminal it prints a table and a verdict; piped, or with
+`--json`, it prints JSON in this shape:
+
+```json
+{
+  "passed": true,
+  "checks": [
+    { "name": "workspace-write", "target": "/workspace", "outcome": "confined", "detail": "not created: EROFS" }
+  ],
+  "melra": { "transport": "socket", "target": "/run/melra/melra.sock", "answers": true, "detail": "MELRA answered, asking for its token; none was sent" }
+}
+```
+
+`checks` always lists the five in the order above; `transport` is `socket` or
+`http`; `detail` is for people and may change.
+
+It sends nothing over the connections it opens, sends no token, reads no byte
+of MELRA's database or key, changes no setting, and removes the file it
+creates; if it cannot, `detail` names the file to remove. Only a refusal counts
+as confined: permission denied, a read-only file system, a connection refused
+or not made within 3 seconds, or no such file at the `MELRA_HOME` named, which
+means the box does not show it. So set `MELRA_HOME` and `MELRA_WORKSPACE` to the
+server's real directories as the box sees them, and point `--public` and
+`--local` at something that listens when nothing is in the way. What the probe
+could not try reports open, with `not tested`, rather than claim it confined:
+`MELRA_HOME` not set, a workspace that is not there, no shell to start, a
+`--public` or `--local` name that does not resolve (a box that resolves no
+names may still reach addresses, so name an address), or no port the probe can
+listen on itself on 127.0.0.1. Connections go direct: a proxy the box offers is
+the box's own allowlist, and the probe does not check it. It proves only the
+checks on this list.
+
+### In CI or a container
+
+Start MELRA outside the box, on a socket in a directory only its user can
+read, give the box that socket and the path of MELRA's home, and make the probe
+the step before the agent:
+
+```bash
+# Outside the box.
+mkdir -m 700 "$RUNNER_TEMP/melra"
+melra serve --socket "$RUNNER_TEMP/melra/melra.sock" &
+
+# Inside it, as the agent will run. A non-zero exit fails the job here.
+docker run --rm --user "$(id -u):$(id -g)" --read-only --network none \
+  --add-host host.docker.internal:host-gateway \
+  -v "$PWD:/workspace:ro" -w /workspace -v "$RUNNER_TEMP/melra:/run/melra" \
+  -e MELRA_HOME="$HOME/.melra" \
+  your-agent-image \
+  melra probe --socket /run/melra/melra.sock --local host.docker.internal:<port> --json
+```
+
+The socket is mode `0600`, so the box has to run as the user that started the
+server, as `--user` does here. `MELRA_HOME` names the server's home, the
+default here, at the path a mount of it would have; the container mounts
+nothing there, so `melra-home-read` finds no file and reports confined. Inside
+a container 127.0.0.1 is the container's own, so the default `local-connect`
+target is always reachable there and reports open: name a port that listens on
+the host, as the container would reach it, with `--local`. The same holds for
+any box with its own network namespace. The shell `program-start` tries is the
+box's own, so an image that ships one lets the agent start it, and the probe
+reports that as open; an image without one reports `not tested`, since the
+agent may still start other programs there.
+
 ## Requirements
 
 - Node.js 22.13 or newer, or 23.4 or newer.
@@ -345,7 +449,7 @@ MELRA uses these environment variables:
 | `MELRA_HTTP_PORT` | Port for `melra serve --http` | `7457` |
 | `MELRA_HTTP_TOKEN` | Bearer token for `melra serve --http` | a fresh random token, printed at startup |
 | `MELRA_HTTP_OAUTH` | Set to `0` so that token is the only way in and no client can register itself | unset (clients may register, on loopback) |
-| `MELRA_SOCKET` | Unix socket path that `melra doctor` checks and `melra status` probes. It does not move `melra serve` off stdio; pass `--socket <path>` for that — see [over a Unix socket](#over-a-unix-socket). Not on Windows | unset |
+| `MELRA_SOCKET` | Unix socket path that `melra doctor` checks, `melra status` probes and `melra probe` asks. It does not move `melra serve` off stdio; pass `--socket <path>` for that — see [over a Unix socket](#over-a-unix-socket). Not on Windows | unset |
 | `MELRA_HARNESS_TOOLS` | Set to `1` (or `true`, `yes`, `on`) to add thirteen plainly named tools such as `read_file` and `run_command` alongside the twelve `melra_*` tools — see [ordinary tool names](#ordinary-tool-names) | unset (only the `melra_*` tools) |
 | `MELRA_LAUNCHED` | Set to `1` by [`melra launch`](#launch-an-agent-with-melra-as-its-only-tool) on the server it starts, which then leaves `node`, `npm`, `npx` and `pnpm` out of the default `allowedCommands`; a policy file's own `allowedCommands` is kept as written | unset (the full default list) |
 

@@ -76,6 +76,7 @@ describe("melra CLI", () => {
       workspaceRoot: resolve("/tmp/melra-workspace"),
       workspaceSet: true,
       dataDirectory: resolve("/tmp/melra-home"),
+      homeSet: true,
       approver: "operator",
       browserExecutablePath: resolve("/Applications/Google Chrome"),
       browserCdpEndpoint: "http://127.0.0.1:9222/",

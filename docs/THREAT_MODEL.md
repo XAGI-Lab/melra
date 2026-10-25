@@ -49,8 +49,15 @@ Loopback still admits every process on the machine up to the token; a
 [Unix socket](INSTALLATION.md#over-a-unix-socket) created mode `0600` narrows
 that to the OS user running MELRA, which is the IPC a sandboxed harness should
 be given.
-The residual risk is the assertion itself. See
-[deployment modes](INSTALLATION.md#deployment-modes).
+The residual risk is the assertion itself. `melra probe`, run inside the box
+before the agent starts, checks part of it from the agent's side: that a
+workspace write, a read of MELRA's database and key in the `MELRA_HOME` it is
+given, a public connection, a connection to another local port and starting
+the shell are each refused, and that the MELRA outside the box answers. What
+it could not try is reported open, not confined. It proves those five and
+nothing else, and only for the targets it tried. See
+[deployment modes](INSTALLATION.md#deployment-modes) and
+[checking an agent's box](INSTALLATION.md#check-an-agents-box).
 
 **A session `melra launch` starts.** `melra launch claude-code` removes the
 harness's own alternative for the one session it starts, in either mode:

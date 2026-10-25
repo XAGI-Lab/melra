@@ -892,6 +892,14 @@ list is under [Files](CAPABILITIES.md#files)). That bounds the file writer
 only: other files a harness loads, such as agent and skill definitions, stay
 writable, and an approved terminal command can still write any of them.
 
+MELRA can still check, from inside, a box it does not own: `melra probe`, run
+where the agent will run, tries a workspace write, a read of MELRA's data, a
+public and a local connection, and starting the shell, reports each as
+confined or open, and checks that the MELRA outside the box answers. Only a
+refusal counts as confined. It shows the box stops those five, and nothing
+beyond them. See
+[checking an agent's box](INSTALLATION.md#check-an-agents-box).
+
 ## Verification boundary
 
 Filesystem predicates independently re-read the workspace (level 1), and
