@@ -2,7 +2,7 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
-import { access, lstat, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import { spawn } from "node:child_process";
 import { basename, dirname, join, resolve } from "node:path";
@@ -522,6 +522,54 @@ async function socketCheck(path: string): Promise<{
       };
 }
 
+/**
+ * Whether the user MELRA runs as can change the policy that governs it. A
+ * `warn` in enforced mode, never a `fail`: the digest on every receipt still
+ * says which file governed an effect. But a file this user can rewrite, or
+ * replace through its directory, is one any process running as this user can
+ * change before the next effect. In developer mode that is the ordinary setup,
+ * so it passes and says so. With no file, the path is where one would be
+ * loaded from on the next start.
+ */
+async function policyWriteCheck(path: string, mode: CliEnvironment["mode"]): Promise<DoctorCheck> {
+  // Permission bits answer this on POSIX; on Windows ACLs decide it, and
+  // access() does not read them.
+  if (process.platform === "win32") {
+    return { name: "policy-write", status: "pass", detail: "not checked on win32" };
+  }
+  // Read-only is not enough: the owner can chmod it back. And a folder this
+  // user can change lets it swap anything below it, so every folder above the
+  // file counts, along the path as given and the one its links resolve to.
+  const ancestors = (from: string): string[] => (from === dirname(from) ? [from] : [from, ...ancestors(dirname(from))]);
+  const uid = process.getuid?.();
+  const seen = new Set<string>();
+  const changeable: string[] = [];
+  for (const target of [...ancestors(path), ...ancestors(await realpath(path).catch(() => path))]) {
+    // Each real file or folder once, by the first name it was reached under.
+    const real = await realpath(target).catch(() => target);
+    if (seen.has(real)) continue;
+    seen.add(real);
+    const owner = await stat(target).then((stats) => stats.uid, () => undefined);
+    // Missing: nothing there yet to change.
+    if (owner === undefined) continue;
+    const writable = await access(target, constants.W_OK).then(() => true, () => false);
+    if (writable || owner === uid) changeable.push(target);
+  }
+  if (changeable.length === 0) {
+    return { name: "policy-write", status: "pass", detail: `${path} and every folder above it are out of this user's reach` };
+  }
+  const detail = `${changeable.join(", ")} can be changed by the user MELRA runs as`;
+  return mode === "enforced"
+    ? {
+        name: "policy-write",
+        status: "warn",
+        detail,
+        // Never "make MELRA_HOME read-only": MELRA has to write it.
+        next: "point MELRA_POLICY at a file another account owns, in folders this user cannot change",
+      }
+    : { name: "policy-write", status: "pass", detail: `${detail}: expected in developer mode, matters in enforced mode` };
+}
+
 async function doctor(env: CliEnvironment): Promise<{
   report: DoctorReport;
   failed: boolean;
@@ -682,17 +730,17 @@ async function doctor(env: CliEnvironment): Promise<{
   let credentials: LocalPolicy["credentials"] = {};
   try {
     const path = await existingPolicyPath(env);
-    let allowLocalhost: boolean | undefined;
     // The server's own parser, so a bad `mode` or grant fails here too.
-    if (path !== undefined) ({ credentials, allowLocalhost } = await loadPolicy(path, env.workspaceRoot));
+    const loaded = await loadPolicy(path, env.workspaceRoot);
+    credentials = loaded.credentials;
     checks.push({
       name: "policy",
       status: "pass",
-      detail: path ?? "using safe built-in defaults",
+      detail: `${path ?? "using safe built-in defaults"} (${loaded.digest})`,
     });
     // Enforced mode keeps loopback closed unless the file opens it, so say so
     // when it does: the services this machine runs for itself are behind it.
-    if (env.mode === "enforced" && allowLocalhost === true) {
+    if (env.mode === "enforced" && loaded.allowLocalhost === true) {
       checks.push({
         name: "loopback",
         status: "warn",
@@ -700,6 +748,8 @@ async function doctor(env: CliEnvironment): Promise<{
         next: `remove allowLocalhost from ${path} unless a task needs a service on this machine`,
       });
     }
+    // With no file, the next start loads whatever appears at the default path.
+    checks.push(await policyWriteCheck(path ?? join(env.dataDirectory, "policy.json"), env.mode));
   } catch (error) {
     checks.push({
       name: "policy",

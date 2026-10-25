@@ -96,7 +96,13 @@ with `*` standing for any run of characters. `principal` is matched against
 identity is `agent:local`. An effect with no matching grant is denied
 `capability_not_granted`, an expired one `capability_expired`, and one issued
 against a superseded `policyVersion` is refused rather than reinterpreted under
-rules it was not written for.
+rules it was not written for. That pin follows the label, not the content.
+`loadPolicy` sets `digest` to `sha256:` and the SHA-256 of the file's bytes, or
+`default:<version>` with no file, and every decision carries it as
+`policyDigest`. It covers the bytes only: keys the file leaves out take this
+version's defaults, and the workspace root depends on the caller and on where
+the file is. A policy built in code has none; one changed after loading should
+replace or drop it.
 
 `unhinged: true` short-circuits evaluation to `allow` — but only after the
 caller's own `forbiddenEffects` and `constraints` are honoured, because those are

@@ -571,6 +571,7 @@ async function renderTaskDetail(id, into) {
     ["Outcome", badge(d.outcome, { allow: "ok", confirm: "info", deny: "bad" })],
     ["Reason", human(d.reason)], ["Effect", d.effect], ["Risk", d.risk],
     ["Traits", d.traits?.length ? chips(d.traits) : null], ["Policy version", d.policyVersion],
+    ["Policy digest", d.policyDigest ? mono(d.policyDigest) : null],
   ])));
   const evidence = receipts?.certificate?.evidence ?? receipts?.receipts?.flatMap((r) => r.evidence ?? []) ?? [];
   parts.push(el("div", { class: "section" }, el("h2", { text: "Evidence" }), evidence.length === 0

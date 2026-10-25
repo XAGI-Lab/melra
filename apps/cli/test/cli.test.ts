@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { execFile, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
@@ -1522,6 +1523,85 @@ describe("melra CLI", () => {
     expect(await loopback({ allowLocalhost: true }, {})).toBeUndefined();
   });
 
+  it("names the policy's digest, and warns in enforced mode while MELRA's own user can change the policy", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-cli-")));
+    roots.push(root);
+    await mkdir(join(root, "ws"));
+    const folder = join(root, "policy");
+    await mkdir(folder);
+    const policyPath = join(folder, "policy.json");
+    const text = JSON.stringify({ allowedCommands: ["git"] });
+    await writeFile(policyPath, text);
+    const digest = `sha256:${createHash("sha256").update(text).digest("hex")}`;
+    const env = {
+      ...process.env,
+      MELRA_WORKSPACE: join(root, "ws"),
+      MELRA_HOME: join(root, "data"),
+      MELRA_POLICY: policyPath,
+      MELRA_MODE: "",
+    };
+    const doctor = async (policy = policyPath, mode = "") => {
+      const result = await execute(process.execPath, [entry, "doctor"], {
+        cwd: root,
+        env: { ...env, MELRA_POLICY: policy, MELRA_MODE: mode },
+      }).catch((error: { stdout: string }) => error);
+      const report = JSON.parse(result.stdout) as {
+        checks: Array<{ name: string; status: string; detail: string; next?: string }>;
+      };
+      return (name: string) => report.checks.find((check) => check.name === name);
+    };
+    const status = JSON.parse((await execute(process.execPath, [entry, "status", "--json"], { cwd: root, env })).stdout);
+    expect(status.policyDigest).toBe(digest);
+    const request = join(root, "read.json");
+    await writeFile(request, JSON.stringify({ goal: "Read", operation: { kind: "file", action: "list", path: "." } }));
+    const tested = await execute(process.execPath, [entry, "policy", "test", "--request", request], { cwd: root, env });
+    expect(JSON.parse(tested.stdout).decision.policyDigest).toBe(digest);
+    const checks = await doctor();
+    expect(checks("policy")?.detail).toBe(`${policyPath} (${digest})`);
+    if (process.platform === "win32") {
+      expect(checks("policy-write")).toMatchObject({ status: "pass", detail: "not checked on win32" });
+      return;
+    }
+    // Developer mode: the ordinary setup, so it passes and says why, and
+    // `setup` has no MELRA_POLICY advice to print.
+    const developer = checks("policy-write");
+    expect(developer).toMatchObject({
+      status: "pass",
+      detail: expect.stringMatching(/ can be changed by the user MELRA runs as: expected in developer mode, matters in enforced mode$/),
+    });
+    expect(developer).not.toHaveProperty("next");
+    // What this user can change, nearest first.
+    const changeable = async (policy?: string) => {
+      const check = (await doctor(policy, "enforced"))("policy-write");
+      expect(check).toMatchObject({
+        status: "warn",
+        next: "point MELRA_POLICY at a file another account owns, in folders this user cannot change",
+      });
+      return check?.detail.replace(/ can be changed by the user MELRA runs as$/, "").split(", ");
+    };
+    // Read-only is not out of reach while this user owns the file and its
+    // folder, and the folder above them lets it replace the folder itself.
+    await chmod(policyPath, 0o444);
+    await chmod(folder, 0o555);
+    try {
+      expect((await changeable())?.slice(0, 3)).toEqual([policyPath, folder, root]);
+      // Through a link, the folder holding the file it names counts too.
+      const link = join(root, "link");
+      await mkdir(link);
+      await symlink(policyPath, join(link, "policy.json"));
+      expect(await changeable(join(link, "policy.json"))).toContain(folder);
+    } finally {
+      await chmod(folder, 0o755);
+    }
+    // The default layout gets the same advice, never to make MELRA_HOME
+    // read-only, which MELRA must write. With no file there yet, the folder
+    // the next start would load one from still counts.
+    const data = join(root, "data");
+    expect((await changeable(""))?.[0]).toBe(data);
+    await writeFile(join(data, "policy.json"), text);
+    expect((await changeable(""))?.slice(0, 2)).toEqual([join(data, "policy.json"), data]);
+  });
+
   it("reports local readiness through doctor", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-cli-"));
     roots.push(root);
@@ -2303,6 +2383,9 @@ describe("melra CLI", () => {
     expect(report.workspace).toBe(root);
     expect(report.ready).toBe(true);
     expect(report.checks.some((check) => check.name === "sqlite")).toBe(true);
+    // Its policy sits in MELRA_HOME, which this user owns: ordinary in
+    // developer mode, so no MELRA_POLICY advice.
+    expect(report.checks.find((check) => check.name === "policy-write")?.status).toBe("pass");
     expect(JSON.parse(await readFile(report.policyPath, "utf8"))).toMatchObject({
       mutations: "confirm",
     });

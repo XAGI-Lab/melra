@@ -330,6 +330,12 @@ export interface ActionReceipt {
   policyDecision: {
     outcome: "allow" | "deny" | "confirm";
     policyVersion: string;
+    /**
+     * The policy file the effect ran under: `sha256:` and the SHA-256 of its
+     * bytes, or `default:<version>` with none. Absent on receipts written
+     * before it existed, or under a policy built in code.
+     */
+    policyDigest?: string;
     approvalId?: string;
     /** Who approved, through which channel, having been shown what. */
     approval?: {
@@ -357,6 +363,8 @@ export interface ExecutionCertificate {
   goal: string;
   result: CertificateResult;
   policyVersion: string;
+  /** As on the task's receipts. Covered by `digest`, like every other field. */
+  policyDigest?: string;
   receiptIds: string[];
   evidence: EvidenceItem[];
   createdAt: string;
