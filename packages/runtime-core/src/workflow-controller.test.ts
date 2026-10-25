@@ -22,7 +22,7 @@ import { Verifier, type EvidenceProbe } from "@melra/verifier-core";
 import { PayloadCipher } from "./payload-cipher.js";
 import { TaskController } from "./task-controller.js";
 import { applyWorkflowEvent } from "./workflow-events.js";
-import { WorkflowController } from "./workflow-controller.js";
+import { WorkflowController, type WorkflowAdvanceResult } from "./workflow-controller.js";
 
 const roots: string[] = [];
 const stores: SqliteStore[] = [];
@@ -3350,8 +3350,8 @@ describe("WorkflowController human input and delegation", () => {
     expect(waiting.run.nodes.ask?.prompt).toBe("Ship it?");
     expect(waiting.run.nodes.act?.status).toBe("pending");
 
-    // An unlisted answer is rejected, so a workflow can branch on a value it
-    // actually enumerated rather than on arbitrary prose.
+    // An unlisted answer is rejected: `choices` is the set it must come from.
+    // No later node reads it, so any listed answer completes the node.
     await expect(
       controller.advance(planned.id, [], [{ nodeId: "ask", value: "maybe" }]),
     ).rejects.toThrow("workflow_input_not_a_choice:ask");
@@ -3366,6 +3366,97 @@ describe("WorkflowController human input and delegation", () => {
 
     const finished = await controller.advance(planned.id);
     expect(finished.run.status).toBe("verified_complete");
+  });
+
+  /** A node asking `answeredBy` (when given) before a step that depends on it. */
+  function asking(answeredBy?: "operator" | "any") {
+    return WorkflowDefinitionSchema.parse({
+      schemaVersion: "1.0.0",
+      id: definitionId,
+      version: 1,
+      name: "Ask an operator",
+      nodes: [
+        {
+          id: "ask",
+          type: "human_input",
+          prompt: "Proceed with the release step?",
+          choices: ["yes", "no"],
+          ...(answeredBy === undefined ? {} : { answeredBy }),
+        },
+        { id: "act", type: "operation", dependsOn: ["ask"], request: request("after the answer") },
+      ],
+    });
+  }
+
+  /** The event that recorded the answer to `ask`. */
+  function answerOf(result: WorkflowAdvanceResult) {
+    return result.events.find((event) => event.type === "workflow.node_changed" && event.data.nodeId === "ask")?.data;
+  }
+
+  it("takes an operator node's answer only from the operator in an enforced kernel, out of band", async () => {
+    const { controller } = await setup(undefined, { mode: "enforced" });
+    const planned = controller.plan(asking("operator"));
+    await controller.advance(planned.id);
+    const before = controller.events(planned.id).length;
+
+    // The agent's answer is refused before anything moves.
+    await expect(
+      controller.advance(planned.id, [], [{ nodeId: "ask", value: "yes" }]),
+    ).rejects.toThrow("workflow_input_in_band_refused:ask");
+    expect(controller.status(planned.id).nodes.ask?.status).toBe("awaiting_input");
+    expect(controller.status(planned.id).nodes.act?.status).toBe("pending");
+    expect(controller.events(planned.id)).toHaveLength(before);
+
+    const answered = await controller.advance(
+      planned.id,
+      [],
+      [{ nodeId: "ask", value: "no" }],
+      { operator: "cli:alice" },
+    );
+    expect(answered.run.nodes.ask).toMatchObject({ status: "verified_complete", input: "no" });
+    expect(answerOf(answered)).toMatchObject({
+      nodeId: "ask",
+      from: "awaiting_input",
+      state: { input: "no" },
+      answeredBy: "cli:alice",
+      channel: "out_of_band",
+      answeredAt: expect.any(String),
+    });
+  });
+
+  it("keeps who answered off the node, which an older MELRA sharing the home still reads", async () => {
+    const { controller } = await setup();
+    const planned = controller.plan(asking());
+    await controller.advance(planned.id);
+    const answered = await controller.advance(planned.id, [], [{ nodeId: "ask", value: "yes" }]);
+    // Exactly the keys an answered node has always had.
+    expect(Object.keys(answered.run.nodes.ask!).sort()).toEqual(["input", "prompt", "status", "taskIds"]);
+    expect(answerOf(answered)?.state).toEqual(answered.run.nodes.ask);
+  });
+
+  it("records who answered a node any caller may answer, and an operator node outside enforced mode", async () => {
+    // Left out, `answeredBy` is not stored, so an older MELRA still reads the definition.
+    expect(asking().nodes[0]).not.toHaveProperty("answeredBy");
+    for (const [mode, answeredBy] of [
+      ["enforced", undefined],
+      ["enforced", "any"],
+      ["developer", "operator"],
+    ] as const) {
+      const { controller } = await setup(undefined, { mode });
+      const planned = controller.plan(asking(answeredBy));
+      await controller.advance(planned.id);
+      const answered = await controller.advance(planned.id, [], [{ nodeId: "ask", value: "yes" }]);
+      expect(answered.run.nodes.ask?.status, `${mode} ${answeredBy}`).toBe("verified_complete");
+      expect(answerOf(answered), `${mode} ${answeredBy}`).toMatchObject({ answeredBy: "agent", channel: "in_band" });
+    }
+    // An operator in a developer-mode process is in band, as for a halt.
+    const { controller } = await setup();
+    const planned = controller.plan(asking("operator"));
+    await controller.advance(planned.id);
+    const answered = await controller.advance(planned.id, [], [{ nodeId: "ask", value: "yes" }], {
+      operator: "cli:alice",
+    });
+    expect(answerOf(answered)).toMatchObject({ answeredBy: "cli:alice", channel: "in_band" });
   });
 
   it("fails a delegation whose declared evidence does not hold", async () => {

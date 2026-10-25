@@ -237,7 +237,7 @@ MELRA uses these environment variables:
 | `MELRA_PAYLOAD_KEY` | Optional canonical base64url 256-bit payload key | private `<MELRA_HOME>/payload.key` |
 | `MELRA_UNHINGED` | Set to `1` to remove every guardrail — see below | unset (all guardrails on) |
 | `MELRA_MODE` | `developer` or `enforced` — see [deployment modes](#deployment-modes) | `developer` |
-| `MELRA_APPROVER` | The name [`melra approve`](#approving-from-the-command-line) records as the approver, as `cli:<name>`, [`melra judge`](#judging-from-the-command-line) as the judge of a verdict, also as `cli:<name>`, and [`melra console`](#approving-in-a-browser) as `console:<name>`, and `melra workflow pause`, `suspend` and `resume` as who halted or resumed the run, as `cli:<name>`. Letters (any script), digits, `.`, `_`, `@` and `-`, at most 64; checked when `melra approve`, `melra judge` or `melra run` records a decision, when `melra workflow pause`, `suspend` or `resume` runs, and when `melra console` starts. Receipts and certificates carry it, and an agent can read both. | `operator` |
+| `MELRA_APPROVER` | The name [`melra approve`](#approving-from-the-command-line) records as the approver, as `cli:<name>`, [`melra judge`](#judging-from-the-command-line) as the judge of a verdict, also as `cli:<name>`, and [`melra console`](#approving-in-a-browser) as `console:<name>`, and `melra workflow pause`, `suspend` and `resume` as who halted or resumed the run, and `melra workflow advance --input` as who answered a `human_input` node, both as `cli:<name>`. Letters (any script), digits, `.`, `_`, `@` and `-`, at most 64; checked when `melra approve`, `melra judge` or `melra run` records a decision, when `melra workflow pause`, `suspend` or `resume` runs or `melra workflow advance` is given `--input`, and when `melra console` starts. Receipts and certificates carry it, and an agent can read both. | `operator` |
 | `MELRA_HTTP_PORT` | Port for `melra serve --http` | `7457` |
 | `MELRA_HTTP_TOKEN` | Bearer token for `melra serve --http` | a fresh random token, printed at startup |
 | `MELRA_HTTP_OAUTH` | Set to `0` so that token is the only way in and no client can register itself | unset (clients may register, on loopback) |
@@ -1061,6 +1061,18 @@ closing every door it owns:
   `out_of_band` only for an operator in an enforced process. `melra approve
   <task-id> --deny` and `melra workflow cancel` stay the stops the agent
   cannot undo at all.
+- **Only an operator answers an operator's question.** A workflow
+  `human_input` node declaring `"answeredBy": "operator"` is answered with
+  `melra workflow advance <workflow-id> --input <node-id>=<value>`, recorded as
+  `cli:<name>` from [`MELRA_APPROVER`](#local-configuration) on channel
+  `out_of_band` when that command runs in enforced mode (`in_band` from a
+  developer-mode shell). An answer for it sent with `melra_workflow_advance`
+  is refused with `workflow_input_in_band_refused:<node-id>`, the whole call
+  with it, and the node keeps waiting. A node without it is answered by anyone,
+  as in developer mode, and every answer's `workflow.node_changed` event
+  records who gave it, the channel and when. An answer completes its node
+  whatever it says: no later node reads it, so gate a step on an approval, not
+  on a question.
 - **Every receipt says `enforced`.** `ActionReceipt.mode` records it, and
   `melra_capabilities` publishes `policy.mode`, so an auditor never has to infer
   whether an effect was governed by the only door or by one of several.

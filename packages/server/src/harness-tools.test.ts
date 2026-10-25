@@ -248,6 +248,69 @@ describe("harness tools in enforced mode", () => {
     }
   });
 
+  it("leaves an operator's question to the operator: the agent's answer is refused and the node waits", async () => {
+    const [left, right] = InMemoryTransport.createLinkedPair();
+    await createMcpServer(runtime).connect(right);
+    const agent = new Client({ name: "t", version: "1" });
+    await agent.connect(left);
+    const call = async (name: string, args: Record<string, unknown>) => {
+      const result = (await agent.callTool({ name, arguments: args })) as { isError?: boolean; content: { text: string }[] };
+      return { refused: result.isError === true, body: result.content[0]!.text };
+    };
+    try {
+      const { tools } = await agent.listTools();
+      expect(tools.find((tool) => tool.name === "melra_workflow_advance")?.description).toContain(
+        "workflow_input_in_band_refused",
+      );
+      expect(agent.getInstructions()).toContain("melra workflow advance <workflowId> --input <nodeId>=<value>");
+      const run = JSON.parse(
+        (
+          await call("melra_workflow_plan", {
+            definition: {
+              schemaVersion: "1.0.0",
+              id: "66666666-6666-4666-8666-666666666666",
+              version: 1,
+              name: "Asked",
+              nodes: [
+                { id: "ask", type: "human_input", prompt: "Proceed?", choices: ["yes", "no"], answeredBy: "operator" },
+                { id: "any", type: "human_input", prompt: "Notes?" },
+              ],
+            },
+          })
+        ).body,
+      ) as { id: string };
+      await call("melra_workflow_advance", { workflowId: run.id });
+
+      const refused = await call("melra_workflow_advance", {
+        workflowId: run.id,
+        inputs: [
+          { nodeId: "ask", value: "yes" },
+          { nodeId: "any", value: "none" },
+        ],
+      });
+      expect(refused.refused).toBe(true);
+      expect(refused.body).toContain("workflow_input_in_band_refused:ask");
+      // Nothing moved, the other answer included.
+      expect(runtime.workflows.status(run.id).nodes).toMatchObject({
+        ask: { status: "awaiting_input" },
+        any: { status: "awaiting_input" },
+      });
+
+      const answered = JSON.parse(
+        (await call("melra_workflow_advance", { workflowId: run.id, inputs: [{ nodeId: "any", value: "none" }] })).body,
+      ) as { run: { nodes: Record<string, unknown> }; events: { type: string; data: Record<string, unknown> }[] };
+      expect(answered.run.nodes.any).toMatchObject({ status: "verified_complete" });
+      expect(answered.run.nodes.ask).toMatchObject({ status: "awaiting_input" });
+      expect(answered.events.find((event) => event.type === "workflow.node_changed")?.data).toMatchObject({
+        nodeId: "any",
+        answeredBy: "agent",
+        channel: "in_band",
+      });
+    } finally {
+      await agent.close();
+    }
+  });
+
   it("plans a URL or query it accepts even when its goal would pass the goal's cap", async () => {
     // 8,017 characters, but each é is percent-encoded to six in the goal. On
     // loopback, so policy stops it at the plan and no page is opened.

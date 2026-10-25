@@ -13,6 +13,21 @@ All notable changes are documented here. The format follows
   provider may not show yet rather than a no. A task whose outcome is unknown
   records when it first parked as `recovery_required` in `parkedAt`, which
   later writes leave alone.
+- A workflow `human_input` node can declare `"answeredBy": "operator"`; left
+  out, it is `any`, as before. In enforced mode such a node takes its answer
+  only from `melra workflow advance <workflow-id> --input <node-id>=<value>`,
+  and an answer for it sent with `melra_workflow_advance` is refused with
+  `workflow_input_in_band_refused:<node-id>` before anything in the run moves
+  (#419). Every `human_input` answer now records who gave it (`answeredBy`:
+  `cli:` plus `MELRA_APPROVER` for an operator, otherwise the agent's
+  principal), the `channel` (`out_of_band` only for an operator in an enforced
+  process) and `answeredAt` on its `workflow.node_changed` event; the node
+  itself keeps the shape older releases read. A definition that declares
+  `answeredBy` is not readable by `0.3.0-alpha.21` or earlier: such a process
+  sharing the `MELRA_HOME` cannot advance a run planned from it, and refuses
+  to start while that run is planned, running, awaiting approval or
+  `recovery_required`. Upgrade every process sharing the home together before
+  declaring it.
 
 ### Changed
 
@@ -24,6 +39,9 @@ All notable changes are documented here. The format follows
   and in the 30 s sweep, asks such a task again, as `melra_execute` on it
   does, and the first miss asked after the window settles it. Set
   `settleMs: 0` for a provider whose reads always show its latest writes.
+- **Breaking:** `melra workflow advance --input` now records `MELRA_APPROVER`
+  as who answered, and fails on a value it does not accept before answering
+  anything (#419). Without `--input` it does not read the variable, as before.
 
 ### Fixed
 
@@ -33,6 +51,17 @@ All notable changes are documented here. The format follows
   the effect ran, which invited running it again; a workflow run failed and
   unwound past it. It now stays parked until its settle window has passed
   (#418).
+- The `human_input` node schema's comments no longer say a later node can
+  read or branch on an answer (#419): none can, and any answer within
+  `maxLength` and `choices` completes the node and releases what depends on
+  it, so a "no" stops nothing. The schema, `melra_workflow_advance` and
+  ARCHITECTURE.md now say so; gate a step on an approval instead.
+
+### Security
+
+- In enforced mode a workflow question meant for an operator can no longer be
+  answered by the agent, and every answer to a workflow question records who
+  gave it and through which channel.
 
 ## [0.3.0-alpha.21] - 2026-10-25
 

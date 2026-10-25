@@ -42,7 +42,7 @@ type EmitEvent = (
   data: Record<string, unknown>,
 ) => void;
 
-/** Who halts or resumes a run: an operator by their `cli:` label, or the agent. */
+/** Who halts, resumes or answers a run: an operator by their `cli:` label, or the agent. */
 export type WorkflowActor = { operator: string } | { agent: string };
 
 export interface WorkflowAdvanceResult {
@@ -55,6 +55,9 @@ interface NodeAdvance {
   state: WorkflowNodeState;
   tasks: TaskRecord[];
   checkpoint?: boolean;
+  // Who answered a human_input node. On its event rather than the node state,
+  // whose strict shape an older MELRA sharing this home still parses.
+  answer?: { answeredBy: string; channel: "in_band" | "out_of_band"; answeredAt: string };
 }
 
 /**
@@ -241,10 +244,15 @@ export class WorkflowController {
       this.loadDefinition(run).nodes.some((node) => node.id === nodeId && node.type === "compensation");
   }
 
+  /**
+   * `by` is who supplies `inputs`, as for a halt: an operator by their `cli:`
+   * label, or the agent by its principal. Each human_input answer records it.
+   */
   async advance(
     workflowId: string,
     approvals: ApprovalResponse[] = [],
     inputs: WorkflowInput[] = [],
+    by: WorkflowActor = { agent: "agent" },
   ): Promise<WorkflowAdvanceResult> {
     const previous = this.advances.get(workflowId);
     const ready =
@@ -255,7 +263,7 @@ export class WorkflowController {
             () => undefined,
           );
     const result = ready.then(() =>
-      this.leasedAdvance(workflowId, approvals, inputs),
+      this.leasedAdvance(workflowId, approvals, inputs, by),
     );
     this.advances.set(workflowId, result);
     try {
@@ -274,6 +282,7 @@ export class WorkflowController {
     workflowId: string,
     approvals: ApprovalResponse[],
     inputs: WorkflowInput[],
+    by: WorkflowActor,
   ): Promise<WorkflowAdvanceResult> {
     const current = this.status(workflowId);
     // Refused before the lease is touched: taking it would replace, and the
@@ -287,6 +296,17 @@ export class WorkflowController {
     // again or run on the strength of a request that is refused. Refused
     // before anything moves.
     if (this.tasks.enforced && approvals.length > 0) throw new Error("approval_in_band_refused");
+    // So is the agent's answer to a node that asks for an operator's: an
+    // enforced kernel takes that one only out of band.
+    if (this.tasks.enforced && !("operator" in by) && inputs.length > 0) {
+      const operatorNode = this.loadDefinition(current).nodes.find(
+        (node) =>
+          node.type === "human_input" &&
+          node.answeredBy === "operator" &&
+          inputs.some((input) => input.nodeId === node.id),
+      );
+      if (operatorNode !== undefined) throw new Error(`workflow_input_in_band_refused:${operatorNode.id}`);
+    }
     // An expired lease someone else holds is an advance that died mid-flight.
     // Taking it over would read a projection from before that advance's tasks
     // and plan them again under keys that were never committed, so the run is
@@ -343,7 +363,7 @@ export class WorkflowController {
     renewal.unref();
     this.leased.add(workflowId);
     try {
-      return await this.advanceOnce(workflowId, approvals, inputs);
+      return await this.advanceOnce(workflowId, approvals, inputs, by);
     } finally {
       this.leased.delete(workflowId);
       clearInterval(renewal);
@@ -355,6 +375,7 @@ export class WorkflowController {
     workflowId: string,
     approvals: ApprovalResponse[],
     inputs: WorkflowInput[],
+    by: WorkflowActor,
   ): Promise<WorkflowAdvanceResult> {
     const stored = this.status(workflowId);
     if (["verified_complete", "cancelled"].includes(stored.status)) {
@@ -476,7 +497,7 @@ export class WorkflowController {
         // and stopping at the first one that does not reach `compensated` —
         // continuing past a failed unwind would strand the saga in a state no
         // node describes.
-        this.unwind(rollback, graph, definition, current, approvals, inputs)
+        this.unwind(rollback, graph, definition, current, approvals, inputs, by)
       : Promise.allSettled(
           nodeIds.map(async (nodeId) => {
             const node = graph.nodes.get(nodeId)!;
@@ -489,6 +510,7 @@ export class WorkflowController {
                 current,
                 approvals,
                 inputs,
+                by,
               ),
             };
           }),
@@ -594,6 +616,7 @@ export class WorkflowController {
           nodeId,
           from,
           state: result.state,
+          ...result.answer,
         });
       }
       this.settleStatus(draft, definition, emit);
@@ -1414,6 +1437,7 @@ export class WorkflowController {
     run: WorkflowRun,
     approvals: ApprovalResponse[],
     inputs: WorkflowInput[],
+    by: WorkflowActor,
   ): Promise<Array<{ nodeId: string; result: NodeAdvance }>> {
     const results: Array<{ nodeId: string; result: NodeAdvance }> = [];
     for (const nodeId of nodeIds) {
@@ -1427,6 +1451,7 @@ export class WorkflowController {
         run,
         approvals,
         inputs,
+        by,
       );
       results.push({ nodeId, result });
       if (result.state.status !== "compensated") break;
@@ -1441,6 +1466,7 @@ export class WorkflowController {
     run: WorkflowRun,
     approvals: ApprovalResponse[],
     inputs: WorkflowInput[],
+    by: WorkflowActor,
   ): Promise<NodeAdvance> {
     switch (node.type) {
       case "operation": {
@@ -1603,6 +1629,7 @@ export class WorkflowController {
         ) {
           throw new Error(`workflow_input_not_a_choice:${node.id}`);
         }
+        const { actor, channel } = this.actor(by);
         return {
           state: {
             status: "verified_complete",
@@ -1611,6 +1638,7 @@ export class WorkflowController {
             input: recordedInput(supplied.value),
           },
           tasks: [],
+          answer: { answeredBy: recordedInput(actor, 300), channel, answeredAt: new Date().toISOString() },
         };
       }
       case "delegation": {
