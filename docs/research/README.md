@@ -25,6 +25,7 @@ Latency is environment-specific.
 
 - [Methodology and claim policy](METHODOLOGY.md)
 - [GovBench governance benchmark](GOVBENCH.md)
+- [AARM v1.0 self-check (how to run it)](AARM_SELFCHECK.md)
 - [Memory retrieval](MEMORY.md)
 - [Browser use](BROWSER.md)
 - [Terminal use](TERMINAL.md)
@@ -59,6 +60,7 @@ evaluation has been run and released.
 ```bash
 pnpm benchmark:core
 pnpm benchmark:govbench
+pnpm benchmark:aarm -- --output "$(mktemp -d)/aarm.json"
 
 git clone https://github.com/snap-research/locomo.git /tmp/locomo
 pnpm benchmark:locomo -- \

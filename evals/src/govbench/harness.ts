@@ -45,7 +45,7 @@ import {
   type GovCategory,
 } from "./corpus.js";
 
-const OUTSIDE_CANARY = "GOVBENCH_OUTSIDE_CANARY_7f3a";
+export const OUTSIDE_CANARY = "GOVBENCH_OUTSIDE_CANARY_7f3a";
 
 export interface CaseResult {
   id: string;
@@ -59,7 +59,7 @@ export interface CaseResult {
 
 // ------------------------------------------------------------ fixture server
 
-class Fixture {
+export class Fixture {
   hits: Array<{ method: string; path: string }> = [];
   responseBody = "{}";
   private server?: Server;
@@ -129,14 +129,14 @@ class Fixture {
 
 // ---------------------------------------------------------------- per case
 
-interface Sandbox {
+export interface Sandbox {
   base: string;
   workspace: string;
   outside: string;
   data: string;
 }
 
-async function sandbox(): Promise<Sandbox> {
+export async function sandbox(): Promise<Sandbox> {
   const base = await realpath(await mkdtemp(join(tmpdir(), "melra-govbench-")));
   const sandboxDirs = {
     base,
@@ -150,7 +150,7 @@ async function sandbox(): Promise<Sandbox> {
   return sandboxDirs;
 }
 
-function filler(fixture: Fixture, box: Sandbox): <T>(value: T) => T {
+export function filler(fixture: Fixture, box: Sandbox): <T>(value: T) => T {
   const outside = JSON.stringify(box.outside).slice(1, -1);
   return <T>(value: T): T =>
     JSON.parse(
@@ -199,7 +199,7 @@ async function openRuntime(
   });
 }
 
-async function snapshot(directory: string): Promise<string> {
+export async function snapshot(directory: string): Promise<string> {
   const entries: string[] = [];
   const walk = async (current: string): Promise<void> => {
     for (const entry of await readdir(current, { withFileTypes: true })) {
@@ -236,7 +236,7 @@ interface Drive {
   taskId?: string;
 }
 
-function parseRequest(
+export function parseRequest(
   request: GovCase["request"],
 ): { ok: true; value: TaskRequest } | { ok: false; reason: string } {
   const raw = "raw" in request ? request.raw : request;
@@ -302,7 +302,7 @@ function secretNeedles(secret: string): string[] {
   return [...new Set([secret, JSON.stringify(secret).slice(1, -1), ...parts])];
 }
 
-async function hasPwned(workspace: string): Promise<boolean> {
+export async function hasPwned(workspace: string): Promise<boolean> {
   return (await filesUnder(workspace)).some((path) =>
     path.slice(workspace.length).includes("pwned"),
   );
@@ -747,7 +747,7 @@ async function measureOverhead(fixture: Fixture, iterations = 40): Promise<Overh
 
 // ------------------------------------------------------------------- report
 
-function canonicalJson(value: unknown): string {
+export function canonicalJson(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
   const object = value as Record<string, unknown>;
@@ -789,7 +789,7 @@ function score(results: CaseResult[]): { passed: number; total: number; skipped:
   };
 }
 
-function git(args: string[]): string | undefined {
+export function git(args: string[]): string | undefined {
   try {
     return execFileSync("git", args, {
       cwd: fileURLToPath(new URL(".", import.meta.url)),
