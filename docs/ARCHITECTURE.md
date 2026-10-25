@@ -683,8 +683,10 @@ version's defaults. The workspace root comes from `MELRA_WORKSPACE`, else a
 `MELRA_POLICY` file's `workspaceRoot` (relative to the file), else the current
 directory (a policy file's `workspaceRoot` can also only narrow it to a folder
 inside), and is in neither the digest nor the receipt. The mode and unsafe-local
-overrides are recorded on their own. A digest therefore names a policy together
-with the MELRA version that ran it. `melra_execute` re-evaluates policy, so the
+overrides are recorded on their own. A digest and the MELRA version that ran it
+therefore name a policy, except that a server `melra launch` starts leaves
+`node`, `npm`, `npx` and `pnpm` out of the defaults under the same digest.
+`melra_execute` re-evaluates policy, so the
 receipt carries the digest the effect ran under, not the one it was planned
 under, and the certificate repeats it.
 

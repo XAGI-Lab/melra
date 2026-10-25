@@ -2,7 +2,7 @@
 
 ## Version status
 
-`0.3.0-alpha.21` is pre-stable. Alpha minor releases may change MCP schemas,
+`0.3.0-alpha.22` is pre-stable. Alpha minor releases may change MCP schemas,
 CLI JSON, SDK methods, package exports, and SQLite data. Patch releases should
 remain backward compatible unless a documented security correction requires a
 break.
@@ -201,6 +201,11 @@ planned from one, and while that run is planned, running, awaiting approval or
 `recovery_required` it refuses to start at all, since starting recovers every
 such run. Upgrade every process sharing the home together before declaring
 `answeredBy`.
+
+A request or workflow definition whose `http_resource_matches` predicate sets
+`settleMs` is not readable by `0.3.0-alpha.21` or earlier either. Upgrade every
+process sharing the home together before setting it; left out, the 30 s
+default applies and the request stays readable.
 
 ## Workflow compatibility and limits
 
