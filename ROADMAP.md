@@ -214,6 +214,10 @@ them as promises was the wrong call:
 
 ## v0.3 — Durable Core Alpha
 
+Complete. The 0.3 line ends with the last `0.3.0-alpha` before
+`0.4.0-alpha.0`; the PostgreSQL provider waits for
+[P5](#p5--beyond-one-machine).
+
 ### Workflow runtime
 
 - [x] Immutable versioned workflow definitions and bounded DAG validation.
@@ -374,7 +378,8 @@ alternative, not asking the harness not to use it.
       (`melra serve --socket`, mode `0600`, token still
       required, refused on Windows, checked by `melra doctor`). Still missing
       are hardened deployment recipes that make the sandboxed-harness setup
-      the default rather than a thing to assemble.
+      the default rather than a thing to assemble. This is the
+      [v0.4](#v04--mandatory-mediation) theme.
       ([#52](https://github.com/XAGI-Lab/melra/issues/52))
 - [x] Rename `--unhinged` to something boring and descriptive
       (`--unsafe-local`), keeping the current flag as a deprecated alias, and
@@ -473,7 +478,36 @@ alternative, not asking the harness not to use it.
 - [ ] Distributed workers without weakening local policy semantics.
 - [ ] Fleet-level operator view across many kernels.
 
-## v0.4 and later
+## v0.4 — Mandatory mediation
+
+Enforced mode closes the doors MELRA owns. v0.4 takes away the harness's own,
+so that going through MELRA is not something the agent is asked to do. That
+takes four layers: remove the second path in the harness, confine the agent
+process, keep the keys in MELRA, and detect what got through. `0.4.0-alpha.0`
+is cut once the container pair, `setup --exclusive` / `--managed` and the
+`doctor` harness line have landed.
+
+- [x] `melra launch claude-code`: Claude Code with Read, Glob and Grep as its
+      only built-in tools and MELRA as its only MCP server (`0.3.0-alpha.22`).
+- [x] The file capability refuses the settings files a harness loads at
+      session start (`path_harness_config`, `0.3.0-alpha.22`).
+- [ ] A container pair in `examples/deploy`, with a CI smoke test: MELRA holds
+      the writable workspace and the keys; the agent gets a read-only
+      workspace and an internal network.
+- [ ] `melra setup --exclusive` and `--managed`: a client configuration where
+      MELRA is the only tool that changes anything, and an admin-managed
+      variant the user cannot turn back off.
+- [ ] A `harness` line in `melra doctor`: whether managed settings are
+      installed, who owns them, and which lock settings are missing.
+- [ ] `melra probe`: checks that must fail inside the box (a workspace write,
+      a `MELRA_HOME` read, a public connection) and one that must pass (the
+      MELRA socket).
+- [ ] A recipe for running the agent as a separate OS user, with a socket
+      group and per-agent tokens.
+- [ ] `melra exec -- <harness>` on an OS sandbox profile, with MELRA outside
+      on `serve --socket`.
+
+## v0.5 and later
 
 - [ ] MELRA protocol published as an open specification: EffectRequest,
       Principal, Capability, PolicyDecision, Authorization, ExecutionState,
