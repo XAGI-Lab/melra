@@ -196,6 +196,8 @@ MELRA uses `<MELRA_HOME>/melra.sqlite` in WAL mode. Schema migration version
 | `workflow_snapshots` | Validated checkpoint projections |
 | `idempotency_commits` | Unique committed logical task attempts |
 | `approval_decisions` | Operator approval decisions, one per challenge |
+| `approval_denials` | Operator denials with their reason and note, one per challenge |
+| `refusals` | Answers refused for their channel or for not matching, one per task or run and code |
 | `capability_usage` | Capability grant draws, one per grant and task |
 
 Migration `7` makes the records an effect leaves append-only, with triggers
@@ -220,6 +222,19 @@ that refuse a write with `record_append_only`:
 The triggers live in the database, so they bind every process that writes it,
 an older MELRA sharing the home included; no version has ever needed to change
 or remove these rows, or to write a certificate any other way.
+
+Migration `8` adds `approval_denials` and `refusals`, with the same triggers:
+no `UPDATE` or `DELETE`, no insert on a stored rowid, and an insert under a
+stored key ignored. A deny writes its row in the same transaction as the
+compare-and-set that cancels its task, which also writes the task's `denial`,
+so a deny that loses that race records nothing. A refusal is keyed by its task
+or run and its code, so the first is kept and repeats add nothing: the table
+grows with the tasks and runs there are, never with how often an answer is
+sent. It holds the code, the mode, the sender's declared principal, the client
+its transport authenticated, if any, and the time, and nothing that was sent.
+A refusal inside a transaction is recorded after that transaction rolls back.
+Only versions with migration `8` write either table, and read-only observers on
+a home no such version has opened read none.
 
 That is the whole claim. It catches bugs, stray scripts and naive edits. It
 does not stop a new row being added, or a certificate being updated in place,
@@ -700,7 +715,25 @@ read the task can read it. A decision recorded through an operator surface
 `out_of_band` only in enforced mode, and is bound to the render: a request that
 changed after it was shown cannot run on it.
 Decisions live in their own insert-once table, and one made before the
-challenge expired stays usable for a TTL after it was made.
+challenge expired stays usable for a TTL after it was made. A no is recorded
+the same way (`TaskController.deny`): once per challenge in `approval_denials`,
+with a reason, a redacted note MELRA never reads, the approver and the channel,
+and on the task it cancels as `denial`. The agent's own `melra_task_cancel`
+leaves no `denial`, so an operator's no and an agent withdrawing its task stay
+apart. Nothing reads a denial to decide anything yet.
+
+An answer refused for its channel, or for not matching what it answers, is
+recorded through one helper (`TaskController.refuse`) before the refusal is
+thrown, and `melra tasks`, `melra status` and `melra watch` show it: an
+approval or verdict sent in band where only an operator's counts
+(`approval_in_band_refused`, `judgement_in_band_refused`,
+`workflow_input_in_band_refused`), and an approval whose digest, render, id or
+phrase does not match. Asking without an answer (`approval_required`), a task
+asked to run with no challenge, an expired challenge, an approval sent with
+`melra workflow advance --approval` and a verdict sent with `melra judge` are
+not recorded; a decision `melra approve` or the console records that does not
+match is, under the approver's name. See
+[durable storage](#durable-storage) for what is kept and its bound.
 
 Enforced mode issues no phrase at all: the challenge has the approval id, the
 task id, the action digest and the expiry, and nothing the agent could echo.

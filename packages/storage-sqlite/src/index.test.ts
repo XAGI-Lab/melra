@@ -447,6 +447,8 @@ describe("the records an effect leaves", () => {
       INSERT INTO idempotency_commits VALUES ('k', '${taskId}', 1, 'at');
       INSERT INTO certificate_history VALUES ('c', '${taskId}', '{}', 'at', 'at');
       INSERT INTO certified_tasks VALUES ('${taskId}');
+      INSERT INTO approval_denials VALUES ('d', '${taskId}', 'digest', 'op', 'out_of_band', 'cli:operator', 'never', NULL, 'at');
+      INSERT INTO refusals VALUES ('${taskId}', 'approval_in_band_refused', 'task', 'enforced', NULL, NULL, 'at');
     `);
     // Each row a REPLACE would put in place of the stored one on its key, and
     // whether it is refused or, for a table MELRA writes with INSERT OR
@@ -475,6 +477,20 @@ describe("the records an effect leaves", () => {
       ["idempotency_commits", "attempt", [`('k', '${taskId}', 9, 'at')`], false, `'k2', '${taskId}', 9, 'at'`],
       ["certificate_history", "data", [], true, `'c2', '${taskId}', '{}', 'at', 'at'`],
       ["certified_tasks", "task_id", [`('${taskId}')`], false, `'${otherTask}'`],
+      [
+        "approval_denials",
+        "reason",
+        [`('d', '${taskId}', 'digest', 'op', 'out_of_band', 'cli:other', 'other', NULL, 'at')`],
+        false,
+        `'d2', '${taskId}', 'digest', 'op', 'out_of_band', 'cli:other', 'other', NULL, 'at'`,
+      ],
+      [
+        "refusals",
+        "mode",
+        [`('${taskId}', 'approval_in_band_refused', 'task', 'developer', NULL, NULL, 'later')`],
+        false,
+        `'${otherTask}', 'approval_in_band_refused', 'task', 'enforced', NULL, NULL, 'at'`,
+      ],
     ] as const) {
       const stored = store.database.prepare(`SELECT rowid, * FROM ${table}`).all();
       expect(() => store!.database.exec(`UPDATE ${table} SET ${column} = 2`)).toThrow("record_append_only");
@@ -577,5 +593,54 @@ describe("the records an effect leaves", () => {
     expect(store.database.prepare("SELECT certificate_id AS id, data FROM certificate_history").all()).toEqual([
       { id: "c", data: "{}" },
     ]);
+  });
+});
+
+describe("refused answers (#424)", () => {
+  const refusal = (subjectId: string, code: string, refusedAt: string) => ({
+    kind: "task" as const,
+    subjectId,
+    code,
+    mode: "enforced",
+    client: "operator",
+    refusedAt,
+  });
+
+  it("keep one row per task or run and code, however often the same answer is sent", () => {
+    store = new SqliteStore(":memory:");
+    const [task, other] = ["7a1d0000-0000-4000-8000-00000000000a", "7a1d0000-0000-4000-8000-00000000000b"];
+    // An agent sending the same refused answer in a loop.
+    for (let index = 0; index < 1_000; index += 1) {
+      store.recordRefusal(refusal(task, "approval_in_band_refused", new Date(Date.UTC(2026, 9, 1, 0, 0, index)).toISOString()));
+    }
+    expect(store.refusalCount()).toBe(1);
+    // The first is the one kept.
+    expect(store.listRefusals(10)).toEqual([refusal(task, "approval_in_band_refused", "2026-10-01T00:00:00.000Z")]);
+    store.recordRefusal(refusal(task, "approval_render_mismatch", "2026-10-02T00:00:00.000Z"));
+    store.recordRefusal(refusal(other, "approval_in_band_refused", "2026-10-03T00:00:00.000Z"));
+    expect(store.refusalCount()).toBe(3);
+    expect(store.listRefusals(10).map((entry) => [entry.subjectId, entry.code])).toEqual([
+      [other, "approval_in_band_refused"],
+      [task, "approval_render_mismatch"],
+      [task, "approval_in_band_refused"],
+    ]);
+    expect(store.listRefusals(10, [task]).map((entry) => entry.code)).toEqual([
+      "approval_render_mismatch",
+      "approval_in_band_refused",
+    ]);
+  });
+
+  it("read as none from a home no store of this version has migrated yet", () => {
+    tempDirectory = mkdtempSync(join(tmpdir(), "melra-storage-refusals-"));
+    const path = join(tempDirectory, "melra.sqlite");
+    new SqliteStore(path).close();
+    // As an older MELRA leaves it: no refusals table.
+    const older = new DatabaseSync(path);
+    older.exec("DROP TABLE refusals");
+    older.close();
+    // An observer never migrates.
+    store = new SqliteStore(path, { readOnly: true });
+    expect(store.refusalCount()).toBe(0);
+    expect(store.listRefusals(5)).toEqual([]);
   });
 });

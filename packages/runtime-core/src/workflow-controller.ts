@@ -295,7 +295,14 @@ export class WorkflowController {
     // after siblings in the same wave had already been cancelled, planned
     // again or run on the strength of a request that is refused. Refused
     // before anything moves.
-    if (this.tasks.enforced && approvals.length > 0) throw new Error("approval_in_band_refused");
+    // The agent's are recorded against the run, by who the transport says
+    // sent them. An operator's, refused for the mode its process runs in, is a
+    // command to rerun, not an answer from the agent's side.
+    if (this.tasks.enforced && approvals.length > 0) {
+      throw "operator" in by
+        ? new Error("approval_in_band_refused")
+        : this.tasks.refuse("approval_in_band_refused", { kind: "workflow", subjectId: workflowId, client: by.agent });
+    }
     // So is the agent's answer to a node that asks for an operator's: an
     // enforced kernel takes that one only out of band.
     if (this.tasks.enforced && !("operator" in by) && inputs.length > 0) {
@@ -305,7 +312,11 @@ export class WorkflowController {
           node.answeredBy === "operator" &&
           inputs.some((input) => input.nodeId === node.id),
       );
-      if (operatorNode !== undefined) throw new Error(`workflow_input_in_band_refused:${operatorNode.id}`);
+      if (operatorNode !== undefined) {
+        // Recorded without the node id, which is the definition's.
+        this.tasks.refuse("workflow_input_in_band_refused", { kind: "workflow", subjectId: workflowId, client: by.agent });
+        throw new Error(`workflow_input_in_band_refused:${operatorNode.id}`);
+      }
     }
     // An expired lease someone else holds is an advance that died mid-flight.
     // Taking it over would read a projection from before that advance's tasks
@@ -579,6 +590,7 @@ export class WorkflowController {
           node.request,
           current.nodes[node.id]?.taskIds[0],
           approvals,
+          by,
           true,
           {
             workflowId: current.id,
@@ -1483,6 +1495,7 @@ export class WorkflowController {
           node.request,
           approvedTaskId ?? state.taskIds[0],
           approvals,
+          by,
           true,
           {
             workflowId: run.id,
@@ -1503,6 +1516,7 @@ export class WorkflowController {
           target.request,
           state.taskIds[0],
           approvals,
+          by,
           false,
           {
             workflowId: run.id,
@@ -1568,6 +1582,7 @@ export class WorkflowController {
           chosen ? node.whenTrue : node.whenFalse,
           state,
           approvals,
+          by,
           { ...identity, branch: chosen ? "true" : "false" },
         );
       }
@@ -1576,16 +1591,18 @@ export class WorkflowController {
           node.branches,
           state,
           approvals,
+          by,
           run.id,
           node.id,
         );
       case "bounded_loop":
-        return await this.runLoop(node, state, approvals, run.id);
+        return await this.runLoop(node, state, approvals, by, run.id);
       case "compensation": {
         const result = await this.runTask(
           node.request,
           state.taskIds[0],
           approvals,
+          by,
           true,
           {
             workflowId: run.id,
@@ -1697,6 +1714,7 @@ export class WorkflowController {
     request: TaskRequest,
     existingTaskId: string | undefined,
     approvals: ApprovalResponse[],
+    by: WorkflowActor,
     executePlanned = true,
     identity: TaskIdentity,
   ): Promise<NodeAdvance> {
@@ -1771,7 +1789,8 @@ export class WorkflowController {
           tasks: [task],
         };
       }
-      task = (await this.tasks.execute(task.id, approval)).task;
+      // As who sent it, so a refused one is recorded only as the agent's.
+      task = (await this.tasks.execute(task.id, approval, by)).task;
     } else if (task.status === "planned" && executePlanned) {
       task = (await this.tasks.execute(task.id)).task;
     }
@@ -1815,6 +1834,7 @@ export class WorkflowController {
     requests: TaskRequest[],
     state: WorkflowNodeState,
     approvals: ApprovalResponse[],
+    by: WorkflowActor,
     identity: TaskIdentity,
   ): Promise<NodeAdvance> {
     const taskIds: string[] = [];
@@ -1830,7 +1850,7 @@ export class WorkflowController {
         named !== undefined && this.tasks.status(named).idempotencyKey === taskIdempotencyKey(taskIdentity, request)
           ? named
           : undefined;
-      const result = await this.runTask(request, existing, approvals, true, taskIdentity);
+      const result = await this.runTask(request, existing, approvals, by, true, taskIdentity);
       tasks.push(...result.tasks);
       taskIds.push(result.state.taskIds[0]!);
       if (result.state.status !== "verified_complete") {
@@ -1850,6 +1870,7 @@ export class WorkflowController {
     branches: TaskRequest[][],
     state: WorkflowNodeState,
     approvals: ApprovalResponse[],
+    by: WorkflowActor,
     workflowId: string,
     nodeId: string,
   ): Promise<NodeAdvance> {
@@ -1865,7 +1886,7 @@ export class WorkflowController {
       branches.map((branch, index) => {
         const taskIds = state.taskIds.slice(offset, offset + branch.length);
         offset += branch.length;
-        return this.runSequential(branch, { ...state, taskIds }, approvals, {
+        return this.runSequential(branch, { ...state, taskIds }, approvals, by, {
           workflowId,
           nodeId,
           iteration: 0,
@@ -1903,6 +1924,7 @@ export class WorkflowController {
     node: Extract<WorkflowNode, { type: "bounded_loop" }>,
     state: WorkflowNodeState,
     approvals: ApprovalResponse[],
+    by: WorkflowActor,
     workflowId: string,
   ): Promise<NodeAdvance> {
     // Refused before an iteration runs, rather than once one has.
@@ -1946,6 +1968,7 @@ export class WorkflowController {
           request,
           taskIds[offset + index],
           approvals,
+          by,
           true,
           {
             workflowId,

@@ -445,7 +445,7 @@ MELRA uses these environment variables:
 | `MELRA_PAYLOAD_KEY` | Optional canonical base64url 256-bit payload key | private `<MELRA_HOME>/payload.key` |
 | `MELRA_UNHINGED` | Set to `1` to remove every guardrail — see below | unset (all guardrails on) |
 | `MELRA_MODE` | `developer` or `enforced` — see [deployment modes](#deployment-modes) | `developer` |
-| `MELRA_APPROVER` | The name [`melra approve`](#approving-from-the-command-line) records as the approver, as `cli:<name>`, [`melra judge`](#judging-from-the-command-line) as the judge of a verdict, also as `cli:<name>`, and [`melra console`](#approving-in-a-browser) as `console:<name>`, and `melra workflow pause`, `suspend` and `resume` as who halted or resumed the run, and `melra workflow advance --input` as who answered a `human_input` node, both as `cli:<name>`. Letters (any script), digits, `.`, `_`, `@` and `-`, at most 64; checked when `melra approve`, `melra judge` or `melra run` records a decision, when `melra workflow pause`, `suspend` or `resume` runs or `melra workflow advance` is given `--input`, and when `melra console` starts. Receipts and certificates carry it, and an agent can read both. | `operator` |
+| `MELRA_APPROVER` | The name [`melra approve`](#approving-from-the-command-line) records as the approver, as `cli:<name>`, [`melra judge`](#judging-from-the-command-line) as the judge of a verdict, also as `cli:<name>`, and [`melra console`](#approving-in-a-browser) as `console:<name>`, and `melra workflow pause`, `suspend` and `resume` as who halted or resumed the run, and `melra workflow advance --input` as who answered a `human_input` node, both as `cli:<name>`. Letters (any script), digits, `.`, `_`, `@` and `-`, at most 64; checked when `melra approve`, `melra judge` or `melra run` records a decision, when `melra workflow pause`, `suspend` or `resume` runs or `melra workflow advance` is given `--input` or `--approval`, and when `melra console` starts. Receipts and certificates carry it, and an agent can read both. | `operator` |
 | `MELRA_HTTP_PORT` | Port for `melra serve --http` | `7457` |
 | `MELRA_HTTP_TOKEN` | Bearer token for `melra serve --http` | a fresh random token, printed at startup |
 | `MELRA_HTTP_OAUTH` | Set to `0` so that token is the only way in and no client can register itself | unset (clients may register, on loopback) |
@@ -1173,6 +1173,23 @@ Piped, or with `--json`, `tasks` and `status` print JSON (the task records are
 the ones `/api/tasks` returns) and `watch` prints one JSON event per line.
 Colour follows [`NO_COLOR`](https://no-color.org).
 
+They also show the answers MELRA refused: an approval or verdict sent from the
+agent's side where only an operator gives one (`approval_in_band_refused`,
+`judgement_in_band_refused`, `workflow_input_in_band_refused`), and one that did
+not match what it answers (`approval_action_digest_mismatch`,
+`approval_render_mismatch`, `approval_phrase_mismatch`, `approval_id_mismatch`).
+Each is recorded once per task or run and code, with the mode, who sent it and
+when, and nothing it carried. An approval you send with `melra workflow advance
+--approval` or a verdict you send with `melra judge`, such as `melra judge`
+without `--mode enforced` on a task that ran enforced, is not recorded; a
+decision `melra approve` or the console records that does not match is, under
+your approver name. `tasks` and `status` print how many there are and the latest
+five (`refusals` in their JSON; `tasks --json` has it only when there are any),
+`tasks` marks with `!` a task whose agent sent an approval or verdict only an
+operator gives (a run's refusals show in the latest five), and `watch` prints a
+line (`"type": "refusal"`) for each new one. In enforced mode such a mark is the
+sign to look at what the agent was asked to do.
+
 They open the database read-only and never create it, and in WAL mode a reader
 does not block a writer, so leaving `melra watch` open beside `melra serve`
 costs the server nothing. What they print is the stored, already-redacted copy.
@@ -1295,9 +1312,11 @@ closing every door it owns:
   again. A developer-mode `melra approve` on a task with no phrase records
   nothing and fails with `approval_needs_enforced_mode`. The same holds for an
   answer to a `semantic` question: none sent with `melra_task_judge` is
-  recorded (one on a question still waiting is refused with
+  recorded as a verdict (one on a question still waiting is refused with
   `judgement_in_band_refused`), and an operator answers with
-  [`melra judge`](#judging-from-the-command-line).
+  [`melra judge`](#judging-from-the-command-line). Each attempt is refused and
+  recorded where [`melra tasks` and `melra status`](#see-what-melra-is-doing)
+  show it.
 - **Only an operator lifts an operator's halt.** A run halted with `melra
   workflow pause` or `melra workflow suspend` is resumed only with `melra
   workflow resume`: `melra_workflow_control` answers `resume` with
@@ -1384,7 +1403,19 @@ that planned the task runs it with `melra_execute`, and the decision lets it.
 melra approve 3f2a…        # shows the effect, asks y/N
 melra approve 3f2a… --yes  # no question, for a script that already decided
 melra approve 3f2a… --deny # cancel the task instead
+melra approve 3f2a… --deny --reason too_broad --note "Only report.txt"
 ```
+
+A deny records the operator's no and cancels the task in one write.
+`--reason` is one of `wrong_target`, `too_broad`, `not_now`, `never` and
+`other`, the default. `--note` is up to 1,000 characters for whoever reads the
+record: it is stored redacted and MELRA never reads it. Neither is accepted
+without `--deny`. The task gains `denial` (`reason`, `note`, `channel`,
+`approver`, `decidedAt`), which the agent reads with `melra_task_status`, and
+the denial is kept once per challenge, append-only, beside the operator's
+decisions. A task the agent cancelled itself with `melra_task_cancel` has no
+`denial`. If another process started the task first, the deny records nothing
+and exits 1 with the task as it stands.
 
 Denying a step of a durable workflow fails its run, as a failed step does: the
 next `melra workflow advance` offers the compensations declared for the steps
@@ -1507,9 +1538,10 @@ then open an empty database, with no task waiting in it.
 Once started, it opens the console in your default browser. A task waiting
 for approval shows the screen `melra approve` shows, with Approve and Deny.
 Approve records a decision bound to exactly that screen and runs nothing: the
-agent that planned the task runs it, as after `melra approve`. Deny cancels the task, as `--deny`
-does. The receipt names the approver as `console:` plus
-[`MELRA_APPROVER`](#local-configuration). In enforced mode the decision is
+agent that planned the task runs it, as after `melra approve`. Deny cancels the
+task and records why, as `--deny` does, with the reason picked beside it
+(`other` unless you pick another) and the note typed there, if any. The receipt
+names the approver as `console:` plus [`MELRA_APPROVER`](#local-configuration). In enforced mode the decision is
 `out_of_band`. In developer mode it is `in_band`, the terminal and the page say
 so, and a task with no phrase is refused with `approval_needs_enforced_mode`,
 as `melra approve` refuses it.

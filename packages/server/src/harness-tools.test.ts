@@ -182,7 +182,70 @@ describe("harness tools in enforced mode", () => {
       call(collect(runtime, { kind: "harness", id: "other" }), "approve", { taskId: held.taskId }),
     ).rejects.toThrow("task_belongs_to_another_client");
     await expect(readFile(join(workspace, "owned.txt"), "utf8")).rejects.toThrow();
+    // A phrase the owner sends is refused, and recorded as the owner's.
+    await expect(call(owner, "approve", { taskId: held.taskId, phrase: "APPROVE 000000000000" })).rejects.toThrow(
+      "approval_in_band_refused",
+    );
+    expect(runtime.store.listRefusals(5)).toEqual([
+      expect.objectContaining({ code: "approval_in_band_refused", client: "harness:owner" }),
+    ]);
     expect((await call(owner, "approve", { taskId: held.taskId })).status).toBe("verified_success");
+  });
+
+  it("records a refused approval as its sender's, never as the planner's", async () => {
+    const agents: Client[] = [];
+    const session = async (client?: Principal) => {
+      const [left, right] = InMemoryTransport.createLinkedPair();
+      await createMcpServer(runtime, client).connect(right);
+      const agent = new Client({ name: "t", version: "1" });
+      await agent.connect(left);
+      agents.push(agent);
+      return async (name: string, args: Record<string, unknown>) =>
+        (await agent.callTool({ name, arguments: args })) as { isError?: boolean; content: { text: string }[] };
+    };
+    try {
+      const owner = await session({ kind: "harness", id: "A" });
+      // Over stdio: a transport that authenticates nobody, and may reach any task.
+      const unnamed = await session();
+      const plan = async () =>
+        JSON.parse(
+          (
+            await owner("melra_plan", {
+              goal: "Write w.txt",
+              operation: { kind: "file", action: "write", path: "w.txt", content: "x" },
+              requiredEvidence: [{ type: "file_exists", path: "w.txt" }],
+            })
+          ).content[0]!.text,
+        ) as { id: string; approval: { approvalId: string } };
+      const [own, reached] = [await plan(), await plan()];
+      for (const [send, task] of [
+        [owner, own],
+        [unnamed, reached],
+      ] as const) {
+        const refused = await send("melra_execute", {
+          taskId: task.id,
+          approval: { approvalId: task.approval.approvalId, phrase: "APPROVE 000000000000" },
+        });
+        expect(refused.isError).toBe(true);
+        expect(refused.content[0]!.text).toContain("approval_in_band_refused");
+      }
+      const recorded = new Map(runtime.store.listRefusals(5).map(({ subjectId, ...refusal }) => [subjectId, refusal]));
+      expect(recorded.get(own.id)).toEqual({
+        kind: "task",
+        code: "approval_in_band_refused",
+        mode: "enforced",
+        client: "harness:A",
+        refusedAt: expect.any(String),
+      });
+      expect(recorded.get(reached.id)).toEqual({
+        kind: "task",
+        code: "approval_in_band_refused",
+        mode: "enforced",
+        refusedAt: expect.any(String),
+      });
+    } finally {
+      await Promise.all(agents.map((agent) => agent.close()));
+    }
   });
 
   it("holds an operator's pause against the agent: no resume, and no run of the waiting step", async () => {

@@ -10,6 +10,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
   ApprovalResponseSchema,
+  DenialInputSchema,
   SemanticVerdictSchema,
   TaskRequestSchema,
   TaskStatusSchema,
@@ -400,14 +401,16 @@ async function workflowCommand(
         if (workflowId === undefined) {
           throw new Error("workflow advance requires a workflow ID");
         }
+        const approvals = workflowApprovals(args);
         const inputs = workflowInputs(args);
         // As the operator, recorded on each answer: in enforced mode only an
-        // operator answers a node whose answeredBy is operator.
+        // operator answers a node whose answeredBy is operator, and an
+        // approval refused there is the operator's, not the agent's.
         const result = await melra.workflows.advance(
           workflowId,
-          workflowApprovals(args),
+          approvals,
           inputs,
-          inputs.length === 0 ? undefined : { operator: approverLabel(env) },
+          inputs.length === 0 && approvals.length === 0 ? undefined : { operator: approverLabel(env) },
         );
         output(result);
         return workflowExitCode(result.run.status);
@@ -1130,17 +1133,26 @@ function resolveTaskId(melra: MelraRuntime, given: string, status?: TaskStatus):
  * the agent that planned it runs it, and the decision lets it.
  */
 async function approveCommand(args: string[], env: CliEnvironment): Promise<number> {
-  const [given] = positionals(args);
+  const [given] = positionals(args, ["--reason", "--note"]);
   if (given === undefined) throw new Error("approve requires a task ID");
+  const reason = argument("--reason", args);
+  const note = argument("--note", args);
+  if (!args.includes("--deny") && (reason !== undefined || note !== undefined)) {
+    throw new Error("--reason and --note go with --deny");
+  }
+  // Checked before anything opens the store, so a typo records nothing.
+  const denial = DenialInputSchema.parse({
+    ...(reason === undefined ? {} : { reason }),
+    ...(note === undefined ? {} : { note }),
+  });
   const approver = approverLabel(env);
   const melra = await runtime(env);
   try {
     const taskId = resolveTaskId(melra, given, "awaiting_approval");
     const view = melra.controller.approvalView(taskId);
     if (args.includes("--deny")) {
-      melra.controller.cancel(taskId);
-      // Read back: another process may have started it in the meantime.
-      const task = melra.controller.status(taskId);
+      // Not cancelled when another process started it in the meantime.
+      const task = melra.controller.deny(taskId, approver, denial);
       output({ task });
       return task.status === "cancelled" ? 0 : 1;
     }
@@ -1377,7 +1389,9 @@ Usage:
   melra probe [--socket <path> | --url <loopback-url>] [--public <host:port>]
               [--local <host:port>] [--json]
   melra run --request <task.json>
-  melra approve <task-id> [--yes] [--deny] [--json]
+  melra approve <task-id> [--yes] [--json]
+  melra approve <task-id> --deny [--reason wrong_target|too_broad|not_now|never|other]
+                                 [--note <text>]
   melra judge <task-id> --judgement <id> --verdict yes|no|cannot_tell
                         [--rationale <text>]
   melra console
@@ -1772,7 +1786,7 @@ async function main(): Promise<void> {
       return;
     }
     case "approve":
-      rejectUnknownFlags(args, ["--yes", "--deny", "--json"]);
+      rejectUnknownFlags(args, ["--yes", "--deny", "--reason", "--note", "--json"]);
       process.exitCode = await approveCommand(args, env);
       return;
     case "judge":

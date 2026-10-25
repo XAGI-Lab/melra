@@ -660,9 +660,14 @@ async function approvalPanel(id, pending) {
       : action === "deny" ? "Denied; the task is cancelled."
       : "Approved, " + human(result.decision.channel) + ". The agent's next call runs it.";
   };
+  // Why, recorded with a deny for the people who read the record; MELRA never reads the note.
+  const reason = el("select", { "aria-label": "Why deny" }, ["wrong_target", "too_broad", "not_now", "never", "other"]
+    .map((value) => el("option", { value, text: human(value), selected: value === "other" })));
+  const note = el("input", { type: "text", maxlength: 1000, placeholder: "Note (optional)", "aria-label": "Note with a deny" });
+  const denial = () => ({ reason: reason.value, ...(note.value.trim() === "" ? {} : { note: note.value }) });
   const buttons = pending.decision ? [] : [
     el("button", { type: "button", class: "filter", text: "Approve", "data-drawn": drawnAt, "aria-disabled": "true", onclick: () => answer("approve", drawn) }),
-    el("button", { type: "button", class: "filter", text: "Deny", "data-drawn": drawnAt, "aria-disabled": "true", onclick: () => answer("deny") }),
+    el("button", { type: "button", class: "filter", text: "Deny", "data-drawn": drawnAt, "aria-disabled": "true", onclick: () => answer("deny", denial()) }),
   ];
   showSettling();
   return el("div", { class: "section" }, el("h2", { text: "Approve this effect?" }),
@@ -675,7 +680,7 @@ async function approvalPanel(id, pending) {
     // MELRA wrote, its Effect line above all.
     el("pre", { class: "screen" }, pending.summary.replace(/\n$/, "").split("\n").map((line) => el("span", { class: "line", text: line }))),
     pending.decision ? el("p", {}, "Approved by " + pending.decision.approver + " ", when(pending.decision.decidedAt), ".")
-      : el("p", {}, buttons[0], " ", buttons[1]),
+      : el("p", {}, buttons[0], " ", buttons[1], " ", reason, " ", note),
     status);
 }
 

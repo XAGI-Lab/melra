@@ -22,6 +22,59 @@ All notable changes are documented here. The format follows
   nothing over its connections, changes no setting, and proves only the checks
   on its list. See
   [checking an agent's box](docs/INSTALLATION.md#check-an-agents-box).
+- An operator's deny says why: `melra approve <task-id> --deny` takes
+  `--reason wrong_target|too_broad|not_now|never|other` (`other` when left
+  out) and `--note <text>`, and the console's Deny takes a reason from a list
+  and an optional note. The note holds up to 1,000 characters, is stored
+  redacted and is never read by MELRA. Each deny is recorded once per challenge
+  in a new `approval_denials` table with the approver, the channel
+  (`out_of_band` from an enforced process), the time, the render digest and a
+  keyed digest of the operation, and the task it cancels gains `denial`
+  (`reason`, `note`, `channel`, `approver`, `decidedAt`), which
+  `melra_task_status` returns. A task its agent cancelled with
+  `melra_task_cancel` has no `denial`, so the two no longer leave the same
+  record. Nothing acts on a denial yet.
+- Answers MELRA refuses for coming from the agent's side where only an operator
+  answers, or for not matching what they answer, are now recorded (#424):
+  `approval_in_band_refused` (from `melra_execute`, `melra_workflow_advance` and
+  the `approve` harness tool), `judgement_in_band_refused`,
+  `workflow_input_in_band_refused`, `approval_action_digest_mismatch`,
+  `approval_render_mismatch`, `approval_phrase_mismatch` and
+  `approval_id_mismatch`. A new `refusals` table keeps the task or run, the
+  code, the mode, the sender's declared principal and the client its transport
+  authenticated, if any, and the time, and nothing that was sent. It keeps one
+  row per task or run and code, the first, so sending the same answer again adds
+  nothing. A refused verdict is recorded after the transaction it was refused in
+  is rolled back. An approval sent with `melra workflow advance --approval` or a
+  verdict sent with `melra judge` is not recorded, such as `melra judge` without
+  `--mode enforced` on an enforced task; a decision `melra approve` or the
+  console records that does not match is recorded under the approver's name.
+  `melra tasks` and `melra status` show how many are recorded and the latest
+  five (`refusals` in their JSON, in `melra tasks --json` only when there are
+  any), `melra watch` reports each new one, and `melra tasks` marks with `!` a
+  task whose agent sent an approval or verdict only an operator gives; a run's
+  show in the latest five.
+- `approval_denials` and `refusals` arrive in migration 8 and are append-only,
+  as migration 7's tables are (`record_append_only`). Only this version writes
+  them, so an older MELRA sharing the home keeps writing as it did.
+
+### Changed
+
+- A task policy denies at planning now gets a `POLICY_BLOCKED` certificate, as
+  one denied at execute already did, and its `certificateId` names it (#424).
+- **Breaking:** The console's deny route takes only `{ "reason", "note" }`,
+  both optional, where it ignored its body; any other body is refused with
+  nothing recorded.
+- **Breaking:** `melra workflow advance --approval` now sends as the operator
+  and checks `MELRA_APPROVER` as `--input` does, so a name it does not accept is
+  refused before the run moves.
+
+### Security
+
+- An agent's attempt, in enforced mode, to approve its own change, answer its
+  own semantic question or answer a question meant for an operator is now
+  recorded where the operator looks, not only refused. Each such record is
+  bounded, so repeating an attempt cannot grow the store.
 
 ## [0.3.0-alpha.22] - 2026-10-25
 

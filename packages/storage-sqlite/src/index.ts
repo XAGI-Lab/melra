@@ -14,6 +14,8 @@ import {
   WorkflowSnapshotSchema,
   type EncryptedPayload,
   type ApprovalDecision,
+  type ApprovalDenial,
+  type Refusal,
   type WorkflowEvent,
   type WorkflowRun,
   type WorkflowSnapshot,
@@ -138,6 +140,26 @@ function keepPrivate(path: string): void {
       // Not there yet, or not ours to change: SQLite creates the WAL files later, from the database's mode.
     }
   }
+}
+
+/** Refuses any update or delete of `table`'s rows, and an insert on a stored rowid (migration 7). */
+function appendOnly(table: string): string {
+  return `
+      CREATE TRIGGER IF NOT EXISTS ${table}_no_update BEFORE UPDATE ON ${table}
+      BEGIN SELECT RAISE(ABORT, 'record_append_only'); END;
+      CREATE TRIGGER IF NOT EXISTS ${table}_no_delete BEFORE DELETE ON ${table}
+      BEGIN SELECT RAISE(ABORT, 'record_append_only'); END;
+      CREATE TRIGGER IF NOT EXISTS ${table}_no_rowid_reuse BEFORE INSERT ON ${table}
+        WHEN NEW.rowid <> -1 AND EXISTS (SELECT 1 FROM ${table} WHERE rowid = NEW.rowid)
+      BEGIN SELECT RAISE(ABORT, 'record_append_only'); END;`;
+}
+
+/** Refuses, or with `IGNORE` ignores, an insert under a stored row's key (migration 7). */
+function keyedOnce(table: string, key: string, raise: string): string {
+  return `
+      CREATE TRIGGER IF NOT EXISTS ${table}_no_replace BEFORE INSERT ON ${table}
+        WHEN EXISTS (SELECT 1 FROM ${table} WHERE ${key})
+      BEGIN SELECT RAISE(${raise}); END;`;
 }
 
 export class SqliteStore {
@@ -438,14 +460,7 @@ export class SqliteStore {
           OR EXISTS (SELECT 1 FROM certificates WHERE id = NEW.id AND rowid IS NOT OLD.rowid)
       BEGIN SELECT RAISE(ABORT, 'record_append_only'); END;
       ${["receipts", "workflow_events", "approval_decisions", "capability_usage", "idempotency_commits", "certificate_history", "certified_tasks"]
-        .map((table) => `
-      CREATE TRIGGER IF NOT EXISTS ${table}_no_update BEFORE UPDATE ON ${table}
-      BEGIN SELECT RAISE(ABORT, 'record_append_only'); END;
-      CREATE TRIGGER IF NOT EXISTS ${table}_no_delete BEFORE DELETE ON ${table}
-      BEGIN SELECT RAISE(ABORT, 'record_append_only'); END;
-      CREATE TRIGGER IF NOT EXISTS ${table}_no_rowid_reuse BEFORE INSERT ON ${table}
-        WHEN NEW.rowid <> -1 AND EXISTS (SELECT 1 FROM ${table} WHERE rowid = NEW.rowid)
-      BEGIN SELECT RAISE(ABORT, 'record_append_only'); END;`)
+        .map(appendOnly)
         .join("")}
       ${[
         ["receipts", "id = NEW.id", "ABORT, 'record_append_only'"],
@@ -459,11 +474,45 @@ export class SqliteStore {
         ["idempotency_commits", "idempotency_key = NEW.idempotency_key", "IGNORE"],
         ["certified_tasks", "task_id = NEW.task_id", "IGNORE"],
       ]
-        .map(([table, key, raise]) => `
-      CREATE TRIGGER IF NOT EXISTS ${table}_no_replace BEFORE INSERT ON ${table}
-        WHEN EXISTS (SELECT 1 FROM ${table} WHERE ${key})
-      BEGIN SELECT RAISE(${raise}); END;`)
+        .map(([table, key, raise]) => keyedOnce(table!, key!, raise!))
         .join("")}
+    `,
+    );
+    // Migration 8 records an operator's no to a challenge, once per challenge,
+    // and the answers refused for coming from the agent's side or for not
+    // matching what they answer (#424). A refusal is kept once per task or
+    // run and code: one row per record that exists, however often the same
+    // one is sent. Both are append-only as migration 7's tables are. Only new
+    // code writes either, so an older MELRA sharing the home writes as before.
+    this.applyMigration(
+      8,
+      `
+      CREATE TABLE IF NOT EXISTS approval_denials (
+        approval_id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL,
+        render_digest TEXT NOT NULL,
+        operation_digest TEXT NOT NULL,
+        channel TEXT NOT NULL,
+        approver TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        note TEXT,
+        decided_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS refusals (
+        subject_id TEXT NOT NULL,
+        code TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        mode TEXT NOT NULL,
+        principal TEXT,
+        client TEXT,
+        refused_at TEXT NOT NULL,
+        PRIMARY KEY(subject_id, code)
+      );
+      CREATE INDEX IF NOT EXISTS refusals_refused_at ON refusals(refused_at);
+      ${appendOnly("approval_denials")}
+      ${keyedOnce("approval_denials", "approval_id = NEW.approval_id", "IGNORE")}
+      ${appendOnly("refusals")}
+      ${keyedOnce("refusals", "subject_id = NEW.subject_id AND code = NEW.code", "IGNORE")}
     `,
     );
   }
@@ -1280,6 +1329,84 @@ export class SqliteStore {
         FROM approval_decisions WHERE approval_id = ?
       `)
       .get(approvalId) as ApprovalDecision | undefined;
+  }
+
+  /** False when this challenge already has a denial. */
+  recordApprovalDenial(denial: ApprovalDenial): boolean {
+    const result = this.database
+      .prepare(`
+        INSERT OR IGNORE INTO approval_denials(
+          approval_id, task_id, render_digest, operation_digest, channel,
+          approver, reason, note, decided_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `)
+      .run(
+        denial.approvalId,
+        denial.taskId,
+        denial.renderDigest,
+        denial.operationDigest,
+        denial.channel,
+        denial.approver,
+        denial.reason,
+        denial.note ?? null,
+        denial.decidedAt,
+      );
+    return Number(result.changes) === 1;
+  }
+
+  /** Silent on a repeat: the first refusal of a code for a task or run is the one kept. */
+  recordRefusal(refusal: Refusal): void {
+    this.database
+      .prepare(`
+        INSERT OR IGNORE INTO refusals(
+          subject_id, code, kind, mode, principal, client, refused_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `)
+      .run(
+        refusal.subjectId,
+        refusal.code,
+        refusal.kind,
+        refusal.mode,
+        refusal.principal ?? null,
+        refusal.client ?? null,
+        refusal.refusedAt,
+      );
+  }
+
+  /** The newest `limit` refusals, of the tasks and runs in `subjectIds` if given. */
+  listRefusals(limit: number, subjectIds?: readonly string[]): Refusal[] {
+    if (!this.recordsRefusals()) return [];
+    const rows = this.database
+      .prepare(`
+        SELECT subject_id AS subjectId, code, kind, mode, principal, client, refused_at AS refusedAt
+        FROM refusals
+        WHERE ?1 IS NULL OR subject_id IN (SELECT value FROM json_each(?1))
+        ORDER BY refused_at DESC LIMIT ?2
+      `)
+      .all(subjectIds === undefined ? null : JSON.stringify(subjectIds), limit) as unknown as Array<Omit<Refusal, "principal" | "client"> & { principal: string | null; client: string | null }>;
+    return rows.map(({ principal, client, ...row }) => ({
+      ...row,
+      ...(principal === null ? {} : { principal }),
+      ...(client === null ? {} : { client }),
+    }));
+  }
+
+  /**
+   * An observer's store never migrates, so a home only an older MELRA has
+   * opened has no refusals table yet, and nothing refused recorded in it.
+   */
+  private recordsRefusals(): boolean {
+    return (
+      this.database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'refusals'").get() !==
+      undefined
+    );
+  }
+
+  refusalCount(): number {
+    if (!this.recordsRefusals()) return 0;
+    return Number((this.database.prepare("SELECT COUNT(*) AS count FROM refusals").get() as { count: number }).count);
   }
 
   /**

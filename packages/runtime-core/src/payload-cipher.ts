@@ -15,7 +15,7 @@ import {
 import { canonicalJson } from "@melra/receipt-schema";
 
 /** What a record digest is for. Each one is keyed apart from the others. */
-export type DigestPurpose = "action" | "render" | "input";
+export type DigestPurpose = "action" | "render" | "input" | "operation";
 
 export class PayloadCipher {
   private readonly key: Buffer;

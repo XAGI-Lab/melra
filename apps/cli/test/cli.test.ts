@@ -230,8 +230,28 @@ describe("melra CLI", () => {
       expect(server.store.getApprovalDecision(developer.approval!.approvalId)).toBeUndefined();
 
       const denied = plan();
-      await execute(process.execPath, [entry, "approve", denied.id, "--deny"], { cwd: root, env });
-      expect(server.store.getTask(denied.id)?.status).toBe("cancelled");
+      await execute(
+        process.execPath,
+        [entry, "approve", denied.id, "--deny", "--reason", "too_broad", "--note", "Only report.txt."],
+        { cwd: root, env: { ...env, MELRA_APPROVER: "alice" } },
+      );
+      expect(server.store.getTask(denied.id)).toMatchObject({
+        status: "cancelled",
+        denial: { reason: "too_broad", note: "Only report.txt.", channel: "out_of_band", approver: "cli:alice" },
+      });
+      // A reason beside a yes would read as a no and approve, and one not in the
+      // list says nothing: both are refused with nothing recorded.
+      const unsure = plan();
+      for (const [args, said] of [
+        [["--yes", "--reason", "never"], "--reason and --note go with --deny"],
+        [["--deny", "--reason", "someday"], "reason: Invalid option"],
+      ] as const) {
+        await expect(
+          execute(process.execPath, [entry, "approve", unsure.id, ...args], { cwd: root, env }),
+        ).rejects.toMatchObject({ code: 1, stderr: expect.stringContaining(said) });
+      }
+      expect(server.store.getTask(unsure.id)).toMatchObject({ status: "awaiting_approval" });
+      expect(server.store.getApprovalDecision(unsure.approval!.approvalId)).toBeUndefined();
     } finally {
       await server.close();
     }
@@ -312,6 +332,19 @@ describe("melra CLI", () => {
         "workflow_input_in_band_refused:ask",
       );
       const env = { ...process.env, MELRA_HOME: dataDirectory, MELRA_WORKSPACE: root, MELRA_MODE: "enforced", MELRA_APPROVER: "alice" };
+      // An approval is refused here from anyone, but only the agent's is
+      // recorded: the operator's own is a command to correct. The agent's
+      // names no client, since nothing authenticated it.
+      await expect(
+        execute(
+          process.execPath,
+          [entry, "workflow", "advance", run.id, "--approval", "00000000-0000-4000-8000-000000000000:APPROVE x"],
+          { cwd: root, env },
+        ),
+      ).rejects.toMatchObject({ code: 1, stderr: expect.stringContaining("approval_in_band_refused") });
+      expect(server.store.listRefusals(5).map((refusal) => [refusal.code, refusal.client])).toEqual([
+        ["workflow_input_in_band_refused", undefined],
+      ]);
       const answered = await execute(process.execPath, [entry, "workflow", "advance", run.id, "--input", "ask=yes"], {
         cwd: root,
         env,
@@ -366,6 +399,39 @@ describe("melra CLI", () => {
       expect(refused.stderr).toContain("MELRA_APPROVER");
       expect(server.workflows.status(run.id).nodes.ask).toMatchObject({ status: "awaiting_input" });
       expect(server.workflows.status(run.id).nodes.ask).not.toHaveProperty("input");
+      // So is an approval, sent as the operator: even the right phrase is
+      // refused before the run moves.
+      const held = server.workflows.plan(
+        WorkflowDefinitionSchema.parse({
+          schemaVersion: "1.0.0",
+          id: "99999999-9999-4999-8999-999999999999",
+          version: 1,
+          name: "Held",
+          nodes: [
+            {
+              id: "write",
+              type: "operation",
+              request: {
+                goal: "Write the report",
+                operation: { kind: "file", action: "write", path: "report.txt", content: "x" },
+                requiredEvidence: [{ type: "file_exists", path: "report.txt" }],
+              },
+            },
+          ],
+        }),
+      );
+      const { approval } = (await server.workflows.advance(held.id)).run.nodes.write!;
+      const approving = fail(
+        await execute(
+          process.execPath,
+          [entry, "workflow", "advance", held.id, "--approval", `${approval!.approvalId}:${approval!.phrase!}`],
+          { cwd: root, env },
+        ).catch(fail),
+      );
+      expect(approving.code).toBe(1);
+      expect(approving.stderr).toContain("MELRA_APPROVER");
+      expect(server.workflows.status(held.id).nodes.write).toMatchObject({ status: "awaiting_approval" });
+      expect(existsSync(join(root, "report.txt"))).toBe(false);
     } finally {
       await server.close();
     }
@@ -409,11 +475,13 @@ describe("melra CLI", () => {
       const bare = await judge([task[0]!], "enforced", enforcedHome);
       expect(bare.code).toBe(1);
       expect(bare.stderr).toContain("judge requires --judgement <id> --verdict yes|no|cannot_tell");
-      // A developer process on the enforced run is refused, and writes nothing.
+      // A developer process on the enforced run is refused, and writes nothing:
+      // not even a refused answer, which would mark the task as its agent's.
       const inBand = await judge([...task, "--verdict", "yes"], "", enforcedHome);
       expect(inBand.code).toBe(1);
       expect(inBand.stderr).toContain("judgement_in_band_refused");
       expect(inBand.stderr).toContain("MELRA_MODE=enforced");
+      expect(server.store.refusalCount()).toBe(0);
       // Sent to rerun enforced, it would only meet the real refusal there (#384).
       const wrongId = await judge([task[0]!, ...unknown], "", enforcedHome);
       expect(wrongId.code).toBe(1);
