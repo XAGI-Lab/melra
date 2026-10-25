@@ -1,10 +1,10 @@
 # Project Status
 
-Last updated: 2026-10-24
+Last updated: 2026-10-25
 
-Version: `0.3.0-alpha.20`
+Version: `0.3.0-alpha.21`
 
-The CLI's npm `alpha` and `latest` tags both resolve to `0.3.0-alpha.20`, so
+The CLI's npm `alpha` and `latest` tags both resolve to `0.3.0-alpha.21`, so
 `npx @melra/cli` installs the current alpha. Nine library packages
 (`protocol`, `server`, `policy-core`, `runtime-core`, `receipt-schema`,
 `storage-sqlite`, `terminal-runtime`, `memory`, `sdk`) still have `latest` at
@@ -13,13 +13,13 @@ tag is current.
 
 ## Engineering Complete
 
-- ✅ **Latest main checks green**: the latest observed runs for CI, CodeQL, dependency audit, container, deployment recipes, and single executable all passed on `main` at `7ccce6b`, the `v0.3.0-alpha.20` release commit ([CI run](https://github.com/XAGI-Lab/melra/actions/runs/40080622582))
+- ✅ **Latest main checks green**: the latest observed runs for CI, CodeQL, dependency audit, container, deployment recipes, and single executable all passed on `main` at `be68816`, the `v0.3.0-alpha.21` release commit ([CI run](https://github.com/XAGI-Lab/melra/actions/runs/40140444736))
 - ✅ **Versions consistent** across the root manifest, every `apps/*` and `packages/*` manifest, the protocol constant, sdk-py, and both uv locks (`pnpm versions:check`)
-- ✅ **Gate green at the `v0.3.0-alpha.20` tag**: `pnpm check`, `pnpm e2e`, `pnpm security:audit`, `pnpm evals`, the publishable durable-core evaluation, and `pnpm pack:check` all passed in the release workflow
+- ✅ **Gate green at the `v0.3.0-alpha.21` tag**: `pnpm check`, `pnpm e2e`, `pnpm security:audit`, `pnpm evals`, the publishable durable-core evaluation, and `pnpm pack:check` all passed in the release workflow
 - ✅ **Conformance L3 verified effects**: `melra conformance` reports 14/14 checks against this build's own stdio server, and L1 under `MELRA_UNHINGED=1` — both asserted in CI. Levels and their limits: [CONFORMANCE.md](CONFORMANCE.md)
 - ✅ **Install paths documented**: npm, container, release tarball, source
 - ✅ **Registry install verified end to end**: the `installed` job on ubuntu, macOS and Windows installs the just-published `@melra/cli` from npm, passes `melra doctor`, and drives a real stdio session to `verified_success`; `npx -y @melra/cli@alpha conformance` in an empty directory earns level 3 (14/14)
-- ✅ **Latest release published**: GitHub release [v0.3.0-alpha.20](https://github.com/XAGI-Lab/melra/releases/tag/v0.3.0-alpha.20) has 10 assets, the container is on `ghcr.io/xagi-lab/melra:alpha` and `:latest`, and the `@melra/cli` npm `alpha` and `latest` tags resolve to it. Nineteen security advisories are published, patched in `0.3.0-alpha.15` (nine), `0.3.0-alpha.16` (five), `0.3.0-alpha.19` (two) and `0.3.0-alpha.20` (three); none remains in draft ([advisories](https://github.com/XAGI-Lab/melra/security/advisories)).
+- ✅ **Latest release published**: GitHub release [v0.3.0-alpha.21](https://github.com/XAGI-Lab/melra/releases/tag/v0.3.0-alpha.21) has 10 assets, the container is on `ghcr.io/xagi-lab/melra:alpha` and `:latest`, and the `@melra/cli` npm `alpha` and `latest` tags resolve to it. Twenty-nine security advisories are published, patched in `0.3.0-alpha.15` (nine), `0.3.0-alpha.16` (five), `0.3.0-alpha.19` (two), `0.3.0-alpha.20` (three) and `0.3.0-alpha.21` (ten); none remains in draft ([advisories](https://github.com/XAGI-Lab/melra/security/advisories)).
 
 `0.3.0-alpha.7` is the one gap in that history: its container image built, but
 the `artifacts` job failed on a stale `uv.lock` before reaching the registry, so
@@ -40,7 +40,7 @@ leaving it for a tag push to discover.
 
 **Current state:** Automated compatibility claim is the official MCP SDK (TypeScript + Python) over stdio, loopback HTTP, and the Unix socket. `melra setup --client` writes the config for 25 named clients, checked against each client's documentation or source and round-tripped by the CLI tests — a claim about the file, not about the client. Named graphical clients remain release-gated until manually exercised.
 
-**Action:** Install `npx @melra/cli@alpha` or download a `v0.3.0-alpha.20` release artifact, configure each client per docs/INSTALLATION.md, verify discovery/plan/execute/receipt cycle.
+**Action:** Install `npx @melra/cli@alpha` or download a `v0.3.0-alpha.21` release artifact, configure each client per docs/INSTALLATION.md, verify discovery/plan/execute/receipt cycle.
 
 ### Independent Security Review
 
