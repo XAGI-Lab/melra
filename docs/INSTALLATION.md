@@ -128,11 +128,12 @@ narrows the list without making the rest harmless: any allowed command run as
 an approved change has your rights, and in developer mode the agent approves its
 own changes, so `--mode enforced` is how you decide each one.
 
-After `--`, `launch` passes claude a prompt, `-p`/`--print`, `--model <model>`,
-`--output-format <format>`, `--verbose`, `-c`/`--continue` and `-r`/`--resume
-[id]`, and nothing else: any other argument is refused with
-`launch_argument_refused`, and so is a one-word prompt, which claude can read
-as one of its own subcommands. It exits with claude's exit code.
+After `--`, `launch` passes claude prompt arguments, `-p`/`--print`, `--model
+<model>`, `--output-format <format>`, `--verbose`, `-c`/`--continue` and
+`-r`/`--resume [id]`, and nothing else: any other flag is refused with
+`launch_argument_refused`, and so is a first prompt argument of one lowercase
+word, which claude can read as one of its own subcommands. It exits with
+claude's exit code.
 
 ```bash
 melra launch claude-code -- -p "list the TODO comments in src" --output-format json

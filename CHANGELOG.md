@@ -6,13 +6,18 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0-alpha.22] - 2026-10-25
+
 ### Added
 
 - `http_resource_matches` takes `settleMs` (0 to 3,600,000), read by
   reconciliation only: how long after a task first parked a miss is a write the
   provider may not show yet rather than a no. A task whose outcome is unknown
   records when it first parked as `recovery_required` in `parkedAt`, which
-  later writes leave alone.
+  later writes leave alone. A request or workflow definition that sets
+  `settleMs` is not readable by `0.3.0-alpha.21` or earlier sharing the
+  `MELRA_HOME`: upgrade every process sharing the home before setting it (left
+  out, the 30 s default applies).
 - A workflow `human_input` node can declare `"answeredBy": "operator"`; left
   out, it is `any`, as before. In enforced mode such a node takes its answer
   only from `melra workflow advance <workflow-id> --input <node-id>=<value>`,
@@ -32,7 +37,7 @@ All notable changes are documented here. The format follows
   matched ignoring case, that the helpers computer actions start go without,
   beyond `MELRA_PAYLOAD_KEY` and `MELRA_HTTP_TOKEN`, which none ever gets. The
   server sets it to every variable a credential's `source.env` names; a library
-  embedder can name more. (#420)
+  embedder can name more (#420).
 - Every policy decision, receipt (`policyDecision.policyDigest`) and certificate
   records `policyDigest` beside `policyVersion`: `sha256:` and the SHA-256 of
   the policy file's bytes, which `sha256sum` reproduces, or `default:<version>`
@@ -43,12 +48,13 @@ All notable changes are documented here. The format follows
   `MELRA_POLICY` file's `workspaceRoot` (relative to the file), else the current
   directory (a policy file's `workspaceRoot` can also only narrow it to a folder
   inside), and is in neither the digest nor the receipt. `--mode`, `MELRA_MODE`
-  and unsafe-local are recorded on their own. So a digest names a policy
-  together with the MELRA version that ran it. `melra_capabilities`
-  (`policy.digest`), `melra policy test`, `melra status` (`policyDigest`),
-  `melra doctor` and the console show it. INSTALLATION.md no longer says a
-  `policyVersion` pin is refused whenever the policy changes: it follows the
-  label.
+  and unsafe-local are recorded on their own. So a digest and the MELRA
+  version that ran it name a policy, except that a server `melra launch`
+  starts leaves `node`, `npm`, `npx` and `pnpm` out of the defaults under the
+  same digest. `melra_capabilities` (`policy.digest`), `melra policy test`,
+  `melra status` (`policyDigest`), `melra doctor` and the console show it.
+  INSTALLATION.md no longer says a `policyVersion` pin is refused whenever the
+  policy changes: it follows the label.
 - `melra doctor` reports (`policy-write`) when the user MELRA runs as can change
   the policy: when that user can write, or owns, the file or any folder above
   it, along the path as given and the one its links resolve to. With no policy
@@ -67,9 +73,10 @@ All notable changes are documented here. The format follows
   workspace, policy and mode every other command reads, developer by default.
   Before claude starts it prints what the session can and cannot do and how a
   change is approved, and it exits with claude's exit code. After `--` it
-  passes on only a prompt, `-p`/`--print`, `--model`, `--output-format`,
-  `--verbose`, `-c`/`--continue` and `-r`/`--resume`; anything else, and a
-  one-word prompt claude could read as one of its subcommands, is refused with
+  passes on only prompt arguments, `-p`/`--print`, `--model`,
+  `--output-format`, `--verbose`, `-c`/`--continue` and `-r`/`--resume`; any
+  other flag, and a first prompt argument of one lowercase word, which claude
+  could read as one of its subcommands, is refused with
   `launch_argument_refused`. `--dry-run` prints the claude command and its MCP
   config as JSON instead of running them, and `CLAUDE_BIN` or `--claude-bin`
   names the claude to run, so a test can use a stand-in. That claude is run by
@@ -78,6 +85,15 @@ All notable changes are documented here. The format follows
   in. The server it configures is opened and closed first, so one that would
   refuse to start stops `launch` before claude starts. A `claude` started any
   other way is unchanged.
+- A server `melra launch` starts has `MELRA_LAUNCHED=1`, which leaves `node`,
+  `npm`, `npx` and `pnpm` out of the default `allowedCommands`, since each runs
+  any program with the OS user's rights. A policy file's own `allowedCommands`
+  is kept as written, and the launch summary warns when it lists one of them,
+  as a `policy.json` that `melra init` or `melra setup` wrote does. Every other
+  setup keeps the defaults it had. This narrows the list without making the
+  rest harmless: any allowed command run as an approved change has the OS
+  user's rights, and in developer mode the agent approves its own changes, so
+  `--mode enforced` is how a person decides each one.
 
 ### Changed
 
@@ -131,15 +147,6 @@ All notable changes are documented here. The format follows
   (`.claude`, `.vscode`, `.codex`, a client's own folder), even an empty one;
   not the project folder holding `.mcp.json`. Reading them, and the rest of
   `.claude` or `.vscode`, is unchanged.
-- A server `melra launch` starts has `MELRA_LAUNCHED=1`, which leaves `node`,
-  `npm`, `npx` and `pnpm` out of the default `allowedCommands`, since each runs
-  any program with the OS user's rights. A policy file's own `allowedCommands`
-  is kept as written, and the launch summary warns when it lists one of them,
-  as a `policy.json` that `melra init` or `melra setup` wrote does. Every other
-  setup keeps the defaults it had. This narrows the list without making the
-  rest harmless: any allowed command run as an approved change has the OS
-  user's rights, and in developer mode the agent approves its own changes, so
-  `--mode enforced` is how a person decides each one.
 - In enforced mode the server's instructions for a model waiting on
   `approval_awaiting_operator` now say that `melra_task_status` keeps showing
   `awaiting_approval` until the task runs, to call `melra_execute` again later,
@@ -196,10 +203,13 @@ All notable changes are documented here. The format follows
   is masked too, not only the password. A body cut at the size cap is masked to
   the length of the longest such form. A shorter credential is still masked only
   as sent.
-- MELRA's file capability no longer changes the settings files listed under
-  Changed, which a coding agent's harness loads at the next session start, so
-  an agent cannot use it to rewrite them for its next session. The refusal is
-  a fixed check, not policy, so it holds in every mode, unsafe-local included.
+- MELRA's file capability no longer writes, creates, removes or moves the
+  settings files listed under Changed, which a coding agent's harness loads at
+  the next session start, or a folder named like the one they sit in, so an
+  agent cannot use it to rewrite them for its next session. Deleting or moving
+  a folder further up, such as a project folder, still takes them along. The
+  refusal is a fixed check, not policy, so it holds in every mode, unsafe-local
+  included.
   It covers those files only: other files a harness loads, such as agent, skill
   and command definitions, are not refused, and an approved terminal command
   can still write any of them.
@@ -3962,7 +3972,8 @@ All notable changes are documented here. The format follows
 - Cross-scope memory overwrite and deletion protection.
 - Patched transitive HTTP adapter enforced through a package override.
 
-[Unreleased]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.21...HEAD
+[Unreleased]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.22...HEAD
+[0.3.0-alpha.22]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.21...v0.3.0-alpha.22
 [0.3.0-alpha.21]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.20...v0.3.0-alpha.21
 [0.3.0-alpha.20]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.19...v0.3.0-alpha.20
 [0.3.0-alpha.19]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.18...v0.3.0-alpha.19
