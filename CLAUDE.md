@@ -184,7 +184,8 @@ so `TaskController` parks such a task in `waiting_user` for a verdict from outsi
 (`melra_task_judge`, or `melra judge` for an operator), and the recovery sweep settles it
 closed at expiry (#54). `judge()` acts only on the verdict enum, never reads the rationale,
 refuses a judge that declares the task's own principal or names it in its chain
-(`semantic_judge_is_actor`), and writes only the task row and its certificate.
+(`semantic_judge_is_actor`), and writes only the task row and its certificate; the
+certificate it replaces is kept in `certificate_history`.
 
 Redaction happens at multiple layers: `redactStructuredValue` on task requests, results, and
 error messages before persistence, plus `redactMemoryValue` inside the memory package and
@@ -219,7 +220,11 @@ Invariants worth knowing before touching this code:
 - Events are append-only and ordered; projections and snapshots are derived. Read state through `status()`/`events()` rather than querying tables directly.
 - Exact workflow definitions and adapter results are sealed with AES-256-GCM (`payload-cipher.ts`) bound to record identity and purpose. Keys come from `MELRA_PAYLOAD_KEY` or a mode-`0600` file (`packages/server/src/payload-key.ts`); permissive key files fail closed.
 
-All of this lives in SQLite migrations 1–6 (`packages/storage-sqlite/src/index.ts`).
+All of this lives in SQLite migrations 1–7 (`packages/storage-sqlite/src/index.ts`).
+Migration 7's triggers make receipts, workflow events, approval decisions, grant draws,
+idempotency commits and `certificate_history` append-only and let a certificate change only
+in place on its own task (`record_append_only`), so a test that corrupts such a row must
+drop the trigger first.
 Schema changes need a new migration, not an edit to an existing one's statements. An older
 MELRA keeps writing a migrated home (`melra setup` pins each client to its version), so a
 migration must leave its writes correct: an expression index or a new table does, a column only

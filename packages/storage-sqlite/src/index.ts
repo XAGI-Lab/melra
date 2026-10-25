@@ -383,6 +383,89 @@ export class SqliteStore {
         ON tasks(json_extract(data, '$.idempotencyKey'));
     `,
     );
+    // Migration 7 makes the records an effect leaves append-only, in SQL so an
+    // older MELRA sharing the home is held to it too: no version has ever
+    // updated or deleted these rows, only inserted them (or ignored a repeat).
+    // A certificate is still replaced when a task is judged or settled, by an
+    // upsert on its task (every version writes it so), so the row it replaces
+    // is kept in certificate_history. REPLACE removes a row without firing its
+    // delete trigger (recursive_triggers is off), so an insert whose rowid or
+    // key a stored row holds is refused too; the three written with INSERT OR
+    // IGNORE ignore a key they hold instead, so a repeat still reports no
+    // change. NEW.rowid is -1 in an insert that names none, so -1 is never
+    // compared: no row MELRA writes has it, and one someone else wrote there
+    // must not block every insert after it. An upsert fires the insert trigger too, so a certificate
+    // insert may meet its own task's row; one that then lands as a new row
+    // replaced it, which certificates_insert_once refuses by finding the task
+    // in certified_tasks. An update may not move a certificate to another
+    // rowid, task or certificate's id. This stops bugs, stray scripts and
+    // naive edits, not someone who can write the file: they can drop a
+    // trigger. A future prune must drop and recreate these triggers inside
+    // the one transaction it deletes in.
+    this.applyMigration(
+      7,
+      `
+      CREATE TABLE IF NOT EXISTS certificate_history (
+        certificate_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        data TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        replaced_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS certified_tasks (task_id TEXT PRIMARY KEY);
+      INSERT OR IGNORE INTO certified_tasks(task_id) SELECT task_id FROM certificates;
+      CREATE TRIGGER IF NOT EXISTS certificates_keep_history
+        AFTER UPDATE ON certificates
+      BEGIN
+        INSERT INTO certificate_history(certificate_id, task_id, data, created_at, replaced_at)
+        VALUES (OLD.id, OLD.task_id, OLD.data, OLD.created_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+      END;
+      CREATE TRIGGER IF NOT EXISTS certificates_no_delete BEFORE DELETE ON certificates
+      BEGIN SELECT RAISE(ABORT, 'record_append_only'); END;
+      CREATE TRIGGER IF NOT EXISTS certificates_no_replace BEFORE INSERT ON certificates
+        WHEN EXISTS (
+          SELECT 1 FROM certificates
+          WHERE (rowid = NEW.rowid AND NEW.rowid <> -1) OR (id = NEW.id AND task_id IS NOT NEW.task_id)
+        )
+      BEGIN SELECT RAISE(ABORT, 'record_append_only'); END;
+      CREATE TRIGGER IF NOT EXISTS certificates_insert_once AFTER INSERT ON certificates
+      BEGIN
+        SELECT RAISE(ABORT, 'record_append_only') FROM certified_tasks WHERE task_id = NEW.task_id;
+        INSERT INTO certified_tasks(task_id) VALUES (NEW.task_id);
+      END;
+      CREATE TRIGGER IF NOT EXISTS certificates_no_rekey BEFORE UPDATE ON certificates
+        WHEN NEW.rowid IS NOT OLD.rowid OR NEW.task_id IS NOT OLD.task_id
+          OR EXISTS (SELECT 1 FROM certificates WHERE id = NEW.id AND rowid IS NOT OLD.rowid)
+      BEGIN SELECT RAISE(ABORT, 'record_append_only'); END;
+      ${["receipts", "workflow_events", "approval_decisions", "capability_usage", "idempotency_commits", "certificate_history", "certified_tasks"]
+        .map((table) => `
+      CREATE TRIGGER IF NOT EXISTS ${table}_no_update BEFORE UPDATE ON ${table}
+      BEGIN SELECT RAISE(ABORT, 'record_append_only'); END;
+      CREATE TRIGGER IF NOT EXISTS ${table}_no_delete BEFORE DELETE ON ${table}
+      BEGIN SELECT RAISE(ABORT, 'record_append_only'); END;
+      CREATE TRIGGER IF NOT EXISTS ${table}_no_rowid_reuse BEFORE INSERT ON ${table}
+        WHEN NEW.rowid <> -1 AND EXISTS (SELECT 1 FROM ${table} WHERE rowid = NEW.rowid)
+      BEGIN SELECT RAISE(ABORT, 'record_append_only'); END;`)
+        .join("")}
+      ${[
+        ["receipts", "id = NEW.id", "ABORT, 'record_append_only'"],
+        [
+          "workflow_events",
+          "id = NEW.id OR (aggregate_id = NEW.aggregate_id AND sequence = NEW.sequence)",
+          "ABORT, 'record_append_only'",
+        ],
+        ["approval_decisions", "approval_id = NEW.approval_id", "IGNORE"],
+        ["capability_usage", "grant_id = NEW.grant_id AND task_id = NEW.task_id", "IGNORE"],
+        ["idempotency_commits", "idempotency_key = NEW.idempotency_key", "IGNORE"],
+        ["certified_tasks", "task_id = NEW.task_id", "IGNORE"],
+      ]
+        .map(([table, key, raise]) => `
+      CREATE TRIGGER IF NOT EXISTS ${table}_no_replace BEFORE INSERT ON ${table}
+        WHEN EXISTS (SELECT 1 FROM ${table} WHERE ${key})
+      BEGIN SELECT RAISE(${raise}); END;`)
+        .join("")}
+    `,
+    );
   }
 
   private applyMigration(version: number, statements: string): void {

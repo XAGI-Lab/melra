@@ -526,7 +526,8 @@ closed the same way as `cannot_tell`, with the error
 `semantic_judgement_expired`, keeping any yes already given. On the settled
 certificate an answered item carries `judgedBy` and, beside it, `executedBy`,
 the receipt's principal. A verdict writes only the task and its certificate,
-never a receipt. A task with a failing
+never a receipt, and the certificate it replaces is kept in
+`certificate_history`. A task with a failing
 predicate beside it is `partial` without waiting. Outside unsafe-local mode, a
 destructive effect whose evidence has a `semantic` predicate but nothing the
 kernel re-reads (`file_exists`, `file_absent`, `file_hash`) or asks another
@@ -584,7 +585,13 @@ input, output and evidence; file contents, browser text, terminal output, typed
 values, environment values, URL queries and userinfo, and common secret formats
 are not retained there. A task's goal is kept as declared with only those secret
 formats taken out, so a certificate's `goal` says what the task was for; a
-secret of no recognisable format written into a goal is kept with it. An
+secret of no recognisable format written into a goal is kept with it. Once
+a receipt, workflow event, approval decision, grant draw or idempotency commit
+is written, the database refuses an `UPDATE` or `DELETE` of it
+(`record_append_only`) and a write that would replace it leaves it as it was,
+which guards against mistakes rather than against someone who can write
+`melra.sqlite` (see
+[durable storage](ARCHITECTURE.md#durable-storage)). An
 `http_resource_matches` item names the URL it read without its query or
 userinfo; the request itself goes out as declared.
 

@@ -33,6 +33,13 @@ Pass `{ readOnly: true }` to open an existing database without creating it or
 taking a write lock — what `melra tasks`, `watch`, and `status` do beside a
 running server.
 
+Receipts, events, approval decisions, grant draws and idempotency commits are
+append-only: triggers refuse an `UPDATE` or `DELETE` of them
+(`record_append_only`) and keep a write that would replace one from taking
+effect. A certificate is never removed and changes only in place on its own
+task, and each one an update replaces is kept in `certificate_history`. That
+catches mistakes; anyone who can write the file can drop a trigger.
+
 Schema changes need a new migration rather than an edit to an existing one.
 
 Uses `node:sqlite`, which emits an experimental warning on Node 22 and 24.

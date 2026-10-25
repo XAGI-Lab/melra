@@ -200,8 +200,9 @@ cannot settle waits in `recovery_required` and is never replayed.
 
 ### 🧾 What happened?
 
-Every action MELRA runs to an outcome leaves a **redacted, hash-linked receipt**, so
-you can audit what ran, who asked, and why it was allowed.
+Every action MELRA runs to an outcome leaves a **redacted, append-only receipt**
+and a certificate that carries its own digest, so you can audit what ran, who
+asked, and why it was allowed.
 
 </td>
 </tr>
