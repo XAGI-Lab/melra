@@ -129,14 +129,14 @@ function req(
   };
 }
 
-const file = (
+export const file = (
   action: "list" | "read" | "stat" | "hash" | "write" | "move" | "delete" | "mkdir",
   path: string,
   extra: Record<string, unknown> = {},
 ): TaskRequestInput["operation"] =>
   ({ kind: "file", action, path, ...extra }) as TaskRequestInput["operation"];
 
-const term = (
+export const term = (
   command: string,
   args: string[] = [],
   extra: Record<string, unknown> = {},
@@ -150,7 +150,7 @@ const term = (
     ...extra,
   }) as TaskRequestInput["operation"];
 
-const http = (
+export const http = (
   method: "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE",
   url: string,
   extra: Record<string, unknown> = {},

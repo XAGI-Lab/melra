@@ -57,6 +57,19 @@ All notable changes are documented here. The format follows
 - `approval_denials` and `refusals` arrive in migration 8 and are append-only,
   as migration 7's tables are (`record_append_only`). Only this version writes
   them, so an older MELRA sharing the home keeps writing as it did.
+- `pnpm benchmark:aarm` runs a self-check of MELRA against the 21 AARM v1.0
+  minimum tests (17 MUST, 4 SHOULD) through the real runtime, with no model and
+  no network beyond loopback, in a few seconds. The cases are MELRA's own, as
+  data in `evals/src/aarm/corpus.ts`; which cases map to which test, our
+  paraphrase of each test and the sources (a hash of the aarm.dev table, never
+  its text) are pre-registered in
+  `evals/manifests/aarm-v1.0-minimum-tests-v1.json`, whose SHA-256 the harness
+  pins and checks before it runs. A case needing an interface MELRA lacks
+  (defer, modify, a record verifier, signed receipts, an audit export,
+  sessions, labels), or whose steps are not written yet, is reported
+  `not_implemented`, never run. It writes an artifact only with
+  `--output <file>`. It is a self-run mapping, not AARM conformance. See
+  `docs/research/AARM_SELFCHECK.md`.
 
 ### Changed
 
