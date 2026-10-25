@@ -502,3 +502,352 @@ describe("workflow approvals decided by an operator", () => {
     expect(store.getTask(taskId!)?.attempt).toBe(1);
   });
 });
+
+describe("an operator's denial", () => {
+  for (const mode of ["developer", "enforced"] as const) {
+    it(`cancels the task with why it was denied, apart from the agent's own cancel (${mode})`, async () => {
+      const { tasks, store, cipher } = await setup({ mode });
+      const planned = tasks.plan(put("ledger"));
+      const token = "ghp_0123456789abcdefghijklmnopqrstuvwxyz";
+      const denied = tasks.deny(planned.id, "cli:alice", { reason: "wrong_target", note: `Not this ledger, ${token}` });
+      const channel = mode === "enforced" ? "out_of_band" : "in_band";
+      const denial = {
+        reason: "wrong_target",
+        note: "Not this ledger, [REDACTED_GITHUB_TOKEN]",
+        channel,
+        approver: "cli:alice",
+        decidedAt: expect.any(String),
+      };
+      expect(denied).toMatchObject({ status: "cancelled", denial });
+      // What melra_task_status reads.
+      expect(tasks.status(planned.id)).toMatchObject({ status: "cancelled", denial });
+      const [row] = store.database.prepare("SELECT * FROM approval_denials").all();
+      expect(row).toMatchObject({
+        approval_id: planned.approval!.approvalId,
+        task_id: planned.id,
+        channel,
+        approver: "cli:alice",
+        reason: "wrong_target",
+        note: "Not this ledger, [REDACTED_GITHUB_TOKEN]",
+        // Of the operation alone, so the same request planned again has the same one.
+        operation_digest: cipher.digest(put("ledger").operation, "operation"),
+      });
+      await expect(tasks.execute(planned.id)).rejects.toThrow("task_not_executable:cancelled");
+
+      // The agent withdrawing its own task leaves no denial.
+      const withdrawn = tasks.plan(put("ledger"));
+      expect(tasks.cancel(withdrawn.id)).not.toHaveProperty("denial");
+      expect(store.getTask(withdrawn.id)).not.toHaveProperty("denial");
+      // A bare deny is reason other, with no note.
+      const bare = tasks.plan(put("other"));
+      expect(tasks.deny(bare.id, "cli:alice").denial).toEqual({
+        reason: "other",
+        channel,
+        approver: "cli:alice",
+        decidedAt: expect.any(String),
+      });
+    });
+  }
+
+  it("bounds the note, and records nothing for a task another process started first", async () => {
+    const { tasks, store } = await setup();
+    const planned = tasks.plan(put("ledger"));
+    expect(() => tasks.deny(planned.id, "cli:alice", { note: "x".repeat(1_001) })).toThrow();
+    expect(() => tasks.deny(planned.id, "cli:alice", { reason: "because" as "other" })).toThrow();
+    // Started by a peer between the operator's read and the deny.
+    const started = { ...store.getTask(planned.id)!, status: "running" as const };
+    const view = tasks.approvalView(planned.id);
+    store.saveTask(started);
+    vi.spyOn(tasks, "approvalView").mockReturnValueOnce(view);
+    expect(tasks.deny(planned.id, "cli:alice").status).toBe("running");
+    expect(store.getTask(planned.id)).not.toHaveProperty("denial");
+    expect(store.database.prepare("SELECT count(*) AS n FROM approval_denials").get()).toEqual({ n: 0 });
+    // Redaction lengthens this one, and the cap still holds after it.
+    const long = tasks.plan(put("long"));
+    const note = `${"x".repeat(984)} Bearer abcdefgh`;
+    expect(note).toHaveLength(1_000);
+    expect(tasks.deny(long.id, "cli:alice", { note }).denial?.note).toHaveLength(1_000);
+    const row = store.database.prepare("SELECT note FROM approval_denials WHERE task_id = ?").get(long.id) as {
+      note: string;
+    };
+    expect(row.note).toHaveLength(1_000);
+    expect(row.note).not.toContain("abcdefgh");
+  });
+});
+
+describe("refused answers (#424)", () => {
+  const forge = (task: { approval?: { approvalId: string; actionDigest: string } }) => ({
+    approvalId: task.approval!.approvalId,
+    phrase: `APPROVE ${task.approval!.actionDigest.slice(0, 12)}`,
+  });
+
+  const waiting = async (tasks: TaskController) => {
+    const planned = tasks.plan(
+      TaskRequestSchema.parse({
+        goal: "Inspect",
+        operation: { kind: "system", action: "info" },
+        requiredEvidence: [{ type: "semantic", question: "Is it fine?", artifacts: ["stored"] }],
+      }),
+    );
+    const ran = await tasks.execute(planned.id);
+    expect(ran.task.status).toBe("waiting_user");
+    return { taskId: planned.id, judgementId: ran.task.judgements![0]!.judgementId };
+  };
+
+  it("records an in-band approval once per task and code, however often it is sent, and nothing it carried", async () => {
+    const { tasks, store } = await setup({ mode: "enforced" });
+    const identity = { principal: { kind: "agent" as const, id: "a" }, onBehalfOf: [] };
+    const planned = tasks.plan({ ...put("ledger"), identity }, { client: "harness:A" });
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      await expect(tasks.execute(planned.id, forge(planned), { agent: "harness:A" })).rejects.toThrow(
+        "approval_in_band_refused",
+      );
+    }
+    expect(store.refusalCount()).toBe(1);
+    expect(store.listRefusals(5)).toEqual([
+      {
+        kind: "task",
+        subjectId: planned.id,
+        code: "approval_in_band_refused",
+        mode: "enforced",
+        client: "harness:A",
+        refusedAt: expect.any(String),
+      },
+    ]);
+    const stored = JSON.stringify(store.database.prepare("SELECT * FROM refusals").all());
+    expect(stored).not.toContain(planned.approval!.approvalId);
+    expect(stored).not.toContain(planned.approval!.actionDigest.slice(0, 12));
+    // Refusing it changed nothing else.
+    expect(store.getTask(planned.id)?.status).toBe("awaiting_approval");
+  });
+
+  it("names the sender its transport authenticated, never the task's planner", async () => {
+    const { tasks, store, cipher } = await setup({ mode: "enforced" });
+    const identity = { principal: { kind: "agent" as const, id: "a" }, onBehalfOf: [] };
+    const planned = tasks.plan({ ...put("ledger"), identity }, { client: "harness:A" });
+    // A session whose transport authenticated nobody, which calls its sender
+    // `agent`, can reach any task, so what it sends names nobody, not the
+    // client that planned the task.
+    const unnamed = { agent: "agent" };
+    await expect(tasks.execute(planned.id, forge(planned), unnamed)).rejects.toThrow("approval_in_band_refused");
+    // Nor a run.
+    const workflows = new WorkflowController(store, tasks, cipher);
+    const run = workflows.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: "66666666-6666-4666-8666-666666666666",
+        version: 1,
+        name: "Reached",
+        nodes: [{ id: "write", type: "operation", request: put("write") }],
+      }),
+    );
+    await expect(workflows.advance(run.id, [forge(planned)], [], unnamed)).rejects.toThrow("approval_in_band_refused");
+    // Nor does an agent's verdict sent over such a transport name the operator.
+    const asked = await waiting(tasks);
+    const grader = { identity: { principal: { kind: "agent" as const, id: "grader" }, onBehalfOf: [] } };
+    expect(() => tasks.judge({ ...asked, verdict: "yes" }, grader)).toThrow("judgement_in_band_refused");
+    expect(store.listRefusals(5)).toEqual(
+      expect.arrayContaining([
+        {
+          kind: "task",
+          subjectId: planned.id,
+          code: "approval_in_band_refused",
+          mode: "enforced",
+          refusedAt: expect.any(String),
+        },
+        {
+          kind: "task",
+          subjectId: asked.taskId,
+          code: "judgement_in_band_refused",
+          mode: "enforced",
+          principal: "agent:grader",
+          refusedAt: expect.any(String),
+        },
+        {
+          kind: "workflow",
+          subjectId: run.id,
+          code: "approval_in_band_refused",
+          mode: "enforced",
+          refusedAt: expect.any(String),
+        },
+      ]),
+    );
+    expect(store.refusalCount()).toBe(3);
+  });
+
+  it("records nothing for an operator's own command refused for the mode its process runs in", async () => {
+    const { root, tasks, store, cipher } = await setup({ mode: "enforced" });
+    const developer = new TaskController(
+      store,
+      createDefaultPolicy(root),
+      { execute: async () => ({ success: true }) },
+      await Verifier.create(root),
+      cipher,
+    );
+    // `melra judge` run without enforced mode on a task that ran enforced.
+    const asked = await waiting(tasks);
+    expect(() => developer.judge({ ...asked, verdict: "yes" }, { operator: "cli:alice" })).toThrow(
+      "judgement_in_band_refused",
+    );
+    // `melra workflow advance --approval` in enforced mode.
+    const workflows = new WorkflowController(store, tasks, cipher);
+    const run = workflows.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: "66666666-6666-4666-8666-666666666666",
+        version: 1,
+        name: "Written",
+        nodes: [{ id: "write", type: "operation", request: put("write") }],
+      }),
+    );
+    await expect(
+      workflows.advance(run.id, [{ approvalId: "00000000-0000-4000-8000-000000000000", phrase: "APPROVE x" }], [], {
+        operator: "cli:alice",
+      }),
+    ).rejects.toThrow("approval_in_band_refused");
+    // And without enforced mode, on that run's step planned enforced.
+    const { approval } = (await workflows.advance(run.id)).run.nodes.write!;
+    await expect(
+      new WorkflowController(store, developer, cipher).advance(
+        run.id,
+        [{ approvalId: approval!.approvalId, phrase: "APPROVE x" }],
+        [],
+        { operator: "cli:alice" },
+      ),
+    ).rejects.toThrow("approval_phrase_mismatch");
+    expect(store.refusalCount()).toBe(0);
+  });
+
+  it("records a phrase, id or decision that does not match, in developer mode too", async () => {
+    const { root, tasks, store, cipher } = await setup();
+    const planned = tasks.plan(put("ledger"));
+    await expect(tasks.execute(planned.id, { approvalId: planned.approval!.approvalId, phrase: "APPROVE 000000000000" }))
+      .rejects.toThrow("approval_phrase_mismatch");
+    await expect(tasks.execute(planned.id, { approvalId: "00000000-0000-4000-8000-000000000000", phrase: "APPROVE x" }))
+      .rejects.toThrow("approval_id_mismatch");
+    expect(() => tasks.decide(planned.id, "0".repeat(64), "cli:alice")).toThrow("approval_render_mismatch");
+    // Asked without an answer is not an attempt.
+    await expect(tasks.execute(planned.id)).rejects.toThrow("approval_required");
+    // A decision row that does not match what would be shown is its approver's.
+    const shown = tasks.plan(put("shown"));
+    store.recordApprovalDecision({
+      approvalId: shown.approval!.approvalId,
+      taskId: shown.id,
+      renderDigest: "f".repeat(64),
+      channel: "in_band",
+      approver: "cli:bob",
+      decidedAt: new Date().toISOString(),
+    });
+    await expect(tasks.execute(shown.id)).rejects.toThrow("approval_render_mismatch");
+    // A stored challenge that no longer binds the operation.
+    const bound = tasks.plan(put("bound"));
+    store.saveTask({ ...store.getTask(bound.id)!, approval: { ...bound.approval!, actionDigest: "0".repeat(64) } });
+    await expect(tasks.execute(bound.id, { approvalId: bound.approval!.approvalId, phrase: bound.approval!.phrase! }))
+      .rejects.toThrow("approval_action_digest_mismatch");
+    // Planned with no challenge, then asked to run where policy wants one:
+    // refused, but nothing was sent, so nothing is recorded.
+    const unasked = tasks.plan(
+      // `../outside`, not `/etc`: Windows reads `/etc` as a switch, not a path.
+      TaskRequestSchema.parse({ goal: "List", operation: { kind: "terminal", action: "run", command: "ls", args: ["../outside"] } }),
+    );
+    expect(unasked.status).toBe("planned");
+    const enforced = new TaskController(
+      store,
+      { ...createDefaultPolicy(root), mode: "enforced" },
+      { execute: async () => ({ success: true }) },
+      await Verifier.create(root),
+      cipher,
+    );
+    await expect(enforced.execute(unasked.id)).rejects.toThrow("approval_action_digest_mismatch");
+    // A run's step answered through the run is the sender's too.
+    const workflows = new WorkflowController(store, tasks, cipher);
+    const run = workflows.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: "88888888-8888-4888-8888-888888888888",
+        version: 1,
+        name: "Answered",
+        nodes: [{ id: "write", type: "operation", request: put("write") }],
+      }),
+    );
+    const step = (await workflows.advance(run.id)).run.nodes.write!;
+    await expect(
+      workflows.advance(run.id, [{ approvalId: step.approval!.approvalId, phrase: "APPROVE 000000000000" }], [], {
+        agent: "harness:C",
+      }),
+    ).rejects.toThrow("approval_phrase_mismatch");
+    expect(store.listRefusals(10).find(({ subjectId }) => subjectId === step.taskIds[0])).toMatchObject({
+      code: "approval_phrase_mismatch",
+      client: "harness:C",
+    });
+    expect(store.listRefusals(10).map(({ subjectId, code, mode, principal }) => [subjectId, code, mode, principal])).toEqual(
+      expect.arrayContaining([
+        [planned.id, "approval_phrase_mismatch", "developer", undefined],
+        [planned.id, "approval_id_mismatch", "developer", undefined],
+        [planned.id, "approval_render_mismatch", "developer", "cli:alice"],
+        [shown.id, "approval_render_mismatch", "developer", "cli:bob"],
+        [bound.id, "approval_action_digest_mismatch", "developer", undefined],
+      ]),
+    );
+    expect(store.refusalCount()).toBe(6);
+  });
+
+  it("records an in-band verdict outside the transaction the refusal rolls back", async () => {
+    const { tasks, store } = await setup({ mode: "enforced" });
+    const asked = await waiting(tasks);
+    const judge = {
+      identity: { principal: { kind: "agent" as const, id: "grader" }, onBehalfOf: [] },
+      client: { kind: "harness" as const, id: "C" },
+    };
+    const before = JSON.stringify(store.getTask(asked.taskId));
+    expect(() => tasks.judge({ ...asked, verdict: "yes" }, judge)).toThrow("judgement_in_band_refused");
+    expect(JSON.stringify(store.getTask(asked.taskId))).toBe(before);
+    expect(store.listRefusals(5)).toEqual([
+      expect.objectContaining({ subjectId: asked.taskId, code: "judgement_in_band_refused", principal: "agent:grader", client: "harness:C" }),
+    ]);
+  });
+
+  it("records an in-band answer to a run against the run, without what it said", async () => {
+    const { tasks, store, cipher } = await setup({ mode: "enforced" });
+    const workflows = new WorkflowController(store, tasks, cipher);
+    const planned = workflows.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: "77777777-7777-4777-8777-777777777777",
+        version: 1,
+        name: "Asked",
+        nodes: [
+          { id: "ask", type: "human_input", prompt: "Ship it?", answeredBy: "operator" },
+          { id: "write", type: "operation", dependsOn: ["ask"], request: put("write") },
+        ],
+      }),
+    );
+    await workflows.advance(planned.id);
+    const agent = { agent: "harness:C" };
+    await expect(workflows.advance(planned.id, [], [{ nodeId: "ask", value: "ship-it-now" }], agent)).rejects.toThrow(
+      "workflow_input_in_band_refused:ask",
+    );
+    await expect(
+      workflows.advance(planned.id, [{ approvalId: "00000000-0000-4000-8000-000000000000", phrase: "APPROVE x" }], [], agent),
+    ).rejects.toThrow("approval_in_band_refused");
+    expect(store.listRefusals(5).map(({ kind, subjectId, code, client }) => [kind, subjectId, code, client])).toEqual(
+      expect.arrayContaining([
+        ["workflow", planned.id, "workflow_input_in_band_refused", "harness:C"],
+        ["workflow", planned.id, "approval_in_band_refused", "harness:C"],
+      ]),
+    );
+    expect(JSON.stringify(store.database.prepare("SELECT * FROM refusals").all())).not.toMatch(/ship-it-now|APPROVE/);
+  });
+});
+
+describe("a plan-time policy deny", () => {
+  it("is certified POLICY_BLOCKED, as an execute-time one is", async () => {
+    const { tasks, store } = await setup();
+    const planned = tasks.plan({ ...put("ledger"), constraints: ["only the ledger"] });
+    expect(planned.status).toBe("policy_blocked");
+    const certificate = store.getCertificateForTask(planned.id);
+    expect(certificate).toMatchObject({ taskId: planned.id, result: "POLICY_BLOCKED", mode: "developer" });
+    expect(planned.certificateId).toBe(certificate?.certificateId);
+    expect(store.getTask(planned.id)?.certificateId).toBe(certificate?.certificateId);
+  });
+});

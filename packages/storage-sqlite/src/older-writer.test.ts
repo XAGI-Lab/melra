@@ -274,4 +274,41 @@ describe("an older MELRA writing the same home", () => {
       store.database.prepare("SELECT data FROM certificate_history WHERE task_id = ?").all(row.id),
     ).toEqual([{ data: JSON.stringify(first) }]);
   });
+
+  it("leaves a task denied here denied, and its own deny reads as the plain cancel it is", () => {
+    const path = newHome();
+    const store = open(path);
+    const older = olderMelra(path);
+    const pending = task("awaiting_approval");
+    store.saveTask(pending);
+    const denial = {
+      reason: "never" as const,
+      channel: "out_of_band" as const,
+      approver: "cli:operator",
+      decidedAt: pending.updatedAt,
+    };
+    // What a deny here writes: the cancel carrying its denial, and its row.
+    expect(store.saveTaskIf({ ...pending, status: "cancelled", denial }, UNSTARTED)).toBe(true);
+    expect(
+      store.recordApprovalDenial({
+        ...denial,
+        approvalId: "00000000-0000-4000-8000-0000000000d1",
+        taskId: pending.id,
+        renderDigest: "b".repeat(64),
+        operationDigest: "c".repeat(64),
+      }),
+    ).toBe(true);
+    // Its execute and its deny, both a write out of an unstarted status, find
+    // the task gone from one and leave the denial standing.
+    expect(older.saveTaskIf({ ...pending, status: "running" }, UNSTARTED)).toBe(false);
+    expect(older.saveTaskIf({ ...pending, status: "cancelled" }, UNSTARTED)).toBe(false);
+    expect(store.getTask(pending.id)).toMatchObject({ status: "cancelled", denial });
+    // It records no denial and no refusal: its deny is a cancel, as it always was.
+    const other = task("awaiting_approval", { id: "00000000-0000-4000-8000-000000000002" });
+    older.saveTask(other);
+    expect(older.saveTaskIf({ ...other, status: "cancelled" }, UNSTARTED)).toBe(true);
+    expect(store.getTask(other.id)?.status).toBe("cancelled");
+    expect(store.getTask(other.id)).not.toHaveProperty("denial");
+    expect(store.refusalCount()).toBe(0);
+  });
 });

@@ -175,6 +175,7 @@ describe("melra tasks, status, and watch", { timeout: 60_000 }, () => {
       awaitingApproval: number;
       expiredApprovals: number;
       expiredWorkflowSteps: number;
+      refusals: { count: number; latest: unknown[] };
     };
 
   it("counts an approval given in time, not yet acted on, as neither waiting nor expired", async () => {
@@ -496,6 +497,55 @@ describe("melra tasks, status, and watch", { timeout: 60_000 }, () => {
     expect([status.awaitingApproval, status.expiredApprovals]).toEqual([0, 1]);
   });
 
+  it("shows the answers refused, and flags a task whose agent sent one only an operator gives (#424)", async () => {
+    const { root, options, run } = await workspace();
+    const tried = (await run(fileWrite)).task;
+    const quiet = (await run(fileWrite)).task;
+    const store = new SqliteStore(join(root, ".melra", "melra.sqlite"));
+    const refusal = {
+      kind: "task" as const,
+      subjectId: tried.id,
+      code: "approval_in_band_refused",
+      mode: "enforced",
+      principal: "agent:a",
+      client: "harness:A",
+      refusedAt: new Date().toISOString(),
+    };
+    try {
+      store.recordRefusal(refusal);
+      // A mismatch is recorded too, but is not the agent answering for the operator.
+      store.recordRefusal({ ...refusal, subjectId: quiet.id, code: "approval_phrase_mismatch", mode: "developer" });
+    } finally {
+      store.close();
+    }
+    const listed = JSON.parse((await execute(process.execPath, [entry, "tasks", "--json"], options)).stdout) as {
+      refusals: { count: number; latest: unknown[] };
+    };
+    expect(listed.refusals.count).toBe(2);
+    expect(listed.refusals.latest).toContainEqual(refusal);
+    const status = await statusOf(options);
+    expect(status.refusals).toEqual(listed.refusals);
+
+    const tty = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+    Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+    let printed = "";
+    const write = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => ((printed += String(chunk)), true));
+    try {
+      tasksCommand(
+        { workspaceRoot: root, dataDirectory: join(root, ".melra"), approver: "operator", unhinged: false, mode: "developer" },
+        { limit: 10, json: false, window: { mode: "developer" } },
+      );
+    } finally {
+      write.mockRestore();
+      if (tty === undefined) delete (process.stdout as { isTTY?: boolean }).isTTY;
+      else Object.defineProperty(process.stdout, "isTTY", tty);
+    }
+    expect(printed).toContain(`${tried.id.slice(0, 8)}!`);
+    expect(printed).not.toContain(`${quiet.id.slice(0, 8)}!`);
+    expect(printed).toContain("2 refused answer(s) recorded");
+    expect(printed).toContain(`task ${tried.id.slice(0, 8)}  approval_in_band_refused  enforced  agent:a`);
+  });
+
   it("refuses a --status or --limit with nothing after it", async () => {
     const { options } = await workspace();
     // What an unquoted `--status $S` sends with S unset: it listed everything.
@@ -578,6 +628,27 @@ describe("melra tasks, status, and watch", { timeout: 60_000 }, () => {
         });
       });
       const created = await run(systemInfo);
+      const refused = new Promise<Record<string, unknown>>((found) => {
+        watcher.stdout.on("data", () => {
+          for (const line of buffered.split("\n").slice(0, -1)) {
+            const event = JSON.parse(line) as Record<string, unknown>;
+            if (event.type === "refusal") found(event);
+          }
+        });
+      });
+      const store = new SqliteStore(join(options.env.MELRA_HOME, "melra.sqlite"));
+      try {
+        store.recordRefusal({
+          kind: "task",
+          subjectId: created.task.id,
+          code: "approval_phrase_mismatch",
+          mode: "developer",
+          refusedAt: new Date().toISOString(),
+        });
+      } finally {
+        store.close();
+      }
+      expect(await refused).toMatchObject({ type: "refusal", id: created.task.id, code: "approval_phrase_mismatch" });
       expect(await verified).toMatchObject({
         type: "task",
         id: created.task.id,

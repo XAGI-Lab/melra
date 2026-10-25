@@ -1340,6 +1340,60 @@ export interface ApprovalDecision {
   decidedAt: string;
 }
 
+/** Why an operator said no to a challenge. */
+export const DenialReasonSchema = z.enum(["wrong_target", "too_broad", "not_now", "never", "other"]);
+export type DenialReason = z.infer<typeof DenialReasonSchema>;
+
+/**
+ * What an operator surface sends with a no. `note` is for the people reading
+ * the record: stored redacted, and never read by MELRA.
+ */
+export const DenialInputSchema = z
+  .object({
+    reason: DenialReasonSchema.default("other"),
+    note: z.string().min(1).max(1_000).optional(),
+  })
+  .strict();
+export type DenialInput = z.input<typeof DenialInputSchema>;
+
+/**
+ * An operator's no to a challenge, recorded once per challenge. Like a
+ * decision, `channel` is `out_of_band` only from an enforced process, and
+ * `renderDigest` digests the contract an approver would be shown.
+ * `operationDigest` is keyed and digests the operation alone, without its
+ * task, so the same request planned again has the same one.
+ */
+export interface ApprovalDenial {
+  approvalId: string;
+  taskId: string;
+  renderDigest: string;
+  operationDigest: string;
+  channel: "in_band" | "out_of_band";
+  approver: string;
+  reason: DenialReason;
+  note?: string;
+  decidedAt: string;
+}
+
+/**
+ * An answer refused for coming from the agent's side where only an operator
+ * answers, or for not matching what it answers (#424). Kept once per task or
+ * run and code, the first time; nothing of what was sent is kept. `principal`
+ * is the chain the sender declared, if it declared one (a decision's approver,
+ * for a decision that does not match), and `client` the client its transport
+ * authenticated, if any. An approval sent with `melra workflow advance
+ * --approval` or a verdict sent with `melra judge` is not recorded.
+ */
+export interface Refusal {
+  kind: "task" | "workflow";
+  subjectId: string;
+  code: string;
+  mode: string;
+  principal?: string;
+  client?: string;
+  refusedAt: string;
+}
+
 /** An answer to a semantic question (#54): no confidence, only these three. */
 export const SemanticVerdictSchema = z.enum(["yes", "no", "cannot_tell"]);
 export type SemanticVerdict = z.infer<typeof SemanticVerdictSchema>;
@@ -1382,6 +1436,11 @@ export interface TaskRecord {
   approval?: ApprovalChallenge;
   /** What authorised the run, written in the same save that marks it running. */
   approvedBy?: ApprovalDecision;
+  /**
+   * An operator's no, written in the save that cancels the task. A task its
+   * agent cancelled has none.
+   */
+  denial?: Pick<ApprovalDenial, "reason" | "note" | "channel" | "approver" | "decidedAt">;
   /**
    * The deployment mode the effect ran under, written in that same save, so a
    * receipt or certificate written later by recovery or reconciliation in a

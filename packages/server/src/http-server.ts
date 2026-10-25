@@ -15,7 +15,7 @@ import { isMainThread } from "node:worker_threads";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import type { Principal, TaskRecord, WorkflowRun } from "@melra/protocol";
+import type { DenialInput, Principal, TaskRecord, WorkflowRun } from "@melra/protocol";
 import { callerRef } from "@melra/protocol";
 import type { SqliteStore } from "@melra/storage-sqlite";
 import { capabilitiesPayload, createMcpServer } from "./mcp-server.js";
@@ -797,7 +797,7 @@ export async function serveHttp(
     if (route[2] === "deny") {
       // Another process may have started it since the page drew it: then it
       // runs, and the page must not say it was denied.
-      const task = runtime.controller.cancel(taskId);
+      const task = runtime.controller.deny(taskId, console_.approver, ((await readBody(request)) ?? {}) as DenialInput);
       if (task.status !== "cancelled") throw new Error(`task_not_cancellable:${task.status}`);
       json(response, 200, { task });
       return;

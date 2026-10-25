@@ -147,19 +147,28 @@ describe("approval console", () => {
     const run = await runtime.controller.execute(task.id);
     expect(run.task.status).toBe("verified_success");
     expect(run.task.approvedBy).toMatchObject({ channel: "out_of_band", approver: "console:test" });
-    // Deny cancels, through the same checks.
+    // Deny cancels, through the same checks, and records the operator's no.
     const other = pending();
-    const denied = await call(server, `/api/tasks/${other.id}/deny`, { method: "POST", token, origin, body: {} });
-    expect(denied.body.task).toMatchObject({ status: "cancelled" });
+    const deny = (body: unknown) => call(server, `/api/tasks/${other.id}/deny`, { method: "POST", token, origin, body });
+    expect((await deny({ reason: "someday" })).status).toBe(400);
+    expect(runtime.store.getTask(other.id)?.status).toBe("awaiting_approval");
+    const denied = await deny({ reason: "not_now", note: "After the release." });
+    expect(denied.body.task).toMatchObject({
+      status: "cancelled",
+      denial: { reason: "not_now", note: "After the release.", channel: "out_of_band", approver: "console:test" },
+    });
     // One the agent's server started after the page drew it runs, so the deny
     // is refused rather than shown as done.
     const started = pending();
     const view = runtime.controller.approvalView.bind(runtime.controller);
-    vi.spyOn(runtime.controller, "approvalView").mockImplementationOnce((taskId) => {
-      const drawn = view(taskId);
-      runtime.store.saveTask({ ...drawn.task, status: "running" });
-      return drawn;
-    });
+    // Started once the deny has read it, after the route's own read.
+    vi.spyOn(runtime.controller, "approvalView")
+      .mockImplementationOnce(view)
+      .mockImplementationOnce((taskId) => {
+        const drawn = view(taskId);
+        runtime.store.saveTask({ ...drawn.task, status: "running" });
+        return drawn;
+      });
     const late = await call(server, `/api/tasks/${started.id}/deny`, { method: "POST", token, origin, body: {} });
     expect(late).toMatchObject({ status: 400, body: { error: "task_not_cancellable:running" } });
   });
@@ -300,6 +309,7 @@ describe("approval console", () => {
     if (executablePath === undefined) return;
     const { server, code } = await open();
     const task = pending("Write w.txt</pre><script>alert(1)</script>\u202e");
+    const other = pending();
     const browser = await chromium.launch({ executablePath, headless: true });
     try {
       const page = await browser.newPage();
@@ -331,6 +341,21 @@ describe("approval console", () => {
       await approve.click();
       await page.getByText("Approved, out of band").waitFor();
       expect(decisionFor(task.id)).toMatchObject({ channel: "out_of_band", approver: "console:test" });
+      // A deny carries the reason picked and the note typed beside it.
+      await page.locator(`[data-key="${other.id}"]`).click();
+      await page.getByLabel("Why deny").selectOption("never");
+      await page.getByLabel("Note with a deny").fill("Not on Fridays.");
+      const deny = page.getByRole("button", { name: "Deny", exact: true });
+      await deny.scrollIntoViewIfNeeded();
+      await expect.poll(() => deny.getAttribute("aria-disabled"), { timeout: 5_000 }).toBe("false");
+      await deny.click();
+      await page.getByText("Denied; the task is cancelled.").waitFor();
+      expect(runtime.store.getTask(other.id)?.denial).toMatchObject({
+        reason: "never",
+        note: "Not on Fridays.",
+        channel: "out_of_band",
+        approver: "console:test",
+      });
       // A reload is a new page, and only the page that spent the code is paired.
       // The one that left took the session with it: the console refuses it now.
       await page.reload();

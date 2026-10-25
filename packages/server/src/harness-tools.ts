@@ -21,6 +21,7 @@ import {
   type EvidencePredicate,
   OperationSchema,
   type Principal,
+  principalRef,
   TaskRequestSchema,
 } from "@melra/protocol";
 import { z } from "zod";
@@ -378,6 +379,7 @@ export function registerHarnessTools(
       const executed = await runtime.controller.execute(
         taskId,
         phrase === undefined ? undefined : { approvalId: held.approval.approvalId, phrase },
+        client === undefined ? undefined : { agent: principalRef(client) },
       );
       return toolResult(summarize(taskId, executed.task.status, executed.output));
     },

@@ -548,8 +548,10 @@ answer. The `harness:` link an OAuth client's token puts above a judge's
 chain is recorded in `judgedBy` but not compared. That check compares declared identities, so over MCP even a `human:` judge is the
 harness's claim; only a `cli:` judge, from `melra judge`, came through an
 operator surface. In enforced mode, and on a task that ran enforced, no verdict
-sent over MCP is recorded: one on a question still waiting is refused
-(`judgement_in_band_refused`), and an operator answers with `melra judge`. A
+sent over MCP is recorded as a verdict: one on a question still waiting is
+refused (`judgement_in_band_refused`), the attempt is recorded where
+`melra tasks` and `melra status` show it, and an operator answers with
+`melra judge`. A
 yes on every question makes the task `verified_success`.
 The first `no` ends it `partial` (`semantic_judgement_no`); `cannot_tell` ends a
 change `recovery_required` and a read `partial`
@@ -618,11 +620,11 @@ values, environment values, URL queries and userinfo, and common secret formats
 are not retained there. A task's goal is kept as declared with only those secret
 formats taken out, so a certificate's `goal` says what the task was for; a
 secret of no recognisable format written into a goal is kept with it. Once
-a receipt, workflow event, approval decision, grant draw or idempotency commit
-is written, the database refuses an `UPDATE` or `DELETE` of it
-(`record_append_only`) and a write that would replace it leaves it as it was,
-which guards against mistakes rather than against someone who can write
-`melra.sqlite` (see
+a receipt, workflow event, approval decision or denial, refused answer, grant
+draw or idempotency commit is written, the database refuses an `UPDATE` or
+`DELETE` of it (`record_append_only`) and a write that would replace it leaves
+it as it was, which guards against mistakes rather than against someone who
+can write `melra.sqlite` (see
 [durable storage](ARCHITECTURE.md#durable-storage)). An
 `http_resource_matches` item names the URL it read without its query or
 userinfo; the request itself goes out as declared.

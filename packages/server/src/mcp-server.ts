@@ -227,7 +227,7 @@ export const SERVER_INSTRUCTIONS = [
  * unchanged byte for byte.
  */
 const ENFORCED_APPROVAL =
-  "Enforced mode: a challenge has no phrase and you cannot approve it. Anything you send as an approval is refused (approval_in_band_refused). An operator approves with `melra approve <taskId>` outside this conversation; until then melra_execute answers approval_awaiting_operator and melra_task_status keeps showing awaiting_approval, so call melra_execute again later: only the operator's decision lets this task run. Do not reach the same effect through another tool. approval_expired means plan the task again. No verdict you send is recorded: one on a question still waiting is refused (judgement_in_band_refused); an operator judges with `melra judge <taskId> --judgement <judgementId> --verdict yes|no|cannot_tell`. A workflow's human_input node whose answeredBy is operator is answered only by an operator, with `melra workflow advance <workflowId> --input <nodeId>=<value>`; an answer you send for one is refused (workflow_input_in_band_refused).";
+  "Enforced mode: a challenge has no phrase and you cannot approve it. Anything you send as an approval is refused (approval_in_band_refused). An operator approves with `melra approve <taskId>` outside this conversation; until then melra_execute answers approval_awaiting_operator and melra_task_status keeps showing awaiting_approval, so call melra_execute again later: only the operator's decision lets this task run. Do not reach the same effect through another tool. approval_expired means plan the task again. No verdict you send is recorded as a verdict: one on a question still waiting is refused (judgement_in_band_refused); an operator judges with `melra judge <taskId> --judgement <judgementId> --verdict yes|no|cannot_tell`. A workflow's human_input node whose answeredBy is operator is answered only by an operator, with `melra workflow advance <workflowId> --input <nodeId>=<value>`; an answer you send for one is refused (workflow_input_in_band_refused).";
 
 export function createMcpServer(
   runtime: MelraRuntime,
@@ -251,7 +251,7 @@ export function createMcpServer(
   // authenticated client acts only on its own tasks and runs: an id is a
   // handle, not a credential. A halt from here is the agent's, whoever holds
   // the session; an operator's comes only through `melra workflow`. So is an
-  // answer to a human_input node.
+  // answer to a human_input node, and an approval.
   const caller = callerRef(client);
   const agent = { agent: client === undefined ? "agent" : principalRef(client) };
   const ownTask = (taskId: string) => runtime.controller.assertCaller(taskId, caller);
@@ -316,7 +316,7 @@ export function createMcpServer(
       const parsed = MelraExecuteInputSchema.parse(input);
       ownTask(parsed.taskId);
       return toolResult(
-        await runtime.controller.execute(parsed.taskId, parsed.approval),
+        await runtime.controller.execute(parsed.taskId, parsed.approval, agent),
       );
     },
   );
@@ -326,7 +326,7 @@ export function createMcpServer(
     {
       title: "Inspect MELRA task status",
       description:
-        "Read one task's stored record by taskId (from melra_plan, or a workflow node's taskIds), in any status, policy_blocked and cancelled included, without changing or waiting on it. Returns the task: status, policyDecision, any approval challenge and approvedBy, the redacted request and result, error, attempts, receiptIds, certificateId, judgements (with judgedBy once answered) and timestamps. Use it to re-check a task after melra_task_cancel or from another session, or to re-read a pending challenge. Use melra_receipt for receipts and the certificate, and melra_workflow_status for a whole workflow run.",
+        "Read one task's stored record by taskId (from melra_plan, or a workflow node's taskIds), in any status, policy_blocked and cancelled included, without changing or waiting on it. Returns the task: status, policyDecision, any approval challenge and approvedBy, denial when an operator denied it (reason, note, channel, approver, decidedAt; a task cancelled with melra_task_cancel has none), the redacted request and result, error, attempts, receiptIds, certificateId, judgements (with judgedBy once answered) and timestamps. Use it to re-check a task after melra_task_cancel or from another session, or to re-read a pending challenge. Use melra_receipt for receipts and the certificate, and melra_workflow_status for a whole workflow run.",
       inputSchema: MelraTaskStatusInputSchema,
       annotations: {
         readOnlyHint: true,
@@ -399,9 +399,9 @@ export function createMcpServer(
     {
       title: "Judge a MELRA task's semantic question",
       description:
-        "Answer one semantic question a waiting_user task waits on. MELRA runs no model, so a semantic predicate in requiredEvidence is answered from outside it, by a principal other than the one that planned the task. Read the task with melra_task_status first: judgements lists each question's judgementId, predicateIndex and expiresAt; request.requiredEvidence[predicateIndex] is the question, and the redacted result is what the effect returned. Judge that result, not the question's framing: the question was written by whoever ran the effect. identity is required and recorded as given, beside the receipt's principal; a judge whose principal is the task's principal or a non-human link that principal acts for, or whose onBehalfOf names the task's principal, is refused (semantic_judge_is_actor). rationale is for the people reading the record: stored redacted, never read by MELRA. A yes on every question makes the task verified_success; the first no ends it partial (error semantic_judgement_no); cannot_tell ends a change recovery_required and a read partial (semantic_judgement_cannot_tell); a yes while other questions are open is recorded and the task keeps waiting. Each question is answered once. Nothing runs again and no receipt is added: only the task and, once settled, its certificate change. Returns { task, certificate? }, the certificate only when the verdict settled the task. Fails without writing anything with task_not_found, judgement_in_band_refused (a task run in enforced mode takes a verdict only from an operator), task_not_awaiting_judgement:<status>, judgement_not_found, judgement_already_answered, judgement_expired (from expiresAt on; the task then settles closed) or semantic_judge_is_actor." +
+        "Answer one semantic question a waiting_user task waits on. MELRA runs no model, so a semantic predicate in requiredEvidence is answered from outside it, by a principal other than the one that planned the task. Read the task with melra_task_status first: judgements lists each question's judgementId, predicateIndex and expiresAt; request.requiredEvidence[predicateIndex] is the question, and the redacted result is what the effect returned. Judge that result, not the question's framing: the question was written by whoever ran the effect. identity is required and recorded as given, beside the receipt's principal; a judge whose principal is the task's principal or a non-human link that principal acts for, or whose onBehalfOf names the task's principal, is refused (semantic_judge_is_actor). rationale is for the people reading the record: stored redacted, never read by MELRA. A yes on every question makes the task verified_success; the first no ends it partial (error semantic_judgement_no); cannot_tell ends a change recovery_required and a read partial (semantic_judgement_cannot_tell); a yes while other questions are open is recorded and the task keeps waiting. Each question is answered once. Nothing runs again and no receipt is added: only the task and, once settled, its certificate change. Returns { task, certificate? }, the certificate only when the verdict settled the task. Fails without recording a verdict with task_not_found, judgement_in_band_refused (a task run in enforced mode takes a verdict only from an operator; the refused attempt is recorded for the operator to see), task_not_awaiting_judgement:<status>, judgement_not_found, judgement_already_answered, judgement_expired (from expiresAt on; the task then settles closed) or semantic_judge_is_actor." +
         (runtime.policy.mode === "enforced"
-          ? " Enforced mode: no verdict sent here is recorded, and one on a question still waiting is refused (judgement_in_band_refused); an operator judges with `melra judge <taskId> --judgement <judgementId> --verdict yes|no|cannot_tell` outside this conversation."
+          ? " Enforced mode: no verdict sent here is recorded as one, and one on a question still waiting is refused (judgement_in_band_refused); an operator judges with `melra judge <taskId> --judgement <judgementId> --verdict yes|no|cannot_tell` outside this conversation."
           : ""),
       inputSchema: MelraTaskJudgeInputSchema,
       annotations: {

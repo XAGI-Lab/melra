@@ -12,6 +12,7 @@ import { connect, type NetConnectOpts } from "node:net";
 import { join } from "node:path";
 import {
   PRODUCT_VERSION,
+  type Refusal,
   type TaskRecord,
   type TaskStatus,
   type WorkflowRun,
@@ -222,6 +223,38 @@ function judgementCounts(store: SqliteStore): JudgementCounts {
   return counts;
 }
 
+interface Refusals {
+  count: number;
+  latest: Refusal[];
+}
+
+function refusals(store: SqliteStore): Refusals {
+  return { count: store.refusalCount(), latest: store.listRefusals(5) };
+}
+
+/** An answer only an operator gives in enforced mode, sent from the agent's side. */
+function inBand(refusal: Refusal): boolean {
+  return refusal.code.endsWith("_in_band_refused");
+}
+
+function refusalLine(refusal: Refusal): string {
+  return printable(
+    [
+      `${refusal.kind} ${shortId(refusal.subjectId)}`,
+      refusal.code,
+      refusal.mode,
+      refusal.principal ?? refusal.client ?? "",
+      ago(refusal.refusedAt),
+    ]
+      .filter((part) => part !== "")
+      .join("  "),
+  );
+}
+
+function refusalHint(count: number): string {
+  return `${count} refused answer(s) recorded, one per task or run and code; the latest:`;
+}
+
 function judgementHint(waiting: number): string {
   return `${waiting} waiting for judgement — answer with \`melra judge <task-id> --judgement <id> --verdict yes|no|cannot_tell\``;
 }
@@ -240,18 +273,32 @@ export interface TasksOptions {
 }
 
 export function tasksCommand(env: CliEnvironment, options: TasksOptions): number {
-  const { tasks, approvals, judgements } = withStore(
+  const { tasks, approvals, judgements, refused, tried } = withStore(
     env,
     {
       tasks: [] as TaskRecord[],
       approvals: { waiting: 0, expired: 0, expiredSteps: 0 },
       judgements: { waiting: 0, expired: 0 },
+      refused: { count: 0, latest: [] } as Refusals,
+      tried: new Set<string>(),
     },
-    (store) => ({
-      tasks: store.listTasks(options.limit, options.status),
-      approvals: approvalCounts(store, options.window),
-      judgements: judgementCounts(store),
-    }),
+    (store) => {
+      const tasks = store.listTasks(options.limit, options.status);
+      return {
+        tasks,
+        approvals: approvalCounts(store, options.window),
+        judgements: judgementCounts(store),
+        refused: refusals(store),
+        // Listed tasks whose agent sent an approval or verdict only an
+        // operator gives. A run's refusals name the run, so mark no task.
+        tried: new Set(
+          store
+            .listRefusals(100_000, tasks.map((task) => task.id))
+            .filter(inBand)
+            .map((refusal) => refusal.subjectId),
+        ),
+      };
+    },
   );
   if (!humanOutput(options.json)) {
     // The shape `/api/tasks` answers with, minus approvals and the console's
@@ -260,7 +307,15 @@ export function tasksCommand(env: CliEnvironment, options: TasksOptions): number
     const { policyError } = options;
     write(
       printable(
-        JSON.stringify({ tasks: tasks.map(visible), ...(policyError === undefined ? {} : { policyError }) }, null, 2),
+        JSON.stringify(
+          {
+            tasks: tasks.map(visible),
+            ...(refused.count === 0 ? {} : { refusals: refused }),
+            ...(policyError === undefined ? {} : { policyError }),
+          },
+          null,
+          2,
+        ),
         true,
       ),
     );
@@ -280,7 +335,7 @@ export function tasksCommand(env: CliEnvironment, options: TasksOptions): number
   }
   const header = ["ID", "STATUS", "OPERATION", "TARGET", "EFFECT", "UPDATED"];
   const rows = tasks.map((task) => [
-    shortId(task.id),
+    `${shortId(task.id)}${tried.has(task.id) ? "!" : ""}`,
     task.status,
     operationName(task),
     truncate(printable(taskTarget(task)), 48),
@@ -301,6 +356,10 @@ export function tasksCommand(env: CliEnvironment, options: TasksOptions): number
     ...expiredHints(approvals),
     ...(judgements.waiting > 0 ? [judgementHint(judgements.waiting)] : []),
     ...(judgements.expired > 0 ? [expiredJudgementHint(judgements.expired)] : []),
+    ...(tried.size > 0
+      ? [paint.fail("! its agent sent an approval or verdict that only an operator gives, and it was refused")]
+      : []),
+    ...(refused.count > 0 ? [refusalHint(refused.count), ...refused.latest.map((entry) => `  ${refusalLine(entry)}`)] : []),
   ];
   if (hints.length > 0) write();
   for (const hint of hints) write(hint);
@@ -319,10 +378,15 @@ type WatchEvent =
       effect: string;
       risk: string;
     }
-  | { type: "workflow"; at: string; id: string; status: string; previous?: string };
+  | { type: "workflow"; at: string; id: string; status: string; previous?: string }
+  | ({ type: "refusal"; at: string; id: string } & Omit<Refusal, "subjectId" | "refusedAt">);
 
 function describe(event: WatchEvent): string {
   const time = new Date(event.at).toLocaleTimeString();
+  if (event.type === "refusal") {
+    const { type: _type, at, id, ...refusal } = event;
+    return `${time}  refused ${refusalLine({ ...refusal, subjectId: id, refusedAt: at })}`;
+  }
   const status =
     event.previous === undefined
       ? tone(event.status, event.status)
@@ -354,6 +418,7 @@ export function watchCommand(env: CliEnvironment, options: { json: boolean }): P
   const human = humanOutput(options.json);
   const seenTasks = new Map<string, string>();
   const seenWorkflows = new Map<string, string>();
+  const seenRefusals = new Set<string>();
   let store: SqliteStore | undefined;
   let primed = false;
 
@@ -402,6 +467,14 @@ export function watchCommand(env: CliEnvironment, options: { json: boolean }): P
         ...(previous === undefined ? {} : { previous }),
       });
     }
+    // Kept once per task or run and code, so a key seen is never news again.
+    for (const { subjectId, refusedAt, ...refusal } of store.listRefusals(100).reverse()) {
+      const key = `${subjectId}\0${refusal.code}`;
+      if (seenRefusals.has(key)) continue;
+      seenRefusals.add(key);
+      if (!primed) continue;
+      emit({ type: "refusal", at: refusedAt, id: subjectId, ...refusal });
+    }
     primed = true;
   };
 
@@ -433,7 +506,8 @@ export function watchCommand(env: CliEnvironment, options: { json: boolean }): P
     // On stderr so stdout stays pure NDJSON; it also tells a caller that the
     // baseline is taken and anything from here on will be reported.
     process.stderr.write(
-      `Watching ${databasePath(env)} for task and workflow changes. Ctrl-C to stop.\n`,
+      `Watching ${databasePath(env)} for task and workflow changes and refused answers` +
+        ` (${store?.refusalCount() ?? 0} recorded so far). Ctrl-C to stop.\n`,
     );
     timer = setInterval(tick, POLL_MS);
   });
@@ -511,7 +585,7 @@ export async function statusCommand(
   }
   const mode = env.mode === "enforced" || policyMode === "enforced" ? "enforced" : "developer";
   const path = databasePath(env);
-  const { tasks, workflows, lastActivity, approvals, judgements } = withStore(
+  const { tasks, workflows, lastActivity, approvals, judgements, refused } = withStore(
     env,
     {
       tasks: {} as Record<string, number>,
@@ -519,6 +593,7 @@ export async function statusCommand(
       lastActivity: undefined as string | undefined,
       approvals: { waiting: 0, expired: 0, expiredSteps: 0 },
       judgements: { waiting: 0, expired: 0 },
+      refused: { count: 0, latest: [] } as Refusals,
     },
     (store) => {
       const runs = store.listWorkflowRuns();
@@ -536,6 +611,7 @@ export async function statusCommand(
           () => runs,
         ),
         judgements: judgementCounts(store),
+        refused: refusals(store),
       };
     },
   );
@@ -566,6 +642,7 @@ export async function statusCommand(
     expiredWorkflowSteps: approvals.expiredSteps,
     awaitingJudgement: judgements.waiting,
     expiredJudgements: judgements.expired,
+    refusals: refused,
     lastActivity: lastActivity ?? null,
     server: {
       http: { address: `127.0.0.1:${port}`, state: http ? "reachable" : "not running" },
@@ -596,6 +673,10 @@ export async function statusCommand(
   for (const hint of expiredHints(approvals)) row("Expired", hint);
   if (report.awaitingJudgement > 0) row("Waiting", judgementHint(report.awaitingJudgement));
   if (report.expiredJudgements > 0) row("Expired", expiredJudgementHint(report.expiredJudgements));
+  if (refused.count > 0) {
+    row("Refused", refusalHint(refused.count));
+    for (const entry of refused.latest) row("", paint.fail(refusalLine(entry)));
+  }
   row("Last active", lastActivity === undefined ? "never" : ago(lastActivity));
   row("HTTP", `${report.server.http.address} ${report.server.http.state}`);
   if (report.server.socket !== undefined) {

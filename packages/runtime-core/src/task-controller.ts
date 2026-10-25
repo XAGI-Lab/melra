@@ -5,7 +5,9 @@ import { randomUUID } from "node:crypto";
 import type {
   ApprovalChallenge,
   ApprovalDecision,
+  ApprovalDenial,
   ApprovalResponse,
+  DenialInput,
   EffectContract,
   EvidencePredicate,
   Identity,
@@ -13,6 +15,7 @@ import type {
   Operation,
   PolicyDecision,
   Principal,
+  Refusal,
   SemanticJudgedBy,
   SemanticJudgement,
   TaskRecord,
@@ -22,11 +25,13 @@ import {
   allowsRetry,
   callerRef,
   delegationChain,
+  DenialInputSchema,
   effectContract,
   executionGuaranteeFor,
   isOutcomeUnknown,
   LOCAL_IDENTITY,
   MelraTaskJudgeInputSchema,
+  principalRef,
   TaskRequestSchema,
 } from "@melra/protocol";
 import {
@@ -398,6 +403,8 @@ export class TaskController {
     this.store.transaction(() => {
       this.store.saveTask(task);
       if (sealed !== undefined) this.store.saveTaskPayload(id, sealed, timestamp);
+      // A deny is an outcome like any other, so it is certified as execute's is.
+      else this.createAndSaveCertificate(task, []);
     });
     // The plaintext request goes back to the caller with the contract derived
     // from it, so what a caller reads before approving is the same object the
@@ -512,9 +519,16 @@ export class TaskController {
     }
   }
 
+  /**
+   * `by` is who sent `approval`, as for a workflow advance: the agent by the
+   * client its transport authenticated (`agent` where it authenticated none),
+   * or an operator by their label. A refused answer is recorded as the
+   * agent's, never as the planner's, and an operator's not at all.
+   */
   async execute(
     taskId: string,
     approval?: ApprovalResponse,
+    by?: { agent: string } | { operator: string },
   ): Promise<ExecutionResult> {
     const task = this.status(taskId);
     if (task.status === "policy_blocked") {
@@ -571,18 +585,30 @@ export class TaskController {
       // process planned holds the plain digest, which binds the same exact
       // operation; it stays executable until it expires.
       const fresh = rechecked.challenge?.actionDigest;
+      // An operator's is a command to rerun, not an answer from the agent's side.
+      const refused = (code: string): Error =>
+        by !== undefined && "operator" in by
+          ? new Error(code)
+          : this.refuse(code, {
+              kind: "task",
+              subjectId: task.id,
+              ...(by === undefined ? {} : { client: by.agent }),
+            });
       if (
         fresh === undefined ||
         (task.approval?.actionDigest !== this.payloadCipher.digest(fresh, "action") &&
           task.approval?.actionDigest !== fresh)
       ) {
-        throw new Error("approval_action_digest_mismatch");
+        // A task planned without a challenge was sent nothing to refuse.
+        throw task.approval === undefined
+          ? new Error("approval_action_digest_mismatch")
+          : refused("approval_action_digest_mismatch");
       }
       // Enforced mode asserts the agent holds no credential, so anything it
       // sends is refused rather than ignored, and only an operator's
       // out-of-band decision lets the effect run.
       if (this.policy.mode === "enforced" && approval !== undefined) {
-        throw new Error("approval_in_band_refused");
+        throw refused("approval_in_band_refused");
       }
       // A decision an operator recorded wins over anything the caller sent.
       const { contract, renderDigest: render } = this.approvalRender(task, request);
@@ -601,7 +627,12 @@ export class TaskController {
         // A row a 0.3.0-alpha.17 or alpha.18 `melra approve` or console wrote
         // holds the plain digest of the same contract.
         if (decision.renderDigest !== render && decision.renderDigest !== sha256(contract)) {
-          throw new Error("approval_render_mismatch");
+          // Sent by whoever recorded the decision, not by this caller.
+          throw this.refuse("approval_render_mismatch", {
+            kind: "task",
+            subjectId: task.id,
+            principal: decision.approver,
+          });
         }
         if (!this.usable(task, decision)) throw new Error("approval_expired");
         // Out of band is this kernel's claim to make, not the row's: a
@@ -619,7 +650,10 @@ export class TaskController {
       } else {
         const approvalResult = validateApproval(task.approval, approval);
         if (!approvalResult.ok) {
-          throw new Error(approvalResult.reason);
+          // Only an answer that was sent and did not match is an attempt.
+          throw ["approval_id_mismatch", "approval_phrase_mismatch"].includes(approvalResult.reason)
+            ? refused(approvalResult.reason)
+            : new Error(approvalResult.reason);
         }
         // The phrase is readable by anyone who can read the task, so an echo
         // of it says only that something echoed it.
@@ -1352,9 +1386,10 @@ export class TaskController {
    * A verdict writes the task row and nothing else, its certificate on a
    * settle included: no receipt, grant draw, breaker record or idempotency
    * commit, all of which the effect settled when it ran. Every check reads
-   * the row inside one transaction, and each refusal writes nothing, so a
-   * question is answered once, and a peer's verdict or the expiry sweep wins
-   * against this one at most once.
+   * the row inside one transaction, and each refusal writes nothing there, so
+   * a question is answered once, and a peer's verdict or the expiry sweep wins
+   * against this one at most once. An agent's in-band verdict is then recorded
+   * as a refused answer, outside that transaction.
    *
    * `by` is the surface. An agent's declared identity is checked against the
    * task's actor, with `client` the link its transport authenticated, if any;
@@ -1368,6 +1403,28 @@ export class TaskController {
     by: { identity: Identity; client?: Principal } | { operator: string },
   ): ExecutionResult {
     const parsed = MelraTaskJudgeInputSchema.omit({ identity: true }).parse(input);
+    try {
+      return this.judgeOnce(parsed, by);
+    } catch (error) {
+      // Recorded once the transaction is rolled back, which would take it too.
+      // An operator's, refused for the mode its process runs in, is a command
+      // to rerun, not an answer from the agent's side.
+      if (!(error instanceof Error) || error.message !== "judgement_in_band_refused" || !("identity" in by)) {
+        throw error;
+      }
+      throw this.refuse("judgement_in_band_refused", {
+        kind: "task",
+        subjectId: parsed.taskId,
+        principal: delegationChain(by.identity),
+        ...(by.client === undefined ? {} : { client: principalRef(by.client) }),
+      });
+    }
+  }
+
+  private judgeOnce(
+    parsed: Omit<MelraTaskJudgeInput, "identity">,
+    by: { identity: Identity; client?: Principal } | { operator: string },
+  ): ExecutionResult {
     const operator = "operator" in by && this.enforced;
     return this.store.transaction(() => {
       const task = this.status(parsed.taskId);
@@ -1548,7 +1605,9 @@ export class TaskController {
       throw new Error("approval_needs_enforced_mode");
     }
     if (Date.parse(task.approval!.expiresAt) <= Date.now()) throw new Error("approval_expired");
-    if (renderDigest !== current) throw new Error("approval_render_mismatch");
+    if (renderDigest !== current) {
+      throw this.refuse("approval_render_mismatch", { kind: "task", subjectId: taskId, principal: approver });
+    }
     const decision: ApprovalDecision = {
       approvalId: task.approval!.approvalId,
       taskId,
@@ -1559,6 +1618,67 @@ export class TaskController {
     };
     if (!this.store.recordApprovalDecision(decision)) throw new Error("approval_already_decided");
     return decision;
+  }
+
+  /**
+   * Records an approver's no, and why, and cancels the task in one write:
+   * the denial lands with the cancel or not at all. Returns the task as it
+   * now stands, which is not cancelled when another process started it
+   * first. `out_of_band` only in enforced mode, as for a decision; the note
+   * is stored redacted and never read here. `melra_task_cancel`, the agent
+   * withdrawing its own task, leaves no denial.
+   */
+  deny(taskId: string, approver: string, input: DenialInput = {}): TaskRecord {
+    const { reason, note } = DenialInputSchema.parse(input);
+    const { task, renderDigest } = this.approvalView(taskId);
+    const shown: NonNullable<TaskRecord["denial"]> = {
+      reason,
+      // Capped after redaction, which can lengthen it.
+      ...(note === undefined ? {} : { note: redactSecrets(note).value.slice(0, 1_000) }),
+      channel: this.enforced ? "out_of_band" : "in_band",
+      approver,
+      decidedAt: now(),
+    };
+    const denied: TaskRecord = { ...task, status: "cancelled", denial: shown, updatedAt: shown.decidedAt };
+    const denial: ApprovalDenial = {
+      ...shown,
+      approvalId: task.approval!.approvalId,
+      taskId,
+      renderDigest,
+      operationDigest: this.payloadCipher.digest(this.loadRequest(taskId).operation, "operation"),
+    };
+    return this.store.transaction(() => {
+      if (!this.store.saveTaskIf(denied, UNSTARTED)) return this.status(taskId);
+      this.store.recordApprovalDenial(denial);
+      return denied;
+    });
+  }
+
+  /**
+   * Records a refused answer and returns the error to throw (#424). Only the
+   * code, who sent it and when are kept, once per task or run and code. A
+   * record that cannot be written changes nothing about the refusal. A
+   * `client` of `agent`, a transport's name for a sender it did not
+   * authenticate, names no client and is left out.
+   */
+  refuse(code: string, sender: Pick<Refusal, "kind" | "subjectId" | "principal" | "client">): Error {
+    const { principal } = sender;
+    const client = sender.client === "agent" ? undefined : sender.client;
+    try {
+      this.store.recordRefusal({
+        kind: sender.kind,
+        subjectId: sender.subjectId,
+        code,
+        mode: this.policy.mode,
+        // Declared by the sender, so stored as other claims are.
+        ...(principal === undefined ? {} : { principal: redactSecrets(principal).value }),
+        ...(client === undefined ? {} : { client: redactSecrets(client).value }),
+        refusedAt: now(),
+      });
+    } catch {
+      // The refusal stands whether or not it could be written down.
+    }
+    return new Error(code);
   }
 
   /** The recorded decision for a pending task, while it can still be used. */
