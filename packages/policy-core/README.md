@@ -118,4 +118,5 @@ instead of leaving a machine permissive with a config that claims otherwise.
 Requires Node.js 22 or newer. Full documentation:
 [github.com/XAGI-Lab/melra](https://github.com/XAGI-Lab/melra)
 
-Apache-2.0
+AGPL-3.0-only, or a commercial license from XAGI Labs Private Limited. See
+[licensing](https://github.com/XAGI-Lab/melra/blob/main/LICENSING.md).

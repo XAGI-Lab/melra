@@ -47,7 +47,7 @@ strict tsc), plus two Python projects managed by `uv` (`sdk-py`,
 pnpm install --frozen-lockfile
 pnpm build                  # tsc -p per package; required before tests (see below)
 pnpm typecheck              # builds, then tsc -p tsconfig.test.json per package (src + tests, no emit)
-pnpm check                  # versions:check + docs:check + scripts/release.test.mjs (release scripts and workflow wiring) + typecheck + check-dist (no tests in dist/) + README examples + test + python:check — the CI gate
+pnpm check                  # versions:check + docs:check + licenses:check + scripts/release.test.mjs (release scripts and workflow wiring) + typecheck + check-dist (no tests in dist/) + README examples + test + python:check — the CI gate
 pnpm docs:check             # every relative link and #anchor in every *.md resolves; every MELRA_* variable has a row in docs/INSTALLATION.md; CHANGELOG.md is in Keep a Changelog shape, with a non-empty section for package.json's version
 pnpm evals                  # 55 deterministic policy/execution scenarios → evals/results/latest.json
 pnpm e2e                    # packages/server/test/e2e.test.ts against a live stdio server
@@ -201,7 +201,10 @@ uses the conditional-spread idiom (`...(x === undefined ? {} : { x })`) instead 
 `undefined`. Match it rather than loosening types.
 
 Every source file carries the two-line `Copyright 2026 XAGI Labs Private Limited` /
-`SPDX-License-Identifier: Apache-2.0` header.
+`SPDX-License-Identifier: <id>` header. The id is `Apache-2.0` under `packages/sdk-ts`,
+`packages/protocol`, `sdk-py` and `examples/`, and `AGPL-3.0-only` everywhere else
+([LICENSING.md](LICENSING.md)); `pnpm licenses:check` (part of `pnpm check`) enforces it with
+each manifest's `license` field and package `LICENSE`, and `--fix` writes them.
 
 ## Durable workflows
 
@@ -243,7 +246,7 @@ them together with `pnpm versions:set <version>`.
 
 ## Contribution conventions
 
-- Commits are signed off (DCO); `scripts/check-dco.mjs` and `.github/workflows/dco.yml` enforce it. Commit subjects follow `type(scope): summary`, e.g. `bench(browser): add paired evaluator`.
+- Commits are signed off (DCO); `scripts/check-dco.mjs` and `.github/workflows/dco.yml` enforce it. Outside contributors also sign the CLA ([CLA.md](CLA.md)). Commit subjects follow `type(scope): summary`, e.g. `bench(browser): add paired evaluator`.
 - User-visible changes get a `CHANGELOG.md` entry under `## [Unreleased]`, in the existing `### Added`/`Changed`/`Deprecated`/`Removed`/`Fixed`/`Security` section (canonical order, one of each). `scripts/check-changelog.mjs` enforces the shape, and `.gitattributes` merges the file with `merge=union` so parallel branches stop conflicting there locally; GitHub's web merge ignores that, so rebase before merging and rerun `pnpm docs:check`.
 - CI runs `pnpm check` on ubuntu/macos/windows × Node 22/24 (Python 3.11), plus the Python SDK tests and pyright on CPython 3.12–3.14, so avoid platform-specific paths and shell assumptions.
 

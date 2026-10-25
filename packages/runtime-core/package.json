@@ -2,7 +2,7 @@
   "name": "@melra/runtime-core",
   "version": "0.3.0-alpha.22",
   "description": "Durable task and workflow execution, recovery, budgets, retries, and verification for MELRA.",
-  "license": "Apache-2.0",
+  "license": "AGPL-3.0-only",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/XAGI-Lab/melra.git",

@@ -1,5 +1,5 @@
 // Copyright 2026 XAGI Labs Private Limited
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: AGPL-3.0-only
 
 // An older MELRA writing the same home. `melra setup` pins each client to the
 // version that wrote its config, so after an upgrade a pinned server keeps

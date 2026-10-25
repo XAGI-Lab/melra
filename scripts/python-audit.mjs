@@ -1,5 +1,5 @@
 // Copyright 2026 XAGI Labs Private Limited
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: AGPL-3.0-only
 
 import { execFileSync } from "node:child_process";
 import { mkdir } from "node:fs/promises";

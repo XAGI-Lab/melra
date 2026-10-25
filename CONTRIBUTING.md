@@ -32,7 +32,8 @@ Markdown-only contributions do not need Node.js or pnpm setup. Before opening
 the pull request, run `git diff --check`; GitHub Actions runs the repository
 checks for every pull request. Each commit still needs a sign-off, including
 one made in GitHub's web editor (see
-[Developer Certificate of Origin](#developer-certificate-of-origin)).
+[Developer Certificate of Origin](#developer-certificate-of-origin)), and you
+need to have signed the [CLA](#contributor-license-agreement).
 
 ## Development setup
 
@@ -75,6 +76,34 @@ Protocol, policy, storage, and release changes require maintainer review.
 
 Do not contribute customer data, credentials, deployment identifiers, private
 prompts, billing records, or code you do not have the right to license.
+
+## Licensing of contributions
+
+MELRA is dual-licensed ([LICENSING.md](LICENSING.md)). The kernel is
+AGPL-3.0-only, and XAGI Labs Private Limited also offers it under a commercial
+license. `packages/sdk-ts`, `packages/protocol`, `sdk-py` and `examples/` are
+Apache-2.0, and a contribution to them is licensed under Apache-2.0 and stays
+so.
+
+A new source file takes the header for its path; `pnpm licenses:check --fix`
+writes it.
+
+## Contributor License Agreement
+
+Before your first pull request can be merged, sign the
+[Contributor License Agreement](CLA.md). The CLA check on the pull request asks
+you to post one comment saying you agree; that signs it for all your
+contributions. You keep your copyright. The CLA lets XAGI Labs offer your
+contribution under the AGPL and under its commercial license, which the dual
+license depends on. If your employer has rights in your work, make sure they
+allow you to contribute under it first.
+
+The CLA does not replace the sign-off below: every commit needs both.
+
+For maintainers: any change to the text of `CLA.md` makes a new version. Raise
+its version line, and on the `cla-signatures` branch move `signatures/cla.json`
+to an archive file named for the old version, so that the check asks everyone
+to sign the new text.
 
 ## Developer Certificate of Origin
 

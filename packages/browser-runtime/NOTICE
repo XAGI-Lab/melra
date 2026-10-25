@@ -1,0 +1,37 @@
+MELRA
+Copyright 2024-2026 XAGI Labs Private Limited
+
+This product includes software developed by XAGI Labs Private Limited.
+
+MELRA is dual-licensed. Its kernel, every part not named below, is licensed
+under the GNU Affero General Public License, version 3 only (AGPL-3.0-only);
+see LICENSE. XAGI Labs Private Limited also offers the kernel under a
+commercial license. The TypeScript SDK (packages/sdk-ts), the protocol package
+(packages/protocol), the Python SDK (sdk-py), examples/ and the code samples in
+the documentation are licensed under the Apache License, Version 2.0; see
+LICENSES/Apache-2.0.txt. LICENSING.md in the source repository,
+https://github.com/XAGI-Lab/melra, has the details.
+
+Every release up to and including 0.3.0-alpha.22 was published under the
+Apache License, Version 2.0, and remains available under it.
+
+Portions of this software were contributed under the Apache License, Version
+2.0, with a Developer Certificate of Origin sign-off and no contributor license
+agreement, and remain available under that license (LICENSES/Apache-2.0.txt):
+
+- Yunus Arda Güney (@yunusarda-sudo): packages/browser-runtime/src/index.ts,
+  packages/browser-runtime/src/see-act.test.ts and
+  packages/browser-runtime/src/popups-profile.test.ts (#235, #300), and
+  docs/COMPATIBILITY.md (#220).
+- anying (@anyingiit): apps/cli/src/index.ts, scripts/check-env-docs.mjs and
+  scripts/release.test.mjs (#393).
+- ADITYA (@adity982): packages/server/src/mcp-server.ts and CLAUDE.md (#45).
+
+Their CHANGELOG.md entries for those pull requests are covered too.
+
+The MELRA name and logo are trademarks of XAGI Labs Private Limited, and none of
+the licenses above grants any right to use them; see TRADEMARKS.md. The
+official MELRA logo and hero artwork are copyright XAGI Labs Private Limited,
+all rights reserved, and may be used only as TRADEMARKS.md allows. Copies
+distributed before this change under CC-BY-ND-4.0 keep that license; see
+LICENSES/CC-BY-ND-4.0.txt.

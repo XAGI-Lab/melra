@@ -1,5 +1,5 @@
 // Copyright 2026 XAGI Labs Private Limited
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: AGPL-3.0-only
 
 // Imported by `bin.ts` before the rest of the CLI, so it must not import
 // anything that links `node:sqlite`.

@@ -1,5 +1,5 @@
 // Copyright 2026 XAGI Labs Private Limited
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: AGPL-3.0-only
 
 // Registers `.github/workflows/release.yml` in XAGI-Lab/melra as the trusted
 // publisher for every public @melra/* package, so releases publish over OIDC

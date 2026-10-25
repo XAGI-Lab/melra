@@ -31,7 +31,7 @@ made through other tools remain outside MELRA's control.
 <a href="https://mcpservers.org/servers/xagi-lab/melra"><img src="https://mcpservers.org/badge.svg" alt="Listed on mcpservers.org" /></a>
 <a href="https://mcp.site/servers/melra"><img src="https://mcp.site/badge/melra" alt="Listed on mcp.site" /></a>
 <a href="https://smithery.ai/servers/xagi-labs/melra"><img src="https://img.shields.io/badge/Smithery-listed-F97316?style=flat-square" alt="MELRA on Smithery" /></a>
-<a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-f97316?style=flat-square" alt="Apache-2.0 license" /></a>
+<a href="LICENSING.md"><img src="https://img.shields.io/badge/license-AGPL--3.0--only-f97316?style=flat-square" alt="AGPL-3.0-only license, SDKs Apache-2.0" /></a>
 <img src="https://img.shields.io/badge/evals-55%2F55-22c55e?style=flat-square&logo=checkmarx&logoColor=white" alt="55 of 55 deterministic evaluation scenarios passing" />
 <img src="https://img.shields.io/badge/telemetry-off-0f172a?style=flat-square" alt="Telemetry off" />
 
@@ -827,7 +827,8 @@ documentation and threat analysis are all welcome.
 | [Contributing guide](docs/CONTRIBUTING_GUIDE.md) | How the pipeline fits together and which files one change touches |
 
 1. Read [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md).
-2. Sign your commits under the DCO (`git commit -s`).
+2. Sign your commits under the DCO (`git commit -s`), and sign the
+   [CLA](CLA.md) once, on your first pull request.
 3. Run `pnpm check` before opening a pull request; it also checks links, the
    environment-variable table and the CHANGELOG shape.
 4. Report vulnerabilities through
@@ -838,16 +839,25 @@ documentation and threat analysis are all welcome.
 
 ## License
 
-Software and documentation are licensed under the [Apache License 2.0](LICENSE). The
-official logo and hero artwork are licensed under
-[CC BY-ND 4.0](LICENSES/CC-BY-ND-4.0.txt). Third-party benchmark datasets keep their
-own licenses and are not included in this repository.
+The MELRA kernel, CLI and documentation are licensed under the
+[GNU Affero General Public License v3.0 only](LICENSE), and XAGI Labs Private
+Limited also offers the kernel under a commercial license. The SDKs
+(`@melra/sdk`, `@melra/protocol` and the `melra` Python package), the examples
+and the code samples in the documentation stay under the
+[Apache License 2.0](LICENSES/Apache-2.0.txt), so code that only calls MELRA can
+use any license. Releases up to and including `0.3.0-alpha.22` were Apache-2.0
+and stay so. [LICENSING.md](LICENSING.md) maps each path to its license and
+explains what the AGPL asks of a modified MELRA run as a network service.
+
+The MELRA name and logo are covered by [TRADEMARKS.md](TRADEMARKS.md); the
+official logo and hero artwork are all rights reserved. Third-party benchmark
+datasets keep their own licenses and are not included in this repository.
 
 <div align="center">
 <br />
 
 **Built in the open by [XAGI Labs](https://github.com/XAGI-Lab).**
 
-<sub>MELRA brand assets © XAGI Labs Private Limited, licensed CC BY-ND 4.0.</sub>
+<sub>MELRA brand assets © XAGI Labs Private Limited, all rights reserved.</sub>
 
 </div>

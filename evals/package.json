@@ -3,7 +3,7 @@
   "version": "0.3.0-alpha.0",
   "description": "Deterministic safety, execution, crash-recovery, and concurrency evaluations for MELRA.",
   "private": true,
-  "license": "Apache-2.0",
+  "license": "AGPL-3.0-only",
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json",

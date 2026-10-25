@@ -1,5 +1,5 @@
 // Copyright 2026 XAGI Labs Private Limited
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: AGPL-3.0-only
 
 // Prints the channel package.json's version releases under: the npm dist-tag
 // it publishes with and the container tag it moves. alpha, beta or rc for that

@@ -84,6 +84,21 @@ All notable changes are documented here. The format follows
 - **Breaking:** `melra workflow advance --approval` now sends as the operator
   and checks `MELRA_APPROVER` as `--input` does, so a name it does not accept is
   refused before the run moves.
+- **Breaking:** the MELRA kernel is now licensed under the GNU Affero General
+  Public License v3.0 only (`AGPL-3.0-only`) instead of Apache-2.0, and XAGI
+  Labs Private Limited also offers it under a commercial license. That covers
+  `@melra/cli`, `@melra/server` and every other package except the SDKs:
+  `@melra/sdk`, `@melra/protocol` and the `melra` Python package stay
+  Apache-2.0, as do `examples/` and the code samples in the documentation, so
+  code that only calls MELRA is unaffected. Releases up to and including
+  `0.3.0-alpha.22` were Apache-2.0 and stay so. Contributions now need the
+  [Contributor License Agreement](CLA.md) as well as a DCO sign-off, and the
+  MELRA name and logo are covered by [TRADEMARKS.md](TRADEMARKS.md). The
+  official logo and hero artwork are now all rights reserved instead of CC BY-ND
+  4.0; copies already distributed under it keep that license. Each
+  published package now ships its own `LICENSE`, and the release archive,
+  container image and single executables carry `LICENSE` and `NOTICE`.
+  [LICENSING.md](LICENSING.md) maps each path to its license.
 
 ### Security
 

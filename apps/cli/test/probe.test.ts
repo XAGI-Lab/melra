@@ -1,5 +1,5 @@
 // Copyright 2026 XAGI Labs Private Limited
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: AGPL-3.0-only
 
 // `melra probe`, run where nothing is confined, so every check must come back
 // open and the exit code non-zero, and against stubbed checks for the verdict.

@@ -20,7 +20,7 @@ RUN pnpm deploy --filter @melra/cli --prod /release
 FROM node:24-bookworm-slim@sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5 AS runtime
 
 LABEL org.opencontainers.image.source="https://github.com/XAGI-Lab/melra"
-LABEL org.opencontainers.image.licenses="Apache-2.0"
+LABEL org.opencontainers.image.licenses="AGPL-3.0-only"
 LABEL org.opencontainers.image.title="MELRA"
 LABEL org.opencontainers.image.description="Safe, reliable, and verifiable MCP execution runtime"
 
@@ -35,6 +35,10 @@ ENV MELRA_HOME=/data
 
 WORKDIR /opt/melra
 COPY --from=build --chown=node:node /release ./
+# The deployed CLI brings its own LICENSE; NOTICE names the parts contributed
+# under Apache-2.0, whose text is in LICENSES/.
+COPY NOTICE ./
+COPY LICENSES ./LICENSES/
 
 RUN mkdir -p /workspace /data \
     && chown -R node:node /workspace /data \

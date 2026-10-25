@@ -1,5 +1,5 @@
 // Copyright 2026 XAGI Labs Private Limited
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: AGPL-3.0-only
 
 // Two runtimes on one MELRA home, as a `serve` and a CLI command beside it
 // are. Building a runtime recovers, and recovery used to take the other one's

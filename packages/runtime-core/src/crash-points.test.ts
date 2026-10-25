@@ -1,5 +1,5 @@
 // Copyright 2026 XAGI Labs Private Limited
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: AGPL-3.0-only
 
 // What a crash after the adapter returned leaves, at every write `execute`
 // makes from then on, and what recovery in a new process makes of it. The

@@ -1,5 +1,5 @@
 // Copyright 2026 XAGI Labs Private Limited
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: AGPL-3.0-only
 
 // Prints "<dir> <name>" for every public workspace package, each after the
 // @melra/* packages it depends on, packages/* before apps/*, each directory

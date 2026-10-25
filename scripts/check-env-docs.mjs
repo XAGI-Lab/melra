@@ -1,5 +1,5 @@
 // Copyright 2026 XAGI Labs Private Limited
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: AGPL-3.0-only
 
 // Every MELRA_* variable the shipped code reads must have a row in an
 // environment table in docs/INSTALLATION.md, and every row must name a variable

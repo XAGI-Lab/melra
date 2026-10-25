@@ -32,6 +32,15 @@ release advisories. They are listed in `CODEOWNERS`.
   approver.
 - Security maintainers may merge an embargoed fix before public discussion.
 
+## Licensing
+
+The kernel is AGPL-3.0-only, and XAGI Labs Private Limited, as its licensor,
+also offers it under a commercial license; the SDKs and examples are
+Apache-2.0 ([LICENSING.md](LICENSING.md)). Contributions are accepted under the
+[CLA](CLA.md) and the DCO ([CONTRIBUTING.md](CONTRIBUTING.md)). The name and
+logo follow [TRADEMARKS.md](TRADEMARKS.md). A change to any of these is a
+licensing change under the decision process above.
+
 ## Compatibility
 
 Once a package reaches `1.0.0`, breaking changes require:

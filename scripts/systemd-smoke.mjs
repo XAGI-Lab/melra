@@ -1,5 +1,5 @@
 // Copyright 2026 XAGI Labs Private Limited
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: AGPL-3.0-only
 
 // Runs the built CLI under the hardening in examples/deploy/systemd/
 // melra.service, via `systemd-run`, and checks two things: `doctor` sees the

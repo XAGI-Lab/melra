@@ -1,3 +1,6 @@
+// Copyright 2026 XAGI Labs Private Limited
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Peak-RSS sampler. Reports the highest total resident memory across all node
 // processes seen while a command runs, so a memory regression in the test
 // runner is measurable instead of anecdotal.

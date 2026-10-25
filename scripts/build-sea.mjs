@@ -1,5 +1,5 @@
 // Copyright 2026 XAGI Labs Private Limited
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: AGPL-3.0-only
 
 // Builds `melra` as a single executable with Node inside (#76): one file that
 // runs where Node is not installed. Bundles the built CLI with esbuild, then
@@ -64,6 +64,12 @@ const lazySqlite = {
   },
 };
 
+// The binary is a single file, so it carries its license inside: LICENSE
+// (AGPL-3.0-only), NOTICE, and the Apache-2.0 text NOTICE points to for the
+// parts contributed under it, as one comment at the top of the script it runs.
+const legal = await Promise.all(["LICENSE", "NOTICE", "LICENSES/Apache-2.0.txt"].map((file) => readFile(join(root, file), "utf8")));
+if (legal.some((text) => text.includes("*/"))) throw new Error("a license text would end the comment that carries it");
+
 await rm(out, { recursive: true, force: true });
 await mkdir(out, { recursive: true });
 await build({
@@ -77,9 +83,9 @@ await build({
   // WebDriver BiDi, which MELRA does not use: it drives Chrome over CDP.
   external: ["chromium-bidi", "chromium-bidi/*", "electron"],
   plugins: [inlinePlaywrightJson, lazySqlite],
-  // Bundled CommonJS dependencies still reach for these.
+  // The license comment, then what bundled CommonJS dependencies still reach for.
   banner: {
-    js: [
+    js: `/*!\n${legal.join("\n")}*/\n` + [
       "import { createRequire as __melraRequire } from 'node:module';",
       "import { fileURLToPath as __melraPath } from 'node:url';",
       "import { dirname as __melraDir } from 'node:path';",

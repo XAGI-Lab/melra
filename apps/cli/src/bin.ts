@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Copyright 2026 XAGI Labs Private Limited
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: AGPL-3.0-only
 
 // The `melra` executable. Before the rest of the CLI loads it does two things,
 // then hands over to `index.ts`: it silences one Node warning, and it refuses
