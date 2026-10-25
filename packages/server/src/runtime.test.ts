@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -9,8 +10,9 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, delimiter, dirname, join, parse, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { deploymentMode, TaskRequestSchema, type TaskRequest } from "@melra/protocol";
+import { deploymentMode, PRODUCT_VERSION, TaskRequestSchema, type TaskRequest } from "@melra/protocol";
 import { serveHttp } from "./http-server.js";
+import { capabilitiesPayload } from "./mcp-server.js";
 import {
   assertEnforceable,
   broadWorkspace,
@@ -371,6 +373,61 @@ describe("enforced mode", () => {
     } finally {
       server.close();
     }
+  });
+});
+
+describe("policy digest", () => {
+  let base: string;
+  let workspace: string;
+  let data: string;
+  let runtime: MelraRuntime | undefined;
+
+  beforeEach(async () => {
+    base = await mkdtemp(join(tmpdir(), "melra-digest-"));
+    workspace = join(base, "workspace");
+    data = join(base, "data");
+    await mkdir(workspace, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await runtime?.close();
+    runtime = undefined;
+    await rm(base, { recursive: true, force: true });
+  });
+
+  // One read under a fresh runtime, and the digest its receipt, certificate
+  // and the published capabilities name.
+  const digests = async (policyPath?: string) => {
+    await runtime?.close();
+    runtime = await createMelraRuntime({
+      workspaceRoot: workspace,
+      dataDirectory: data,
+      environment: {},
+      ...(policyPath === undefined ? {} : { policyPath }),
+    });
+    const task = runtime.controller.plan(request({ operation: { kind: "system", action: "info" } }));
+    const { receipt, certificate } = await runtime.controller.execute(task.id);
+    const published = (capabilitiesPayload(runtime) as { policy: { digest?: string } }).policy.digest;
+    return [receipt?.policyDecision.policyDigest, certificate?.policyDigest, published];
+  };
+
+  it("stamps the default policy by version when no file is loaded", async () => {
+    expect(await digests()).toEqual(Array(3).fill(`default:${PRODUCT_VERSION}`));
+  });
+
+  it("changes on the next receipt when one allowlist entry changes", async () => {
+    const policyPath = join(base, "policy.json");
+    const write = async (allowedCommands: string[]) => {
+      const text = JSON.stringify({ allowedCommands });
+      await writeFile(policyPath, text, "utf8");
+      return `sha256:${createHash("sha256").update(text).digest("hex")}`;
+    };
+    const before = await write(["git", "ls"]);
+    expect(await digests(policyPath)).toEqual([before, before, before]);
+    // Same `version` label, one entry different.
+    const after = await write(["git", "cat"]);
+    expect(after).not.toBe(before);
+    expect(await digests(policyPath)).toEqual([after, after, after]);
   });
 });
 

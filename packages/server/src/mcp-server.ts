@@ -90,6 +90,9 @@ export function capabilitiesPayload(runtime: MelraRuntime): unknown {
         ],
         policy: {
           version: runtime.policy.version,
+          // The label says what the operator called it; this says which file
+          // it is, as every decision and receipt made under it does.
+          digest: runtime.policy.digest,
           workspaceRoot: runtime.policy.workspaceRoot,
           // How this kernel is deployed, said out loud on the surface a harness
           // reads. `developer` is the honest admission that the harness may have

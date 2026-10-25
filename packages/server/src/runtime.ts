@@ -24,7 +24,6 @@ import { FileRuntime } from "@melra/file-runtime";
 import { HttpRuntime } from "@melra/http-runtime";
 import { LocalMemory } from "@melra/memory";
 import {
-  createDefaultPolicy,
   CredentialBroker,
   loadPolicy,
   localhostAllowed,
@@ -367,10 +366,8 @@ export async function createMelraRuntime(
   const workspaceRoot = resolve(options.workspaceRoot);
   const dataDirectory = resolve(options.dataDirectory);
   const environment = options.environment ?? process.env;
-  const loaded =
-    options.policyPath === undefined
-      ? createDefaultPolicy(workspaceRoot)
-      : await loadPolicy(options.policyPath, workspaceRoot);
+  // Through `loadPolicy` either way, so the defaults carry their digest too.
+  const loaded = await loadPolicy(options.policyPath, workspaceRoot);
   // Either channel is enough to ask for it, and the resolved policy is the one
   // place that answers "is this server unhinged" — so a policy file that sets
   // the flag still raises every warning the environment variable does.

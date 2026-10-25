@@ -662,6 +662,13 @@ export const PolicyDecisionSchema = z
     risk: RiskSchema,
     reason: z.string(),
     policyVersion: z.string(),
+    policyDigest: z
+      .string()
+      .max(128)
+      .optional()
+      .describe(
+        "The policy file the decision was made under: sha256: and the hex SHA-256 of its bytes, or default:<MELRA version> with no file. Unlike policyVersion it changes with any edit. It covers the file's bytes only: not the defaults for keys the file leaves out, which follow the MELRA version, nor the workspace root or the mode and unsafe-local overrides. Absent on older decisions.",
+      ),
     traits: z
       .array(CapabilityTraitSchema)
       .max(8)
@@ -721,7 +728,8 @@ export const CapabilityGrantSchema = z
     /**
      * Policy version this grant was issued against. A grant that names a
      * version the running policy no longer has is refused rather than silently
-     * reinterpreted under different rules.
+     * reinterpreted under different rules. It follows the `version` label, so
+     * an edit that keeps the label keeps the grant.
      */
     policyVersion: z.string().max(64).optional(),
     /**

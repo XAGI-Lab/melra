@@ -499,15 +499,15 @@ export async function statusCommand(
   let policyMode: string | undefined;
   let policyUnhinged = false;
   let policyTtlMs: number | undefined;
-  if (options.policyPath !== undefined) {
-    try {
-      const loaded = await loadPolicy(options.policyPath, env.workspaceRoot);
-      policyMode = loaded.mode;
-      policyUnhinged = loaded.unhinged;
-      policyTtlMs = loaded.approvalTtlMs;
-    } catch (error) {
-      policyError = error instanceof Error ? error.message : String(error);
-    }
+  let policyDigest: string | undefined;
+  try {
+    const loaded = await loadPolicy(options.policyPath, env.workspaceRoot);
+    policyMode = loaded.mode;
+    policyUnhinged = loaded.unhinged;
+    policyTtlMs = loaded.approvalTtlMs;
+    policyDigest = loaded.digest;
+  } catch (error) {
+    policyError = error instanceof Error ? error.message : String(error);
   }
   const mode = env.mode === "enforced" || policyMode === "enforced" ? "enforced" : "developer";
   const path = databasePath(env);
@@ -552,6 +552,7 @@ export async function statusCommand(
     workspace: env.workspaceRoot,
     dataDirectory: env.dataDirectory,
     policy: options.policyPath ?? null,
+    ...(policyDigest === undefined ? {} : { policyDigest }),
     ...(policyError === undefined ? {} : { policyError }),
     database: {
       path,
@@ -587,6 +588,7 @@ export async function statusCommand(
       ? `${options.policyPath} (invalid: ${policyError})`
       : (options.policyPath ?? "built-in defaults"),
   );
+  if (policyDigest !== undefined) row("Digest", policyDigest);
   row("Database", report.database.exists ? `${path} (${bytes(report.database.bytes)})` : `${path} (not created yet)`);
   row("Tasks", summary(tasks));
   row("Workflows", summary(workflows));

@@ -28,12 +28,25 @@ import {
   deploymentMode,
   LOCAL_IDENTITY,
   PolicyFileSchema,
+  PRODUCT_VERSION,
   principalRef,
   terminalArgumentPaths,
 } from "@melra/protocol";
 
 export interface LocalPolicy {
   version: string;
+  /**
+   * What `version` cannot say: which file this is. `sha256:` and the hex
+   * SHA-256 of the file's bytes, so `sha256sum` on the file gives the same
+   * value, or `default:<version>` when `loadPolicy` read no file. The bytes
+   * only: a key the file leaves out takes this MELRA version's default, the
+   * workspace root also depends on the caller's and on where the file is, and
+   * `mode` and unsafe-local have flag and environment overrides. So it names a
+   * policy only together with the MELRA version that ran it. A program that
+   * changes a loaded policy should replace or drop it. Absent on a policy
+   * built in code.
+   */
+  digest?: string;
   workspaceRoot: string;
   allowedCommands: string[];
   allowedDomains: string[];
@@ -148,10 +161,11 @@ export interface LocalPolicy {
 
 // The file and the policy it becomes name the same keys, checked both ways at
 // compile time: a key added to one alone is a type error naming it, rather than
-// one the file refuses or one it can never set.
+// one the file refuses or one it can never set. `digest` alone is taken of the
+// file, so it cannot be written in it.
 type NoKeys<Keys extends never> = Keys;
 type _PolicyFileKeysMatch = [
-  NoKeys<Exclude<keyof LocalPolicy, keyof PolicyFileInput>>,
+  NoKeys<Exclude<keyof LocalPolicy, keyof PolicyFileInput | "digest">>,
   NoKeys<Exclude<keyof PolicyFileInput, keyof LocalPolicy>>,
 ];
 
@@ -576,8 +590,11 @@ export async function loadPolicy(
   workspaceRoot: string,
 ): Promise<LocalPolicy> {
   const defaults = createDefaultPolicy(workspaceRoot);
-  if (path === undefined) return defaults;
-  const text = await readFile(path, "utf8");
+  if (path === undefined) return { ...defaults, digest: `default:${PRODUCT_VERSION}` };
+  // The bytes as read, not the parsed policy, so the digest is the one an
+  // auditor gets from `sha256sum` and nothing here decides what counts.
+  const bytes = await readFile(path);
+  const text = bytes.toString("utf8");
   let raw: unknown;
   try {
     raw = JSON.parse(text);
@@ -621,6 +638,7 @@ export async function loadPolicy(
   return {
     ...defaults,
     ...parsed,
+    digest: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
     // A relative root is relative to the file, not to whatever directory the
     // server happened to start in: Claude Desktop starts servers in `/`.
     workspaceRoot:
@@ -1258,6 +1276,7 @@ export function evaluatePolicy(
     risk,
     reason,
     policyVersion: policy.version,
+    ...(policy.digest === undefined ? {} : { policyDigest: policy.digest }),
     traits: classified.traits,
   });
 

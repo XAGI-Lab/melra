@@ -1698,6 +1698,9 @@ export class TaskController {
       policyDecision: {
         outcome: task.policyDecision.outcome,
         policyVersion: task.policyDecision.policyVersion,
+        ...(task.policyDecision.policyDigest === undefined
+          ? {}
+          : { policyDigest: task.policyDecision.policyDigest }),
         ...(approvalId === undefined ? {} : { approvalId }),
         ...(task.approvedBy === undefined
           ? {}
@@ -1797,6 +1800,9 @@ export class TaskController {
       goal: task.request.goal,
       result: certificateResult(task),
       policyVersion: task.policyDecision.policyVersion,
+      ...(task.policyDecision.policyDigest === undefined
+        ? {}
+        : { policyDigest: task.policyDecision.policyDigest }),
       receiptIds: task.receiptIds,
       // Redacted and masked as a receipt's is, before the digest is taken.
       // Doing either again changes nothing, so one written from a stored

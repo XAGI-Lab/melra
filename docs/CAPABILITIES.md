@@ -684,6 +684,25 @@ capability, operation, effect, risk, target, traits, postconditions, budget,
 idempotency key, policy decision, and authorization in one object. It is derived
 from the persisted task and cannot be supplied.
 
+Every policy decision names the policy it was made under in two ways.
+`policyVersion` is the `version` label the operator writes, `"1"` unless they
+change it. `policyDigest` is `sha256:` and the SHA-256 of the policy file's
+bytes, the value `sha256sum` prints for it, or `default:<version>` when no file
+is loaded, so it changes with any edit whether or not the label moved. It covers
+the file's bytes only. A key the file leaves out takes the running MELRA
+version's default, so one digest can stand for other rules under another
+version. The workspace root comes from `MELRA_WORKSPACE`, else a `MELRA_POLICY`
+file's `workspaceRoot` (relative to the file), else the current directory (a
+policy file's `workspaceRoot` can also only narrow it to a folder inside), and
+is in neither the digest nor any receipt. `--mode`, `MELRA_MODE` and
+unsafe-local are recorded on their own: the receipt's `mode` records the first
+two, and a decision unsafe-local allowed gives `unhinged_mode_no_guardrails` as
+its reason. Receipts carry both under `policyDecision`, the certificate carries
+both, and `melra_capabilities` publishes them as `policy.version` and
+`policy.digest`. A grant pinned with `policyVersion` is refused
+(`capability_policy_version_mismatch`) once the label differs, and so follows
+the label rather than the content.
+
 ## Task budgets
 
 Every request has:

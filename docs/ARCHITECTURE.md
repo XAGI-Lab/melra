@@ -674,6 +674,20 @@ deployed, which is the difference between "governed by the only door" and
 written at the same time as the outcome rather than left for an auditor to infer.
 See [deployment modes](INSTALLATION.md#deployment-modes).
 
+`policyDecision` names the policy as well as the outcome: `policyVersion`, the
+label the operator wrote, and `policyDigest`, `sha256:` and the SHA-256 of the
+policy file's bytes (`default:<version>` with none), which `loadPolicy` takes
+once as it reads the file. The label can stay put across an edit; the digest
+cannot. It covers those bytes only. Keys the file leaves out take the running
+version's defaults. The workspace root comes from `MELRA_WORKSPACE`, else a
+`MELRA_POLICY` file's `workspaceRoot` (relative to the file), else the current
+directory (a policy file's `workspaceRoot` can also only narrow it to a folder
+inside), and is in neither the digest nor the receipt. The mode and unsafe-local
+overrides are recorded on their own. A digest therefore names a policy together
+with the MELRA version that ran it. `melra_execute` re-evaluates policy, so the
+receipt carries the digest the effect ran under, not the one it was planned
+under, and the certificate repeats it.
+
 A receipt for an approved effect also says who approved it and how:
 `policyDecision.approval` holds the `channel`, the `approver`, when they decided,
 and `renderDigest`, a keyed digest of the effect contract they were shown. An

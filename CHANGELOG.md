@@ -33,6 +33,31 @@ All notable changes are documented here. The format follows
   beyond `MELRA_PAYLOAD_KEY` and `MELRA_HTTP_TOKEN`, which none ever gets. The
   server sets it to every variable a credential's `source.env` names; a library
   embedder can name more. (#420)
+- Every policy decision, receipt (`policyDecision.policyDigest`) and certificate
+  records `policyDigest` beside `policyVersion`: `sha256:` and the SHA-256 of
+  the policy file's bytes, which `sha256sum` reproduces, or `default:<version>`
+  when no file is loaded. `policyVersion` is a label that defaults to `"1"`, so
+  an edit that kept it left no trace; the digest changes with any edit (#425).
+  It covers the file's bytes only. Keys the file leaves out take the running
+  version's defaults. The workspace root comes from `MELRA_WORKSPACE`, else a
+  `MELRA_POLICY` file's `workspaceRoot` (relative to the file), else the current
+  directory (a policy file's `workspaceRoot` can also only narrow it to a folder
+  inside), and is in neither the digest nor the receipt. `--mode`, `MELRA_MODE`
+  and unsafe-local are recorded on their own. So a digest names a policy
+  together with the MELRA version that ran it. `melra_capabilities`
+  (`policy.digest`), `melra policy test`, `melra status` (`policyDigest`),
+  `melra doctor` and the console show it. INSTALLATION.md no longer says a
+  `policyVersion` pin is refused whenever the policy changes: it follows the
+  label.
+- `melra doctor` reports (`policy-write`) when the user MELRA runs as can change
+  the policy: when that user can write, or owns, the file or any folder above
+  it, along the path as given and the one its links resolve to. With no policy
+  file it checks where the next start would load one from. In enforced mode that
+  is a warning, and the advice is to point `MELRA_POLICY` at a file another
+  account owns, never to make `MELRA_HOME` read-only, which MELRA must write. In
+  developer mode, where a default setup keeps its policy in `MELRA_HOME`, it
+  passes and names the paths, so `melra setup` gives no `MELRA_POLICY` advice
+  there. It is not checked on Windows.
 
 ### Changed
 

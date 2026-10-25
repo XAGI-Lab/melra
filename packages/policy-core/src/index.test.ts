@@ -1,12 +1,13 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
+import { createHash } from "node:crypto";
 import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { TaskRequestSchema } from "@melra/protocol";
+import { PRODUCT_VERSION, TaskRequestSchema } from "@melra/protocol";
 import {
   classifyCommand,
   classifyOperation,
@@ -173,6 +174,28 @@ describe("policy file", () => {
     );
   });
 
+  it("fingerprints the file as sha256sum would, and the defaults by version", async () => {
+    const text = JSON.stringify({ allowedCommands: ["git", "ls"] });
+    await writeFile(file(), text);
+    const loaded = await loadPolicy(file(), directory);
+    expect(loaded.digest).toBe(`sha256:${createHash("sha256").update(text).digest("hex")}`);
+    // One allowlist entry changed under the same label: only the digest says so.
+    const edited = await load({ allowedCommands: ["git", "cat"] });
+    expect(edited.version).toBe(loaded.version);
+    expect(edited.digest).toMatch(/^sha256:[a-f0-9]{64}$/);
+    expect(edited.digest).not.toBe(loaded.digest);
+    expect((await loadPolicy(undefined, directory)).digest).toBe(`default:${PRODUCT_VERSION}`);
+    // Every decision made under a policy names it.
+    const list = TaskRequestSchema.parse({
+      goal: "List",
+      operation: { kind: "file", action: "list", path: "." },
+    });
+    expect(evaluatePolicy("t", list, edited).decision).toMatchObject({
+      policyVersion: "1",
+      policyDigest: edited.digest,
+    });
+  });
+
   it("loads every committed example policy, and the one init writes", async () => {
     const examples = fileURLToPath(new URL("../../../examples/", import.meta.url));
     const found = (await readdir(examples, { recursive: true }))
@@ -185,6 +208,7 @@ describe("policy file", () => {
     expect(await load({ ...defaults, mode: "enforced" })).toEqual({
       ...createDefaultPolicy(directory),
       mode: "enforced",
+      digest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
     });
     // Unchanged semantics: a relative root is the file's, retention merges over
     // the defaults, and a grant gets its defaults.

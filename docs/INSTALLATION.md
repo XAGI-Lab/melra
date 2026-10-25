@@ -86,8 +86,9 @@ melra doctor
 
 The command reports Node, guardrails, deployment mode, workspace,
 data-directory (and whether it sits inside the workspace, which enforced mode
-refuses), SQLite, browser, computer-use adapter, and policy readiness —
-plus the `MELRA_SOCKET` path when one is set, the OS isolation in effect (see
+refuses), SQLite, browser, computer-use adapter, policy readiness and digest,
+and whether the user MELRA runs as can change the policy — plus the
+`MELRA_SOCKET` path when one is set, the OS isolation in effect (see
 [Docker](#docker)), and MCP clients — without exposing credentials. Unlike
 `setup`, it changes no configuration: the only thing it may create is the data
 directory, if it does not exist yet.
@@ -98,7 +99,8 @@ to run next:
 
 ```text
   ✓  browser         /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
-  ✓  policy          /home/you/.melra/policy.json
+  ✓  policy          /home/you/.melra/policy.json (sha256:9c1f…)
+  ✓  policy-write    /home/you/.melra/policy.json, /home/you/.melra, /home/you can be changed by the user MELRA runs as: expected in developer mode, matters in enforced mode
   ⚠  clients
       ⚠  cursor  configured  pinned to @melra/cli@0.2.0, this is 0.3.0-alpha.12; fix: …
 
@@ -357,6 +359,36 @@ key. `melra doctor` fails its `policy` check with the same message, `melra
 policy test` prints it, and `melra status` and `melra tasks` report it
 (`policyError` in their JSON).
 
+`version` is a label you write, and `"1"` when you do not. Beside it, every
+policy decision, receipt and certificate records `policyDigest`: `sha256:` and
+the SHA-256 of the file's bytes, which `sha256sum policy.json` reproduces, or
+`default:<MELRA version>` when no file is loaded. Any edit changes it, so two
+receipts governed by different files say so even when the label did not move. It
+covers the file's bytes only. A key the file leaves out takes the running MELRA
+version's default, so the same digest can stand for other rules under another
+version. The workspace root comes from `MELRA_WORKSPACE`, else a `MELRA_POLICY`
+file's `workspaceRoot` (relative to the file), else the current directory (a
+policy file's `workspaceRoot` can also only narrow it to a folder inside), and
+is in neither the digest nor any receipt. The receipt records the mode beside
+the digest (`mode`), and a decision unsafe-local allowed gives
+`unhinged_mode_no_guardrails` as its reason. `melra_capabilities`, `melra policy
+test`, `melra status` (`policyDigest`), `melra doctor` and the console show it.
+
+The digest records which file governed an effect; it does not stop the file
+changing. `melra doctor` reports (`policy-write`) when the user MELRA runs as
+can change the policy: when it can write, or owns, the file or any folder above
+it, since an owner can make a read-only file writable again and a changeable
+folder lets anything below it be replaced. A link is followed, and the file it
+names and the folders above that count too. With no policy file, the check
+looks at `MELRA_HOME`, since the next start loads a `policy.json` that appears
+there. A default setup keeps its policy in `MELRA_HOME`, so this user can
+always change it. In developer mode that is expected: the check passes and
+names the paths, and `setup` gives no advice about it. In enforced mode it
+warns. To clear the warning, point `MELRA_POLICY` at a file another account
+owns, in folders this user cannot change. Do not make `MELRA_HOME` read-only
+instead: MELRA has to write its database there. On Windows the check reports
+`not checked`.
+
 The generated policy allows any public browser destination
 (`allowedDomains: ["*"]`) and, in developer mode, localhost, so browsing works
 without editing anything. That list is a *narrowing* control, not the safety boundary: the
@@ -469,7 +501,10 @@ operation as — `file.write`, `terminal.run`, `browser.click` — with `*` stan
 for any run of characters. `principal` is matched against the immediate caller
 in the request's `identity`, written `kind:id`; a request that declares no
 identity is the local principal, `agent:local`. Add `policyVersion` to a grant
-to have it refused rather than reinterpreted after the policy changes under it.
+to have it refused once the file's `version` no longer matches it. The pin
+follows the label, not the content: an edit that leaves `version` as it was
+leaves the grant in force, so bump `version` with any change the grant should
+not survive.
 A memory target is `<scope>:<action>:<id or key>`, except that `list`,
 `search` and `clear`, which act on the whole scope, are `<scope>:<action>:*`
 whatever key or id they name, so a grant scoped to keys does not cover them (see
