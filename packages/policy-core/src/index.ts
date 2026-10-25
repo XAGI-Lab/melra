@@ -153,8 +153,9 @@ export interface LocalPolicy {
    * instead is remove every door it owns that would contradict it: no
    * `--unsafe-local`, no bind outside loopback, no client registering itself.
    *
-   * Named on every receipt, because "was this effect governed by the only door
-   * or by one of several" is not something an auditor should have to infer.
+   * Named on every receipt as the deployment the operator declared, which an
+   * auditor cannot recover after the fact; it is not evidence that no other
+   * path existed.
    */
   mode: DeploymentMode;
 }
@@ -535,7 +536,17 @@ function gitReadOnly(args: readonly string[]): boolean {
   return listing || names === 0;
 }
 
-export function createDefaultPolicy(workspaceRoot: string): LocalPolicy {
+/**
+ * The default commands whose job is to run whatever program they are handed.
+ * `melra launch` leaves them out of its defaults, since the agent it starts
+ * has no shell of its own. That narrows the list without making the rest
+ * harmless: any allowed command run as an approved change has the OS user's
+ * rights, and in developer mode the agent approves its own changes.
+ */
+export const RUNTIME_COMMANDS: readonly string[] = ["node", "npm", "npx", "pnpm"];
+
+/** `runtimes: false` leaves `RUNTIME_COMMANDS` out of `allowedCommands`. */
+export function createDefaultPolicy(workspaceRoot: string, runtimes = true): LocalPolicy {
   return {
     version: "1",
     workspaceRoot: resolve(workspaceRoot),
@@ -560,7 +571,7 @@ export function createDefaultPolicy(workspaceRoot: string): LocalPolicy {
       "tasklist",
       "wc",
       "where",
-    ],
+    ].filter((command) => runtimes || !RUNTIME_COMMANDS.includes(command)),
     allowedDomains: ["*"],
     popups: "block",
     mutations: "confirm",
@@ -585,11 +596,17 @@ export function localhostAllowed(policy: Pick<LocalPolicy, "allowLocalhost" | "m
   return policy.allowLocalhost ?? policy.mode !== "enforced";
 }
 
+/**
+ * The policy a file sets, over the defaults. `runtimes` is
+ * `createDefaultPolicy`'s, so it narrows only a list the file leaves out: a
+ * file's own `allowedCommands` is kept as written.
+ */
 export async function loadPolicy(
   path: string | undefined,
   workspaceRoot: string,
+  runtimes = true,
 ): Promise<LocalPolicy> {
-  const defaults = createDefaultPolicy(workspaceRoot);
+  const defaults = createDefaultPolicy(workspaceRoot, runtimes);
   if (path === undefined) return { ...defaults, digest: `default:${PRODUCT_VERSION}` };
   // The bytes as read, not the parsed policy, so the digest is the one an
   // auditor gets from `sha256sum` and nothing here decides what counts.

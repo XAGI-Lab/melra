@@ -2,9 +2,10 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: Apache-2.0
 
-import { access, lstat, mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import { spawn } from "node:child_process";
+import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
@@ -57,8 +58,11 @@ import {
 import {
   type CliEnvironment,
   approverLabel,
+  claudeLaunchArgv,
+  claudeProgram,
   namedDeploymentMode,
   parseCliEnvironment,
+  selfCommand,
   serverLaunch,
 } from "./environment.js";
 import { approvalConsole, assertConsoleTerminal, confirmInTerminal } from "./approval-console.js";
@@ -72,6 +76,7 @@ import {
   renderConformance,
   renderDoctor,
   renderInit,
+  renderLaunch,
   renderSetup,
   setupWizard,
   type ConformanceReport,
@@ -172,13 +177,14 @@ function unsafeLocalBanner(root: string): string {
   ].join("\n");
 }
 
-async function runtime(env: CliEnvironment): Promise<MelraRuntime> {
+async function runtime(env: CliEnvironment, environment?: NodeJS.ProcessEnv): Promise<MelraRuntime> {
   const policyPath = await existingPolicyPath(env);
   return await createMelraRuntime({
     workspaceRoot: env.workspaceRoot,
     dataDirectory: env.dataDirectory,
     unhinged: env.unhinged,
     mode: env.mode,
+    ...(environment === undefined ? {} : { environment }),
     ...(policyPath === undefined ? {} : { policyPath }),
     ...(env.browserExecutablePath === undefined
       ? {}
@@ -249,7 +255,7 @@ function rejectUnknownFlags(args: string[], known: readonly string[]): void {
   // slot after any known flag that takes one.
   // Every known flag that takes no value. One missing here had its next
   // token skipped unchecked, so `--write --dry-run` wrote the config.
-  const boolean = new Set(["--http", "--json", "--yes", "--deny", "--write", "--open"]);
+  const boolean = new Set(["--http", "--json", "--yes", "--deny", "--write", "--open", "--dry-run"]);
   const valued = new Set(known.filter((flag) => !boolean.has(flag)));
   for (let index = 0; index < args.length; index += 1) {
     const argument_ = args[index];
@@ -817,6 +823,18 @@ async function doctor(env: CliEnvironment): Promise<{
   };
 }
 
+// What a client starts the server with, as `init` and `launch` write it.
+function serverEnvironment(env: CliEnvironment, policyPath: string | undefined): Record<string, string> {
+  return {
+    MELRA_WORKSPACE: env.workspaceRoot,
+    MELRA_HOME: env.dataDirectory,
+    ...(policyPath === undefined ? {} : { MELRA_POLICY: policyPath }),
+    // The client starts the server with this env, not with our flags: without
+    // it `--mode enforced` would be reported here and a developer server run.
+    ...(env.mode === "enforced" ? { MELRA_MODE: "enforced" } : {}),
+  };
+}
+
 async function init(args: string[], env: CliEnvironment): Promise<InitResult> {
   await mkdir(env.dataDirectory, { recursive: true, mode: 0o700 });
   // The operator's MELRA_POLICY when there is one: writing the default path
@@ -839,14 +857,7 @@ async function init(args: string[], env: CliEnvironment): Promise<InitResult> {
   const label = CLIENTS[client]?.label ?? client;
   const config = clientConfig(client, {
     ...serverLaunch(import.meta.dirname, PRODUCT_VERSION),
-    env: {
-      MELRA_WORKSPACE: env.workspaceRoot,
-      MELRA_HOME: env.dataDirectory,
-      MELRA_POLICY: policyPath,
-      // The client starts the server with this env, not with our flags: without
-      // it `--mode enforced` would be reported here and a developer server run.
-      ...(env.mode === "enforced" ? { MELRA_MODE: "enforced" } : {}),
-    },
+    env: serverEnvironment(env, policyPath),
   });
   const configPath = clientConfigPath(client, env.workspaceRoot);
   if (args.includes("--write")) {
@@ -939,6 +950,109 @@ async function setup(args: string[], env: CliEnvironment): Promise<number> {
   const { report, failed } = await doctor(env);
   printJsonOrHuman({ ...initialized, ...report }, () => renderSetup(initialized, report), args);
   return failed ? 1 : 0;
+}
+
+// Where `--dry-run` shows the config file a real launch writes and removes.
+const MCP_CONFIG_PLACEHOLDER = "<mcp-config.json>";
+
+/**
+ * Starts Claude Code with melra as its only MCP server and no built-in tool
+ * that changes anything, so MELRA's tools are the agent's only way to change
+ * anything.
+ * The server is this very melra, by absolute path, with the workspace, policy
+ * and mode every other command here would use, and MELRA_LAUNCHED, so its
+ * defaults leave out the commands that run any program. Exits as claude does.
+ * A `claude` started any other way is unchanged.
+ */
+async function launch(args: string[], env: CliEnvironment): Promise<number> {
+  // Everything after `--` is claude's, and refused unless it is on the list.
+  const split = args.indexOf("--");
+  const own = split < 0 ? args : args.slice(0, split);
+  const passed = split < 0 ? [] : args.slice(split + 1);
+  rejectUnknownFlags(own, ["--dry-run", "--claude-bin"]);
+  if (positionals(own, ["--claude-bin"]).join(" ") !== "claude-code") {
+    throw new Error("launch supports only claude-code: melra launch claude-code [--dry-run] [-- <claude arguments>]");
+  }
+  const named = argument("--claude-bin", own);
+  if (own.includes("--claude-bin") && (named === undefined || named.trim() === "" || named.startsWith("--"))) {
+    throw new Error("--claude-bin requires a path");
+  }
+  const claude = await claudeProgram(named ?? (process.env.CLAUDE_BIN?.trim() || "claude"));
+  const planned = claudeLaunchArgv(MCP_CONFIG_PLACEHOLDER, passed);
+  const reader = questions(own);
+  if (!(await workspaceAgreed(env, reader).finally(() => reader?.close()))) return 1;
+  if (!(await stat(env.workspaceRoot).catch(() => undefined))?.isDirectory()) {
+    throw new Error(`workspace not found: ${env.workspaceRoot}`);
+  }
+  const policyPath = await existingPolicyPath(env);
+  // The server claude will start, opened and closed here first, so one that
+  // would refuse to start stops here, not in claude's log, and the summary
+  // lists what it will allow.
+  const melra = await runtime(env, { ...process.env, MELRA_LAUNCHED: "1" });
+  const policy = melra.policy;
+  await melra.close();
+  const self = selfCommand();
+  const mcpConfig = clientConfig("claude-code", {
+    command: self.command,
+    args: [...self.args, "serve"],
+    env: {
+      ...serverEnvironment(env, policyPath),
+      ...(env.unhinged ? { MELRA_UNHINGED: "1" } : {}),
+      MELRA_HARNESS_TOOLS: "1",
+      MELRA_LAUNCHED: "1",
+    },
+  });
+  const summary = renderLaunch({
+    mode: policy.mode,
+    unhinged: policy.unhinged,
+    workspace: env.workspaceRoot,
+    allowedCommands: policy.allowedCommands,
+    ...(policyPath === undefined ? {} : { policyPath }),
+  });
+  process.stderr.write(summary);
+  if (own.includes("--dry-run")) {
+    output({
+      command: claude,
+      args: planned,
+      cwd: env.workspaceRoot,
+      mcpConfig,
+      note: `a launch writes mcpConfig to a private temporary file, passes its path for ${MCP_CONFIG_PLACEHOLDER}, and removes it when claude exits`,
+    });
+    return 0;
+  }
+  const directory = await mkdtemp(join(tmpdir(), "melra-launch-"));
+  try {
+    const file = join(directory, "mcp.json");
+    await writeFile(file, `${JSON.stringify(mcpConfig, null, 2)}\n`, { mode: 0o600 });
+    const child = spawn(claude, claudeLaunchArgv(file, passed), { cwd: env.workspaceRoot, stdio: "inherit" });
+    // Ctrl-C reaches claude from the terminal, and claude decides what it
+    // means; this process waits for it, so the file is removed after it.
+    // A hangup stops it as SIGTERM does, or this process would die at once and
+    // leave claude and the file behind.
+    const wait = () => undefined;
+    const stop = () => child.kill("SIGTERM");
+    process.on("SIGINT", wait);
+    process.on("SIGTERM", stop);
+    process.on("SIGHUP", stop);
+    try {
+      return await new Promise<number>((exited, failed) => {
+        child.once("error", (error: NodeJS.ErrnoException) =>
+          failed(
+            error.code === "ENOENT"
+              ? new Error(`claude_not_found: ${claude}; install Claude Code 2.1.296 or later, or name it with CLAUDE_BIN or --claude-bin`)
+              : error,
+          ),
+        );
+        child.once("exit", (code) => exited(code ?? 1));
+      });
+    } finally {
+      process.off("SIGINT", wait);
+      process.off("SIGTERM", stop);
+      process.off("SIGHUP", stop);
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 }
 
 async function runTask(args: string[], env: CliEnvironment): Promise<number> {
@@ -1258,6 +1372,8 @@ Usage:
   melra init [--client <name>] [--write] [--json]
   melra serve [--http [--port <port>] [--open]]
   melra serve --socket <path>
+  melra launch claude-code [--dry-run] [--claude-bin <path>]
+                           [-- <claude arguments>]
   melra run --request <task.json>
   melra approve <task-id> [--yes] [--deny] [--json]
   melra judge <task-id> --judgement <id> --verdict yes|no|cannot_tell
@@ -1287,6 +1403,16 @@ approval and there is no terminal to ask in, 4 when policy blocks it, and 5
 when it waits on a semantic judgement, with 'next' holding the 'melra judge'
 command for each of its judgements, one per line, its verdict left for you to
 fill in. An error, or a no at its prompt, exits 1.
+
+'melra launch claude-code' starts Claude Code with melra as its only MCP
+server and Read, Glob and Grep as its only built-in tools, so MELRA's tools
+are the only ones it has that change anything. It prints what the session can
+and cannot do on stderr first, and exits as claude does. After '--' it passes
+on only a prompt, -p/--print, --model, --output-format, --verbose,
+-c/--continue and -r/--resume, and refuses anything else. --dry-run prints the
+claude command and MCP config instead of running them. CLAUDE_BIN or
+--claude-bin names the claude to run, a relative path from here (default:
+claude in one of PATH's absolute directories).
 
 'melra console', run by you in a terminal, opens an approval console in your
 browser, on a server of its own with no MCP endpoint, that approves or denies
@@ -1368,6 +1494,8 @@ Environment:
                                    <MELRA_HOME>/payload.key); back it up
   MELRA_HARNESS_TOOLS              Set to 1 to add read_file, run_command and
                                    the other plain tool names
+  MELRA_LAUNCHED                   Set to 1 by 'melra launch': node, npm, npx
+                                   and pnpm only if the policy file lists them
 `);
 }
 
@@ -1558,6 +1686,9 @@ async function main(): Promise<void> {
       process.once("SIGTERM", () => void close().finally(() => process.exit(0)));
       return;
     }
+    case "launch":
+      process.exitCode = await launch(args, env);
+      return;
     case "run":
       rejectUnknownFlags(args, ["--request"]);
       // Failed until the task says otherwise: an effect that never returns

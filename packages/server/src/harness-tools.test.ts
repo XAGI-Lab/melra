@@ -389,6 +389,12 @@ describe("harness tools in enforced mode", () => {
     expect(enforced?.startsWith(SERVER_INSTRUCTIONS)).toBe(true);
     expect(enforced).toContain("melra approve <taskId>");
     expect(enforced).toContain("approval_awaiting_operator");
+    // A wait is the operator's turn, not a cue to find another way.
+    expect(enforced).toContain("Do not reach the same effect through another tool.");
+    expect(enforced).not.toContain("try again later");
+    // A decision changes nothing melra_task_status shows; the task runs only
+    // when melra_execute is called again.
+    expect(enforced).toContain("call melra_execute again");
     const developer = await createMelraRuntime({
       workspaceRoot: workspace,
       dataDirectory: join(base, "dev-data"),

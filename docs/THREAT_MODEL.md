@@ -52,6 +52,25 @@ be given.
 The residual risk is the assertion itself. See
 [deployment modes](INSTALLATION.md#deployment-modes).
 
+**A session `melra launch` starts.** `melra launch claude-code` removes the
+harness's own alternative for the one session it starts, in either mode:
+Claude Code runs with read-only built-in tools, melra as its only MCP server,
+its user, project and local settings files ignored, and any claude argument
+beyond a short list refused, so MELRA's tools are the only ones that agent has
+that change anything. Outside it are a `claude` started any other way;
+desktop clients; plugin hooks, whose loading under `--restricted` is
+unverified; and a program MELRA's policy lets the agent run, which has the OS
+user's rights whichever allowed command starts it. In developer mode the agent
+approves its own changes, so enforced mode is how a person decides each one.
+The server such a session starts leaves `node`, `npm`, `npx` and `pnpm` out of
+its default `allowedCommands` unless the policy file lists them, which narrows
+that list without closing it. The claude `launch` runs is found by absolute
+path, never from the workspace it starts in, where the agent can write. It is
+not an operating-system boundary: the agent's process runs as the same OS user,
+so what this document says about that user's access to the data directory and
+the policy file still applies. See
+[launching an agent](INSTALLATION.md#launch-an-agent-with-melra-as-its-only-tool).
+
 ## Threats and controls
 
 | Threat | Current control | Residual risk |

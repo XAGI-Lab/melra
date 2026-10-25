@@ -6,8 +6,10 @@
 // because importing that runs the CLI, and every piece here needs a test.
 
 import { createInterface } from "node:readline/promises";
+import { RUNTIME_COMMANDS } from "@melra/policy-core";
 import { printable } from "@melra/server/kernel";
 import { CLIENTS } from "./clients.js";
+import { CLAUDE_TOOLS } from "./environment.js";
 import type { ClientChoice, ClientStatus } from "./client-status.js";
 import { mark, paint, table, type Status } from "./output.js";
 
@@ -214,6 +216,55 @@ export function renderSetup(result: InitResult, report: DoctorReport): string {
     "",
     ...(attention.length === 0 ? [] : [checkRows(attention, report), ""]),
     ...summary(report),
+  ].join("\n");
+}
+
+export interface LaunchSummary {
+  mode: string;
+  unhinged: boolean;
+  workspace: string;
+  policyPath?: string;
+  /** What the server will allow, read as it reads them. */
+  allowedCommands: readonly string[];
+}
+
+/**
+ * What `melra launch claude-code` tells the person starting it before claude
+ * starts: what the session can and cannot do, and who approves a change.
+ */
+export function renderLaunch(summary: LaunchSummary): string {
+  // Unsafe-local runs any program and asks nothing, so no row may say less.
+  const runtimes = summary.unhinged ? [] : RUNTIME_COMMANDS.filter((command) => summary.allowedCommands.includes(command));
+  const rows = [
+    ["Mode", summary.unhinged ? "UNSAFE-LOCAL: no policy, approval or confinement applies" : summary.mode],
+    ["Workspace", summary.workspace],
+    ["Policy", summary.unhinged ? "not applied" : (summary.policyPath ?? "safe built-in defaults")],
+    ["Agent has", `${CLAUDE_TOOLS.split(",").join(", ")}, which only read the workspace, and MELRA's tools for everything else`],
+    ["Off", "Bash, Edit, Write, WebFetch and the other built-in tools, every other MCP server, and your user, project and local Claude Code settings"],
+    [
+      "Commands",
+      summary.unhinged
+        ? "any program, shells included"
+        : `${summary.allowedCommands.join(", ") || "none"}` +
+          (runtimes.length === 0 ? "; node, npm, npx and pnpm only if the policy file lists them" : ""),
+    ],
+    [
+      "Approve",
+      summary.unhinged
+        ? "nothing is asked; every change runs"
+        : summary.mode === "enforced"
+          ? "melra approve <task-id> or melra console, in another terminal, enforced, with this MELRA_HOME"
+          : "the agent can echo MELRA's phrase itself, and an approved command runs with your rights; " +
+            "launch with --mode enforced to approve each change yourself",
+    ],
+    ...(runtimes.length === 0
+      ? []
+      : [["Warning", `the policy allows ${runtimes.join(", ")}; a program they run is not limited to MELRA's tools`]]),
+  ];
+  return [
+    "Starting Claude Code. MELRA's tools are the only ones it has that change anything.",
+    table(rows, { indent: 2 }),
+    "",
   ].join("\n");
 }
 

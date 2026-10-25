@@ -117,7 +117,7 @@ Write it into ~/project/.mcp.json? [Y/n]
   ✓  Policy       ~/.melra/policy.json
   ✓  Claude Code  ~/project/.mcp.json
 
-Next: Start claude in this workspace and approve the 'melra' server when it asks; 'claude mcp list' then shows it connected.
+Next: Start claude in this workspace and approve the 'melra' server when it asks; 'claude mcp list' then shows it connected. Or start it with 'melra launch claude-code', so MELRA's are the only tools it has that change anything.
 ```
 
 Then restart your agent app (Claude Code asks you to approve a project's server
@@ -446,6 +446,17 @@ unit, each checked in CI, and `melra doctor` reports which restrictions are actu
 effect. See
 [deployment modes](docs/INSTALLATION.md#deployment-modes),
 the [threat model](docs/THREAT_MODEL.md) and the [security policy](SECURITY.md).
+
+For Claude Code, `melra launch claude-code` takes the other path away for the
+session it starts: Read, Glob and Grep are its only built-in tools and melra its
+only MCP server, so the only tools it has that change anything are MELRA's. A
+command MELRA runs for it still has your rights, and in developer mode the agent
+approves its own changes, so `--mode enforced` is how you decide each one. The
+server it starts leaves `node`, `npm`, `npx` and `pnpm` out of the default
+allowlist, unless the policy file lists them, as one `melra setup` wrote does:
+remove the ones the agent does not need. A `claude` started any other way is
+unchanged. See
+[launching an agent](docs/INSTALLATION.md#launch-an-agent-with-melra-as-its-only-tool).
 
 </details>
 

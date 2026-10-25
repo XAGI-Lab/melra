@@ -162,6 +162,13 @@ Actions: `run`, `start`, `status`, `output`, `stop`, `send`.
   an interpreter such as `node`, `sg` with `-c`, or a WSL distribution's
   launcher (`ubuntu.exe`). So allowlist one only if you would approve what it
   runs.
+- A server [`melra launch`](INSTALLATION.md#launch-an-agent-with-melra-as-its-only-tool)
+  starts leaves `node`, `npm`, `npx` and `pnpm` out of the default
+  `allowedCommands`, since the agent there has no shell of its own; a policy
+  file's own `allowedCommands` is kept as written. That narrows the list
+  without making the rest harmless: any allowed command run as an approved
+  change has your rights, and in developer mode the agent approves its own
+  changes.
 - Command, arguments, working directory, environment, duration, and output are
   bounded.
 - Only a read runs without approval. A read is a read-only program (`cat`,
@@ -716,7 +723,8 @@ bytes, the value `sha256sum` prints for it, or `default:<version>` when no file
 is loaded, so it changes with any edit whether or not the label moved. It covers
 the file's bytes only. A key the file leaves out takes the running MELRA
 version's default, so one digest can stand for other rules under another
-version. The workspace root comes from `MELRA_WORKSPACE`, else a `MELRA_POLICY`
+version, and under `melra launch`, whose defaults leave out node, npm, npx and
+pnpm. The workspace root comes from `MELRA_WORKSPACE`, else a `MELRA_POLICY`
 file's `workspaceRoot` (relative to the file), else the current directory (a
 policy file's `workspaceRoot` can also only narrow it to a folder inside), and
 is in neither the digest nor any receipt. `--mode`, `MELRA_MODE` and

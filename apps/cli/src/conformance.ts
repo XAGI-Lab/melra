@@ -28,13 +28,13 @@
 
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { isSea } from "node:sea";
 import { promisify } from "node:util";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { PRODUCT_VERSION } from "@melra/protocol";
+import { selfCommand } from "./environment.js";
 
 export const CONFORMANCE_SUITE = "melra-conformance/1";
 
@@ -654,9 +654,8 @@ async function connect(
   }
   const command = options.command ?? process.execPath;
   // Reproduce how this process was started, loaders included, so the same
-  // command works from `dist/bin.js` and from `tsx src/index.ts`. A single
-  // executable is its own entry point and takes the subcommand directly.
-  const self = isSea() ? [] : [...process.execArgv, process.argv[1] ?? ""];
+  // command works from `dist/bin.js` and from `tsx src/index.ts`.
+  const self = selfCommand().args;
   const args = options.args ?? (options.command === undefined ? [...self, "serve"] : ["serve"]);
   const env = { ...(options.env ?? inheritedEnvironment()), ...options.serverEnv };
   const transport = new StdioClientTransport({

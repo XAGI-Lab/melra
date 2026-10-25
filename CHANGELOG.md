@@ -58,6 +58,26 @@ All notable changes are documented here. The format follows
   developer mode, where a default setup keeps its policy in `MELRA_HOME`, it
   passes and names the paths, so `melra setup` gives no `MELRA_POLICY` advice
   there. It is not checked on Windows.
+- `melra launch claude-code [-- <claude arguments>]` starts Claude Code 2.1.296
+  or later with Read, Glob and Grep as its only built-in tools, melra as its
+  only MCP server and its user, project and local settings files ignored
+  (`--tools`, `--strict-mcp-config`, `--mcp-config`, `--restricted`), so the
+  only tools it has that change anything are MELRA's. The MCP entry runs the
+  same `melra` by absolute path, with `MELRA_HARNESS_TOOLS=1`, on the
+  workspace, policy and mode every other command reads, developer by default.
+  Before claude starts it prints what the session can and cannot do and how a
+  change is approved, and it exits with claude's exit code. After `--` it
+  passes on only a prompt, `-p`/`--print`, `--model`, `--output-format`,
+  `--verbose`, `-c`/`--continue` and `-r`/`--resume`; anything else, and a
+  one-word prompt claude could read as one of its subcommands, is refused with
+  `launch_argument_refused`. `--dry-run` prints the claude command and its MCP
+  config as JSON instead of running them, and `CLAUDE_BIN` or `--claude-bin`
+  names the claude to run, so a test can use a stand-in. That claude is run by
+  absolute path: a named path from the current directory, a bare name only
+  from `PATH`'s absolute directories, never from the directory claude starts
+  in. The server it configures is opened and closed first, so one that would
+  refuse to start stops `launch` before claude starts. A `claude` started any
+  other way is unchanged.
 
 ### Changed
 
@@ -111,6 +131,28 @@ All notable changes are documented here. The format follows
   (`.claude`, `.vscode`, `.codex`, a client's own folder), even an empty one;
   not the project folder holding `.mcp.json`. Reading them, and the rest of
   `.claude` or `.vscode`, is unchanged.
+- A server `melra launch` starts has `MELRA_LAUNCHED=1`, which leaves `node`,
+  `npm`, `npx` and `pnpm` out of the default `allowedCommands`, since each runs
+  any program with the OS user's rights. A policy file's own `allowedCommands`
+  is kept as written, and the launch summary warns when it lists one of them,
+  as a `policy.json` that `melra init` or `melra setup` wrote does. Every other
+  setup keeps the defaults it had. This narrows the list without making the
+  rest harmless: any allowed command run as an approved change has the OS
+  user's rights, and in developer mode the agent approves its own changes, so
+  `--mode enforced` is how a person decides each one.
+- In enforced mode the server's instructions for a model waiting on
+  `approval_awaiting_operator` now say that `melra_task_status` keeps showing
+  `awaiting_approval` until the task runs, to call `melra_execute` again later,
+  that only the operator's decision lets the task run, and not to reach the
+  same effect through another tool.
+- ARCHITECTURE.md, INSTALLATION.md and the type docs of `ActionReceipt.mode`
+  and `LocalPolicy.mode` no longer say enforced mode makes MELRA the only path,
+  or that a receipt's `mode` tells "the only door" from one of several:
+  enforced mode assumes the operator has taken the alternatives away, and
+  `mode` is the deployment the operator declared, not evidence that no other
+  path existed. The root and `@melra/server` package descriptions and the
+  systemd unit call MELRA an autonomy kernel for the effects routed through it,
+  and the Claude Code setup hint names `melra launch claude-code`.
 
 ### Fixed
 

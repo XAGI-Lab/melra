@@ -54,7 +54,7 @@ pnpm e2e                    # packages/server/test/e2e.test.ts against a live st
 pnpm pack:check              # npm pack --dry-run for the published CLI
 pnpm readme:check           # typecheck every ```ts block in every package README
 pnpm security:audit          # pnpm audit --prod + scripts/python-audit.mjs
-pnpm melra <cmd>            # run the CLI from source via tsx (setup | doctor | conformance | init | serve | run | approve | judge | console | inspect | export | tasks | watch | status | workflow | demo | clients | policy test | version)
+pnpm melra <cmd>            # run the CLI from source via tsx (setup | doctor | conformance | init | serve | launch | run | approve | judge | console | inspect | export | tasks | watch | status | workflow | demo | clients | policy test | version)
 ```
 
 Single test file (vitest args pass through the package script):

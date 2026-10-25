@@ -71,7 +71,11 @@ export const CLIENTS: Record<string, Client> = {
     path: (workspace) => join(workspace, ".mcp.json"),
     // A project .mcp.json server waits for the user's approval; until then
     // `claude mcp list` shows it as "Pending approval" and no tool appears.
-    next: "Start claude in this workspace and approve the 'melra' server when it asks; 'claude mcp list' then shows it connected.",
+    // `melra launch` is the way to start it with no other tool that changes
+    // anything; a plain `claude` keeps its own Bash, Edit and Write.
+    next:
+      "Start claude in this workspace and approve the 'melra' server when it asks; 'claude mcp list' then shows it connected. " +
+      "Or start it with 'melra launch claude-code', so MELRA's are the only tools it has that change anything.",
   },
   "claude-desktop": {
     label: "Claude Desktop",
