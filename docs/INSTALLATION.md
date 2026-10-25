@@ -1443,6 +1443,11 @@ What stays on, and why:
   destructive; allowing everything is not the same as reporting nothing.
 - Secret redaction before persistence. Raw output still reaches the caller; the
   database still gets the redacted copy.
+- The file capability's fixed path checks. It still never changes a coding
+  agent's own settings files (`path_harness_config`), because no approval or
+  mode should let one session set what the next may do; it still never writes
+  into a git directory, nor touches MELRA's own data. See
+  [Files](CAPABILITIES.md#files).
 
 The mode cannot run invisibly. Every CLI invocation prints a banner to stderr
 (stdout is the MCP transport, so prose there would corrupt the protocol — MCP
@@ -1530,6 +1535,19 @@ Each path and format above is taken from that client's own documentation or
 source; the entries added most recently link theirs beside them in
 `apps/cli/src/clients.ts`. Warp may ask you
 to approve a change to its MCP file the next time it starts.
+
+MELRA's own file effects never change any of these files at their default
+locations, nor the other settings files a client loads when a session starts
+(`.claude/settings.json` and `settings.local.json`, `.vscode/settings.json` and
+`tasks.json`, the Codex directory's config files): writing, moving or deleting
+one, or a folder named like the one it sits in, is refused in every mode with
+`path_harness_config`, which names the file. A path under `$CODEX_HOME`,
+`$HERMES_HOME` or another moved home is recognised only while that folder
+keeps its default name. Change them yourself, with `--write` or your editor;
+reading them is unaffected. This bounds MELRA's file effects, not the agent:
+an approved terminal command can still write these files, and other files a
+client loads, such as agent and skill definitions, are not refused.
+[Files](CAPABILITIES.md#files) has the full rule.
 
 Clients with no file `--write` can safely target — add MELRA in the app's own
 MCP settings, pasting the `generic` configuration (`melra setup --client

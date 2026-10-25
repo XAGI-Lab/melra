@@ -15,6 +15,7 @@ import {
   rm,
   stat,
 } from "node:fs/promises";
+import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { FileOperation } from "@melra/protocol";
 
@@ -164,6 +165,145 @@ async function realSpelling(
 }
 
 /**
+ * Whether `judge` holds for `spelled`, or for any spelling on the way a chain
+ * of links in it leads: the part that exists resolved through links, and a
+ * link whose target does not exist followed too.
+ */
+async function throughLinks(spelled: string, judge: (at: string) => Promise<boolean>): Promise<boolean> {
+  if (await judge(spelled)) return true;
+  const resolved = new Map<string, Promise<string | NodeJS.ErrnoException>>();
+  const seen = new Set<string>();
+  for (let next: string | undefined = spelled; next !== undefined && !seen.has(next); ) {
+    // No lookup follows a chain this long, but the answer would still tell
+    // where it ends: refused, whatever is there. ponytail: deleting or moving
+    // the link itself is refused too; allowing that needs a chain to a
+    // present name refused at the same length first.
+    if (seen.size > MAX_LINKS) return true;
+    seen.add(next);
+    const step = await realSpelling(next, resolved);
+    if (step.real !== spelled && (await judge(step.real))) return true;
+    next = step.next;
+  }
+  // Every spelling on the way judged, or a loop, which opens nothing.
+  return false;
+}
+
+/**
+ * Files a coding agent's harness loads its permissions, hooks, tasks or MCP
+ * servers from when a session starts, by the last parts of their paths: the
+ * ones `melra setup` writes (apps/cli/src/clients.ts) and the settings beside
+ * them. Changed by the agent, one could widen what its own next session may
+ * do, so no file effect changes one, wherever it lies. Files, not their
+ * folders: the rest of `.claude` or `.vscode` stays writable. `*` is any name,
+ * for a folder whose every file is loaded. A one-name entry is listed again
+ * under its folder, so that folder is known too.
+ *
+ * ponytail: the default places only. A home moved by the client's own
+ * variable (`CODEX_HOME`, `HERMES_HOME`, ...) is recognised only where it
+ * keeps the default folder name; by name, too, like `.git`, so an NTFS stream
+ * or short-name spelling is not.
+ */
+const HARNESS_CONFIG = [
+  ".mcp.json",
+  ".claude/settings.json",
+  ".claude/settings.local.json",
+  ".vscode/settings.json",
+  ".vscode/tasks.json",
+  ".vscode/mcp.json",
+  ".codex/config.toml",
+  ".codex/managed_config.toml",
+  ".codex/requirements.toml",
+  ".codex/hooks.json",
+  ".codex/rules/*",
+  ".gemini/settings.json",
+  ".cursor/mcp.json",
+  "claude_desktop_config.json",
+  "Application Support/Claude/claude_desktop_config.json",
+  "Roaming/Claude/claude_desktop_config.json",
+  ".config/Claude/claude_desktop_config.json",
+  ".codeium/windsurf/mcp_config.json",
+  ".kiro/settings/mcp.json",
+  "saoudrizwan.claude-dev/settings/cline_mcp_settings.json",
+  ".config/zed/settings.json",
+  "Roaming/Zed/settings.json",
+  "opencode.json",
+  ".config/opencode/opencode.json",
+  ".config/goose/config.yaml",
+  "Roaming/Block/goose/config/config.yaml",
+  ".continue/mcpServers/*",
+  ".config/amp/settings.json",
+  ".config/amp/settings.jsonc",
+  "openclaw.json",
+  ".openclaw/openclaw.json",
+  ".hermes/config.yaml",
+  "Local/hermes/config.yaml",
+  ".copilot/mcp-config.json",
+  ".qwen/settings.json",
+  ".augment/settings.json",
+  ".warp/.mcp.json",
+  ".junie/mcp/mcp.json",
+  ".factory/mcp.json",
+  ".kimi-code/mcp.json",
+  "kilo.json",
+  "kilo.jsonc",
+  ".config/kilo/kilo.json",
+  ".config/kilo/kilo.jsonc",
+  ".lmstudio/mcp.json",
+  ".cache/lm-studio/mcp.json",
+].map((entry) => entry.split("/"));
+
+/**
+ * Folders many programs keep their settings in: an entry starting with one is
+ * known by it, but the folder alone is not one client's, so `holding` starts
+ * below it.
+ */
+const SHARED = new Set([".config", "application support", "roaming", "local", ".cache"]);
+
+/**
+ * Whether `path` is one of `HARNESS_CONFIG`, or with `holding` the folder one
+ * sits in, or a folder above it there: a delete or a move takes the file along,
+ * and a move onto that name puts whatever the moved folder holds in its place.
+ */
+function harnessConfig(path: string, holding: boolean): boolean {
+  const parts = resolve(path).split(sep).map(spelling);
+  return HARNESS_CONFIG.some((entry) => {
+    const first = SHARED.has(spelling(entry[0] as string)) ? 2 : 1;
+    for (let size = holding ? first : entry.length; size <= entry.length; size += 1) {
+      const tail = parts.slice(-size);
+      if (tail.length === size && tail.every((part, at) => entry[at] === "*" || part === spelling(entry[at] as string))) {
+        return true;
+      }
+    }
+    return false;
+  });
+}
+
+/** A listed path that a link leads elsewhere: where it leads, and the listed spelling. */
+interface HarnessLink {
+  to: string;
+  listed: string;
+}
+
+/**
+ * Each listed path under `anchors`, and each folder on the way to one, that a
+ * link leads elsewhere. A change naming that place by its own name changes the
+ * listed file all the same.
+ */
+async function harnessLinks(anchors: string[]): Promise<HarnessLink[]> {
+  const listed = new Set(
+    anchors.flatMap((anchor) =>
+      HARNESS_CONFIG.flatMap((entry) =>
+        entry.filter((part) => part !== "*").map((_, at) => join(anchor, ...entry.slice(0, at + 1))),
+      ),
+    ),
+  );
+  const found = await Promise.all(
+    [...listed].map(async (at) => ({ to: await realpath(at).catch(() => at), listed: at })),
+  );
+  return found.filter(({ to, listed }) => to !== listed);
+}
+
+/**
  * The bytes a write's content stands for. Node's base64 decoder is lenient: it
  * stops at the first padding, skips what is not base64, and decoded two joined
  * chunks as the first, plain text as noise and "!!!!" as nothing, each written
@@ -191,6 +331,7 @@ export class FileRuntime {
   private readonly readable: string[];
   private readonly identities = new WeakMap<object, Promise<ReservedIdentities>>();
   private readonly holding = new WeakMap<object, Promise<Set<string>>>();
+  private readonly linked = new WeakMap<object, Promise<HarnessLink[]>>();
 
   private constructor(options: FileRuntimeOptions, root: string) {
     this.root = root;
@@ -233,6 +374,15 @@ export class FileRuntime {
    * ponytail: by name, so an NTFS stream spelling of `.git` is not caught; the
    * reserved-file check has the same Windows follow-up.
    *
+   * `changing` refuses a harness config file (`HARNESS_CONFIG`) the same way,
+   * as spelled and through links, and `holding` (a delete, or either end of a
+   * move) the folder one sits in too. A listed path at the root or in the home
+   * folder that is a link, or runs through one, is followed back too: a change
+   * naming where it leads is judged as that listed path. Reads are unchanged.
+   *
+   * ponytail: followed back from the root and the home folder only, and only
+   * from a link that resolves; a nested project's link is judged by name alone.
+   *
    * `call`, as `isReserved` takes it.
    */
   async resolvePath(
@@ -241,6 +391,7 @@ export class FileRuntime {
     creating = false,
     changing = creating,
     call?: object,
+    holding = changing && !creating,
   ): Promise<string> {
     const lexical = resolve(this.root, input);
     // "Is it the root" asked the way `inside` asks "is it within": through
@@ -279,6 +430,23 @@ export class FileRuntime {
     if (changing && !creating && (await this.holdsReserved(real, call))) throw new Error("path_reserved");
     if (creating && relative(this.root, real).split(sep).some((part) => spelling(part) === ".git")) {
       throw new Error("path_git_metadata");
+    }
+    if (changing) {
+      const links = await perCall(this.linked, call, () => harnessLinks([this.root, homedir()]));
+      // Inside where a link leads, as spelled through it; with `holding`, a
+      // folder above it too, which takes it along.
+      const judge = async (at: string) =>
+        harnessConfig(at, holding) ||
+        links.some(({ to, listed }) =>
+          inside(to, at)
+            ? harnessConfig(join(listed, relative(to, at)), holding)
+            : holding && inside(at, to) && harnessConfig(listed, true),
+        );
+      if (await throughLinks(lexical, judge)) {
+        throw new Error(
+          `path_harness_config: ${input} is, or holds, a coding agent's own configuration, which MELRA's file effects never change; edit it yourself, outside the agent`,
+        );
+      }
     }
     return lexical;
   }
@@ -349,27 +517,11 @@ export class FileRuntime {
     const lookup = remembered(new Map<string, Promise<BigIntStats | undefined>>(), (at) =>
       stat(at, { bigint: true }).catch(() => undefined),
     );
-    const resolved = new Map<string, Promise<string | NodeJS.ErrnoException>>();
     // The same thing under another name, a hard link: so the target and each
     // directory above it are compared by identity with every reserved entry
     // and every file inside a reserved directory.
     const known = await perCall(this.identities, call, () => this.reservedIdentities());
-    const judge = (at: string) => this.reservedAsSpelled(at, reading, known, lookup);
-    if (await judge(spelled)) return true;
-    const seen = new Set<string>();
-    for (let next: string | undefined = spelled; next !== undefined && !seen.has(next); ) {
-      // No lookup follows a chain this long, but the answer would still tell
-      // where it ends: refused, whatever is there. ponytail: deleting or moving
-      // the link itself is refused too; allowing that needs a chain to a
-      // present name refused at the same length first.
-      if (seen.size > MAX_LINKS) return true;
-      seen.add(next);
-      const step = await realSpelling(next, resolved);
-      if (step.real !== spelled && (await judge(step.real))) return true;
-      next = step.next;
-    }
-    // Every spelling on the way judged, or a loop, which opens nothing.
-    return false;
+    return throughLinks(spelled, (at) => this.reservedAsSpelled(at, reading, known, lookup));
   }
 
   private async reservedAsSpelled(
@@ -587,7 +739,7 @@ export class FileRuntime {
         if (operation.destination === undefined) {
           throw new Error("file_move_requires_destination");
         }
-        const destination = await this.resolvePath(this.inputPath(operation.destination), false, true, true, call);
+        const destination = await this.resolvePath(this.inputPath(operation.destination), false, true, true, call, true);
         await mkdir(dirname(destination), { recursive: true });
         await rename(path, destination);
         return {

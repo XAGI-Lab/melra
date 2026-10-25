@@ -421,7 +421,8 @@ Content-Security-Policy.
 
 Every row above can be switched off at once with `melra serve --unsafe-local` (or
 `MELRA_UNHINGED=1`): no policy, no approvals, no evidence requirement, no workspace
-confinement, no destination checks. The agent gets exactly the reach your OS user has.
+confinement, no destination checks. The agent gets the reach your OS user has, apart
+from a few fixed file checks that hold in every mode.
 The mode announces itself on stderr, in `melra doctor` and in `melra_capabilities`,
 and receipts still record what ran. See
 [unsafe-local mode](docs/INSTALLATION.md#unsafe-local-mode).

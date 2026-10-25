@@ -103,6 +103,31 @@ Actions: `list`, `read`, `stat`, `hash`, `write`, `move`, `delete`, `mkdir`.
 - Existing symlinks cannot escape that root. A `write` to a symlink inside it
   writes the file it points to, as `read` reads it; one whose target does not
   exist is refused (`file_write_dangling_symlink`).
+- No action changes the settings files a coding agent's harness loads its
+  permissions, hooks, tasks or MCP servers from when a session starts:
+  `.mcp.json`, `.claude/settings.json` and `settings.local.json`,
+  `.vscode/settings.json`, `tasks.json` and `mcp.json`, `.codex/config.toml`
+  with the Codex directory's other config files, every file in `.codex/rules`
+  and `.continue/mcpServers`, `.gemini/settings.json`, `.cursor/mcp.json`, and
+  every file [`melra setup`](INSTALLATION.md#mcp-clients) writes for a client
+  at its default location (a client home moved by its own variable is
+  recognised only while it keeps the default folder name). A `write`, `mkdir`,
+  `delete` or either end of a `move` naming one is refused with
+  `path_harness_config`, which names the path: edit the file yourself, outside
+  the agent. This holds in every mode, unsafe-local included.
+- Those files are known by name: the last parts of the path, at any depth and
+  in any case, so a file of the same name in an unrelated folder is refused
+  too. A `delete` or `move` of a folder named like one that holds them, such
+  as `.claude`, `.vscode`, `.codex`, `.gemini`, `.cursor`, `.continue` or a
+  client's own folder (`~/.config/zed`, `~/.openclaw`), is refused even when it
+  holds none of them; the folder holding `.mcp.json` is any project, so it is
+  not. A path through a link to one is refused, and so is the place a link
+  leads when the link, at the workspace root or in the home folder, is one of
+  these names or a folder on the way to one.
+- Only those files are refused. Reading them, the rest of `.claude` or
+  `.vscode`, and other files a harness loads, such as agent, skill and command
+  definitions, are unchanged, and an approved terminal command can still write
+  any of them.
 - Reads and writes are size-bounded by local policy.
 - Writes use a temporary sibling file followed by an atomic rename.
 - `encoding: "base64"` content must be base64 (line breaks, missing padding and
