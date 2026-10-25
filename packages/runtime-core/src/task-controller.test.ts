@@ -1022,12 +1022,13 @@ describe("effect contract and principal", () => {
      * A charge whose request reached the wire and was never answered, plus the
      * probe that can settle it. The reconciliation URL is written against the
      * idempotency key rather than a response field on purpose: there is no
-     * response to read on this path.
+     * response to read on this path. One predicate per entry of `windows`.
      */
     async function unansweredCharge(
       probe?: EvidenceProbe,
       url = "http://localhost:9/charges/{{idempotencyKey}}",
       plan: { stored?: boolean } = {},
+      windows: Array<{ settleMs?: number }> = [{}],
     ) {
       const execute = vi.fn(async () => {
         throw outcomeUnknown("socket hang up");
@@ -1046,15 +1047,14 @@ describe("effect contract and principal", () => {
           requiredEvidence: [
             { type: "result_equals", path: "success", value: true },
           ],
-          reconciliation: [
-            {
-              type: "http_resource_matches",
-              url,
-              method: "GET",
-              path: "json.status",
-              value: "applied",
-            },
-          ],
+          reconciliation: windows.map((window) => ({
+            type: "http_resource_matches",
+            url,
+            method: "GET",
+            path: "json.status",
+            value: "applied",
+            ...window,
+          })),
         }),
         plan,
       );
@@ -1101,20 +1101,116 @@ describe("effect contract and principal", () => {
       expect(execute).toHaveBeenCalledTimes(1);
     });
 
-    it("marks a parked mutation failed only once the provider denies it", async () => {
+    it("marks a parked mutation failed only once the provider denies it after the settle window", async () => {
       const probe = vi.fn(async () => ({
         status: 404,
         content: JSON.stringify({ status: "none" }),
       }));
-      const { parked, controller } = await unansweredCharge(probe);
+      const { parked, controller, execute } = await unansweredCharge(probe);
+      expect(parked.task.parkedAt).toBeDefined();
 
-      const settled = await controller.execute(parked.task.id);
-
-      expect(settled.task).toMatchObject({
-        status: "failed",
-        error: "reconciliation_confirms_effect_not_applied",
+      // Asked straight away, a "not found" may be a write the provider does
+      // not show yet: no answer, no receipt, and the window keeps its start.
+      const settling = await controller.execute(parked.task.id);
+      expect(settling.task).toMatchObject({
+        status: "recovery_required",
+        error: "reconciliation_settling",
+        parkedAt: parked.task.parkedAt,
       });
-      expect(settled.certificate?.result).toBe("FAILED");
+      expect(settling.receipt).toBeUndefined();
+
+      vi.spyOn(Date, "now").mockReturnValue(Date.parse(parked.task.parkedAt!) + 30_000);
+      try {
+        const settled = await controller.execute(parked.task.id);
+        expect(settled.task).toMatchObject({
+          status: "failed",
+          error: "reconciliation_confirms_effect_not_applied",
+        });
+        expect(settled.certificate?.result).toBe("FAILED");
+      } finally {
+        vi.mocked(Date.now).mockRestore();
+      }
+      expect(probe).toHaveBeenCalledTimes(2);
+      expect(execute).toHaveBeenCalledTimes(1);
+    });
+
+    it("asks a settling mutation again on the next recovery pass, and settles it after the window", async () => {
+      const probe = vi.fn(async () => ({
+        status: 404,
+        content: JSON.stringify({ status: "none" }),
+      }));
+      const { parked, controller, execute } = await unansweredCharge(probe);
+      expect((await controller.execute(parked.task.id)).task.error).toBe("reconciliation_settling");
+
+      // No caller has to come back: the sweep asks, as it does at startup.
+      vi.spyOn(Date, "now").mockReturnValue(Date.parse(parked.task.parkedAt!) + 30_000);
+      try {
+        expect(await controller.recoverInterrupted()).toMatchObject([
+          { id: parked.task.id, status: "failed", error: "reconciliation_confirms_effect_not_applied" },
+        ]);
+      } finally {
+        vi.mocked(Date.now).mockRestore();
+      }
+      expect(await controller.recoverInterrupted()).toEqual([]);
+      expect(probe).toHaveBeenCalledTimes(2);
+      expect(execute).toHaveBeenCalledTimes(1);
+    });
+
+    it("measures the settle window from when the provider was asked, not when it answered", async () => {
+      const clock = vi.spyOn(Date, "now");
+      let parkedAt = 0;
+      const probe = vi.fn(async () => {
+        // A slow answer, given only after the window is over.
+        clock.mockReturnValue(parkedAt + 30_000);
+        return { status: 404, content: JSON.stringify({ status: "none" }) };
+      });
+      try {
+        const { parked, controller } = await unansweredCharge(probe);
+        parkedAt = Date.parse(parked.task.parkedAt!);
+        expect((await controller.execute(parked.task.id)).task).toMatchObject({
+          status: "recovery_required",
+          error: "reconciliation_settling",
+        });
+      } finally {
+        clock.mockRestore();
+      }
+    });
+
+    it("holds the longest settle window when several predicates declare one", async () => {
+      const probe = vi.fn(async () => ({
+        status: 404,
+        content: JSON.stringify({ status: "none" }),
+      }));
+      const { parked, controller } = await unansweredCharge(probe, undefined, {}, [{ settleMs: 0 }, {}]);
+      expect((await controller.execute(parked.task.id)).task).toMatchObject({
+        status: "recovery_required",
+        error: "reconciliation_settling",
+      });
+    });
+
+    it("measures the window of a task parked without parkedAt from its last write, and keeps it there", async () => {
+      const probe = vi.fn(async () => ({
+        status: 404,
+        content: JSON.stringify({ status: "none" }),
+      }));
+      const { parked, controller, store } = await unansweredCharge(probe);
+      // As an earlier version left it: no parkedAt, last written 20 s ago.
+      const earlier = store.getTask(parked.task.id)!;
+      delete earlier.parkedAt;
+      const lastWrite = new Date(Date.now() - 20_000).toISOString();
+      store.saveTask({ ...earlier, updatedAt: lastWrite });
+      expect((await controller.execute(parked.task.id)).task).toMatchObject({
+        error: "reconciliation_settling",
+        parkedAt: lastWrite,
+      });
+
+      // Asked again, the window still runs from that write, not this one.
+      vi.spyOn(Date, "now").mockReturnValue(Date.parse(lastWrite) + 30_000);
+      try {
+        expect((await controller.execute(parked.task.id)).task.status).toBe("failed");
+      } finally {
+        vi.mocked(Date.now).mockRestore();
+      }
     });
 
     it("keeps a parked mutation parked when the provider cannot be reached", async () => {
@@ -1269,10 +1365,17 @@ describe("effect contract and principal", () => {
       expect((await controller.execute(task.id)).task.status).toBe("failed");
     });
 
-    it("settles an interrupted mutation on recovery when it can", async () => {
+    it.each([
+      ["settles an interrupted mutation on recovery when it can", 200, { status: "verified_success" }],
+      [
+        "keeps an interrupted mutation parked on recovery while the provider may not show it yet",
+        404,
+        { status: "recovery_required", error: "reconciliation_settling" },
+      ],
+    ])("%s", async (_, status, outcome) => {
       const probe = vi.fn(async () => ({
-        status: 200,
-        content: JSON.stringify({ status: "applied" }),
+        status,
+        content: JSON.stringify({ status: status === 200 ? "applied" : "none" }),
       }));
       const execute = vi.fn(async () => ({ success: true }));
       const { controller, store } = await setup({ execute }, probe);
@@ -1306,10 +1409,7 @@ describe("effect contract and principal", () => {
 
       const [recovered] = await controller.recoverInterrupted();
 
-      expect(recovered).toMatchObject({
-        id: task.id,
-        status: "verified_success",
-      });
+      expect(recovered).toMatchObject({ id: task.id, ...outcome });
       expect(execute).not.toHaveBeenCalled();
     });
   });

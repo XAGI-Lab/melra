@@ -619,6 +619,22 @@ export class SqliteStore {
     return rows.map((row) => JSON.parse(row.data) as TaskRecord);
   }
 
+  /**
+   * Parked tasks whose reconciliation missed inside its settle window (#418),
+   * oldest first: no caller is bound to ask them again, so recovery does.
+   */
+  listSettlingTaskIds(): string[] {
+    const rows = this.database
+      .prepare(`
+        SELECT id FROM tasks
+        WHERE json_extract(data, '$.status') = 'recovery_required'
+          AND json_extract(data, '$.error') = 'reconciliation_settling'
+        ORDER BY updated_at ASC
+      `)
+      .all() as unknown as Array<{ id: string }>;
+    return rows.map((row) => row.id);
+  }
+
   /** Every task planned under one idempotency key, any status, found by its index. */
   listTasksByKey(idempotencyKey: string): TaskRecord[] {
     const rows = this.database

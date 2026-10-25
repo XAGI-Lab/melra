@@ -25,6 +25,10 @@ let runtime: MelraRuntime;
 let root: string;
 /** Orders the fixture has accepted, so a duplicate submission is visible. */
 const orders: string[] = [];
+/** Charges the fixture has made, whether or not the caller heard back. */
+const charges: string[] = [];
+/** Whether its reads show those charges yet: this provider's reads lag its writes. */
+let chargesShown = false;
 
 beforeAll(async () => {
   fixture = createServer((req, res) => {
@@ -35,6 +39,18 @@ beforeAll(async () => {
         orders.push(Buffer.concat(chunks).toString("utf8"));
         res.writeHead(201, { "content-type": "application/json" });
         res.end(JSON.stringify({ id: orders.length }));
+        return;
+      }
+      if (req.method === "POST" && req.url === "/charges") {
+        // Makes the charge, then loses the reply.
+        charges.push(String(req.headers["idempotency-key"]));
+        req.socket.destroy();
+        return;
+      }
+      if (req.method === "GET" && req.url?.startsWith("/charges/")) {
+        const shown = chargesShown && charges.some((key) => `/charges/${key}` === req.url);
+        res.writeHead(shown ? 200 : 404, { "content-type": "application/json" });
+        res.end(JSON.stringify(shown ? { status: "applied" } : {}));
         return;
       }
       if (req.method === "POST" && req.url === "/broken") {
@@ -197,6 +213,50 @@ describe("a governed API call", () => {
       for (const socket of sockets) socket.destroy();
       await new Promise<void>((resolve) => switching.close(() => resolve()));
     }
+  });
+
+  it("does not settle a lost charge as never made while its provider does not show it yet", async () => {
+    const planned = runtime.controller.plan(
+      TaskRequestSchema.parse({
+        goal: "Charge the customer",
+        operation: {
+          kind: "http",
+          action: "request",
+          method: "POST",
+          url: `${origin}/charges`,
+          idempotencyKey: "charge-1",
+          content: '{"amount":100}',
+        },
+        requiredEvidence: [{ type: "result_equals", path: "status", value: 201 }],
+        reconciliation: [
+          {
+            type: "http_resource_matches",
+            url: `${origin}/charges/{{idempotencyKey}}`,
+            path: "json.status",
+            value: "applied",
+          },
+        ],
+      }),
+    );
+    const parked = await runtime.controller.execute(planned.id, {
+      approvalId: planned.approval!.approvalId,
+      phrase: planned.approval!.phrase!,
+    });
+    expect(parked.task).toMatchObject({ status: "recovery_required", error: "effect_outcome_unknown:socket hang up" });
+
+    // The obvious retry, straight away: the provider says "not found" for a
+    // charge it made. That is no answer yet, and nothing is receipted.
+    const settling = await runtime.controller.execute(planned.id);
+    expect(settling.task).toMatchObject({ status: "recovery_required", error: "reconciliation_settling" });
+    expect(settling.receipt).toBeUndefined();
+    expect(charges).toHaveLength(1);
+
+    // Shown later, well inside the default window: a yes settles at once.
+    chargesShown = true;
+    const settled = await runtime.controller.execute(planned.id);
+    expect(settled.task.status).toBe("verified_success");
+    expect(settled.receipt?.observedEffect.reconciliation).toBe("provider_state_confirms_effect");
+    expect(charges).toHaveLength(1);
   });
 
   it("denies a host outside the allowlist at plan time", () => {
