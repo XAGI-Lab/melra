@@ -6,6 +6,34 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `http_resource_matches` takes `settleMs` (0 to 3,600,000), read by
+  reconciliation only: how long after a task first parked a miss is a write the
+  provider may not show yet rather than a no. A task whose outcome is unknown
+  records when it first parked as `recovery_required` in `parkedAt`, which
+  later writes leave alone.
+
+### Changed
+
+- Reconciliation settles a parked mutation `failed` only on a miss after its
+  settle window: 30 s for an `http_resource_matches` predicate that does not
+  set `settleMs`, none for any other predicate. Inside the window a `404`, a
+  `410` or a value that does not match yet leaves the task `recovery_required`
+  with `reconciliation_settling` and no receipt. The recovery pass, at startup
+  and in the 30 s sweep, asks such a task again, as `melra_execute` on it
+  does, and the first miss asked after the window settles it. Set
+  `settleMs: 0` for a provider whose reads always show its latest writes.
+
+### Fixed
+
+- A mutation whose reply was lost, reconciled straight away (on the caller's
+  retry, at startup recovery or in the sweep) against a provider that did not
+  show the write yet, was settled `failed` with a `FAILED` certificate though
+  the effect ran, which invited running it again; a workflow run failed and
+  unwound past it. It now stays parked until its settle window has passed
+  (#418).
+
 ## [0.3.0-alpha.21] - 2026-10-25
 
 ### Changed

@@ -701,13 +701,29 @@ safe thing:
 | Provider says | Task becomes |
 |---|---|
 | the effect is applied | `verified_success`, receipted as `recovered` |
-| no such effect | `failed`, `reconciliation_confirms_effect_not_applied` |
+| no such effect, inside the settle window | stays `recovery_required`, `reconciliation_settling` |
+| no such effect, after the settle window | `failed`, `reconciliation_confirms_effect_not_applied` |
 | nothing — unreachable | stays `recovery_required`, `reconciliation_inconclusive` |
 | nothing — the kernel refuses to ask | stays `recovery_required`, `reconciliation_unanswerable:<refusal>` |
 | *(none declared)* | stays `recovery_required`, `reconciliation_not_declared` |
 | *(a `semantic` predicate declared)* | stays `recovery_required`, its cause unchanged: a provider can say whether an effect happened, not whether it is right |
 
 An unreachable provider did not say no, so nothing is concluded from silence.
+Nor from a "not found", or a value that does not match yet, soon after the
+effect: a provider whose reads lag its writes gives that answer for a write
+that has landed, and reconciliation asks soonest after one, on the caller's
+retry and at recovery. A miss is a no only once the settle window has passed
+since the task first parked (`parkedAt`, written once, where `updatedAt`
+changes with every write): an `http_resource_matches` predicate's `settleMs`,
+30 s when it is left out, and none for any other predicate. Inside the
+window the task stays parked as `reconciliation_settling` with no receipt. The
+recovery pass, at startup and in the 30 s sweep, asks it again, as
+`melra_execute` on it does, and the first miss asked after the window settles
+it; when the provider answers does not count, since its view is from when it
+was asked. With several predicates the longest window holds. A task an earlier
+version parked has no `parkedAt`, so its window runs from its last write and is
+pinned there. Reconciliation predicates should read a view that shows the
+provider's latest writes; a lag longer than the window can still read as a no.
 A predicate the kernel itself refuses to ask — a path outside the workspace or
 one the filesystem will not take whole, a URL token with nothing to fill it, a
 verifier this runtime lacks — is
@@ -728,8 +744,11 @@ the other writes nothing and returns the task as it now stands.
 A forward workflow step parked this way moves at the run's next `advance`, in
 the same process: the advance reads the step's tasks again, as recovery does.
 Settled as applied, the step is done and what waits on it runs; settled as not
-applied, it failed, and the run fails and unwinds. A parked compensation is
-covered under [Sagas](#sagas-across-providers).
+applied, it failed, and the run fails and unwinds. Inside its settle window
+the step stays `recovery_required`, and the run with it. The sweep asks the
+step again, and once an ask after the window settles it, the run's next
+advance moves it without a `melra_execute`. A parked compensation is covered
+under [Sagas](#sagas-across-providers).
 
 ## Sagas across providers
 

@@ -440,6 +440,12 @@ export const EvidencePredicateSchema = z.discriminatedUnion("type", [
       path: z.string().min(1).max(512),
       value: z.union([z.string(), z.number(), z.boolean(), z.null()]),
       timeoutMs: z.number().int().min(100).max(60_000).default(15_000),
+      /**
+       * Read by reconciliation only: for this long after the task parked, a
+       * miss is a write the provider may not show yet, not a no. Absent, 30 s.
+       * No default here, so a request stored without it reads back unchanged.
+       */
+      settleMs: z.number().int().min(0).max(3_600_000).optional(),
     })
     .strict(),
   /**
@@ -625,7 +631,7 @@ export const TaskRequestSchema = z
       .max(5)
       .default([])
       .describe(
-        "How to settle this effect if MELRA never learns whether it happened — a request that went out and was never answered, or a crash mid-flight. Read against the facts that were true before the call (idempotencyKey, url, method), never against a response, because there is none. Declaring these makes the executionGuarantee reconciliation-required instead of at-most-once.",
+        "How to settle this effect if MELRA never learns whether it happened — a request that went out and was never answered, or a crash mid-flight. Read against the facts that were true before the call (idempotencyKey, url, method), never against a response, because there is none. Declaring these makes the executionGuarantee reconciliation-required instead of at-most-once. An http_resource_matches miss within its settleMs (default 30000) of the task parking is not read as a no: the task stays recovery_required (reconciliation_settling) until it is asked again after that; set settleMs 0 only for a provider whose reads always show its latest writes.",
       ),
     identity: IdentitySchema.optional().describe(
       "Who is asking, and on whose behalf. Recorded on the task and every receipt, and matched against policy.capabilities when the operator has issued grants. Omitted means the implicit local principal.",
@@ -1382,6 +1388,13 @@ export interface TaskRecord {
   client?: string;
   /** The run a workflow step's task was planned for: it waits while that run is halted. */
   workflowId?: string;
+  /**
+   * When it first parked as `recovery_required` because its outcome was
+   * unknown, where reconciliation's settle window starts; `updatedAt` cannot
+   * say, as every later write rewrites it. Absent on a task an earlier
+   * version parked, one parked on a semantic judgement, or one never parked.
+   */
+  parkedAt?: string;
   createdAt: string;
   updatedAt: string;
 }

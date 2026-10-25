@@ -539,6 +539,17 @@ key into the URL, and the answer settles the task as `verified_success` or
 rather than guessing either way, and a request that declared no reconciliation
 predicates stays parked for a human.
 
+A miss is read as `failed` only once the effect has had time to show. An
+`http_resource_matches` predicate takes `settleMs` (0 to 3,600,000, 30,000 when
+left out; read by reconciliation only): until that long after the task first
+parked (`parkedAt` on the task), a `404`, a `410` or a value that does not match
+yet leaves it `recovery_required` with `reconciliation_settling` and no
+receipt. MELRA's recovery sweep asks it again, as `melra_execute` on it does,
+and the first miss asked after the window settles it. Other predicates have
+no window: a file predicate reads a workspace that shows its own writes. Point
+reconciliation at a read that shows the provider's latest writes, and set
+`settleMs` to at least how far its reads can lag; `0` settles a miss at once.
+
 `melra_execute` returns raw operation output directly to the connected client.
 Durable task state, receipts and certificates keep only centrally redacted
 input, output and evidence; file contents, browser text, terminal output, typed

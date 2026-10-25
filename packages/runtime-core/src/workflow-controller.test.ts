@@ -2281,8 +2281,14 @@ describe("WorkflowController execution", () => {
     expect(calls).not.toContain("payments.example.test/refunds");
   });
 
-  /** A charge whose call was never answered, then a shipment that waits on it. */
-  async function parkedCharge(answer: { status: number; content: string }) {
+  /**
+   * A charge whose call was never answered, then a shipment that waits on it.
+   * A "not found" settles at once unless `settling` asks for a window.
+   */
+  async function parkedCharge(
+    answer: { status: number; content: string },
+    settling: { settleMs?: number } = { settleMs: 0 },
+  ) {
     const calls: string[] = [];
     const { controller, tasks, store } = await setup(
       async (operation) => {
@@ -2306,6 +2312,7 @@ describe("WorkflowController execution", () => {
           method: "GET",
           path: "json.status",
           value: "applied",
+          ...settling,
         },
       ],
     });
@@ -2459,6 +2466,36 @@ describe("WorkflowController execution", () => {
     expect(result.run.nodes.charge?.status).toBe("failed");
     expect(result.run.status).toBe("failed");
     // The charge never happened: nothing ships, and there is nothing to refund.
+    expect(calls).not.toContain("/shipments");
+    expect(calls).not.toContain("/refunds");
+  });
+
+  it("keeps a run halted while its parked step's provider may not show the charge yet, then fails it", async () => {
+    const { controller, tasks, calls, id, taskId } = await parkedCharge({ status: 404, content: "{}" }, {});
+    expect((await tasks.execute(taskId)).task).toMatchObject({
+      status: "recovery_required",
+      error: "reconciliation_settling",
+    });
+
+    const result = await settle(controller, id);
+    expect(result.run.nodes.charge?.status).toBe("recovery_required");
+    expect(result.run.status).toBe("recovery_required");
+    // Nothing ships on a charge that may not have happened, and nothing
+    // refunds one that may have.
+    expect(calls).not.toContain("/shipments");
+    expect(calls).not.toContain("/refunds");
+
+    // The sweep asks again once the window is over, with no melra_execute,
+    // and the run's next advance reads the answer.
+    vi.spyOn(Date, "now").mockReturnValue(Date.parse(tasks.status(taskId).parkedAt!) + 30_000);
+    try {
+      await controller.recoverInterrupted({ abandonedOnly: true });
+    } finally {
+      vi.mocked(Date.now).mockRestore();
+    }
+    expect(tasks.status(taskId).status).toBe("failed");
+    const failed = await settle(controller, id);
+    expect(failed.run.status).toBe("failed");
     expect(calls).not.toContain("/shipments");
     expect(calls).not.toContain("/refunds");
   });

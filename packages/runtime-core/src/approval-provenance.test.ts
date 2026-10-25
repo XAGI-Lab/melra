@@ -387,6 +387,8 @@ const charge = () =>
         method: "GET",
         path: "json.status",
         value: "applied",
+        // A "not found" settles at once: this provider shows every write.
+        settleMs: 0,
       },
     ],
   });

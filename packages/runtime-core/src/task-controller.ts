@@ -96,6 +96,9 @@ function now(): string {
   return new Date().toISOString();
 }
 
+/** How long a reconciliation read over HTTP that misses is not yet a no (#418). */
+const HTTP_SETTLE_MS = 30_000;
+
 /**
  * What was true before the call went out.
  *
@@ -864,6 +867,7 @@ export class TaskController {
           ? "task_budget_exhausted"
           : message;
       task.updatedAt = now();
+      if (unknownOutcome) task.parkedAt = task.updatedAt;
       const evidence: EvidenceItem[] = [
         {
           type: "execution_error",
@@ -977,7 +981,8 @@ export class TaskController {
    * interpolate a verification URL from.
    *
    * Three answers, and the third is the point: it happened, it did not, or the
-   * provider could not be reached and the task stays exactly where it was.
+   * provider could not be reached and the task stays exactly where it was. A
+   * miss inside the settle window is the third too.
    */
   async reconcile(taskId: string): Promise<ExecutionResult> {
     const task = this.status(taskId);
@@ -986,9 +991,13 @@ export class TaskController {
     }
     const request = this.loadRequest(taskId);
     const classified = classifyOperation(request.operation);
+    // A task an earlier version parked has no `parkedAt`; its window runs from
+    // its last write, pinned at the first park here so it does not restart.
+    const parkedAt = task.parkedAt ?? task.updatedAt;
     const park = (reason: string): ExecutionResult =>
       this.settleParked(taskId, () => {
         task.error = reason;
+        task.parkedAt = parkedAt;
         task.updatedAt = now();
         this.store.saveTask(task);
         return { task };
@@ -1004,6 +1013,8 @@ export class TaskController {
     if (request.reconciliation.length === 0) {
       return park("reconciliation_not_declared");
     }
+    // The provider's view is from when it was asked, however late it answers.
+    const askedAt = Date.now();
     const verification = await this.verifier.verify(
       request.reconciliation,
       reconciliationFacts(task.id, request.operation),
@@ -1031,6 +1042,17 @@ export class TaskController {
           { reconciliation: "provider_state_confirms_effect" },
         ),
       );
+    }
+    // A provider whose reads lag its writes says "not found", or shows the old
+    // value, for a write that landed, and is asked soonest after it did: on
+    // the caller's retry and at recovery. Not a no until the window is over.
+    const settleMs = Math.max(
+      ...request.reconciliation.map((predicate) =>
+        predicate.type === "http_resource_matches" ? (predicate.settleMs ?? HTTP_SETTLE_MS) : 0,
+      ),
+    );
+    if (askedAt - Date.parse(parkedAt) < settleMs) {
+      return park("reconciliation_settling");
     }
     // The provider answered, and the answer is that it never happened. Only now
     // is `failed` a claim MELRA is entitled to make.
@@ -1216,6 +1238,18 @@ export class TaskController {
   async recoverInterrupted(failed?: Map<string, unknown>): Promise<TaskRecord[]> {
     const recovered: TaskRecord[] = [];
     const failures = failed ?? new Map<string, unknown>();
+    // A miss inside its settle window parked these, and a workflow's advance
+    // only reads them, so this pass asks again (#418). Listed before the
+    // interrupted tasks, so one this pass parks is not asked twice.
+    for (const id of this.store.listSettlingTaskIds()) {
+      // Settled since the listing, by a caller or a peer.
+      if (this.store.getTask(id)?.status !== "recovery_required") continue;
+      try {
+        recovered.push((await this.reconcile(id)).task);
+      } catch (error) {
+        failures.set(id, error);
+      }
+    }
     for (const listed of this.store.listInterruptedTasks()) {
       // Only tasks whose owning process is gone, and only once: a live peer's
       // work is left to finish. This process's own rows are taken too when
@@ -1444,6 +1478,7 @@ export class TaskController {
         ? "interrupted_read_ready_for_retry"
         : "interrupted_mutation_requires_reconciliation";
     task.updatedAt = now();
+    if (task.status === "recovery_required") task.parkedAt = task.updatedAt;
     // Cut off mid-flight, read or change, it may have run, so it is paid for
     // before it is parked, as `execute` pays for one. A read run again is the
     // same task, so it draws nothing more, but its re-check counts this draw.
