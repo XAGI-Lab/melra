@@ -53,7 +53,8 @@ EXECUTION    the adapter runs under an AbortSignal and a budget
 OBSERVATION  raw adapter result, redacted before persistence
 VERIFICATION independent predicates decide success, not the adapter
 COMMIT       terminal status, events, projection, certificate
-RECEIPT      redacted, hash-linked evidence retained locally
+RECEIPT      redacted, append-only evidence and a self-digested certificate,
+             retained locally
 RESULT       returned to the caller
 ```
 
@@ -185,6 +186,8 @@ MELRA uses `<MELRA_HOME>/melra.sqlite` in WAL mode. Schema migration version
 | `task_payloads` | Encrypted exact task requests and optional results |
 | `receipts` | Redacted action evidence |
 | `certificates` | One terminal execution certificate per task |
+| `certificate_history` | Each certificate a later one replaced |
+| `certified_tasks` | Each task that has had a certificate |
 | `memories` | Scoped, redacted local memory |
 | `workflow_definitions` | Redacted immutable workflow definitions |
 | `workflow_payloads` | Encrypted exact workflow definitions by version |
@@ -192,6 +195,39 @@ MELRA uses `<MELRA_HOME>/melra.sqlite` in WAL mode. Schema migration version
 | `workflow_events` | Append-only aggregate events with unique sequence |
 | `workflow_snapshots` | Validated checkpoint projections |
 | `idempotency_commits` | Unique committed logical task attempts |
+| `approval_decisions` | Operator approval decisions, one per challenge |
+| `capability_usage` | Capability grant draws, one per grant and task |
+
+Migration `7` makes the records an effect leaves append-only, with triggers
+that refuse a write with `record_append_only`:
+
+- `receipts`, `workflow_events`, `approval_decisions`, `capability_usage`,
+  `idempotency_commits`, `certificate_history` and `certified_tasks` refuse any
+  `UPDATE` or `DELETE`, and an insert that names a stored row's rowid. An insert
+  under a stored row's key is refused in `receipts` and `workflow_events`, and
+  ignored in `certified_tasks` and the three that MELRA writes with `INSERT OR
+  IGNORE`, so a repeat there still changes nothing. That closes `INSERT OR
+  REPLACE`, which removes the row it collides with without firing that row's
+  delete trigger.
+- `certificates` refuses any `DELETE`; an insert or update that would take
+  another certificate's rowid, id or task; a second insert for a task, which
+  only a `REPLACE` makes; and an update that moves a certificate to another
+  rowid or task. What is left is how every version of MELRA replaces a
+  certificate when a task is judged or settled: an upsert on the task that
+  updates its row in place. Each row an update replaces is kept in
+  `certificate_history`.
+
+The triggers live in the database, so they bind every process that writes it,
+an older MELRA sharing the home included; no version has ever needed to change
+or remove these rows, or to write a certificate any other way.
+
+That is the whole claim. It catches bugs, stray scripts and naive edits. It
+does not stop a new row being added, or a certificate being updated in place,
+though the one replaced is kept. Anyone who can write `melra.sqlite` can drop
+a trigger and then change anything, so this is not tamper-evidence: nothing
+yet signs the records or chains them to one another. A certificate's `digest`
+covers its own fields, naming its receipts by id only, so it shows that a
+certificate is consistent with itself, not that MELRA wrote it.
 
 Workflow creation persists the redacted definition, encrypted definition,
 initial projection, and first two events atomically. Later transitions use

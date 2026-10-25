@@ -776,6 +776,7 @@ describe("a condition's branch not taken (#268)", () => {
       return task;
     });
     await expect(controller.advance(planned.id)).rejects.toThrow("workflow_lease_lost");
+    store.database.exec("DROP TRIGGER workflow_events_no_update");
     store.database.prepare("UPDATE workflow_events SET data = '{}' WHERE aggregate_id = ?").run(planned.id);
     // Recovery fails closed on it, and so did every cancel: the run could never end.
     expect(() => controller.cancel(planned.id)).not.toThrow();

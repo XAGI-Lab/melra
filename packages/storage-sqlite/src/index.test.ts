@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { TaskRequestSchema } from "@melra/protocol";
+import { createCertificate } from "@melra/receipt-schema";
 import { SqliteStore } from "./index.js";
 
 let store: SqliteStore | undefined;
@@ -426,5 +427,155 @@ describe("SqliteStore", () => {
     ).toMatchObject({ evicted: 1 });
     expect(store.getMemory(ids[0]!)).toBeUndefined();
     expect(store.getMemory(ids[2]!)).toBeDefined();
+  });
+});
+
+describe("the records an effect leaves", () => {
+  const taskId = "7a1d0000-0000-4000-8000-000000000001";
+  const otherTask = "7a1d0000-0000-4000-8000-000000000002";
+  const thirdTask = "7a1d0000-0000-4000-8000-000000000003";
+  const issue = (result: "PARTIAL" | "VERIFIED_SUCCESS", createdAt: string, task = taskId) =>
+    createCertificate({ taskId: task, goal: "Inspect", result, policyVersion: "1", receiptIds: [], evidence: [], createdAt });
+
+  it("refuse to be changed, removed or replaced, by this store or any other writer", () => {
+    store = new SqliteStore(":memory:");
+    store.database.exec(`
+      INSERT INTO receipts VALUES ('r', '${taskId}', '{}', 'at');
+      INSERT INTO workflow_events VALUES ('e', 'w', 1, 'trace', 'workflow.planned', '{}', 'at');
+      INSERT INTO approval_decisions VALUES ('a', '${taskId}', 'digest', 'out_of_band', 'cli:operator', 'at');
+      INSERT INTO capability_usage VALUES ('g', '${taskId}', 0, 'at');
+      INSERT INTO idempotency_commits VALUES ('k', '${taskId}', 1, 'at');
+      INSERT INTO certificate_history VALUES ('c', '${taskId}', '{}', 'at', 'at');
+      INSERT INTO certified_tasks VALUES ('${taskId}');
+    `);
+    // Each row a REPLACE would put in place of the stored one on its key, and
+    // whether it is refused or, for a table MELRA writes with INSERT OR
+    // IGNORE, ignored; then a row under a new key that names the stored row's
+    // rowid, which every table refuses.
+    for (const [table, column, replacements, refused, fresh] of [
+      ["receipts", "data", [`('r', '${taskId}', '{"a":2}', 'at')`], true, `'r2', '${taskId}', '{}', 'at'`],
+      [
+        "workflow_events",
+        "data",
+        [
+          `('e', 'w', 2, 'trace', 'workflow.planned', '{"a":2}', 'at')`,
+          `('e2', 'w', 1, 'trace', 'workflow.planned', '{"a":2}', 'at')`,
+        ],
+        true,
+        `'e2', 'w', 2, 'trace', 'workflow.planned', '{}', 'at'`,
+      ],
+      [
+        "approval_decisions",
+        "approver",
+        [`('a', '${taskId}', 'digest', 'out_of_band', 'cli:other', 'at')`],
+        false,
+        `'a2', '${taskId}', 'digest', 'out_of_band', 'cli:other', 'at'`,
+      ],
+      ["capability_usage", "amount", [`('g', '${taskId}', 5, 'at')`], false, `'g2', '${taskId}', 5, 'at'`],
+      ["idempotency_commits", "attempt", [`('k', '${taskId}', 9, 'at')`], false, `'k2', '${taskId}', 9, 'at'`],
+      ["certificate_history", "data", [], true, `'c2', '${taskId}', '{}', 'at', 'at'`],
+      ["certified_tasks", "task_id", [`('${taskId}')`], false, `'${otherTask}'`],
+    ] as const) {
+      const stored = store.database.prepare(`SELECT rowid, * FROM ${table}`).all();
+      expect(() => store!.database.exec(`UPDATE ${table} SET ${column} = 2`)).toThrow("record_append_only");
+      expect(() => store!.database.exec(`DELETE FROM ${table}`)).toThrow("record_append_only");
+      for (const row of replacements) {
+        const replace = () => store!.database.exec(`INSERT OR REPLACE INTO ${table} VALUES ${row}`);
+        if (refused) expect(replace).toThrow("record_append_only");
+        else replace();
+      }
+      const columns = store.database
+        .prepare("SELECT name FROM pragma_table_info(?)")
+        .all(table)
+        .map(({ name }) => name)
+        .join(", ");
+      expect(() =>
+        store!.database.exec(
+          `INSERT OR REPLACE INTO ${table}(rowid, ${columns}) VALUES ((SELECT rowid FROM ${table}), ${fresh})`,
+        ),
+      ).toThrow("record_append_only");
+      expect(store.database.prepare(`SELECT rowid, * FROM ${table}`).all()).toEqual(stored);
+    }
+  });
+
+  it("keep taking new rows after another writer stores one at rowid -1", () => {
+    store = new SqliteStore(":memory:");
+    // -1 is what an insert that names no rowid sees, so a row there must not
+    // look like the one every later insert collides with.
+    store.database.exec(`
+      INSERT INTO receipts(rowid, id, task_id, data, created_at) VALUES (-1, 'stray', '${otherTask}', '{}', 'at');
+      INSERT INTO certificates(rowid, id, task_id, data, created_at) VALUES (-1, 'stray', '${otherTask}', '{}', 'at');
+      INSERT INTO certificate_history(rowid, certificate_id, task_id, data, created_at, replaced_at)
+        VALUES (-1, 'stray', '${otherTask}', '{}', 'at', 'at');
+    `);
+    store.database.exec(`INSERT INTO receipts VALUES ('r', '${taskId}', '{}', 'at')`);
+    store.saveCertificate(issue("PARTIAL", "2026-10-01T00:00:00.000Z"));
+    const settled = store.saveCertificate(issue("VERIFIED_SUCCESS", "2026-10-02T00:00:00.000Z"));
+    expect(store.getCertificateForTask(taskId)).toEqual(settled);
+    expect(store.database.prepare("SELECT count(*) AS n FROM certificate_history").get()).toEqual({ n: 2 });
+  });
+
+  it("keep each certificate a judgement or settle replaced, and let no other write remove one", () => {
+    store = new SqliteStore(":memory:");
+    const first = store.saveCertificate(issue("PARTIAL", "2026-10-01T00:00:00.000Z"));
+    // A second process certifying the same outcome is handed the first.
+    expect(store.saveCertificate(issue("PARTIAL", "2026-10-01T00:00:00.000Z"), { ifAbsent: true })).toEqual(first);
+    const second = store.saveCertificate(issue("VERIFIED_SUCCESS", "2026-10-02T00:00:00.000Z"));
+    store.saveCertificate(issue("PARTIAL", "2026-10-03T00:00:00.000Z", otherTask));
+
+    expect(store.getCertificateForTask(taskId)).toEqual(second);
+    const history = () =>
+      store!.database
+        .prepare("SELECT certificate_id AS id, task_id AS taskId, data, created_at AS createdAt FROM certificate_history")
+        .all();
+    expect(history()).toEqual([
+      { id: first.certificateId, taskId, data: JSON.stringify(first), createdAt: first.createdAt },
+    ]);
+    const certificates = () => store!.database.prepare("SELECT rowid, * FROM certificates").all();
+    const stored = certificates();
+    const rowid = `(SELECT rowid FROM certificates WHERE task_id = '${taskId}')`;
+    // A REPLACE removes the row it collides with on rowid, id or task without
+    // firing a delete trigger, and outside the upsert would keep no history.
+    for (const write of [
+      "DELETE FROM certificates",
+      `INSERT OR REPLACE INTO certificates VALUES ('${second.certificateId}', '${otherTask}', '{}', 'at')`,
+      `INSERT OR REPLACE INTO certificates VALUES ('${second.certificateId}', '${thirdTask}', '{}', 'at')`,
+      `INSERT OR REPLACE INTO certificates VALUES ('${second.certificateId}', '${taskId}', '{}', 'at')`,
+      `INSERT OR REPLACE INTO certificates VALUES ('fresh', '${taskId}', '{}', 'at')`,
+      `INSERT OR REPLACE INTO certificates(rowid, id, task_id, data, created_at)
+        VALUES (${rowid}, 'fresh', '${thirdTask}', '{}', 'at')`,
+      `INSERT INTO certificates VALUES ('${second.certificateId}', '${otherTask}', '{}', 'at')
+        ON CONFLICT(task_id) DO UPDATE SET id = excluded.id`,
+      `UPDATE OR REPLACE certificates SET id = '${second.certificateId}' WHERE task_id = '${otherTask}'`,
+      `UPDATE OR REPLACE certificates SET task_id = '${taskId}' WHERE task_id = '${otherTask}'`,
+      `UPDATE OR REPLACE certificates SET rowid = ${rowid} WHERE task_id = '${otherTask}'`,
+    ]) {
+      expect(() => store!.database.exec(write), write).toThrow("record_append_only");
+    }
+    expect(certificates()).toEqual(stored);
+    expect(history()).toHaveLength(1);
+  });
+
+  it("hold a certificate written before migration 7 to the same rules", () => {
+    tempDirectory = mkdtempSync(join(tmpdir(), "melra-certified-"));
+    const path = join(tempDirectory, "melra.sqlite");
+    const before = new DatabaseSync(path);
+    before.exec(`
+      CREATE TABLE certificates (
+        id TEXT PRIMARY KEY, task_id TEXT NOT NULL UNIQUE, data TEXT NOT NULL, created_at TEXT NOT NULL
+      );
+      INSERT INTO certificates VALUES ('c', '${taskId}', '{}', 'at');
+    `);
+    before.close();
+    store = new SqliteStore(path);
+
+    expect(() =>
+      store!.database.exec(`INSERT OR REPLACE INTO certificates VALUES ('fresh', '${taskId}', '{}', 'at')`),
+    ).toThrow("record_append_only");
+    const settled = store.saveCertificate(issue("VERIFIED_SUCCESS", "2026-10-02T00:00:00.000Z"));
+    expect(store.getCertificateForTask(taskId)).toEqual(settled);
+    expect(store.database.prepare("SELECT certificate_id AS id, data FROM certificate_history").all()).toEqual([
+      { id: "c", data: "{}" },
+    ]);
   });
 });

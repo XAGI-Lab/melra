@@ -1696,3 +1696,8 @@ then delete the directory configured by `MELRA_HOME`. That directory is the
 complete local persistence boundary for tasks, workflows, events, encrypted
 payloads, receipts, certificates, memory, keys, and browser artifacts.
 Workspace files changed by approved tasks are not deleted automatically.
+Inside it, an `UPDATE` or `DELETE` of a receipt, workflow event, approval
+decision, grant draw or idempotency commit, and a `DELETE` of a certificate,
+is refused (`record_append_only`, see
+[durable storage](ARCHITECTURE.md#durable-storage)), so deleting the directory
+is how they go.

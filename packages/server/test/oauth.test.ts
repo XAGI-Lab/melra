@@ -364,6 +364,7 @@ describe("melra oauth", () => {
       ) as { id: string };
       // As a release that recorded no callers wrote them.
       runtime.store.database.prepare("UPDATE tasks SET data = json_remove(data, '$.client') WHERE id = ?").run(task.id);
+      runtime.store.database.exec("DROP TRIGGER workflow_events_no_update");
       runtime.store.database
         .prepare("UPDATE workflow_events SET data = json_remove(data, '$.data.client') WHERE aggregate_id = ? AND sequence = 1")
         .run(run.id);

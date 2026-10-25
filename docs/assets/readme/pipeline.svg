@@ -87,7 +87,7 @@
     <circle class="exec" r="22"/><text class="num" y="5" text-anchor="middle">9</text>
     <text class="name" y="48" text-anchor="middle">Receipt</text>
     <text class="q" y="68" text-anchor="middle">redacted,</text>
-    <text class="q" y="84" text-anchor="middle">hash-linked</text>
+    <text class="q" y="84" text-anchor="middle">append-only</text>
   </g>
 
   <!-- outcome strip -->

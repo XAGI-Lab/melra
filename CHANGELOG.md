@@ -52,6 +52,23 @@ All notable changes are documented here. The format follows
   `MELRA_PAYLOAD_KEY` and `MELRA_HTTP_TOKEN`; pass `[]` for none. An adapter
   passed as `ComputerRuntimeOptions.adapter` withholds only what it was built
   with, not the runtime's `withheldEnvironment`.
+- **Breaking:** Receipts, workflow events, approval decisions, capability grant
+  draws and idempotency commits are append-only: SQLite triggers (migration 7)
+  refuse, with `record_append_only`, an `UPDATE` or `DELETE` of any of them and
+  an `INSERT OR REPLACE` that would take a stored row's place on its rowid or
+  key, from any process or script, an older MELRA sharing the home included (no
+  version ever made one). In `certified_tasks` and the three written with
+  `INSERT OR IGNORE`, an insert under a stored key is ignored instead, as a
+  repeat already was. A certificate is never removed and changes only in place
+  on its own task, the way every version replaces one when a task is judged or
+  settled: a write that would take another certificate's place, insert a second
+  one for a task or move one to another task is refused. Each certificate an
+  update replaces is kept in a new `certificate_history` table, append-only like
+  the rest, beside `certified_tasks`, which records each task that has had one.
+  This catches bugs, stray scripts and naive edits. Anyone who can write
+  `melra.sqlite` can still add rows, update a certificate in place (the old one
+  is kept) or drop the triggers, so it is not tamper-evidence, as
+  ARCHITECTURE.md and THREAT_MODEL.md now say.
 
 ### Fixed
 
@@ -71,6 +88,10 @@ All notable changes are documented here. The format follows
   configured OCR program) no longer inherit `MELRA_PAYLOAD_KEY`,
   `MELRA_HTTP_TOKEN` or the variables credentials are read from (#420). The
   rest of the server's environment still reaches them.
+- README.md, ARCHITECTURE.md and the README's pipeline diagram no longer call
+  receipts hash-linked, since nothing links them by hash. They describe what
+  exists: append-only receipts and a certificate per task that carries its own
+  digest.
 
 ### Security
 

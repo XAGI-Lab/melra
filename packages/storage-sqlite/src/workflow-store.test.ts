@@ -388,7 +388,8 @@ describe("durable workflow storage", () => {
     ],
     [
       "workflow event",
-      "UPDATE workflow_events SET data = '{}'",
+      // The events refuse an edit, so this one drops their trigger first.
+      "DROP TRIGGER workflow_events_no_update; UPDATE workflow_events SET data = '{}'",
       "stored_workflow_event_invalid",
       (store: SqliteStore) => store.listWorkflowEvents(workflowId),
     ],

@@ -3153,6 +3153,8 @@ describe("WorkflowController recovery", () => {
   it("fails closed when workflow event history is corrupt", async () => {
     const { controller, store } = await setup();
     const planned = controller.plan(definition("Corrupt history"));
+    // Events refuse an edit; one that drops the trigger first still gets in.
+    store.database.exec("DROP TRIGGER workflow_events_no_update");
     store.database
       .prepare(
         "UPDATE workflow_events SET data = '{}' WHERE aggregate_id = ?",

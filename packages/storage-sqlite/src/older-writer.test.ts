@@ -12,7 +12,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
-import { TaskRequestSchema } from "@melra/protocol";
+import { TaskRequestSchema, WorkflowEventSchema, type ApprovalDecision, type WorkflowEvent } from "@melra/protocol";
+import { createCertificate, type ActionReceipt, type ExecutionCertificate } from "@melra/receipt-schema";
 import { SqliteStore, type TaskRecord } from "./index.js";
 
 const stores: SqliteStore[] = [];
@@ -37,7 +38,10 @@ function open(path: string): SqliteStore {
   return store;
 }
 
-/** 0.3.0-alpha.17's two writes of a task, verbatim, on a connection of its own. */
+/**
+ * 0.3.0-alpha.17's two writes of a task and its writes of the records an
+ * effect leaves, verbatim, on a connection of its own.
+ */
 function olderMelra(path: string) {
   const database = new DatabaseSync(path);
   database.exec("PRAGMA busy_timeout = 5000");
@@ -63,6 +67,83 @@ function olderMelra(path: string) {
         `)
         .run(JSON.stringify(task), task.updatedAt, null, task.id, JSON.stringify(expected));
       return Number(result.changes) === 1;
+    },
+    commitIdempotency(key: string, taskId: string, attempt: number, at: string): boolean {
+      const result = database
+        .prepare(`
+          INSERT OR IGNORE INTO idempotency_commits(
+            idempotency_key, task_id, attempt, committed_at
+          )
+          VALUES (?, ?, ?, ?)
+        `)
+        .run(key, taskId, attempt, at);
+      return Number(result.changes) === 1;
+    },
+    recordApprovalDecision(decision: ApprovalDecision): boolean {
+      const result = database
+        .prepare(`
+          INSERT OR IGNORE INTO approval_decisions(
+            approval_id, task_id, render_digest, channel, approver, decided_at
+          )
+          VALUES (?, ?, ?, ?, ?, ?)
+        `)
+        .run(
+          decision.approvalId,
+          decision.taskId,
+          decision.renderDigest,
+          decision.channel,
+          decision.approver,
+          decision.decidedAt,
+        );
+      return Number(result.changes) === 1;
+    },
+    recordCapabilityUse(grantId: string, taskId: string, amount: number, at: string): void {
+      database
+        .prepare(`
+          INSERT OR IGNORE INTO capability_usage(
+            grant_id, task_id, amount, committed_at
+          )
+          VALUES (?, ?, ?, ?)
+        `)
+        .run(grantId, taskId, amount, at);
+    },
+    insertWorkflowEvent(event: WorkflowEvent): void {
+      database
+        .prepare(`
+          INSERT INTO workflow_events(
+            id, aggregate_id, sequence, trace_id, type, data, occurred_at
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `)
+        .run(
+          event.id,
+          event.aggregateId,
+          event.sequence,
+          event.traceId,
+          event.type,
+          JSON.stringify(event),
+          event.occurredAt,
+        );
+    },
+    saveReceipt(receipt: ActionReceipt): void {
+      database
+        .prepare(`
+          INSERT INTO receipts(id, task_id, data, created_at)
+          VALUES (?, ?, ?, ?)
+        `)
+        .run(receipt.receiptId, receipt.taskId, JSON.stringify(receipt), receipt.endedAt);
+    },
+    saveCertificate(certificate: ExecutionCertificate, { ifAbsent = false }: { ifAbsent?: boolean } = {}): void {
+      database
+        .prepare(`
+          INSERT INTO certificates(id, task_id, data, created_at)
+          VALUES (?, ?, ?, ?)
+          ON CONFLICT(task_id) DO ${ifAbsent ? "NOTHING" : `UPDATE SET
+            id = excluded.id,
+            data = excluded.data,
+            created_at = excluded.created_at`}
+        `)
+        .run(certificate.certificateId, certificate.taskId, JSON.stringify(certificate), certificate.createdAt);
     },
   };
 }
@@ -126,5 +207,71 @@ describe("an older MELRA writing the same home", () => {
     expect(store.listInterruptedTasks()).toEqual([]);
     expect(store.claimInterruptedTask(row.id)).toBeUndefined();
     expect(store.getTask(row.id)?.status).toBe("verified_success");
+  });
+
+  it("keeps recording what an effect leaves on a home that keeps those records append-only", () => {
+    const path = newHome();
+    const store = open(path);
+    const older = olderMelra(path);
+    const row = task("verifying", { idempotencyKey: KEY, attempt: 1 });
+    const at = row.updatedAt;
+    older.saveTask(row);
+    // Its commit of an outcome, as it makes it: each record once, a repeat ignored.
+    expect(older.commitIdempotency(KEY, row.id, 1, at)).toBe(true);
+    expect(older.commitIdempotency(KEY, row.id, 2, at)).toBe(false);
+    const decision: ApprovalDecision = {
+      approvalId: "00000000-0000-4000-8000-0000000000a1",
+      taskId: row.id,
+      renderDigest: "b".repeat(64),
+      channel: "out_of_band",
+      approver: "cli:operator",
+      decidedAt: at,
+    };
+    expect(older.recordApprovalDecision(decision)).toBe(true);
+    expect(older.recordApprovalDecision({ ...decision, approver: "cli:other" })).toBe(false);
+    older.recordCapabilityUse("grant", row.id, 1, at);
+    older.recordCapabilityUse("grant", row.id, 1, at);
+    const receipt = { receiptId: "00000000-0000-4000-8000-0000000000b1", taskId: row.id, endedAt: at } as ActionReceipt;
+    older.saveReceipt(receipt);
+    older.insertWorkflowEvent(
+      WorkflowEventSchema.parse({
+        schemaVersion: "1.0.0",
+        id: "00000000-0000-4000-8000-0000000000c1",
+        aggregateId: "00000000-0000-4000-8000-0000000000c2",
+        sequence: 1,
+        traceId: "00000000-0000-4000-8000-0000000000c3",
+        type: "workflow.created",
+        data: {},
+        occurredAt: at,
+      }),
+    );
+    // A certificate, then the one a judgement or a settle writes in its place.
+    const issue = (result: "PARTIAL" | "VERIFIED_SUCCESS") =>
+      createCertificate({
+        taskId: row.id,
+        goal: "Inspect",
+        result,
+        policyVersion: "1",
+        receiptIds: [receipt.receiptId],
+        evidence: [],
+        createdAt: at,
+      });
+    const first = issue("PARTIAL");
+    older.saveCertificate(first, { ifAbsent: true });
+    older.saveCertificate(issue("PARTIAL"), { ifAbsent: true });
+    const settled = issue("VERIFIED_SUCCESS");
+    older.saveCertificate(settled);
+    older.saveTask({ ...row, status: "verified_success", receiptIds: [receipt.receiptId] });
+
+    expect(store.getIdempotencyCommit(KEY)).toMatchObject({ taskId: row.id, attempt: 1 });
+    expect(store.getApprovalDecision(decision.approvalId)).toEqual(decision);
+    expect(store.capabilityUsage("grant", at)).toEqual({ operations: 1, amountInWindow: 1 });
+    expect(store.getReceiptsForTask(row.id)).toEqual([receipt]);
+    expect(store.listWorkflowEvents("00000000-0000-4000-8000-0000000000c2")).toHaveLength(1);
+    expect(store.getCertificateForTask(row.id)).toEqual(settled);
+    // The certificate it replaced is kept, not lost.
+    expect(
+      store.database.prepare("SELECT data FROM certificate_history WHERE task_id = ?").all(row.id),
+    ).toEqual([{ data: JSON.stringify(first) }]);
   });
 });
