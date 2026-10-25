@@ -473,4 +473,21 @@ describe("Verifier", () => {
     });
     expect(sent.verified).toBe(true);
   });
+
+  it("matches a final URL against its pattern by code point, one line per star, in linear time", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-verifier-"));
+    roots.push(root);
+    const verifier = await Verifier.create(root);
+    const matches = async (url: string, pattern: string) =>
+      (await verifier.verify([{ type: "url_matches", pattern }], { url })).verified;
+    expect(await matches("https://example.com/a/b.html", "https://*/*/*.html")).toBe(true);
+    expect(await matches("https://example.com/b.html", "https://*/*/*.html")).toBe(false);
+    expect(await matches("https://example.com/a\n/b.html", "https://*/*/*.html")).toBe(false);
+    expect(await matches("https://example.com/\u{1F642}", "https://example.com/\uD83D*")).toBe(false);
+    const started = performance.now();
+    expect(await matches(`https://${"/".repeat(500)}`, "https://*/*/*/*.html")).toBe(false);
+    // Generous, so a loaded runner does not flake: linear time is well under a
+    // millisecond here.
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
 });

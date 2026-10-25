@@ -21,15 +21,21 @@ const SENSITIVE_KEY =
  * recognisable shape is left to the field-name rule in redactStructuredValue.
  */
 export const SECRET_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
-  // A whole PEM private key block, and a truncated one (output cut mid-key).
-  // PGP's armour says `PRIVATE KEY BLOCK`.
+  // A whole PEM private key block, or a truncated one (output cut mid-key) to
+  // the end of the text. PGP's armour says `PRIVATE KEY BLOCK`. One pattern
+  // for both, so the text after a header is read once.
   [
-    /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----[\s\S]*?-----END (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----/g,
+    /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----(?:[\s\S]*?-----END (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----|[\s\S]*)/g,
     "[REDACTED_PRIVATE_KEY]",
   ],
-  [/-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----[\s\S]*/g, "[REDACTED_PRIVATE_KEY]"],
   [/\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g, "[REDACTED_AWS_KEY_ID]"],
-  [/\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, "[REDACTED_JWT]"],
+  // Tried only from the first `eyJ` in a run of token characters, so the run
+  // is read once: a later `eyJ` in the same run matches only where the first
+  // one does.
+  [
+    /\b(?=eyJ)(?<!\beyJ[A-Za-z0-9_-]*?)eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g,
+    "[REDACTED_JWT]",
+  ],
   [/\b(?:xox[abposre]|xapp)-[A-Za-z0-9-]{10,}\b/g, "[REDACTED_SLACK_TOKEN]"],
   [/\b(?:gh[opurs]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{22,})\b/g, "[REDACTED_GITHUB_TOKEN]"],
   [/\b(?:sk|pk|rk|api|whsec)[-_][a-z0-9_-]{16,}\b/gi, "[REDACTED_API_KEY]"],
@@ -120,9 +126,11 @@ export function redactSecrets(text: string): { value: string; redactions: string
 // A flag whose value is a credential, `--token x` or `--token=x`, matched on
 // the flag's name because the value itself may have no recognisable shape.
 // The credential word may lead a longer name too: `--secret-key`,
-// `--s3-secret-access-key`, `--passphrase`.
+// `--s3-secret-access-key`, `--passphrase`. The lookahead finds the first
+// credential word and is not tried again, and the name is then read as plain
+// segments, so a long name is read once.
 const SECRET_FLAG =
-  /^(--?(?:[a-z0-9]+[-_])*(?:token|password|passwd|passphrase|pass|secret|api[-_]?key|apikey|auth|authorization|credentials?|cookie|private[-_]?key)(?:[-_][a-z0-9]+)*)(?:=([\s\S]*))?$/i;
+  /^(--?(?=(?:[a-z0-9]+[-_])*?(?:token|password|passwd|passphrase|pass|secret|api[-_]?key|apikey|auth|authorization|credentials?|cookie|private[-_]?key)(?:[-_]|=|$))[a-z0-9]+(?:[-_][a-z0-9]+)*)(?:=([\s\S]*))?$/i;
 // `-u user:pass` / `--user user:pass` (curl, wget), and curl's proxy forms:
 // only the part after the colon is a secret, and `sort -u`, `git add -u` take
 // no value at all.
@@ -500,4 +508,68 @@ export function createCertificate(
     ...input,
   };
   return { ...base, digest: sha256(base) };
+}
+
+const LINE_TERMINATORS = new Set(["\n", "\r", "\u2028", "\u2029"]);
+
+/**
+ * Whether `value` is `pattern` with each `*` standing for any run of
+ * characters on one line. The same answers as the `^…$` regex with `.*` for
+ * each `*` that grants, credential hosts and `url_matches` were matched with
+ * before, in time linear in the two lengths.
+ *
+ * Strings compare by UTF-16 unit, as a regex without the `u` flag does. Pass
+ * `[...value]` and `[...pattern]` to compare by code point, as a `u` regex
+ * does, so a `*` never takes half of a surrogate pair.
+ */
+export function wildcardMatch(value: ArrayLike<string>, pattern: ArrayLike<string>): boolean {
+  // The literal runs between the stars.
+  const parts: string[][] = [[]];
+  for (let i = 0; i < pattern.length; i++) {
+    if (pattern[i] === "*") parts.push([]);
+    else parts.at(-1)!.push(pattern[i]!);
+  }
+  const head = parts[0]!;
+  const tail = parts.at(-1)!;
+  if (parts.length === 1) return value.length === head.length && find(value, head, 0, head.length) === 0;
+  const end = value.length - tail.length;
+  if (end < head.length || find(value, head, 0, head.length) !== 0 || find(value, tail, end, value.length) !== end) {
+    return false;
+  }
+  // Every run between goes where it first fits. A star covers no line
+  // terminator, so the run starts by the first one after the run before it.
+  let at = head.length;
+  let stop = at;
+  const lineEnd = () => {
+    stop = Math.max(stop, at);
+    while (stop < value.length && !LINE_TERMINATORS.has(value[stop]!)) stop += 1;
+    return stop;
+  };
+  for (const part of parts.slice(1, -1)) {
+    const found = find(value, part, at, Math.min(end, lineEnd() + part.length));
+    if (found === -1) return false;
+    at = found + part.length;
+  }
+  return lineEnd() >= end;
+}
+
+/**
+ * Where `part` first starts in `value` at or after `from`, ending by `to`, or
+ * -1. Knuth-Morris-Pratt, so the search never steps back over `value`.
+ */
+function find(value: ArrayLike<string>, part: readonly string[], from: number, to: number): number {
+  if (part.length === 0) return from <= to ? from : -1;
+  // The longest proper prefix of `part` that also ends each of its prefixes.
+  const border = [0];
+  for (let i = 1, k = 0; i < part.length; i++) {
+    while (k > 0 && part[i] !== part[k]) k = border[k - 1]!;
+    if (part[i] === part[k]) k += 1;
+    border.push(k);
+  }
+  for (let i = from, k = 0; i < to; i++) {
+    while (k > 0 && value[i] !== part[k]) k = border[k - 1]!;
+    if (value[i] === part[k]) k += 1;
+    if (k === part.length) return i + 1 - k;
+  }
+  return -1;
 }

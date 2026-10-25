@@ -4,6 +4,7 @@
 import { constants } from "node:fs";
 import { lstat, open, type FileHandle } from "node:fs/promises";
 import type { CredentialDefinition } from "@melra/protocol";
+import { wildcardMatch } from "@melra/receipt-schema";
 
 export interface BrokeredHeaders {
   /** Headers to merge into the outgoing request, lowercased. */
@@ -18,11 +19,7 @@ export interface BrokeredHeaders {
 }
 
 function patternMatches(pattern: string, value: string): boolean {
-  if (pattern === "*") return true;
-  const escaped = pattern
-    .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-    .replaceAll("\\*", ".*");
-  return new RegExp(`^${escaped}$`).test(value);
+  return pattern === "*" || wildcardMatch(value, pattern);
 }
 
 function errorCode(error: unknown): string | undefined {

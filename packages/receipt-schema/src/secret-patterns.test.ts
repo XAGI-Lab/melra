@@ -15,7 +15,8 @@ type Patterns = ReadonlyArray<readonly [RegExp, string]>;
 // `::=`, compared with `==`, declared with a type, or given a quoted value with
 // spaces or a YAML block scalar of one or more lines loses its whole value.
 // Those value parts are copied below; the name parts are still the ones from
-// before #353.
+// before #353. The private key and JWT entries are as they stood before they
+// were made to read each text once.
 const BEFORE: Patterns = [
   [
     /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----[\s\S]*?-----END (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----/g,
@@ -311,9 +312,10 @@ function corpus(): string[] {
 }
 
 // A seeded mix of keywords, separators, quotes, URL parts and unicode, a few
-// characters or words at a time, so names and values meet at every boundary.
-function generated(count: number, seed: number): string[] {
-  const pieces = [
+// characters or words at a time, so names and values meet at every boundary;
+// or of `only`, when given.
+function generated(count: number, seed: number, only?: readonly string[]): string[] {
+  const pieces = only ?? [
     ..."pPasSwWordDecrRtTkKenyiI_-:=\"' /@.+%{}$0129aA\n,;#?[]<>~\t",
     "password", "PASSWD", "passphrase", "Secret", "token", "TOKEN", "api_key", "api-key", "apiKey",
     "access_key", "accessKey", "access-key", "db", "my", "x-", "_", "__", "=", ": ", "\": \"", " = ",
@@ -355,6 +357,30 @@ describe("secret patterns that start at their keyword", () => {
     expect(differences(inputs)).toEqual([]);
     expect(inputs.filter((text) => redactSecrets(text).value !== text).length).toBeGreaterThan(400);
    }, 30_000);
+});
+
+describe("the private key and JWT patterns that read each text once", () => {
+  it("redact generated text exactly as before", () => {
+    const inputs = [
+      // Headers with and without an END line after them, nested and cut short.
+      ...generated(3_000, 412, [
+        "-----BEGIN ", "-----END ", "RSA ", "PGP ", "PRIVATE KEY", " BLOCK", "-----", "-----BEGIN PRIVATE KEY-----",
+        "-----END PRIVATE KEY-----", "MII", "\n", " ", "a",
+      ]),
+      // Runs of token characters with `eyJ` at every boundary in them, and
+      // whole segments of a token.
+      ...generated(3_000, 413, [
+        "eyJ", "-eyJ", "eyJ-", `${"eyJ"}${fill(8)}.`, `.${"eyJ"}${fill(8)}`, `.${fill(8)}`, fill(8), "ab", "_", "-",
+        ".", " ", "=",
+      ]),
+    ];
+    expect(differences(inputs)).toEqual([]);
+    // The text reaches both patterns, and leaves some of it alone.
+    const kinds = withPatterns(BEFORE, () => inputs.flatMap((text) => redactSecrets(text).redactions));
+    expect(kinds.filter((kind) => kind === "[REDACTED_PRIVATE_KEY]").length).toBeGreaterThan(1_500);
+    expect(kinds.filter((kind) => kind === "[REDACTED_JWT]").length).toBeGreaterThan(300);
+    expect(inputs.filter((text) => redactSecrets(text).value === text).length).toBeGreaterThan(2_000);
+  }, 30_000);
 });
 
 describe("secret patterns on a credential name's value", () => {

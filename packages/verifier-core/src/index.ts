@@ -7,7 +7,7 @@ import { lstat, readdir, realpath, stat } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { EvidencePredicate } from "@melra/protocol";
-import { evidenceStrength, redactStructuredValue, type EvidenceItem } from "@melra/receipt-schema";
+import { evidenceStrength, redactStructuredValue, wildcardMatch, type EvidenceItem } from "@melra/receipt-schema";
 
 /**
  * A question the kernel itself refuses to ask: a path outside the workspace or
@@ -31,13 +31,6 @@ function readResultPath(
     if (current === null || typeof current !== "object") return undefined;
     return (current as Record<string, unknown>)[segment];
   }, result);
-}
-
-function wildcardMatches(value: string, pattern: string): boolean {
-  const escaped = pattern
-    .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-    .replaceAll("\\*", ".*");
-  return new RegExp(`^${escaped}$`, "u").test(value);
 }
 
 /**
@@ -190,7 +183,8 @@ const urlMatches: Built<"url_matches"> = {
   type: "url_matches",
   async check(predicate, result) {
     const observed = result.url;
-    const passed = typeof observed === "string" && wildcardMatches(observed, predicate.pattern);
+    // By code point, as the `u` regex this was matched with before did.
+    const passed = typeof observed === "string" && wildcardMatch([...observed], [...predicate.pattern]);
     return { passed, summary: `final URL ${passed ? "matched" : "did not match"} expected pattern` };
   },
 };

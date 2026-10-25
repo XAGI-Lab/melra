@@ -1517,6 +1517,17 @@ describe("capability grants", () => {
     expect(decide(at("docs/guide.md"), [grant({ target: "./docs/*" })]).outcome).toBe("allow");
   });
 
+  it("matches a grant's stars in time linear in the target", () => {
+    const deep = [grant({ target: "docs/*/*/*/*.md" })];
+    const at = (path: string) => read({ identity, operation: { kind: "file", action: "read", path } });
+    expect(decide(at("docs/a/b/c/d.md"), deep).outcome).toBe("allow");
+    const started = performance.now();
+    expect(decide(at(`docs/${"a/".repeat(600)}b.txt`), deep).reason).toBe("capability_not_granted:file.read");
+    // Generous, so a loaded runner does not flake: linear time is well under a
+    // millisecond here.
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
+
   it("requires a move's destination to be granted as well as its source", () => {
     const docs = [grant({ target: "docs/*", effects: ["mutate"] })];
     const move = (destination: string) =>

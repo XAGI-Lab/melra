@@ -70,6 +70,9 @@ All notable changes are documented here. The format follows
   `not_implemented`, never run. It writes an artifact only with
   `--output <file>`. It is a self-run mapping, not AARM conformance. See
   `docs/research/AARM_SELFCHECK.md`.
+- `wildcardMatch(value, pattern)` in `@melra/receipt-schema`: the one `*`
+  pattern match capability grants, credential delegations and `url_matches`
+  share, in time linear in its input.
 
 ### Changed
 
@@ -88,6 +91,10 @@ All notable changes are documented here. The format follows
   own semantic question or answer a question meant for an operator is now
   recorded where the operator looks, not only refused. Each such record is
   bounded, so repeating an attempt cannot grow the store.
+- Matching URL and host patterns and redacting secrets, in text and in a
+  command's arguments, now take time linear in their input, so a crafted value
+  cannot stall MELRA. Grants, credential delegations and `url_matches` answer
+  as before, and redaction takes out the same text.
 
 ## [0.3.0-alpha.22] - 2026-10-25
 

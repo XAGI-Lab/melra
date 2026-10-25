@@ -91,7 +91,8 @@ const policy: LocalPolicy = {
 ```
 
 `capability` and `target` are matched against what `classifyOperation` reported,
-with `*` standing for any run of characters. `principal` is matched against
+with `*` standing for any run of characters on one line (a pattern that is just
+`*` matches every value). `principal` is matched against
 `request.identity.principal` written `kind:id`; a request that declares no
 identity is `agent:local`. An effect with no matching grant is denied
 `capability_not_granted`, an expired one `capability_expired`, and one issued

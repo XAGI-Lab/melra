@@ -706,13 +706,14 @@ with `capability_not_granted`, before any allowlist is consulted.
 
 `capability` and `target` are matched against what MELRA classified the
 operation as — `file.write`, `terminal.run`, `browser.click` — with `*` standing
-for any run of characters. `principal` is matched against the immediate caller
-in the request's `identity`, written `kind:id`; a request that declares no
-identity is the local principal, `agent:local`. Add `policyVersion` to a grant
-to have it refused once the file's `version` no longer matches it. The pin
-follows the label, not the content: an edit that leaves `version` as it was
-leaves the grant in force, so bump `version` with any change the grant should
-not survive.
+for any run of characters on one line (a pattern that is just `*` matches every
+value), matched in time linear in the target. `principal` is matched against
+the immediate caller in the request's `identity`, written `kind:id`; a request
+that declares no identity is the local principal, `agent:local`. Add
+`policyVersion` to a grant to have it refused once the file's `version` no
+longer matches it. The pin follows the label, not the content: an edit that
+leaves `version` as it was leaves the grant in force, so bump `version` with
+any change the grant should not survive.
 A memory target is `<scope>:<action>:<id or key>`, except that `list`,
 `search` and `clear`, which act on the whole scope, are `<scope>:<action>:*`
 whatever key or id they name, so a grant scoped to keys does not cover them (see

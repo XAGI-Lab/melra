@@ -81,6 +81,22 @@ describe("credential broker", () => {
     ).rejects.toThrow("credential_capability_not_covered:stripe");
   });
 
+  it("matches a delegation's stars in time linear in the operation", async () => {
+    const covered = broker({
+      stripe: { ...stripe.stripe, capability: "http.get:https://api.stripe.com/*/*/*/*.json" },
+    });
+    const get = (target: string) =>
+      covered.headersFor({ host: "api.stripe.com", capability: "http.get", target });
+    expect((await get("https://api.stripe.com/v1/a/b/c.json")).used).toEqual(["stripe"]);
+    const started = performance.now();
+    await expect(get(`https://api.stripe.com/${"/".repeat(800)}`)).rejects.toThrow(
+      "credential_capability_not_covered:stripe",
+    );
+    // Generous, so a loaded runner does not flake: linear time is well under a
+    // millisecond here.
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
+
   it("reads a mode-0600 file and refuses a permissive one", async () => {
     const path = await secretFile(0o600);
     const request = {
