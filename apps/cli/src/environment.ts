@@ -15,6 +15,8 @@ export interface CliEnvironment {
   /** MELRA_WORKSPACE was set, so no policy file's `workspaceRoot` replaces it. */
   workspaceSet?: boolean;
   dataDirectory: string;
+  /** MELRA_HOME was set, so `dataDirectory` is not this machine's default. */
+  homeSet?: boolean;
   /**
    * `MELRA_APPROVER`, as set: the name `melra approve` records as the
    * approver, `melra judge` as the judge, `melra workflow pause`,
@@ -28,7 +30,10 @@ export interface CliEnvironment {
   unhinged: boolean;
   mode: DeploymentMode;
   policyPath?: string;
-  /** `MELRA_SOCKET`: the socket `doctor` and `status` check; `serve` needs `--socket`. */
+  /**
+   * `MELRA_SOCKET`: the socket `doctor` and `status` check and `probe` asks;
+   * `serve` needs `--socket`.
+   */
   socketPath?: string;
   browserExecutablePath?: string;
   browserCdpEndpoint?: string;
@@ -264,6 +269,7 @@ export function parseCliEnvironment(
     // Empty is unset here too, or the database and payload key would land in
     // the working directory, inside the workspace a confined agent can write.
     dataDirectory: resolve(source.MELRA_HOME?.trim() || join(defaults.home, ".melra")),
+    homeSet: (source.MELRA_HOME ?? "").trim() !== "",
     approver: source.MELRA_APPROVER?.trim() || "operator",
     unhinged: unhingedFromEnvironment(source),
     mode: namedDeploymentMode(source.MELRA_MODE, "MELRA_MODE"),

@@ -1374,6 +1374,8 @@ Usage:
   melra serve --socket <path>
   melra launch claude-code [--dry-run] [--claude-bin <path>]
                            [-- <claude arguments>]
+  melra probe [--socket <path> | --url <loopback-url>] [--public <host:port>]
+              [--local <host:port>] [--json]
   melra run --request <task.json>
   melra approve <task-id> [--yes] [--deny] [--json]
   melra judge <task-id> --judgement <id> --verdict yes|no|cannot_tell
@@ -1413,6 +1415,17 @@ on only a prompt, -p/--print, --model, --output-format, --verbose,
 claude command and MCP config instead of running them. CLAUDE_BIN or
 --claude-bin names the claude to run, a relative path from here (default:
 claude in one of PATH's absolute directories).
+
+'melra probe', run inside an agent's box before the agent starts, tries what
+the box should stop and reports each as confined or open: creating and
+removing a file in the workspace, opening the database and key in MELRA_HOME
+(set it to the server's, as the box sees it), a TCP connection to --public
+(default: 1.1.1.1:443) and to another local port (default: one it listens on
+itself; --local names one), and starting the shell. It sends nothing over
+those connections. Only a refusal counts as confined; what it could not try
+is open, 'not tested'. It then checks that the MELRA running outside the box
+answers on --socket (or MELRA_SOCKET) or --url, asking without a token. It
+exits 0 only when every check is confined and MELRA answers.
 
 'melra console', run by you in a terminal, opens an approval console in your
 browser, on a server of its own with no MCP endpoint, that approves or denies
@@ -1458,14 +1471,23 @@ Flags:
   --socket <path>  Serve what --http serves on a Unix socket created mode 0600,
                    so only this OS user can connect; the token is still
                    required. Not on Windows. This flag, not MELRA_SOCKET,
-                   moves 'serve' off stdio.
+                   moves 'serve' off stdio. For 'probe', the socket MELRA
+                   should answer on (default: MELRA_SOCKET).
   --open           With --http, open the console in your browser once it is
                    listening.
   --url <mcp-url>  Endpoint for 'conformance'. Default: spawn 'melra serve'.
+                   For 'probe', a loopback http:// URL; only its origin is used.
+  --public <host:port>
+                   For 'probe': the public address to connect to (default:
+                   1.1.1.1:443).
+  --local <host:port>
+                   For 'probe': another local port to connect to (default:
+                   one it listens on, on 127.0.0.1).
   --level <1|2|3>  Conformance level being claimed (default: 3). The run exits
                    non-zero if the endpoint falls short of it.
-  --json           For tasks, watch, and status: JSON (NDJSON for watch) even
-                   in a terminal. Output that is not a terminal is JSON anyway.
+  --json           For tasks, watch, status, and probe: JSON (NDJSON for
+                   watch) even in a terminal. Output that is not a terminal is
+                   JSON anyway.
   --limit <n>      How many recent tasks 'tasks' lists (default: 20, max 500).
   --status <s>     Only tasks in this status, e.g. awaiting_approval.
 
@@ -1483,7 +1505,8 @@ Environment:
   MELRA_HTTP_PORT  Port for 'serve --http' (default: 7457)
   MELRA_HTTP_TOKEN Fixed bearer token for 'serve --http' (default: random)
   MELRA_HTTP_OAUTH Set to 0 so only that token gets in; no client can register
-  MELRA_SOCKET     Socket path 'doctor' and 'status' check (serve needs --socket)
+  MELRA_SOCKET     Socket path 'doctor' and 'status' check and 'probe' asks
+                   (serve needs --socket)
   MELRA_BROWSER    Optional Chrome/Chromium/Edge executable
   MELRA_BROWSER_CDP_ENDPOINT       Optional HTTP(S) CDP endpoint
   MELRA_BROWSER_CDP_CONTEXT_INDEX  External context index (-1 is last)
@@ -1689,6 +1712,35 @@ async function main(): Promise<void> {
     case "launch":
       process.exitCode = await launch(args, env);
       return;
+    case "probe": {
+      const valued = ["--socket", "--url", "--public", "--local"];
+      rejectUnknownFlags(args, ["--json", ...valued]);
+      for (const flag of valued) {
+        const value = argument(flag, args);
+        if (args.includes(flag) && (value === undefined || value.trim() === "" || value.startsWith("--"))) {
+          throw new Error(`${flag} requires a value`);
+        }
+      }
+      const url = argument("--url", args);
+      const socketPath = argument("--socket", args) ?? env.socketPath;
+      if (url !== undefined && args.includes("--socket")) throw new Error("--url and --socket name two endpoints; pass one");
+      const publicTarget = argument("--public", args);
+      const local = argument("--local", args);
+      const { probeChecks, renderProbe, runProbe } = await import("./probe.js");
+      const { checks, melra } = probeChecks({
+        workspace: env.workspaceRoot,
+        // Only a MELRA_HOME set here: the default is this box's own ~/.melra,
+        // which says nothing about the server's.
+        ...(env.homeSet === true ? { dataDirectory: env.dataDirectory } : {}),
+        ...(publicTarget === undefined ? {} : { public: publicTarget }),
+        ...(local === undefined ? {} : { local }),
+        ...(url === undefined ? (socketPath === undefined ? {} : { socketPath: resolve(socketPath) }) : { url }),
+      });
+      const report = await runProbe(checks, melra);
+      printJsonOrHuman(report, renderProbe, args);
+      process.exitCode = report.passed ? 0 : 1;
+      return;
+    }
     case "run":
       rejectUnknownFlags(args, ["--request"]);
       // Failed until the task says otherwise: an effect that never returns

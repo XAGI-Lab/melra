@@ -442,8 +442,10 @@ close every door MELRA owns: `--unsafe-local` is refused outright, nothing binds
 outside loopback (a `0600` Unix socket is allowed), no client can register itself, and
 `mode` is stamped on every receipt. For the operating-system side,
 [examples/deploy](examples/deploy/README.md) has a hardened Docker run and systemd
-unit, each checked in CI, and `melra doctor` reports which restrictions are actually in
-effect. See
+unit, each checked in CI, `melra doctor` reports which restrictions are actually in
+effect, and [`melra probe`](docs/INSTALLATION.md#check-an-agents-box), run inside the
+agent's box, checks that it stops a workspace write, a read of MELRA's data, outbound
+and local connections, and starting a shell. See
 [deployment modes](docs/INSTALLATION.md#deployment-modes),
 the [threat model](docs/THREAT_MODEL.md) and the [security policy](SECURITY.md).
 

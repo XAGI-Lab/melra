@@ -6,6 +6,23 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `melra probe [--json]`, run inside an agent's box before the agent starts,
+  reports whether the box stops what it should. It creates and removes a file
+  in the workspace, opens the database and key in `MELRA_HOME` (set to the
+  server's, as the box sees it) without reading them, makes a TCP connection
+  to a public address (`--public`, default `1.1.1.1:443`) and to another local
+  port (`--local`, default one it listens on itself), and starts the shell, and
+  reports each as `confined` or `open`. Only a refusal counts as confined;
+  what it could not try is open, `not tested`. It then checks that the MELRA
+  running outside the box answers on `--socket` (or `MELRA_SOCKET`) or a
+  loopback `--url`, asking without a token, and refuses to run without one. It
+  exits 0 only when every check is confined and MELRA answers. It sends
+  nothing over its connections, changes no setting, and proves only the checks
+  on its list. See
+  [checking an agent's box](docs/INSTALLATION.md#check-an-agents-box).
+
 ## [0.3.0-alpha.22] - 2026-10-25
 
 ### Added
