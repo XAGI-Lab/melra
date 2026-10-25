@@ -394,10 +394,14 @@ async function workflowCommand(
         if (workflowId === undefined) {
           throw new Error("workflow advance requires a workflow ID");
         }
+        const inputs = workflowInputs(args);
+        // As the operator, recorded on each answer: in enforced mode only an
+        // operator answers a node whose answeredBy is operator.
         const result = await melra.workflows.advance(
           workflowId,
           workflowApprovals(args),
-          workflowInputs(args),
+          inputs,
+          inputs.length === 0 ? undefined : { operator: approverLabel(env) },
         );
         output(result);
         return workflowExitCode(result.run.status);
@@ -1217,7 +1221,8 @@ Usage:
   melra workflow advance <workflow-id> [--approval <id>:<exact-phrase>]
                                        [--input <node-id>=<value>]
                                        (--approval: developer mode; enforced:
-                                       melra approve <task-id>, then advance)
+                                       melra approve <task-id>, then advance;
+                                       --input answers as the operator)
   melra workflow inspect <workflow-id>
   melra workflow cancel <workflow-id>
   melra workflow pause|resume|suspend <workflow-id>
@@ -1295,9 +1300,10 @@ Environment:
   MELRA_POLICY     Optional local policy JSON
   MELRA_UNHINGED   Set to 1 to disable every guardrail (see --unsafe-local)
   MELRA_MODE       developer (default) or enforced (see --mode)
-  MELRA_APPROVER   Name 'melra approve', 'melra judge', 'melra console' and
-                   'melra workflow pause|suspend|resume' record as the
-                   approver, judge or actor (default: operator)
+  MELRA_APPROVER   Name 'melra approve', 'melra judge', 'melra console',
+                   'melra workflow pause|suspend|resume' and 'melra workflow
+                   advance --input' record as the approver, judge, actor or
+                   answerer (default: operator)
   MELRA_HTTP_PORT  Port for 'serve --http' (default: 7457)
   MELRA_HTTP_TOKEN Fixed bearer token for 'serve --http' (default: random)
   MELRA_HTTP_OAUTH Set to 0 so only that token gets in; no client can register

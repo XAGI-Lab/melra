@@ -1060,15 +1060,23 @@ export const CompensationNodeSchema = NodeBaseSchema.extend({
 }).strict();
 
 // A workflow that needs a person to answer something stops here. The answer is
-// supplied to `advance`, recorded on the node, and readable by later nodes —
-// it is data the graph waited for, not an approval to run a pending mutation.
+// supplied to `advance` and recorded on the node; who gave it, through which
+// channel and when go on its `workflow.node_changed` event, not the node, so an
+// older MELRA sharing the home still reads the run. No later node reads the
+// answer or branches on it: any valid answer completes the node and releases
+// its dependents, so it is a record of what was said, not a gate, and not an
+// approval to run a pending mutation.
 export const HumanInputNodeSchema = NodeBaseSchema.extend({
   type: z.literal("human_input"),
   prompt: z.string().min(1).max(2_000),
-  // Free text is unconstrained by design; `choices` narrows it to a fixed set
-  // so a workflow can branch on an answer it can actually enumerate.
+  // Free text is unconstrained by design; `choices` narrows it to a fixed set.
   choices: z.array(z.string().min(1).max(200)).max(20).default([]),
   maxLength: z.number().int().min(1).max(10_000).default(1_000),
+  // `operator`: an enforced kernel takes the answer only from an operator, out
+  // of band, and refuses one the agent sends. Absent means `any`. Optional
+  // rather than defaulted, so a definition that leaves it out is stored as
+  // before and an older MELRA sharing the home still reads it.
+  answeredBy: z.enum(["operator", "any"]).optional(),
 }).strict();
 
 // Delegation hands a named sub-goal to an outside worker (another agent, a
@@ -1240,7 +1248,7 @@ export const WorkflowAdvanceInputSchema = z
     approvals: z.array(ApprovalResponseSchema).max(50).default([]).describe("Answers to challenges this run waits on, each {approvalId, phrase} copied from a waiting task's approval and matched by approvalId; unmatched entries are ignored. Must be empty in enforced mode (approval_in_band_refused)."),
     // Answers for nodes parked on a person. Supplied on the same call that
     // resumes the wave, so one round trip both answers and advances.
-    inputs: z.array(WorkflowInputSchema).max(50).default([]).describe("Answers for awaiting_input nodes as {nodeId, value}, matched by nodeId and ignored for nodes this call does not run. A human_input value must fit the node's maxLength and any choices; a delegation value is the delegate's report, and any requiredEvidence on the node still decides."),
+    inputs: z.array(WorkflowInputSchema).max(50).default([]).describe("Answers for awaiting_input nodes as {nodeId, value}, matched by nodeId and ignored for nodes this call does not run. A human_input value must fit the node's maxLength and any choices, and completes the node whatever it says: later nodes do not read it. In enforced mode an answer for a human_input node whose answeredBy is operator is refused (workflow_input_in_band_refused:<nodeId>) and the node keeps waiting for `melra workflow advance <workflowId> --input <nodeId>=<value>`. A delegation value is the delegate's report, and any requiredEvidence on the node still decides."),
   })
   .strict();
 

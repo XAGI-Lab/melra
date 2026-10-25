@@ -15,8 +15,9 @@ export interface CliEnvironment {
   dataDirectory: string;
   /**
    * `MELRA_APPROVER`, as set: the name `melra approve` records as the
-   * approver, `melra judge` as the judge, and `melra workflow pause`,
-   * `suspend` and `resume` as who acted, as `cli:<name>`. Receipts carry it and an agent can read
+   * approver, `melra judge` as the judge, `melra workflow pause`,
+   * `suspend` and `resume` as who acted, and `melra workflow advance --input`
+   * as who answered, as `cli:<name>`. Receipts carry it and an agent can read
    * receipts, so it is a label the operator chooses, never the OS account
    * name. Checked by `approverLabel` only where it is used, so a bad value
    * cannot stop `serve` or `help`.

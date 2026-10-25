@@ -256,7 +256,7 @@ enforced process.
 | `bounded_loop` | Executes 1–50 body requests for at most 100 iterations and may stop on a persisted predicate |
 | `checkpoint` | Emits `workflow.checkpoint_saved` and stores a validated snapshot |
 | `compensation` | Runs a governed compensating request after its verified target is followed by a step that fails or is denied |
-| `human_input` | Blocks in `awaiting_input` until `advance` supplies a value within `maxLength` and, where declared, within `choices` |
+| `human_input` | Blocks in `awaiting_input` until `advance` supplies a value within `maxLength` and, where declared, within `choices`; its `workflow.node_changed` event records who answered (`answeredBy`), the `channel` and `answeredAt`. Any valid answer completes the node: no later node reads it or branches on it. With `answeredBy: "operator"` an enforced kernel takes the answer only from `melra workflow advance --input`, out of band, and refuses one the agent sends (`workflow_input_in_band_refused:<node>`) |
 | `delegation` | Blocks in `awaiting_input` until an outside worker reports back; the node's own `requiredEvidence` decides the outcome |
 
 The total definition limit is 500 nodes; each node may declare at most 100
@@ -525,8 +525,10 @@ and `workflow suspend`; `tasks`, `watch`, and `status` read the local database
 read-only, with or without a server running. `approve` and `console` record an
 operator's decision through `TaskController.decide`, the first in a terminal
 and the second in a browser tab; the server an agent connects to has no route
-that does. The TypeScript and Python SDKs call the same workflow
-tools and do not implement a second execution engine.
+that does. `workflow advance --input` answers a `human_input` node as the
+operator, which in enforced mode is the only way to answer one whose
+`answeredBy` is `operator`. The TypeScript and Python SDKs call the same
+workflow tools and do not implement a second execution engine.
 
 ## Packages
 

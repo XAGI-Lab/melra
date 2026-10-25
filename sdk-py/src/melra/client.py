@@ -302,7 +302,10 @@ class MelraClient:
         Call until the run reaches a terminal status; committed effects are not
         repeated. `approvals` answers approval nodes in developer mode only (in
         enforced mode an operator runs `melra approve`), `inputs` answers
-        `human_input` nodes as `{"nodeId": ..., "value": ...}`.
+        `human_input` nodes as `{"nodeId": ..., "value": ...}`. In enforced
+        mode an answer for a node whose `answeredBy` is `operator` is refused
+        (`workflow_input_in_band_refused`), and an operator answers with
+        `melra workflow advance <id> --input <node>=<value>`.
         """
         workflow_id = self._workflow_id(workflow_id)
         parsed_approvals = approvals or []

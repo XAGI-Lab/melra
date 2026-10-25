@@ -56,6 +56,15 @@ Node types: `operation`, `approval`, `condition`, `parallel`, `bounded_loop`,
 - Exact definitions and task payloads survive restart in encrypted envelopes,
   each task's written with its record in one transaction.
 - Each advance executes one deterministic ready wave.
+- A `human_input` answer is recorded on its node, and who gave it (`answeredBy`:
+  `cli:<name>` for an operator, else the agent's principal), the `channel` and
+  `answeredAt` on its `workflow.node_changed` event. Any answer within
+  `maxLength` and `choices` completes the node; later nodes do not read it, so a
+  "no" stops nothing. A node with `answeredBy: "operator"` takes its answer in
+  enforced mode only from
+  `melra workflow advance <workflow-id> --input <node-id>=<value>`; one sent
+  with `melra_workflow_advance` is refused (`workflow_input_in_band_refused`)
+  and the node keeps waiting.
 - Workflow events and the current projection commit atomically.
 - Interrupted reads may retry. Mutations are never silently repeated: they
   reconcile from independent evidence — a file re-read, or a declared

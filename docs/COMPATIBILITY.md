@@ -192,13 +192,26 @@ older process refuses a challenge a newer one issued with
 versions differ, not that the request changed. Upgrade every process sharing
 a `MELRA_HOME` together, and re-run `melra setup` so pinned clients move.
 
+Releases after `0.3.0-alpha.21` record who answered a workflow `human_input`
+node, the channel and when, on its `workflow.node_changed` event rather than
+on the node, so a run holding an answer stays readable by `0.3.0-alpha.21` or
+earlier. A definition with a node declaring `answeredBy` is not, so such a
+process never takes an answer it would not check: it cannot advance a run
+planned from one, and while that run is planned, running, awaiting approval or
+`recovery_required` it refuses to start at all, since starting recovers every
+such run. Upgrade every process sharing the home together before declaring
+`answeredBy`.
+
 ## Workflow compatibility and limits
 
 The implemented node types are operation, approval, condition, parallel,
 bounded loop, checkpoint, compensation, human input, and delegation. The last
 two block on a person or an outside worker; a delegation node's declared
 evidence still decides its outcome, so a delegate reporting "done" is not
-evidence.
+evidence. A human input answer is recorded with who gave it, but no later node
+reads it: any valid answer completes the node, so it gates nothing. In
+enforced mode a node declaring `answeredBy: "operator"` takes its answer only
+from `melra workflow advance --input`.
 
 Current limits include 500 nodes per definition, 100 dependencies per node,
 100 loop iterations, 20 parallel branches, 50 requests per branch/body, and

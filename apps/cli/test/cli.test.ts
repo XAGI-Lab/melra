@@ -287,6 +287,88 @@ describe("melra CLI", () => {
     }
   });
 
+  it("answers a workflow's operator question as the named operator, out of band when enforced", async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), "melra-cli-")));
+    roots.push(base);
+    const root = join(base, "workspace");
+    await mkdir(root);
+    const dataDirectory = join(base, "data");
+    const server = await createMelraRuntime({ workspaceRoot: root, dataDirectory, environment: { MELRA_MODE: "enforced" } });
+    try {
+      const run = server.workflows.plan(
+        WorkflowDefinitionSchema.parse({
+          schemaVersion: "1.0.0",
+          id: "77777777-7777-4777-8777-777777777777",
+          version: 1,
+          name: "Asked",
+          nodes: [{ id: "ask", type: "human_input", prompt: "Proceed?", choices: ["yes", "no"], answeredBy: "operator" }],
+        }),
+      );
+      await server.workflows.advance(run.id);
+      // The agent's side is refused; the operator's command is not.
+      await expect(server.workflows.advance(run.id, [], [{ nodeId: "ask", value: "yes" }])).rejects.toThrow(
+        "workflow_input_in_band_refused:ask",
+      );
+      const env = { ...process.env, MELRA_HOME: dataDirectory, MELRA_WORKSPACE: root, MELRA_MODE: "enforced", MELRA_APPROVER: "alice" };
+      const answered = await execute(process.execPath, [entry, "workflow", "advance", run.id, "--input", "ask=yes"], {
+        cwd: root,
+        env,
+      });
+      expect(JSON.parse(answered.stdout).run).toMatchObject({
+        status: "verified_complete",
+        nodes: { ask: { status: "verified_complete", input: "yes" } },
+      });
+      expect(server.workflows.events(run.id).find((event) => event.type === "workflow.node_changed" && event.data.from === "awaiting_input")).toMatchObject({
+        data: { nodeId: "ask", answeredBy: "cli:alice", channel: "out_of_band" },
+      });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("refuses a workflow answer from a MELRA_APPROVER it does not accept, and reads it only to answer", async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), "melra-cli-")));
+    roots.push(base);
+    const root = join(base, "workspace");
+    await mkdir(root);
+    const dataDirectory = join(base, "data");
+    // Developer mode, where the agent could answer too: the check is the
+    // CLI's own, not the enforced-mode refusal.
+    const server = await createMelraRuntime({ workspaceRoot: root, dataDirectory });
+    try {
+      const run = server.workflows.plan(
+        WorkflowDefinitionSchema.parse({
+          schemaVersion: "1.0.0",
+          id: "88888888-8888-4888-8888-888888888888",
+          version: 1,
+          name: "Asked",
+          nodes: [{ id: "ask", type: "human_input", prompt: "Proceed?", choices: ["yes", "no"] }],
+        }),
+      );
+      const env = { ...process.env, MELRA_HOME: dataDirectory, MELRA_WORKSPACE: root, MELRA_APPROVER: "Jane Doe" };
+      const fail = (error: unknown) => error as { code: number; stdout: string; stderr: string };
+      // Without --input nothing is recorded, so the variable is not read.
+      const waiting = fail(
+        await execute(process.execPath, [entry, "workflow", "advance", run.id], { cwd: root, env }).catch(fail),
+      );
+      expect(waiting.code).toBe(4);
+      expect(waiting.stderr).not.toContain("MELRA_APPROVER");
+      expect(JSON.parse(waiting.stdout).run.nodes.ask.status).toBe("awaiting_input");
+      const refused = fail(
+        await execute(process.execPath, [entry, "workflow", "advance", run.id, "--input", "ask=yes"], {
+          cwd: root,
+          env,
+        }).catch(fail),
+      );
+      expect(refused.code).toBe(1);
+      expect(refused.stderr).toContain("MELRA_APPROVER");
+      expect(server.workflows.status(run.id).nodes.ask).toMatchObject({ status: "awaiting_input" });
+      expect(server.workflows.status(run.id).nodes.ask).not.toHaveProperty("input");
+    } finally {
+      await server.close();
+    }
+  });
+
   it("judges a waiting task as the named operator, out of band only when enforced", async () => {
     const base = await realpath(await mkdtemp(join(tmpdir(), "melra-cli-")));
     roots.push(base);
