@@ -70,6 +70,7 @@ async function stub(directory: string, label = "claude") {
       "writeFileSync(process.env.STUB_RECORD, JSON.stringify({",
       `  label: ${JSON.stringify(label)}, argv, cwd: process.cwd(), config, content: readFileSync(config, 'utf8'),`,
       "  launched: process.env.MELRA_LAUNCHED ?? null,",
+      '  secrets: ["MELRA_PAYLOAD_KEY", "MELRA_HTTP_TOKEN"].filter((name) => name in process.env),',
       "}));",
       "process.exit(7);",
       "",
@@ -285,6 +286,26 @@ describe("melra launch claude-code", () => {
     expect(run.code).toBe(1);
     expect(run.stderr).toContain("enforced_mode_refuses_data_inside_workspace");
     expect(run.stderr).not.toContain("Starting Claude Code");
+  });
+
+  it("gives claude neither the payload key nor the HTTP token, and so wants the key in its file", async () => {
+    if (process.platform === "win32") return;
+    const { root, home, env } = await sandbox();
+    const record = join(root, "claude-was-run.json");
+    const claude = await stub(root);
+    const secrets = { MELRA_PAYLOAD_KEY: Buffer.alloc(32, 7).toString("base64url"), MELRA_HTTP_TOKEN: "token" };
+    // Held only in the variable: the server claude starts would be given a
+    // new key beside it.
+    const refused = await launch(["--claude-bin", claude], { ...env, ...secrets, STUB_RECORD: record });
+    expect(refused.code).toBe(1);
+    expect(refused.stderr).toContain(`payload_key_missing: melra launch does not pass MELRA_PAYLOAD_KEY on; write the key to ${join(home, "payload.key")}`);
+    expect(existsSync(record)).toBe(false);
+    expect(existsSync(join(home, "payload.key"))).toBe(false);
+    // In the file as well, it is still not passed on.
+    await writeFile(join(home, "payload.key"), secrets.MELRA_PAYLOAD_KEY, { mode: 0o600 });
+    const run = await launch(["--claude-bin", claude], { ...env, ...secrets, STUB_RECORD: record });
+    expect(run.code).toBe(7);
+    expect((JSON.parse(await readFile(record, "utf8")) as { secrets: string[] }).secrets).toEqual([]);
   });
 
   it("runs the claude named from where it was typed, and a bare one only from PATH's absolute directories", async () => {

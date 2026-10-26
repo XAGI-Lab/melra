@@ -5,6 +5,7 @@ import {
   chmod,
   mkdir,
   mkdtemp,
+  open,
   rm,
   stat,
   symlink,
@@ -122,6 +123,59 @@ describe("loadPayloadKey", () => {
       ).rejects.toThrow("payload_key_permissions_too_open");
     },
   );
+
+  it("reads the key file as bytes, and clears them once decoded", async () => {
+    const root = await temporaryRoot();
+    const expected = Buffer.alloc(32, 23);
+    await writeFile(join(root, "payload.key"), expected.toString("base64url"), { mode: 0o600 });
+    // FileHandle's own prototype: what `readFile` handed back is kept to look
+    // at once the key is loaded. A string there stays in V8's heap.
+    const probe = await open(join(root, "payload.key"));
+    const prototype = Object.getPrototypeOf(probe) as { readFile: (...args: unknown[]) => Promise<unknown> };
+    await probe.close();
+    const read: unknown[] = [];
+    const original = prototype.readFile;
+    prototype.readFile = async function (this: unknown, ...args: unknown[]) {
+      const value = await original.apply(this, args);
+      read.push(value);
+      return value;
+    };
+    try {
+      expect(await loadPayloadKey({ dataDirectory: root, environment: {}, sealed: true })).toEqual(expected);
+    } finally {
+      prototype.readFile = original;
+    }
+    expect(read).toHaveLength(1);
+    expect(Buffer.isBuffer(read[0])).toBe(true);
+    expect([...(read[0] as Buffer)].every((byte) => byte === 0)).toBe(true);
+  });
+
+  it("takes exactly the canonical base64url of 32 bytes from the key file", async () => {
+    const root = await temporaryRoot();
+    const path = join(root, "payload.key");
+    const load = async (text: string) => {
+      await rm(path, { force: true });
+      await writeFile(path, text, { mode: 0o600 });
+      return loadPayloadKey({ dataDirectory: root, environment: {}, sealed: true });
+    };
+    // Every byte value in every position, through all 64 characters.
+    for (let fill = 0; fill < 256; fill += 1) {
+      const key = Buffer.from(Array.from({ length: 32 }, (_, at) => (fill + at * 37) % 256));
+      expect(await load(key.toString("base64url"))).toEqual(key);
+    }
+    const spelled = Buffer.alloc(32, 0xff).toString("base64url");
+    for (const text of [
+      `${spelled}\n`,
+      spelled.slice(0, -1),
+      `${spelled.slice(0, -1)}=`,
+      `${spelled.slice(0, -1)}/`,
+      // The last character's two spare bits set: decodes alike, spelled otherwise.
+      `${spelled.slice(0, -1)}${String.fromCharCode(spelled.charCodeAt(42) + 1)}`,
+      Buffer.alloc(31).toString("base64url"),
+    ]) {
+      await expect(load(text), JSON.stringify(text)).rejects.toThrow("payload_key_file_invalid");
+    }
+  });
 
   it("rejects a non-file local key path", async () => {
     const root = await temporaryRoot();

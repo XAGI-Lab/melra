@@ -136,6 +136,12 @@ After `--`, `launch` passes claude prompt arguments, `-p`/`--print`, `--model
 word, which claude can read as one of its own subcommands. It exits with
 claude's exit code.
 
+Neither claude nor the server it starts gets `MELRA_PAYLOAD_KEY` or
+`MELRA_HTTP_TOKEN`, which the agent could read from its own environment. With
+the payload key set only in the variable, `launch` refuses with
+`payload_key_missing` until the key is in `<MELRA_HOME>/payload.key` (mode
+`0600`), rather than let the server start beside it with a new one.
+
 ```bash
 melra launch claude-code -- -p "list the TODO comments in src" --output-format json
 ```
@@ -595,12 +601,12 @@ MELRA uses these environment variables:
 | `MELRA_HOME` | SQLite database and browser artifacts. It must not be the workspace or hold it: a workspace inside it, even through a link, is refused at startup with `workspace_inside_data_directory`. On a case-sensitive filesystem a sibling whose name differs from it only in case is reserved too | `~/.melra` |
 | `MELRA_POLICY` | Optional local policy JSON. Every start reads it again, so wherever it lies it is reserved like `MELRA_HOME`: no file effect, verification or browser upload may name it, nor a terminal argument as a path or a plain `@`/`<` reference, and no file effect removes or moves a directory holding it. A workspace holding it is still an ordinary one | safe built-in policy |
 | `MELRA_BROWSER` | Chrome, Chromium, or Edge executable | auto-detected |
-| `MELRA_PAYLOAD_KEY` | Optional canonical base64url 256-bit payload key | private `<MELRA_HOME>/payload.key` |
+| `MELRA_PAYLOAD_KEY` | Optional canonical base64url 256-bit payload key. Enforced mode warns while it is set, since any process running as the same OS user can read MELRA's environment: prefer the file | private `<MELRA_HOME>/payload.key` |
 | `MELRA_UNHINGED` | Set to `1` to remove every guardrail — see below | unset (all guardrails on) |
 | `MELRA_MODE` | `developer` or `enforced` — see [deployment modes](#deployment-modes) | `developer` |
 | `MELRA_APPROVER` | The name [`melra approve`](#approving-from-the-command-line) records as the approver, as `cli:<name>`, [`melra judge`](#judging-from-the-command-line) as the judge of a verdict, also as `cli:<name>`, and [`melra console`](#approving-in-a-browser) as `console:<name>`, and `melra workflow pause`, `suspend` and `resume` as who halted or resumed the run, and `melra workflow advance --input` as who answered a `human_input` node, both as `cli:<name>`. Letters (any script), digits, `.`, `_`, `@` and `-`, at most 64; checked when `melra approve`, `melra judge` or `melra run` records a decision, when `melra workflow pause`, `suspend` or `resume` runs or `melra workflow advance` is given `--input` or `--approval`, and when `melra console` starts. Receipts and certificates carry it, and an agent can read both. | `operator` |
 | `MELRA_HTTP_PORT` | Port for `melra serve --http` | `7457` |
-| `MELRA_HTTP_TOKEN` | Bearer token for `melra serve --http` | a fresh random token, printed at startup |
+| `MELRA_HTTP_TOKEN` | Bearer token for `melra serve --http`. Enforced mode warns while it is set, as for `MELRA_PAYLOAD_KEY` | a fresh random token, printed at startup |
 | `MELRA_HTTP_OAUTH` | Set to `0` so that token is the only way in and no client can register itself | unset (clients may register, on loopback) |
 | `MELRA_SOCKET` | Unix socket path that `melra doctor` checks, `melra status` probes and `melra probe` asks. It does not move `melra serve` off stdio; pass `--socket <path>` for that — see [over a Unix socket](#over-a-unix-socket). Not on Windows | unset |
 | `MELRA_HARNESS_TOOLS` | Set to `1` (or `true`, `yes`, `on`) to add thirteen plainly named tools such as `read_file` and `run_command` alongside the twelve `melra_*` tools — see [ordinary tool names](#ordinary-tool-names) | unset (only the `melra_*` tools) |
@@ -1455,6 +1461,17 @@ closing every door it owns:
   `MELRA_BROWSER_HAR_REPLAY`) or a credential's `source.file` is refused at
   startup with `enforced_mode_refuses_secret_inside_workspace`, naming which
   one, for the same reason. Move it out of the workspace.
+- **Secrets in MELRA's own environment are named.** No program MELRA starts
+  gets `MELRA_PAYLOAD_KEY` or `MELRA_HTTP_TOKEN`, its browser and the agent
+  [`melra launch`](#launch-an-agent-with-melra-as-its-only-tool) starts
+  included, but any process running as the same OS user can read MELRA's own
+  environment, and no sandbox profile hides it the way it can deny a file.
+  With either set, MELRA still starts,
+  with a warning naming the fix, and `melra doctor` warns on its `environment`
+  line: write the key to `<MELRA_HOME>/payload.key` with mode `0600` and unset
+  the variable, and leave the token unset so `serve` makes a random one. The
+  [two-container recipe](#melra-and-the-agent-in-two-containers) passes a
+  shared token this way, so it warns.
 - **Only an operator approves.** A challenge carries no phrase, so the agent
   is handed nothing to echo, and `melra_execute` refuses any approval it is
   sent with `approval_in_band_refused`. A mutation runs only on a decision an
@@ -2152,7 +2169,9 @@ shell are the container's own
 Replace its `image` and `command` with your agent's and keep the rest. To let
 it call MELRA, export `MELRA_HTTP_TOKEN` before `up`, so both containers get
 the same token; left unset, MELRA makes one up and prints it, and the agent
-does not have it. In enforced mode each change the agent plans waits for you;
+does not have it. MELRA's container runs in enforced mode, so it warns that
+the token is in its environment, where a process running as its user could
+read it. In enforced mode each change the agent plans waits for you;
 approve it from MELRA's side:
 
 ```bash

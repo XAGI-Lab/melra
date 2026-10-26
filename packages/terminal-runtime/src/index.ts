@@ -446,6 +446,11 @@ export class TerminalRuntime {
   /** The protected workspace, as spelled and resolved; absent, PATH is not filtered. */
   private readonly pathOutside: string[] | undefined;
   private readonly jobs = new Map<string, BackgroundJob>();
+  /**
+   * Foreground runs whose program is still running, or whose group is still
+   * being watched after it exited; close() waits for each, as for a job.
+   */
+  private readonly foreground = new Set<ChildProcess>();
   private closed = false;
 
   private constructor(
@@ -676,6 +681,8 @@ export class TerminalRuntime {
         windowsVerbatimArguments: prepared.windowsVerbatimArguments,
         stdio: ["ignore", "pipe", "pipe"],
       });
+      // No pid: it never started, and there is nothing to stop.
+      if (child.pid !== undefined) this.foreground.add(child);
       let stdout = "";
       let stderr = "";
       let truncated = false;
@@ -725,9 +732,26 @@ export class TerminalRuntime {
 
       closePipesAfterExit(child);
       // A foreground run is over when its program is; whatever it left behind
-      // in its group goes with it.
+      // in its group goes with it, by SIGKILL once the grace is up if it traps
+      // SIGTERM: no job holds it, so nothing would ever stop it later. Watched
+      // until empty rather than signalled blind, since an empty group's id can
+      // be reused by an unrelated one.
       child.once("exit", () => {
-        if (OWN_GROUP) signalTree(child, "SIGTERM");
+        if (!groupAlive(child)) {
+          this.foreground.delete(child);
+          return;
+        }
+        signalTree(child, "SIGTERM");
+        let waited = 0;
+        const watch = setInterval(() => {
+          waited += GROUP_POLL_MS;
+          if (groupAlive(child) && waited < KILL_GRACE_MS) return;
+          clearInterval(watch);
+          if (groupAlive(child)) signalTree(child, "SIGKILL");
+          this.foreground.delete(child);
+        }, GROUP_POLL_MS);
+        // Not unref'd: a one-shot `melra run` waits out the grace rather than
+        // exiting with the SIGKILL unsent.
       });
       child.once("error", (error) => {
         clearTimeout(timer);
@@ -1007,6 +1031,19 @@ export class TerminalRuntime {
       clearTimeout(escalation);
     });
     this.jobs.clear();
-    await Promise.all(exits);
+    // Foreground runs too: `serve` exits as soon as this returns, and with it
+    // every timer that would have stopped them. One still running is stopped
+    // as a job is; one that has exited already had its SIGTERM, and its watch
+    // owes the SIGKILL, so it is only waited for.
+    const runs = [...this.foreground].map(async (child) => {
+      const running = () => child.exitCode === null && child.signalCode === null;
+      const escalation = running() ? stopTree(child, CLOSE_GRACE_MS) : undefined;
+      const deadline = performance.now() + CLOSE_GRACE_MS + 1_000;
+      while ((running() || groupAlive(child)) && performance.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, GROUP_POLL_MS));
+      }
+      clearTimeout(escalation);
+    });
+    await Promise.all([...exits, ...runs]);
   }
 }

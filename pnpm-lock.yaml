@@ -239,6 +239,9 @@ importers:
 
   packages/verifier-core:
     dependencies:
+      '@melra/file-runtime':
+        specifier: workspace:*
+        version: link:../file-runtime
       '@melra/protocol':
         specifier: workspace:*
         version: link:../protocol

@@ -1,7 +1,8 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -186,6 +187,109 @@ describe("TerminalRuntime", () => {
     await until(() => !alive(pid), 4_000);
     expect(alive(pid)).toBe(false);
   });
+
+  // POSIX only: Windows has no process groups to find them by.
+  it.skipIf(process.platform === "win32")("stops what a finished run left in its group, even if it ignores SIGTERM", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-terminal-"));
+    roots.push(root);
+    const runtime = await TerminalRuntime.create({ root });
+    // The program starts a process in its own group that ignores SIGTERM, and
+    // exits only once that process says it has its handler, so the SIGTERM
+    // sent at the exit cannot land before it. Renamed into place, so the file
+    // is never seen empty.
+    const leftover =
+      "process.on('SIGTERM', () => {}); const fs = require('fs'); fs.writeFileSync('left.tmp', String(process.pid)); " +
+      "fs.renameSync('left.tmp', 'left'); setInterval(() => {}, 1000)";
+    let pid: number | undefined;
+    try {
+      const result = await runtime.execute(
+        op({
+          args: [
+            "-e",
+            `require('child_process').spawn(process.execPath, ['-e', ${JSON.stringify(leftover)}], { stdio: 'ignore' }).unref(); ` +
+              "const ready = setInterval(() => { if (require('fs').existsSync('left')) clearInterval(ready); }, 20)",
+          ],
+          timeoutMs: 20_000,
+        }),
+      );
+      expect(result.success).toBe(true);
+      await until(() => existsSync(join(root, "left")));
+      pid = Number(await readFile(join(root, "left"), "utf8"));
+      // The grace is a second; a slow runner gets several more to reap it.
+      await until(() => !alive(pid as number), 6_000);
+      expect(alive(pid)).toBe(false);
+    } finally {
+      // Left by a failure, it would outlive the test.
+      if (pid !== undefined && pid > 0 && alive(pid)) process.kill(pid, "SIGKILL");
+      await runtime.close();
+    }
+  }, 30_000);
+
+  // POSIX only, as above.
+  it.skipIf(process.platform === "win32")("stops a run, and what one left, before close() returns to a server about to exit", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-terminal-"));
+    roots.push(root);
+    const module = new URL("../dist/index.js", import.meta.url).href;
+    // What `serve` does when told to stop: close(), then exit at once, and
+    // with it every timer still pending. Once the run is over, or once its
+    // program says it has its SIGTERM handler.
+    const shutdown = async (args: string[], when: "finished" | "running") => {
+      const child = spawn(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          `const { TerminalRuntime } = await import(${JSON.stringify(module)});
+           const { existsSync } = await import("node:fs");
+           const [root, operation, when] = process.argv.slice(1);
+           const runtime = await TerminalRuntime.create({ root });
+           const run = runtime.execute(JSON.parse(operation));
+           if (when === "finished") await run;
+           else while (!existsSync(root + "/pid")) await new Promise((resolve) => setTimeout(resolve, 20));
+           await runtime.close();
+           process.exit(0);`,
+          root,
+          JSON.stringify(op({ args, timeoutMs: 20_000 })),
+          when,
+        ],
+        { stdio: "inherit" },
+      );
+      const [code] = (await once(child, "exit")) as [number | null];
+      expect(code).toBe(0);
+    };
+    const leftover =
+      "process.on('SIGTERM', () => {}); const fs = require('fs'); fs.writeFileSync('left.tmp', String(process.pid)); " +
+      "fs.renameSync('left.tmp', 'left'); setInterval(() => {}, 1000)";
+    const pids: number[] = [];
+    try {
+      // A finished run whose leftover ignores SIGTERM: the SIGKILL a second
+      // later was a timer, and the exit took it.
+      await shutdown(
+        [
+          "-e",
+          `require('child_process').spawn(process.execPath, ['-e', ${JSON.stringify(leftover)}], { stdio: 'ignore' }).unref(); ` +
+            "const ready = setInterval(() => { if (require('fs').existsSync('left')) clearInterval(ready); }, 20)",
+        ],
+        "finished",
+      );
+      // A run still going, whose program ignores SIGTERM: nothing stopped it.
+      await shutdown(
+        [
+          "-e",
+          "process.on('SIGTERM', () => {}); const fs = require('fs'); fs.writeFileSync('pid.tmp', String(process.pid)); " +
+            "fs.renameSync('pid.tmp', 'pid'); setInterval(() => {}, 1000)",
+        ],
+        "running",
+      );
+      for (const name of ["left", "pid"]) pids.push(Number(await readFile(join(root, name), "utf8")));
+      // Killed before close() returned; reaped a moment after its parent exited.
+      await until(() => pids.every((pid) => !alive(pid)), 2_000);
+      expect(pids.filter(alive)).toEqual([]);
+    } finally {
+      // Left by a failure, they would outlive the test.
+      for (const pid of pids) if (pid > 0 && alive(pid)) process.kill(pid, "SIGKILL");
+    }
+  }, 30_000);
 
   // POSIX only: a Windows pipe takes the write into its buffer rather than
   // failing it, so there is no EPIPE to survive there.

@@ -70,9 +70,12 @@ kernel at send time, scoped by host and capability, and never returned to the
 caller ([P4](../ROADMAP.md#p4--credentials-and-api-effects)). Other adapters
 still use the ambient process environment, so an agent that can reach the
 kernel can reach whatever the kernel's process can. Its programs see less of
-it: the terminal passes an allowlist, and the computer adapter's helpers start
+it: the terminal passes an allowlist, the computer adapter's helpers start
 without `MELRA_PAYLOAD_KEY`, `MELRA_HTTP_TOKEN` or any variable a credential is
-read from. Authenticating identity is
+read from, and the browser MELRA launches and the agent `melra launch` starts
+get neither of the first two (enforced mode warns while either is set at all,
+since a process of the same OS user can read MELRA's own environment).
+Authenticating identity is
 [P2](../ROADMAP.md#p2--hard-capability-boundary) work, listed here because the
 lifecycle is the contract even where the implementation is still one step.
 
@@ -268,6 +271,12 @@ The 256-bit key comes from one of two sources:
   payloads. A start without `MELRA_PAYLOAD_KEY` that finds sealed payloads and
   no key file is refused with `payload_key_missing` rather than given a new key
   that could open none of them.
+
+The file is the supported source in enforced mode: any process running as the
+same OS user can read MELRA's environment, so a start there with
+`MELRA_PAYLOAD_KEY` (or `MELRA_HTTP_TOKEN`) set warns, and so does
+`melra doctor`. The file's bytes are decoded without becoming a string and
+cleared once read.
 
 On Unix, an existing key with group/other permissions is rejected. Symlinks and
 non-regular key files are rejected. A key from either source that cannot open

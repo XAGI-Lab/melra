@@ -1,12 +1,38 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: AGPL-3.0-only
 
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { link, lstat, mkdir, mkdtemp, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { link, lstat, mkdir, mkdtemp, open, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Verifier, type PredicateVerifier, type VerificationContext } from "./index.js";
+
+// `after`, once set, runs when the first `stat` or `open` of its path returns;
+// each still does the real one.
+const lookups = vi.hoisted(() => ({
+  after: undefined as { path: string; then: () => Promise<void> } | undefined,
+}));
+vi.mock("node:fs/promises", async (actual) => {
+  const fs = await actual<typeof import("node:fs/promises")>();
+  const looked = async <T>(path: unknown, answer: Promise<T>): Promise<T> => {
+    const value = await answer;
+    const after = lookups.after;
+    if (after !== undefined && String(path) === after.path) {
+      lookups.after = undefined;
+      await after.then();
+    }
+    return value;
+  };
+  return {
+    ...fs,
+    stat: (...args: Parameters<typeof fs.stat>) => looked(args[0], fs.stat(...args)),
+    open: (...args: Parameters<typeof fs.open>) => looked(args[0], fs.open(...args)),
+  };
+});
 
 const roots: string[] = [];
 
@@ -305,6 +331,106 @@ describe("Verifier", () => {
       ["no", false, false],
       ["verification_probe_unavailable", true, true],
     ]);
+  });
+
+  // POSIX only: Windows has no FIFOs.
+  it.skipIf(process.platform === "win32")("never waits on a FIFO put in place of the file it checked", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-verifier-")));
+    roots.push(root);
+    const path = join(root, "f.txt");
+    await writeFile(path, "checked");
+    const verifier = await Verifier.create(root);
+    // Swapped as the first lookup by name after the check returns: a stat and
+    // then a stream opened by name waited on the FIFO for a writer that never
+    // came. Opened once, the file checked is the one hashed. Moved aside, not
+    // removed, so on Linux the descriptor's name is still in the workspace.
+    lookups.after = {
+      path,
+      then: async () => {
+        await rename(path, join(root, "aside"));
+        spawnSync("mkfifo", [path]);
+      },
+    };
+    const outcome = verifier.verify([{ type: "file_hash", path: "f.txt", sha256: "0".repeat(64) }], {});
+    try {
+      const settled = await Promise.race([
+        outcome.then(({ evidence }) => evidence[0]?.digest),
+        new Promise((resolve) => setTimeout(() => resolve("still waiting after 5 s"), 5_000)),
+      ]);
+      expect(settled).toBe(createHash("sha256").update("checked").digest("hex"));
+    } finally {
+      lookups.after = undefined;
+      // Lets a reader still waiting on the FIFO go, so nothing outlives the test.
+      await open(path, constants.O_WRONLY | constants.O_NONBLOCK).then((handle) => handle.close(), () => undefined);
+      await outcome.catch(() => undefined);
+    }
+  }, 30_000);
+
+  // POSIX only: a link needs a privilege on Windows, where nothing checks the
+  // descriptor either, and there are no FIFOs.
+  it.skipIf(process.platform === "win32")("judges what it opens, not a link or a FIFO put there after the check", async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), "melra-verifier-")));
+    roots.push(base);
+    const root = join(base, "ws");
+    await mkdir(join(root, "dir"), { recursive: true });
+    await mkdir(join(base, "outside"));
+    const path = join(root, "dir", "f.txt");
+    await writeFile(join(base, "outside", "f.txt"), "outside");
+    const outside = createHash("sha256").update("outside").digest("hex");
+    let swap: (() => Promise<void>) | undefined;
+    let checks = 0;
+    const verifier = await Verifier.create(root, {
+      // The third is the last check by name: the path as spelled, the part of
+      // it that exists, then the path resolved through links.
+      reserved: async () => {
+        checks += 1;
+        if (checks === 3) await swap?.();
+        return false;
+      },
+    });
+    const swaps: Record<string, [() => Promise<void>, string]> = {
+      // Opened through the link, the file outside was hashed, and matched.
+      link: [
+        async () => {
+          await rename(join(root, "dir"), join(root, "moved"));
+          await symlink(join(base, "outside"), join(root, "dir"));
+        },
+        "verification_path_outside_workspace",
+      ],
+      fifo: [
+        async () => {
+          await rm(path);
+          spawnSync("mkfifo", [path]);
+        },
+        "workspace path is not a regular file",
+      ],
+    };
+    for (const [name, [then, summary]] of Object.entries(swaps)) {
+      await rm(join(root, "dir"), { recursive: true, force: true });
+      await rm(join(root, "moved"), { recursive: true, force: true });
+      await mkdir(join(root, "dir"));
+      await writeFile(path, "checked");
+      [swap, checks] = [then, 0];
+      const { evidence } = await verifier.verify([{ type: "file_hash", path: "dir/f.txt", sha256: outside }], {});
+      expect(evidence[0], name).toMatchObject({ passed: false, summary });
+    }
+  });
+
+  // POSIX only: no Unix socket in the Windows file system.
+  it.skipIf(process.platform === "win32")("fails file_hash of a Unix socket as not a regular file, not inconclusive", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-verifier-")));
+    roots.push(root);
+    const server = createServer();
+    await new Promise<void>((resolve) => server.listen(join(root, "s.sock"), resolve));
+    try {
+      const verifier = await Verifier.create(root);
+      const { evidence } = await verifier.verify([{ type: "file_hash", path: "s.sock", sha256: "0".repeat(64) }], {});
+      // The open itself fails on a socket, and its errno read as "could not tell".
+      expect(evidence[0]).toMatchObject({ passed: false, summary: "workspace path is not a regular file" });
+      expect(evidence[0]?.inconclusive).toBeUndefined();
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
   });
 
   it("answers a path under a regular file as absent", async () => {

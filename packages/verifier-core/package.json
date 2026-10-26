@@ -25,6 +25,7 @@
     "typecheck": "tsc -p tsconfig.test.json"
   },
   "dependencies": {
+    "@melra/file-runtime": "workspace:*",
     "@melra/protocol": "workspace:*",
     "@melra/receipt-schema": "workspace:*"
   }

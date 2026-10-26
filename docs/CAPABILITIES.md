@@ -129,7 +129,20 @@ Actions: `list`, `read`, `stat`, `hash`, `write`, `move`, `delete`, `mkdir`.
   definitions, are unchanged, and an approved terminal command can still write
   any of them.
 - Reads and writes are size-bounded by local policy.
-- Writes use a temporary sibling file followed by an atomic rename.
+- A `read` or `hash`, and `file_hash` evidence, opens the file once and
+  judges what it opened: anything but a regular file is refused
+  (`file_read_requires_regular_file`, `file_hash_requires_regular_file`, or a
+  failed `file_hash`) without waiting on it, and a `read` or `hash` takes no
+  more than the size limit, however the file grows meanwhile. On macOS the
+  path is judged with its links resolved, so a link already in it is judged by
+  where it leads (`path_outside_workspace` when that is outside), and then
+  opened following no link, so one that appears in between fails
+  `path_changed`; on Linux where the descriptor leads is judged again after the
+  open. Windows has the single open only.
+- Writes use a temporary sibling file followed by an atomic rename. On macOS
+  the folder is judged with its links resolved and the file created there
+  following no link, so a link that appears in between fails the write with
+  `path_changed`.
 - `encoding: "base64"` content must be base64 (line breaks, missing padding and
   the URL-safe alphabet allowed), or the write is refused before anything lands
   (`file_content_invalid_base64`).
@@ -183,6 +196,12 @@ Actions: `run`, `start`, `status`, `output`, `stop`, `send`.
   or not, use only a repository inside the workspace (a global option before
   the subcommand makes the call a mutation that needs approval)
   ([deployment modes](INSTALLATION.md#deployment-modes)).
+- A `run` is over when its program is: what it left in its process group gets
+  SIGTERM, then SIGKILL a second later if it is still there (POSIX; Windows
+  has no groups). MELRA does not exit before that second is out, a one-shot
+  `melra run` included, and its shutdown stops a run still going as it stops a
+  background job. A process that leaves its group, with `setsid` for one, is
+  not reached.
 - Background jobs are supervised only for the life of the server process.
 
 A job started with `interactive: true` keeps stdin open, and `send` writes a line
@@ -332,6 +351,12 @@ Actions: `navigate`, `back`, `forward`, `reload`, `inspect`, `wait`, `click`,
 - In enforced mode, `navigate` and `tab_new` to a public host that
   `allowedDomains` admits only through `"*"` need an operator's approval
   (`network_read_unlisted_host`); a host the policy names needs none.
+- The browser MELRA launches has WebRTC's UDP turned off
+  (`--webrtc-ip-handling-policy=disable_non_proxied_udp`), in every mode, so
+  page script cannot send UDP around these checks, STUN included, and its
+  WebRTC over TCP, through a TURN server, goes through them; a page that needs
+  WebRTC over UDP does not get it. A browser attached over CDP keeps its own
+  setting.
 - Confines uploaded files to the workspace, never MELRA's own data directory
   except its artifacts, nor the browser profile, an HTTP archive or a
   credential's file, and downloaded files to the artifact directory.
@@ -340,10 +365,11 @@ Actions: `navigate`, `back`, `forward`, `reload`, `inspect`, `wait`, `click`,
   stays logged in across runs. Unset, every run gets a throwaway profile.
 - `MELRA_BROWSER_HAR_PATH` records the session as an HTTP archive, response
   bodies included, and `MELRA_BROWSER_HAR_REPLAY` serves a later run entirely
-  from that file. A replayed run opens no sockets, so a request the archive does
-  not contain is aborted rather than fetched — a rerun cannot quietly become a
-  live one. The two cannot be combined, and neither works against a browser
-  attached over CDP.
+  from that file. A request the archive does not contain is aborted rather
+  than fetched — a rerun cannot quietly become a live one — and what never
+  reaches a request route, a WebSocket or WebRTC over TCP, goes through the
+  same destination checks as in a live run. The two cannot be combined, and
+  neither works against a browser attached over CDP.
 
 Captchas are detected and reported, never solved.
 
@@ -511,7 +537,7 @@ Action: `info`. Returns local runtime capability information without mutation.
 | `result_contains` | string or serialized-result containment |
 | `file_exists` | root-confined filesystem existence |
 | `file_absent` | root-confined filesystem absence |
-| `file_hash` | exact SHA-256 |
+| `file_hash` | exact SHA-256 of a regular file, read from the one descriptor it judged (see [Files](#files)) |
 | `exit_code` | terminal process exit code |
 | `url_matches` | anchored URL glob (`*` wildcard) |
 | `page_contains` | inspected page text |
