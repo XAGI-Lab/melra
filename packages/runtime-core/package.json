@@ -1,6 +1,6 @@
 {
   "name": "@melra/runtime-core",
-  "version": "0.4.0-alpha.0",
+  "version": "0.4.0-alpha.1",
   "description": "Durable task and workflow execution, recovery, budgets, retries, and verification for MELRA.",
   "license": "AGPL-3.0-only",
   "repository": {
