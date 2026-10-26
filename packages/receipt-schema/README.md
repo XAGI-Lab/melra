@@ -32,6 +32,10 @@ goes to the live caller only; the durable copy is the redacted one. A new field
 that can carry a secret must pass through this, or through the memory package's
 equivalent, before it reaches storage.
 
+`wildcardMatch(value, pattern)` is the `*` pattern match policy grants,
+credential delegations and `url_matches` share: `*` stands for any run of
+characters on one line, and the answer comes in time linear in the input.
+
 Requires Node.js 22 or newer. Full documentation:
 [github.com/XAGI-Lab/melra](https://github.com/XAGI-Lab/melra)
 

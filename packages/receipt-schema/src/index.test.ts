@@ -3,6 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  SECRET_PATTERNS,
   canonicalJson,
   createCertificate,
   evidenceStrength,
@@ -10,6 +11,7 @@ import {
   redactSecrets,
   redactStructuredValue,
   sha256,
+  wildcardMatch,
 } from "./index.js";
 
 describe("receipt and certificate primitives", () => {
@@ -414,6 +416,93 @@ describe("receipt and certificate primitives", () => {
     }
   });
 
+  it("takes time that grows with the text, not faster, in every secret pattern, redactArgv and wildcardMatch", () => {
+    // Synthetic, and assembled at run time so no literal here reads as a
+    // leaked credential to a secret scanner.
+    const fill = (n: number) => "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0".repeat(3).slice(0, n);
+    // A secret of each pattern's shape, in SECRET_PATTERNS order. Every prefix
+    // of one, repeated, is text where a match starts many times.
+    const samples = [
+      [`-----BEGIN RSA ${"PRIVATE"} KEY-----\nMII${fill(8)}\n-----END RSA ${"PRIVATE"} KEY-----`],
+      [`${"AKIA"}ABCDEFGHIJKLMNOP`],
+      [`${"eyJ"}-${fill(8)}.${"eyJ"}-${fill(8)}.${fill(8)}`],
+      [`${"xoxb"}-${fill(12)}`],
+      [`${"ghp"}_${fill(20)}`, `${"github"}_pat_${fill(22)}`],
+      [`${"sk"}-${fill(16)}`],
+      [`${"npm"}_${fill(36)}`, `${"AIza"}${fill(35)}`],
+      [`Bearer ${fill(16)}==`],
+      [`Authorization: Basic ${fill(16)}`, `authorization: digest a=${fill(8)}`, `Authorization: ${fill(16)}`],
+      [`db_password_x: str = "${fill(8)}"`, `password: |\n  ${fill(8)}\n`],
+      [`api_key: |\n  ${fill(8)}\n\n  ${fill(8)}`, `x-access-token="${fill(8)}"`],
+      [`a+b-c.d://{user}:${fill(8)}@host`],
+      [`https://${fill(20)}@host`],
+    ];
+    // A new pattern comes with a sample here, so it is scanned too.
+    expect(samples).toHaveLength(SECRET_PATTERNS.length);
+    const repeated = (sample: string, size: number) =>
+      Array.from({ length: sample.length }, (_, at) =>
+        sample.slice(0, at + 1).repeat(Math.ceil(size / (at + 1))).slice(0, size),
+      );
+    // Each run timed at two sizes, after its text is built, at its fastest of
+    // three. Eight times the text is about eight times the time when it is
+    // linear and 64 when it is quadratic. Three times the growth of the text,
+    // measured from at least a millisecond, leaves room for a loaded runner.
+    const growsLinearly = (label: string, prepare: (size: number) => () => void) => {
+      const [small, large] = [4_000, 32_000].map((size) => {
+        const run = prepare(size);
+        let fastest = Infinity;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const started = performance.now();
+          run();
+          fastest = Math.min(fastest, performance.now() - started);
+        }
+        return fastest;
+      });
+      expect(large!, label).toBeLessThan(24 * Math.max(small!, 1));
+    };
+    SECRET_PATTERNS.forEach(([pattern, replacement], index) => {
+      growsLinearly(`SECRET_PATTERNS[${index}]`, (size) => {
+        const texts = samples[index]!.flatMap((sample) => repeated(sample, size));
+        return () => {
+          for (const text of texts) text.replace(pattern, replacement);
+        };
+      });
+    });
+    growsLinearly("redactArgv", (size) => {
+      // A flag name made of credential words, as the value of a flag, and an
+      // argument of each other shape redactArgv reads, at the same length.
+      const words = "token-".repeat(size / 6);
+      const argv = [
+        "curl",
+        `--${words}`,
+        `--${words}`,
+        `-u${words}`,
+        `-H${words}`,
+        `${"TOKEN".repeat(size / 5)}x`,
+        "//:a".repeat(size / 4),
+      ];
+      return () => redactArgv(argv);
+    });
+    growsLinearly("wildcardMatch", (size) => {
+      const pairs: Array<[string, string]> = [
+        // Stars that could each start at any slash.
+        [`https://${"/".repeat(size)}`, "https://*/*/*/*.html"],
+        [`https://${"/".repeat(size)}.html`, "https://*/*/*/*x*.html"],
+        // A run that almost fits at every start.
+        ["a".repeat(size), `*${"a".repeat(size / 8)}b*`],
+        // A star for every few characters, and lines no star may cross.
+        ["ab".repeat(size / 2), `${"*a".repeat(size / 8)}*c*b`],
+        ["a\n".repeat(size / 2), "*a*a*b*"],
+      ];
+      return () => {
+        for (const [value, pattern] of pairs) {
+          wildcardMatch(value, pattern);
+          wildcardMatch([...value], [...pattern]);
+        }
+      };
+    });
+  }, 30_000);
+
   it("reads an authorization value only when it has the shape of one", () => {
     for (const text of [
       "const headers = { authorization: process.env.API_TOKEN_V2 };",
@@ -509,5 +598,68 @@ describe("receipt and certificate primitives", () => {
     }).value as { operation: { args: string[] }; nested: { args: Record<string, string> } };
     expect(redacted.operation.args).toEqual(["check", "--token=[REDACTED_SENSITIVE_ARG]"]);
     expect(redacted.nested.args.not).toBe("[REDACTED_SENSITIVE_FIELD]");
+  });
+});
+
+describe("wildcardMatch", () => {
+  // The regex grants, credential hosts and url_matches were matched with
+  // before, kept here only to compare against: url_matches with the `u` flag,
+  // policy without it.
+  const regexMatch = (value: string, pattern: string, flags: string) =>
+    new RegExp(`^${pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replaceAll("\\*", ".*")}$`, flags).test(value);
+
+  it("answers as the regex it replaced, by UTF-16 unit and by code point", () => {
+    // xorshift32: the same pairs on every run.
+    let state = 2_026;
+    const random = () => {
+      state ^= state << 13;
+      state ^= state >>> 17;
+      state ^= state << 5;
+      return (state >>> 0) / 4_294_967_296;
+    };
+    // Regex syntax, the four line terminators, and both halves of a pair.
+    const pieces = [
+      "a", "b", "ab", "/", ".", "\\", "?", "$", "(", "[", "\n", "\r", "\u2028", "\u2029", "\uD83D", "\uDE42", "🙂", "é",
+    ];
+    const text = (most: number) => {
+      let out = "";
+      for (let i = Math.floor(random() * (most + 1)); i > 0; i--) out += pieces[Math.floor(random() * pieces.length)];
+      return out;
+    };
+    const differ: string[] = [];
+    let matched = 0;
+    let byUnitOnly = 0;
+    for (let n = 0; n < 50_000; n++) {
+      let pattern = "";
+      for (let i = Math.floor(random() * 8); i > 0; i--) pattern += random() < 0.3 ? "*" : text(1);
+      // Half are the pattern with its stars filled in, so many of them match.
+      const value = random() < 0.5 ? pattern.replace(/\*/g, () => text(2)) : text(8);
+      const byUnit = wildcardMatch(value, pattern);
+      const byCodePoint = wildcardMatch([...value], [...pattern]);
+      if (byUnit !== regexMatch(value, pattern, "") || byCodePoint !== regexMatch(value, pattern, "u")) {
+        differ.push(JSON.stringify([value, pattern]));
+      }
+      if (byUnit) matched += 1;
+      if (byUnit && !byCodePoint) byUnitOnly += 1;
+    }
+    expect(differ).toEqual([]);
+    // The pairs reach both answers, and the two ways of reading a pair.
+    expect(matched).toBeGreaterThan(10_000);
+    expect(byUnitOnly).toBeGreaterThan(20);
+  });
+
+  it("never lets a star take a line terminator, or half of a surrogate pair by code point", () => {
+    for (const terminator of ["\n", "\r", "\u2028", "\u2029"]) {
+      expect(wildcardMatch(`a${terminator}b`, "a*b")).toBe(false);
+      expect(wildcardMatch(`a${terminator}b`, "*")).toBe(false);
+      expect(wildcardMatch(`a${terminator}b`, `a*${terminator}*b`)).toBe(true);
+    }
+    // 🙂 is a high and a low surrogate. By unit a star takes the low one; by
+    // code point it takes the whole character or none of it.
+    expect(wildcardMatch("🙂x", "\uD83D*x")).toBe(true);
+    expect(wildcardMatch([..."🙂x"], [..."\uD83D*x"])).toBe(false);
+    expect(wildcardMatch([..."🙂x"], [..."*x"])).toBe(true);
+    expect(wildcardMatch("https://example.com/a/b.html", "https://*/*/*.html")).toBe(true);
+    expect(wildcardMatch("https://example.com/b.html", "https://*/*/*.html")).toBe(false);
   });
 });

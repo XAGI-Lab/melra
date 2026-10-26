@@ -710,8 +710,9 @@ export type ApprovalResponse = z.infer<typeof ApprovalResponseSchema>;
  * operator rather than derived from a credential.
  *
  * `capability` and `target` are matched against what `classifyOperation`
- * reports, with `*` standing for any run of characters, so `file.*` over
- * `/repo/build/*` grants file work inside one directory and nothing else. An
+ * reports, with `*` standing for any run of characters on one line (a lone `*`
+ * matches every value), so `file.*` over `/repo/build/*` grants file work
+ * inside one directory and nothing else. An
  * empty grant list means no capability narrowing is configured — the rest of
  * policy still applies. A non-empty list is a closed world: an effect with no
  * matching grant is denied before any allowlist is consulted.
@@ -797,7 +798,10 @@ export const CredentialDefinitionSchema = z
         scheme: z.string().max(64).optional(),
       })
       .strict(),
-    /** Hosts the secret may be sent to. `*` matches any run of characters. */
+    /**
+     * Hosts the secret may be sent to. `*` matches any run of characters on
+     * one line, and `*` alone every host.
+     */
     hosts: z.array(z.string().min(1).max(256)).min(1).max(64),
     /**
      * Matched against `<capability>:<target>` as `classifyOperation` reports

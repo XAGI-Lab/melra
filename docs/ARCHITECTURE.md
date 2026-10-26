@@ -140,6 +140,10 @@ any allowlist: authority comes first, because the allowlists describe what a
 grant holder may do, not whether they hold one. A grant is matched against the
 immediate principal, which is a link the caller declares, so it narrows what a
 cooperating caller can reach rather than standing between it and the effect.
+Its patterns, a credential's `hosts` and `capability`, and `url_matches` share
+one `*` match, `wildcardMatch` in `@melra/receipt-schema`, which runs in time
+linear in its input, as the secret patterns do, so a value a caller chooses
+cannot hold the event loop there.
 
 ## Execution boundaries
 

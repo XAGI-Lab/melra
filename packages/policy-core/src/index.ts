@@ -5,7 +5,7 @@ import { readFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, normalize, relative, resolve, sep } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { isIP } from "node:net";
-import { evidenceStrength } from "@melra/receipt-schema";
+import { evidenceStrength, wildcardMatch } from "@melra/receipt-schema";
 import { hostOf, isPrivateAddress } from "./network-policy.js";
 import type {
   ApprovalChallenge,
@@ -1045,11 +1045,6 @@ export function unlistedProbe(predicate: EvidencePredicate, policy: LocalPolicy)
 }
 
 /**
- * `*` stands for any run of characters; everything else is literal. Enough for
- * `file.*` and `/repo/build/*`, and small enough that a policy author can
- * predict what it matches.
- */
-/**
  * A file path as the file runtime will resolve it, for matching against a
  * grant's target. Raw, `docs/../.env` matched a `docs/*` grant and then read
  * `.env`. Normalised by this platform's rules, the ones the runtime resolves
@@ -1067,12 +1062,14 @@ function grantTarget(pattern: string, classified: ClassifiedForGrant): string {
   return classified.capability.startsWith("file.") ? grantPath(pattern) : pattern;
 }
 
+/**
+ * `*` stands for any run of characters on one line, and a pattern that is just
+ * `*` for every value; everything else is literal. Enough for `file.*` and
+ * `/repo/build/*`, and small enough that a policy author can predict what it
+ * matches.
+ */
 function patternMatches(pattern: string, value: string): boolean {
-  if (pattern === "*") return true;
-  const escaped = pattern
-    .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-    .replaceAll("\\*", ".*");
-  return new RegExp(`^${escaped}$`).test(value);
+  return pattern === "*" || wildcardMatch(value, pattern);
 }
 
 /**
