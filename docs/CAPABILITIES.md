@@ -82,10 +82,13 @@ Node types: `operation`, `approval`, `condition`, `parallel`, `bounded_loop`,
 - Compensations unwind newest effect first, one at a time, across as many
   providers as the saga touched. An unwind that cannot finish stops and reports
   `workflow_compensation_incomplete:<node>`. A failed step, or one denied
-  before it runs, starts the unwind, unless another step's outcome is unknown:
-  then the run halts as `recovery_required` until that step is settled by its
-  `reconciliation`, and `workflow cancel` is the way out for a step that
-  declares none. A denied compensation stops the unwind.
+  before it runs, starts the unwind, unless another step's outcome is unknown
+  or an undecided condition has an effect under its keys (#331): then the run
+  halts or stays `running` with compensations parked until the condition is
+  decided, and halts with `workflow_condition_branch_conflict` if the answer
+  conflicts with what ran. A step whose outcome is unknown is settled by its
+  `reconciliation`, and `workflow cancel` is the way out for a step that declares
+  none. A denied compensation stops the unwind.
 - Definitions allow at most 500 nodes, 100 dependencies per node, 20 parallel
   branches, and 100 loop iterations.
 - A `semantic` predicate is refused in any node
