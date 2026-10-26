@@ -9,6 +9,8 @@ import {
   CLIENTS,
   clientConfig,
   clientConfigPath,
+  denyRulesText,
+  replaceFile,
   resolveClient,
   writeClientConfig,
 } from "../src/clients.js";
@@ -556,5 +558,45 @@ describe("client configs", () => {
     const { backup } = await writeClientConfig(path, clientConfig("continue", entry), "continue");
     expect(await readFile(path, "utf8")).toBe(clientConfig("continue", entry));
     expect(await readFile(backup ?? "", "utf8")).toBe("name: stale\n");
+  });
+
+  it("adds deny rules to Claude Code settings as a union, keeping every rule and key there", async () => {
+    const folder = join(await scratch(), ".claude");
+    const path = join(folder, "settings.local.json");
+    expect(await denyRulesText(path, ["Bash", "Edit"])).toEqual({
+      next: '{\n  "permissions": {\n    "deny": [\n      "Bash",\n      "Edit"\n    ]\n  }\n}\n',
+    });
+    const original = '{\n  "model": "x",\n  "permissions": {\n    "allow": ["Bash(npm test)"],\n    "deny": ["Read(./.env)", "Edit"]\n  }\n}\n';
+    await mkdir(folder);
+    await writeFile(path, original);
+    const { existing, next } = await denyRulesText(path, ["Bash", "Edit", "Write"]);
+    expect(existing).toBe(original);
+    expect(next.startsWith('{\n  "model": "x",\n  "permissions": {\n    "allow": ["Bash(npm test)"],\n')).toBe(true);
+    expect(JSON.parse(next)).toEqual({
+      model: "x",
+      permissions: { allow: ["Bash(npm test)"], deny: ["Read(./.env)", "Edit", "Bash", "Write"] },
+    });
+    expect(await replaceFile(path, existing, next)).toEqual({ backup: `${path}.bak` });
+    expect(await readFile(`${path}.bak`, "utf8")).toBe(original);
+    // Every rule already there: the file is left as it is.
+    const again = await denyRulesText(path, ["Write", "Bash"]);
+    expect(again.next).toBe(next);
+    expect(await replaceFile(path, again.existing, again.next)).toEqual({ unchanged: true });
+  });
+
+  it("refuses Claude Code settings it cannot merge into exactly", async () => {
+    const path = join(await scratch(), "settings.local.json");
+    for (const [text, why] of [
+      ['{"permissions": {"deny": ["Edit"]}, "permissions": {}}', /"permissions" appears more than once/],
+      ['{"permissions": {"deny": "Bash"}}', /permissions\.deny is not a list of rules/],
+      ['{"permissions": []}', /"permissions" is not an object/],
+      ["[]", /it does not hold a JSON object/],
+      // Claude Code reads it as strict JSON, and would load none of it.
+      ['{\n// note\n"permissions": {}\n}', /strict JSON/],
+      ['{"permissions": {},}', /strict JSON/],
+    ] as const) {
+      await writeFile(path, text);
+      await expect(denyRulesText(path, ["Bash"])).rejects.toThrow(why);
+    }
   });
 });

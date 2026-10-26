@@ -2,12 +2,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { PRODUCT_VERSION } from "@melra/protocol";
+import { claudeManagedDirectory } from "../src/harness.js";
 
 const execute = promisify(execFile);
 const entry = resolve(import.meta.dirname, "../dist/bin.js");
@@ -42,6 +44,7 @@ async function doctor(root: string, extraPath = "") {
       APPDATA: join(root, "AppData"),
       XDG_CONFIG_HOME: join(root, ".config"),
       CODEX_HOME: join(root, ".codex"),
+      CLAUDE_CONFIG_DIR: join(root, ".claude"),
       OPENCLAW_CONFIG_PATH: join(root, ".openclaw", "openclaw.json"),
       HERMES_HOME: join(root, ".hermes"),
       COPILOT_HOME: join(root, ".copilot"),
@@ -68,6 +71,12 @@ describe("doctor clients check", () => {
     expect(check?.detail).toContain("no MCP client config files found");
     expect(check?.detail).toContain("melra setup --client <name> --write");
     expect(report.clients).toEqual([]);
+    // Claude Code is not in play here, so no harness line; unless this
+    // machine has managed Claude Code settings of its own.
+    if (!existsSync(claudeManagedDirectory())) {
+      expect(report.checks.map((item) => item.name)).not.toContain("harness");
+      expect(report).not.toHaveProperty("harness");
+    }
   });
 
   it("reports configured, stale, missing, unparsed, and absent entries without writing", async () => {

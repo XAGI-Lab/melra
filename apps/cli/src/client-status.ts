@@ -72,7 +72,7 @@ export function resolvesOnPath(command: string): boolean {
 const strings = (value: unknown): string[] =>
   Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 
-function launchOf(entry: unknown): string[] | undefined {
+export function launchOf(entry: unknown): string[] | undefined {
   if (!isObject(entry)) return undefined;
   // OpenCode keeps the whole argv in `command`.
   if (Array.isArray(entry.command)) return strings(entry.command);
