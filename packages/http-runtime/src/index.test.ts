@@ -1,6 +1,7 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: AGPL-3.0-only
 
+import { getEventListeners } from "node:events";
 import { createServer, type Server } from "node:http";
 import { createServer as createTcpServer, type AddressInfo, type Socket } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -177,6 +178,22 @@ describe("http runtime", () => {
     );
     controller.abort(new Error("task_budget_exhausted"));
     await expect(pending).rejects.toThrow("task_budget_exhausted");
+  });
+
+  it("reports a sent request cut off by its budget as task_budget_exhausted", async () => {
+    const controller = new AbortController();
+    const pending = runtime().execute(
+      operation({ method: "POST", url: `${origin}/silent`, content: "charge", timeoutMs: 5000 }),
+      controller.signal,
+    );
+    setTimeout(() => controller.abort(new Error("task_budget_exhausted")), 200);
+    await expect(pending).rejects.toThrow("effect_outcome_unknown:task_budget_exhausted");
+  });
+
+  it("leaves no abort listener on the signal once the exchange settles", async () => {
+    const controller = new AbortController();
+    await runtime().execute(operation({ url: `${origin}/orders` }), controller.signal);
+    expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
   });
 
   it("marks the outcome unknown when a sent request goes unanswered", async () => {
