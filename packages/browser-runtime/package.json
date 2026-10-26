@@ -1,6 +1,6 @@
 {
   "name": "@melra/browser-runtime",
-  "version": "0.4.0-alpha.0",
+  "version": "0.4.0-alpha.1",
   "description": "Browser reference effect adapter for the MELRA kernel.",
   "license": "AGPL-3.0-only",
   "repository": {

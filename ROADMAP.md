@@ -503,6 +503,9 @@ is cut once the container pair, `setup --exclusive` / `--managed` and the
 - [x] `melra probe`: checks that must fail inside the box (a workspace write,
       a `MELRA_HOME` read, a public connection) and one that must pass (the
       MELRA socket) (`0.4.0-alpha.0`).
+- [x] Every command MELRA runs in a per-command OS sandbox: Seatbelt on
+      macOS, bubblewrap on Linux, a second account in the container pair;
+      enforced mode refuses to start without one (`0.4.0-alpha.1`).
 - [ ] A recipe for running the agent as a separate OS user, with a socket
       group and per-agent tokens.
 - [ ] `melra exec -- <harness>` on an OS sandbox profile, with MELRA outside

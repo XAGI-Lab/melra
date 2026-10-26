@@ -2,7 +2,7 @@
 
 ## Version status
 
-`0.4.0-alpha.0` is pre-stable. Alpha minor releases may change MCP schemas,
+`0.4.0-alpha.1` is pre-stable. Alpha minor releases may change MCP schemas,
 CLI JSON, SDK methods, package exports, and SQLite data. Patch releases should
 remain backward compatible unless a documented security correction requires a
 break.

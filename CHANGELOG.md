@@ -6,30 +6,34 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0-alpha.1] - 2026-10-27
+
 ### Added
 
-- A per-command OS sandbox: each command the terminal adapter starts can run
-  in one made for it, chosen once at startup by trying a harmless command.
-  Seatbelt on macOS (`sandbox-exec -p` with a deny-default profile),
-  bubblewrap on Linux (with a PID namespace and `--die-with-parent`), or, for
-  a container where MELRA runs as root with `CAP_SETUID` and `CAP_SETGID`,
-  another account (`uid`). In each a command cannot read MELRA's data, the
-  policy file, the secret files or the logins tools keep under home
-  (`~/.ssh`, `~/.aws`, `~/.config/gh`, `~/.npmrc`, `~/.netrc`,
-  `~/.docker/config.json`, `~/.kube`, `~/.gnupg` and more); under `uid` that
-  is the account's own permissions, which MELRA checks at startup. Under
-  Seatbelt and bubblewrap it also writes only in the workspace and temp, makes
-  no symbolic link unless it installs packages or the policy file names it,
-  and reaches no network without the `network` trait: Seatbelt opens it no
-  socket, and with the trait only IP and DNS, while bubblewrap gives it an
-  empty network namespace, where Unix sockets on the filesystem stay
-  reachable. It is on in enforced mode and off in developer mode unless the
-  policy file turns it on. The policy file's `sandbox` key sets `use` (`on`,
-  `off`, `if-available`), `symlinks` (commands that may make links),
-  `readable` (logins to allow back) and `user` (the `uid` sandbox's account).
-  Each receipt names the sandbox beside `mode`, or says `none` where the
-  policy file let enforced mode start without one. See
-  [per-command sandbox](https://github.com/XAGI-Lab/melra/blob/main/docs/INSTALLATION.md#per-command-sandbox).
+- A per-command OS sandbox: each command the terminal adapter starts can run in
+  one made for it, chosen once at startup by trying a harmless command. Seatbelt
+  on macOS (`sandbox-exec -p` with a deny-default profile), bubblewrap on Linux
+  (with a PID namespace and `--die-with-parent`), or, for a container where
+  MELRA runs as root with `CAP_SETUID` and `CAP_SETGID`, another account
+  (`uid`). In each a command cannot read MELRA's data, the policy file, the
+  secret files or the logins tools keep under home (`~/.ssh`, `~/.aws`,
+  `~/.config/gh`, `~/.npmrc`, `~/.netrc`, `~/.docker/config.json`, `~/.kube`,
+  `~/.gnupg` and more); under `uid` that is the account's own permissions, which
+  MELRA checks at startup. Under Seatbelt and bubblewrap it also writes only in
+  the workspace and temp, makes no symbolic link unless it installs packages or
+  the policy file names it, and reaches no network without the `network` trait:
+  Seatbelt opens it no socket, and with the trait only IP and DNS, while
+  bubblewrap gives it an empty network namespace, where Unix sockets on the
+  filesystem stay reachable. It is on in enforced mode and off in developer mode
+  unless the policy file turns it on, and never under unsafe-local. The policy
+  file's `sandbox` key sets `use` (`on`, `off`, `if-available`), `symlinks`
+  (commands that may make links), `readable` (logins to allow back) and `user`
+  (the `uid` sandbox's account). Each receipt from a kernel with the sandbox on
+  names it beside `mode` (`seatbelt`, `bubblewrap`, `uid`), or `none` where
+  `if-available` let enforced mode start without one, and the approval console's
+  task detail shows it; with the sandbox off a receipt has no `sandbox` field.
+  See [per-command
+  sandbox](https://github.com/XAGI-Lab/melra/blob/main/docs/INSTALLATION.md#per-command-sandbox).
 - `melra doctor` has a `sandbox` line: which sandbox works on this host, or
   why none does and how to fix it. It fails where the server would refuse to
   start, and warns where enforced mode starts on the opt-out.
@@ -55,14 +59,24 @@ All notable changes are documented here. The format follows
 - On macOS, a file `read`, `hash` or `write` is judged by the path with its
   links resolved and then opened following no link, so a link that appears in
   between fails with `path_changed`.
+- **Breaking:** with the sandbox on in enforced mode, commands that ran before
+  can now fail. In every backend they cannot read the logins under home unless
+  `sandbox.readable` lists them. Under Seatbelt and bubblewrap they also cannot
+  write outside the workspace and temp, reach the network without the `network`
+  trait, or make symbolic links unless they install packages or
+  `sandbox.symlinks` names them, so a `git checkout` of a repository holding
+  links fails with `EPERM` until git is named. Under Seatbelt setuid programs
+  such as `ps` and `sudo` do not start; under bubblewrap 32-bit binaries and
+  `io_uring` fail with `EPERM`, and what a background job leaves running ends
+  when its program does.
 - **Breaking:** enforced mode refuses to start where no per-command sandbox
-  works (`sandbox_unavailable`, naming why and the fix), and where the policy
-  file turns it off (`enforced_mode_refuses_sandbox_off`): on Windows, on
-  Linux without bubblewrap or unprivileged user namespaces (Ubuntu 24.04 by
-  default), and on a Mac under `examples/deploy/macos/melra.sb`, which macOS
-  will not nest a profile in. `"sandbox": {"use": "if-available"}` in the
-  policy file is the recorded opt-out. Under bubblewrap what a background job
-  leaves running ends when its program does.
+  works (`sandbox_unavailable`, naming why and the fix): on Windows; on Linux
+  where neither bubblewrap (x86_64 or aarch64, with unprivileged user
+  namespaces, which Ubuntu 24.04 restricts by default) nor a `sandbox.user`
+  account works; and on a Mac under `examples/deploy/macos/melra.sb`, which
+  macOS will not nest a profile in. It also refuses where the policy file sets
+  `"use": "off"` (`enforced_mode_refuses_sandbox_off`). `"sandbox": {"use":
+  "if-available"}` in the policy file is the recorded opt-out.
 - **Breaking:** the container pair runs MELRA as root in group `1000` with
   only `CAP_SETUID` and `CAP_SETGID`, its data and policy file in the image's
   root-only `/var/lib/melra` and `/etc/melra`, and each command as `node`;
@@ -91,11 +105,13 @@ All notable changes are documented here. The format follows
   payload key or the HTTP token from MELRA's environment.
 - The payload key file is decoded without the key ever becoming a string, and
   its bytes are cleared once read.
-- Commands MELRA runs in enforced mode no longer have all of MELRA's own
-  rights: the operating system keeps them away from MELRA's records, keys and
-  policy file and from the logins under home, and under Seatbelt or bubblewrap
-  also from writing outside the workspace and temp, from IP networks unless
-  their traits need it, and from making symbolic links.
+- Commands the terminal adapter runs in enforced mode, unless the policy file
+  records the opt-out, no longer have all of MELRA's own rights: the operating
+  system keeps them away from MELRA's records, keys and policy file and from the
+  logins under home, and under Seatbelt or bubblewrap also from writing outside
+  the workspace and temp, from IP networks unless their traits need it, and from
+  making symbolic links unless they install packages or the policy file names
+  them.
 
 ## [0.4.0-alpha.0] - 2026-10-26
 
@@ -4228,7 +4244,8 @@ All notable changes are documented here. The format follows
 - Cross-scope memory overwrite and deletion protection.
 - Patched transitive HTTP adapter enforced through a package override.
 
-[Unreleased]: https://github.com/XAGI-Lab/melra/compare/v0.4.0-alpha.0...HEAD
+[Unreleased]: https://github.com/XAGI-Lab/melra/compare/v0.4.0-alpha.1...HEAD
+[0.4.0-alpha.1]: https://github.com/XAGI-Lab/melra/compare/v0.4.0-alpha.0...v0.4.0-alpha.1
 [0.4.0-alpha.0]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.22...v0.4.0-alpha.0
 [0.3.0-alpha.22]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.21...v0.3.0-alpha.22
 [0.3.0-alpha.21]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.20...v0.3.0-alpha.21
