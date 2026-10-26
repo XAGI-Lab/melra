@@ -447,7 +447,6 @@ export async function serveHttp(
   // A socket has no host or port, so its requests name plain `localhost`.
   let origin =
     socketPath === undefined ? `http://${host}:${port}` : "http://localhost";
-  let boundPort = port;
   /** `Host` values a loopback listener answers; unset until it is listening. */
   let loopbackHosts: Set<string> | undefined;
 
@@ -466,7 +465,7 @@ export async function serveHttp(
     request: IncomingMessage,
     response: ServerResponse,
   ): Promise<void> {
-    if (loopbackHosts !== undefined && !hostAllowed(request, response)) return;
+    if (!hostAllowed(request, response)) return;
     const url = new URL(request.url ?? "/", origin);
     if (pairing !== undefined) {
       await handleApprovals(request, response, url, pairing);
@@ -474,7 +473,6 @@ export async function serveHttp(
     }
     if (await handleOAuth(request, response, url)) return;
     if (url.pathname === "/open" && request.method === "GET") {
-      if (!hostAllowed(request, response)) return;
       const right =
         openCode !== undefined && tokenMatches(openCode, url.searchParams.get("code") ?? undefined);
       // Only the right code learns it was spent: an operator whose link was
@@ -576,9 +574,7 @@ export async function serveHttp(
     const path = url.pathname.replace(/\/mcp$/, "");
     const method = request.method ?? "GET";
     if (!path.startsWith("/.well-known/") && !path.startsWith("/oauth/")) return false;
-    // Everything else needs the token, which a rebound page does not have;
-    // these routes do not.
-    if (!hostAllowed(request, response, "sign-in")) return true;
+    // Host is already checked upfront before routing; sign-in routes need no token.
     try {
       if (path === "/.well-known/oauth-protected-resource") {
         json(response, 200, oauth.resourceMetadata(origin));
@@ -648,17 +644,17 @@ export async function serveHttp(
 
   /**
    * A web page can rename itself to 127.0.0.1 (DNS rebinding) and talk to this
-   * server as its own origin, from the operator's browser, so a route such a
-   * page must not reach answers only to a loopback name. Any port: a rebound
+   * server as its own origin, from the operator's browser, so every route on
+   * a loopback listener answers only to loopback names. Any port: a rebound
    * page keeps its own name whatever the port, and an SSH tunnel arrives on a
    * different one.
    */
-  function hostAllowed(request: IncomingMessage, response: ServerResponse, what = "this"): boolean {
+  function hostAllowed(request: IncomingMessage, response: ServerResponse): boolean {
     const hostname = (request.headers.host ?? "").toLowerCase().replace(/:\d*$/, "");
     if (loopbackHosts === undefined || loopbackHosts.has(hostname)) return true;
     json(response, 421, {
       error: "host_not_allowed",
-      detail: `Use ${origin}; ${what} answers only to this machine's loopback names.`,
+      detail: `Use ${origin}; every route on a loopback listener answers only to this machine's loopback names.`,
     });
     return false;
   }
@@ -670,24 +666,8 @@ export async function serveHttp(
    */
   function originAllowed(request: IncomingMessage, response: ServerResponse): boolean {
     if (loopbackHosts === undefined) return true;
-    const originHeader = request.headers.origin;
-    if (originHeader === undefined) return true;
-    if (typeof originHeader === "string") {
-      try {
-        const parsed = new URL(originHeader);
-        const originHostname = parsed.hostname.toLowerCase();
-        const originPort = Number(parsed.port || (parsed.protocol === "https:" ? 443 : 80));
-        if (
-          parsed.protocol === "http:" &&
-          loopbackHosts.has(originHostname) &&
-          originPort === boundPort
-        ) {
-          return true;
-        }
-      } catch {
-        // Malformed origin
-      }
-    }
+    const origin = request.headers.origin;
+    if (origin === undefined || origin === `http://${request.headers.host ?? ""}`) return true;
     json(response, 403, { error: "origin_not_allowed" });
     return false;
   }
@@ -767,7 +747,6 @@ export async function serveHttp(
     url: URL,
     console_: NonNullable<typeof pairing>,
   ): Promise<void> {
-    if (!hostAllowed(request, response)) return;
     const method = request.method ?? "GET";
     if (method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
       sendConsole(response, true);
@@ -1110,7 +1089,7 @@ export async function serveHttp(
     });
   });
   const address = server.address();
-  boundPort =
+  const boundPort =
     typeof address === "object" && address !== null ? address.port : port;
   const authority = host.includes(":") ? `[${host}]` : host;
   origin = `http://${authority}:${boundPort}`;
