@@ -1,6 +1,6 @@
 # Capabilities and limits
 
-This document describes `0.3.0-alpha.22`.
+This document describes `0.4.0-alpha.0`.
 
 ## MCP tools
 
@@ -188,7 +188,7 @@ Actions: `run`, `start`, `status`, `output`, `stop`, `send`.
 A job started with `interactive: true` keeps stdin open, and `send` writes a line
 to it ([commands that ask a question](INSTALLATION.md#commands-that-ask-a-question)).
 Stdin is a pipe, not a pseudo-terminal: interactive PTY sessions are not
-implemented in `0.3`.
+implemented in `0.4`.
 
 ### Browser
 
@@ -767,5 +767,5 @@ Mutations and destructive operations have one execution attempt.
   (`console_needs_a_browser`), and is never served on a socket or off loopback
   (`approval_console_loopback_only`).
 - Packaged: source, portable Node artifact, Python SDK artifact, Docker image.
-- Not supported in `0.3`: transports bound to a non-loopback interface,
+- Not supported in `0.4`: transports bound to a non-loopback interface,
   multi-tenant hosting.

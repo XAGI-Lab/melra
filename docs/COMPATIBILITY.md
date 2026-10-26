@@ -2,7 +2,7 @@
 
 ## Version status
 
-`0.3.0-alpha.22` is pre-stable. Alpha minor releases may change MCP schemas,
+`0.4.0-alpha.0` is pre-stable. Alpha minor releases may change MCP schemas,
 CLI JSON, SDK methods, package exports, and SQLite data. Patch releases should
 remain backward compatible unless a documented security correction requires a
 break.
@@ -48,8 +48,8 @@ The normative automated clients are:
 
 - Model Context Protocol TypeScript SDK `1.32.x`;
 - Model Context Protocol Python SDK `1.30.x`;
-- `@melra/sdk` `0.3.x` alpha;
-- the repository Python `melra` client `0.3.x` alpha.
+- `@melra/sdk` `0.4.x` alpha;
+- the repository Python `melra` client `0.4.x` alpha.
 
 The TypeScript SDK validates workflow definitions and returned workflow
 records with the shared Zod contracts, and connects over stdio, loopback (or

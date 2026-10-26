@@ -491,17 +491,18 @@ is cut once the container pair, `setup --exclusive` / `--managed` and the
       only built-in tools and MELRA as its only MCP server (`0.3.0-alpha.22`).
 - [x] The file capability refuses the settings files a harness loads at
       session start (`path_harness_config`, `0.3.0-alpha.22`).
-- [ ] A container pair in `examples/deploy`, with a CI smoke test: MELRA holds
+- [x] A container pair in `examples/deploy`, with a CI smoke test: MELRA holds
       the writable workspace and the keys; the agent gets a read-only
-      workspace and an internal network.
-- [ ] `melra setup --exclusive` and `--managed`: a client configuration where
+      workspace and an internal network (`0.4.0-alpha.0`).
+- [x] `melra setup --exclusive` and `--managed`: a client configuration where
       MELRA is the only tool that changes anything, and an admin-managed
-      variant the user cannot turn back off.
-- [ ] A `harness` line in `melra doctor`: whether managed settings are
-      installed, who owns them, and which lock settings are missing.
-- [ ] `melra probe`: checks that must fail inside the box (a workspace write,
+      variant the user cannot turn back off (Claude Code, `0.4.0-alpha.0`).
+- [x] A `harness` line in `melra doctor`: whether managed settings are
+      installed, who owns them, and which lock settings are missing
+      (`0.4.0-alpha.0`).
+- [x] `melra probe`: checks that must fail inside the box (a workspace write,
       a `MELRA_HOME` read, a public connection) and one that must pass (the
-      MELRA socket).
+      MELRA socket) (`0.4.0-alpha.0`).
 - [ ] A recipe for running the agent as a separate OS user, with a socket
       group and per-agent tokens.
 - [ ] `melra exec -- <harness>` on an OS sandbox profile, with MELRA outside
