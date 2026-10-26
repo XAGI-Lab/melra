@@ -328,6 +328,15 @@ All notable changes are documented here. The format follows
   the workspace and temp, from IP networks unless their traits need it, and from
   making symbolic links unless they install packages or the policy file names
   them.
+### Fixed
+
+- Verification reads made through the independent channel (`http_resource_matches`
+  and a registered verifier's `context.probe`) now stop when the task is cancelled
+  or its budget runs out, leaving the item inconclusive, instead of waiting out
+  the predicate's `timeoutMs` (#407). Registered verifiers can read the same
+  signal as `context.signal`. An HTTP mutation cut off by its budget now reports
+  `effect_outcome_unknown:task_budget_exhausted` rather than
+  `effect_outcome_unknown:task_cancelled`.
 
 ## [0.4.0-alpha.0] - 2026-10-26
 
@@ -887,15 +896,6 @@ All notable changes are documented here. The format follows
   `melra run` uses for `verified_success`.
 
 ### Fixed
-
-- `http_resource_matches` verification reads now inherit the task's
-  execution budget and abort signal (#407). A slow or hanging probe read
-  aborts when the task is cancelled or its budget is exhausted, marking the
-  evidence item inconclusive rather than unanswerable, without waiting out
-  the probe's longer timeout. An HTTP mutation cut off by its budget now
-  reports `effect_outcome_unknown:task_budget_exhausted` rather than
-  `effect_outcome_unknown:task_cancelled`.
-
 
 - `melra inspect`, `melra export`, `melra demo`, `melra policy test` and the
   `melra workflow` subcommands find their action and id wherever they sit

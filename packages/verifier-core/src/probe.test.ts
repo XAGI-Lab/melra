@@ -317,4 +317,28 @@ describe("verification through a channel that did not act", () => {
       summary: "task_budget_exhausted",
     });
   });
+
+  it("keeps the task's signal when a verifier passes its own", async () => {
+    const task = new AbortController();
+    const own = new AbortController();
+    let seen: AbortSignal | undefined;
+    const verifier = await Verifier.create(root, {
+      probe: async (request) => {
+        seen = request.signal;
+        task.abort(new Error("task_budget_exhausted"));
+        throw new Error("aborted");
+      },
+      verifiers: [{
+        type: "own_signal",
+        async check(_input, _result, context) {
+          await context.probe!({ url: "https://example.com", method: "GET", timeoutMs: 1000, signal: own.signal });
+          return { passed: true, summary: "read" };
+        },
+      }],
+    });
+    const { evidence } = await verifier.verify([{ type: "own_signal" }], created, { signal: task.signal });
+    expect(seen?.aborted).toBe(true);
+    expect(own.signal.aborted).toBe(false);
+    expect(evidence[0]).toMatchObject({ inconclusive: true, summary: "task_budget_exhausted" });
+  });
 });
