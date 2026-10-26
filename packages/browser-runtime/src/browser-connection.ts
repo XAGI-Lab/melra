@@ -130,6 +130,19 @@ export async function connectBrowser(
   const launchOptions = {
     executablePath,
     headless: options.headless,
+    // No WebRTC UDP: page script can send it to any address (a STUN request
+    // carries data out), and neither the route handler nor the pinning proxy
+    // sees it. In every mode, as service workers are blocked. Not the
+    // `force-` spelling of the switch, which Chrome 155 ignores.
+    args: ["--webrtc-ip-handling-policy=disable_non_proxied_udp"],
+    // Playwright's default is MELRA's own environment: the browser gets it
+    // without the payload key and the HTTP token, as computer-use helpers do.
+    // Matched ignoring case, as Windows matches names.
+    env: Object.fromEntries(
+      Object.entries(process.env).filter(
+        ([name]) => !["MELRA_PAYLOAD_KEY", "MELRA_HTTP_TOKEN"].includes(name.toUpperCase()),
+      ),
+    ),
     ...(options.proxyServer === undefined
       ? {}
       : { proxy: { server: options.proxyServer } }),

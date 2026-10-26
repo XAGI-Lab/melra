@@ -163,6 +163,17 @@ export function claudeLaunchArgv(mcpConfig: string, passed: readonly string[]): 
 }
 
 /**
+ * `environment` for a program MELRA starts that is not MELRA: without
+ * `MELRA_PAYLOAD_KEY` or `MELRA_HTTP_TOKEN`, which a program can read from its
+ * own environment. Matched ignoring case, as Windows matches names.
+ */
+export function withoutKernelSecrets(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return Object.fromEntries(
+    Object.entries(environment).filter(([name]) => !["MELRA_PAYLOAD_KEY", "MELRA_HTTP_TOKEN"].includes(name.toUpperCase())),
+  );
+}
+
+/**
  * The approver as receipts record it: the surface it was given on (`cli:` or
  * `console:`), then a label nothing can disguise.
  */

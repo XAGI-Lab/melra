@@ -1567,6 +1567,39 @@ describe("melra CLI", () => {
     // Six CLI starts, each a fresh Node process; a slow Windows runner took ~3.6 s for one.
   }, 60_000);
 
+  it("warns in enforced mode of a secret in the environment a server started here inherits", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-cli-")));
+    roots.push(root);
+    await mkdir(join(root, "ws"));
+    const environment = async (extra: Record<string, string>) => {
+      const result = await execute(process.execPath, [entry, "doctor"], {
+        cwd: root,
+        env: {
+          ...process.env,
+          MELRA_WORKSPACE: join(root, "ws"),
+          MELRA_HOME: join(root, "data"),
+          MELRA_POLICY: "",
+          MELRA_MODE: "",
+          MELRA_PAYLOAD_KEY: "",
+          MELRA_HTTP_TOKEN: "",
+          ...extra,
+        },
+      }).catch((error: { stdout: string }) => error);
+      const report = JSON.parse(result.stdout) as { checks: Array<{ name: string; status: string }> };
+      return report.checks.find((check) => check.name === "environment");
+    };
+    // Developer mode: nothing to say.
+    expect(await environment({ MELRA_HTTP_TOKEN: "token" })).toBeUndefined();
+    expect(
+      await environment({ MELRA_MODE: "enforced", MELRA_PAYLOAD_KEY: Buffer.alloc(32, 1).toString("base64url") }),
+    ).toEqual({
+      name: "environment",
+      status: "warn",
+      detail: "MELRA_PAYLOAD_KEY is set in MELRA's environment, which any process running as this OS user can read",
+      next: `write the key to ${join(root, "data", "payload.key")} (mode 0600) and unset MELRA_PAYLOAD_KEY`,
+    });
+  }, 30_000);
+
   it("says when a policy file opens loopback destinations in enforced mode", async () => {
     const root = await realpath(await mkdtemp(join(tmpdir(), "melra-cli-")));
     roots.push(root);
@@ -2865,9 +2898,13 @@ describe("melra CLI", () => {
     roots.push(root);
     const bin = join(root, "bin");
     await mkdir(bin);
-    // Stands in for open and xdg-open, writing down the arguments they were given.
+    // Stands in for open and xdg-open, writing down the arguments they were
+    // given and any MELRA_HTTP_TOKEN in their environment.
     for (const name of ["open", "xdg-open"]) {
-      await writeFile(join(bin, name), `#!/bin/sh\nprintf '%s\\n' "$@" > "$OPENED.tmp" && mv "$OPENED.tmp" "$OPENED"\n`);
+      await writeFile(
+        join(bin, name),
+        `#!/bin/sh\nprintf '%s\\n' "$@" "\${MELRA_HTTP_TOKEN-}" > "$OPENED.tmp" && mv "$OPENED.tmp" "$OPENED"\n`,
+      );
       await chmod(join(bin, name), 0o755);
     }
     const opened = join(root, "opened");
@@ -2878,6 +2915,8 @@ describe("melra CLI", () => {
         MELRA_HOME: join(root, ".melra"),
         MELRA_WORKSPACE: root,
         OPENED: opened,
+        // Standing, so the opener could have been handed it in its environment.
+        MELRA_HTTP_TOKEN: "standing-token",
         PATH: `${bin}:${process.env.PATH ?? ""}`,
       },
       stdio: ["ignore", "ignore", "pipe"],
@@ -2892,8 +2931,10 @@ describe("melra CLI", () => {
       expect(token).toBeDefined();
       const argv = await readFile(opened, "utf8");
       expect(argv).not.toContain(token);
+      // The link, then an empty line where the token would be.
+      expect(argv.split("\n").slice(1)).toEqual(["", ""]);
       // And the console still opens from it, once.
-      const link = argv.trim();
+      const link = argv.split("\n")[0]!;
       const first = await fetch(link, { redirect: "manual" });
       expect(first.status).toBe(303);
       expect(first.headers.get("location")).toBe(`/?token=${token}`);

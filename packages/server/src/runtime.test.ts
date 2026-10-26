@@ -1048,6 +1048,30 @@ describe("the payload key (#417)", () => {
     createMelraRuntime({ workspaceRoot: join(base, "workspace"), dataDirectory: join(base, home), environment });
   const keyed = { MELRA_PAYLOAD_KEY: Buffer.alloc(32, 9).toString("base64url") };
 
+  it("warns in enforced mode, and only there, while a secret is in MELRA's own environment", async () => {
+    const warned = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+    try {
+      const said = async (home: string, environment: NodeJS.ProcessEnv) => {
+        warned.mockClear();
+        await (await start(home, environment)).close();
+        return warned.mock.calls.map(([warning]) => String(warning));
+      };
+      expect(await said("developer", { ...keyed, MELRA_HTTP_TOKEN: "token" })).toEqual([]);
+      // Blank is unset, and the key file is the supported place for the key.
+      expect(await said("enforced", { MELRA_MODE: "enforced", MELRA_HTTP_TOKEN: " " })).toEqual([]);
+      const [both] = await said("keyed", { ...keyed, MELRA_MODE: "enforced", MELRA_HTTP_TOKEN: "token" });
+      expect(both).toMatch(/^melra: MELRA_PAYLOAD_KEY and MELRA_HTTP_TOKEN are set in MELRA's environment, /);
+      expect(both).toContain(join(base, "keyed", "payload.key"));
+      // Started all the same: a warning, not a refusal.
+      expect(await said("token", { MELRA_MODE: "enforced", MELRA_HTTP_TOKEN: "token" })).toEqual([
+        "melra: MELRA_HTTP_TOKEN is set in MELRA's environment, which any process running as this OS user can read; " +
+          "unset MELRA_HTTP_TOKEN, so serve makes a random token",
+      ]);
+    } finally {
+      warned.mockRestore();
+    }
+  });
+
   it("is minted for a fresh home", async () => {
     await (await start("fresh", {})).close();
     expect(existsSync(join(base, "fresh", "payload.key"))).toBe(true);

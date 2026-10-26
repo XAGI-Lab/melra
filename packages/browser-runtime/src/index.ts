@@ -664,15 +664,14 @@ export class BrowserRuntime {
     // theatre. An attached CDP browser is already running and cannot be told to
     // start proxying, so the rebinding window stays open there and the option is
     // documented as the weaker path rather than silently equivalent. A replay
-    // opens no sockets at all, so there is nothing to pin.
+    // gets one too: the archive serves its requests, but what never reaches a
+    // route, a WebSocket or WebRTC over TCP, would otherwise go out unchecked.
     // A context that closed (a crash, a closed window) or failed to start left
     // its proxy listening; a relaunch must not start a second one beside it.
     await this.proxy?.close().catch(() => undefined);
     this.proxy = undefined;
     const proxy =
-      this.options.unhinged === true ||
-      this.options.cdpEndpoint !== undefined ||
-      this.options.replayHarPath !== undefined
+      this.options.unhinged === true || this.options.cdpEndpoint !== undefined
         ? undefined
         : await startPinningProxy(this.options);
     this.proxy = proxy;

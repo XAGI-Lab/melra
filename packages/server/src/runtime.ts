@@ -126,6 +126,33 @@ export function assertEnforceable(mode: DeploymentMode, unhinged: boolean): void
 }
 
 /**
+ * What enforced mode warns of, at startup and in `melra doctor`, when MELRA's
+ * own environment holds `MELRA_PAYLOAD_KEY` or `MELRA_HTTP_TOKEN`; undefined
+ * when it holds neither. No program MELRA starts inherits them, but any
+ * process running as the same OS user can read another's environment (`ps
+ * eww`, `/proc/<pid>/environ`), and no sandbox profile hides it the way it can
+ * deny a file. A warning, not a refusal: the compose recipe passes the token
+ * this way.
+ */
+export function environmentSecrets(
+  environment: NodeJS.ProcessEnv,
+  dataDirectory: string,
+): { detail: string; next: string } | undefined {
+  // Blank is unset, as `serveHttp` reads the token.
+  const set = ["MELRA_PAYLOAD_KEY", "MELRA_HTTP_TOKEN"].filter((name) => environment[name]?.trim());
+  if (set.length === 0) return undefined;
+  return {
+    detail: `${set.join(" and ")} ${set.length > 1 ? "are" : "is"} set in MELRA's environment, which any process running as this OS user can read`,
+    next: [
+      ...(set.includes("MELRA_PAYLOAD_KEY")
+        ? [`write the key to ${join(dataDirectory, "payload.key")} (mode 0600) and unset MELRA_PAYLOAD_KEY`]
+        : []),
+      ...(set.includes("MELRA_HTTP_TOKEN") ? ["unset MELRA_HTTP_TOKEN, so serve makes a random token"] : []),
+    ].join("; "),
+  };
+}
+
+/**
  * Where an unconfined runtime is rooted. Unhinged mode lifts workspace
  * confinement by rooting the file and terminal runtimes at the filesystem root
  * rather than by adding a bypass branch inside them, so the confinement code
@@ -609,6 +636,9 @@ export async function createMelraRuntime(
       });
   }, RECOVERY_SWEEP_MS);
   sweep.unref();
+  // Once started: a process that refuses to start has nothing to warn about.
+  const exposed = mode === "enforced" ? environmentSecrets(environment, dataDirectory) : undefined;
+  if (exposed !== undefined) process.emitWarning(`melra: ${exposed.detail}; ${exposed.next}`);
   return {
     controller,
     workflows,

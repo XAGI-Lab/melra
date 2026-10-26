@@ -2,10 +2,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { createHash } from "node:crypto";
-import { createReadStream, type BigIntStats } from "node:fs";
-import { lstat, readdir, realpath, stat } from "node:fs/promises";
+import type { BigIntStats } from "node:fs";
+import { lstat, readdir, realpath, stat, type FileHandle } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { openRegular } from "@melra/file-runtime";
 import type { EvidencePredicate } from "@melra/protocol";
 import { evidenceStrength, redactStructuredValue, wildcardMatch, type EvidenceItem } from "@melra/receipt-schema";
 
@@ -302,20 +303,24 @@ const fileHash: Built<"file_hash"> = {
   type: "file_hash",
   async check(predicate, _result, context) {
     let path: string;
+    let handle: FileHandle | undefined;
     try {
       path = await context.workspacePath(predicate.path);
       // Streamed, so a large artifact is hashed in constant memory; a FIFO or
-      // a device would never end, so only a regular file is read at all.
-      if (!(await stat(path)).isFile()) {
-        return { passed: false, summary: "workspace path is not a regular file", source: context.relative(path) };
-      }
+      // a device would never end, so only a regular file is read at all. From
+      // one descriptor, judged as the path was (`openRegular`), so what is
+      // hashed is what was checked.
+      handle = await openRegular(path, (opened) => context.workspacePath(opened));
     } catch (error) {
       refuseTooLong(error);
       if (!missing(error)) throw error;
       return { passed: false, summary: "workspace path does not exist", source: predicate.path };
     }
+    if (handle === undefined) {
+      return { passed: false, summary: "workspace path is not a regular file", source: context.relative(path) };
+    }
     const hash = createHash("sha256");
-    await pipeline(createReadStream(path), hash);
+    await pipeline(handle.createReadStream(), hash);
     const digest = hash.digest("hex");
     const passed = digest === predicate.sha256;
     return {

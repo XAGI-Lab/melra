@@ -35,6 +35,7 @@ import {
   confinedRoot,
   createMelraRuntime,
   dataLocationAdvice,
+  environmentSecrets,
   narrowWorkspaceAdvice,
   secretFiles,
   secretInsideWorkspace,
@@ -66,6 +67,7 @@ import {
   parseCliEnvironment,
   selfCommand,
   serverLaunch,
+  withoutKernelSecrets,
 } from "./environment.js";
 import { approvalConsole, assertConsoleTerminal, confirmInTerminal } from "./approval-console.js";
 import { clientStatuses, clientsCheck, detectClients } from "./client-status.js";
@@ -639,6 +641,10 @@ async function doctor(env: CliEnvironment): Promise<{
         ? "enforced: no unsafe-local, loopback or Unix socket only, no client self-registration"
         : "developer: MELRA governs what it is asked for; the harness may have another path"),
   });
+  // What the server warns of when it starts in enforced mode, read from this
+  // shell's environment, which a server started from it inherits.
+  const exposed = env.mode === "enforced" ? environmentSecrets(process.env, env.dataDirectory) : undefined;
+  if (exposed !== undefined) checks.push({ name: "environment", status: "warn", ...exposed });
   try {
     // A file passes access() too, and the runtime then fails to start on it.
     if (!(await stat(env.workspaceRoot)).isDirectory()) throw new Error("not a directory");
@@ -1130,10 +1136,18 @@ async function launch(args: string[], env: CliEnvironment): Promise<number> {
     throw new Error(`workspace not found: ${env.workspaceRoot}`);
   }
   const policyPath = await existingPolicyPath(env);
+  // Neither claude nor the server it starts gets the payload key or the HTTP
+  // token. A key held only in the variable has to be in the file first, or
+  // the server would be given a new one beside it (#417).
+  const agentEnvironment = withoutKernelSecrets(process.env);
+  const keyFile = join(env.dataDirectory, "payload.key");
+  if (process.env.MELRA_PAYLOAD_KEY?.trim() && (await lstat(keyFile).catch(() => undefined)) === undefined) {
+    throw new Error(`payload_key_missing: melra launch does not pass MELRA_PAYLOAD_KEY on; write the key to ${keyFile} (mode 0600)`);
+  }
   // The server claude will start, opened and closed here first, so one that
   // would refuse to start stops here, not in claude's log, and the summary
   // lists what it will allow.
-  const melra = await runtime(env, { ...process.env, MELRA_LAUNCHED: "1" });
+  const melra = await runtime(env, { ...agentEnvironment, MELRA_LAUNCHED: "1" });
   const policy = melra.policy;
   await melra.close();
   const self = selfCommand();
@@ -1169,7 +1183,11 @@ async function launch(args: string[], env: CliEnvironment): Promise<number> {
   try {
     const file = join(directory, "mcp.json");
     await writeFile(file, `${JSON.stringify(mcpConfig, null, 2)}\n`, { mode: 0o600 });
-    const child = spawn(claude, claudeLaunchArgv(file, passed), { cwd: env.workspaceRoot, stdio: "inherit" });
+    const child = spawn(claude, claudeLaunchArgv(file, passed), {
+      cwd: env.workspaceRoot,
+      env: agentEnvironment,
+      stdio: "inherit",
+    });
     // Ctrl-C reaches claude from the terminal, and claude decides what it
     // means; this process waits for it, so the file is removed after it.
     // A hangup stops it as SIGTERM does, or this process would die at once and
@@ -1499,6 +1517,7 @@ function openInBrowser(url: string): Promise<boolean> {
         ? ["cmd", "/c", "start", ""]
         : ["xdg-open"];
   const child = spawn(command!, [...prefix, url], {
+    env: withoutKernelSecrets(process.env),
     stdio: "ignore",
     detached: true,
   });
@@ -1572,7 +1591,9 @@ on only a prompt, -p/--print, --model, --output-format, --verbose,
 -c/--continue and -r/--resume, and refuses anything else. --dry-run prints the
 claude command and MCP config instead of running them. CLAUDE_BIN or
 --claude-bin names the claude to run, a relative path from here (default:
-claude in one of PATH's absolute directories).
+claude in one of PATH's absolute directories). Neither claude nor the server
+it starts gets MELRA_PAYLOAD_KEY or MELRA_HTTP_TOKEN, so a payload key must be
+in MELRA_HOME/payload.key.
 
 'melra probe', run inside an agent's box before the agent starts, tries what
 the box should stop and reports each as confined or open: creating and

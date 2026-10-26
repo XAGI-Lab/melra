@@ -6,6 +6,46 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** the browser MELRA launches starts with
+  `--webrtc-ip-handling-policy=disable_non_proxied_udp`, in every mode, so a
+  page's WebRTC no longer sends UDP; a site that needs WebRTC over UDP does not
+  get it there. A browser attached over CDP is unchanged.
+- **Breaking:** `melra launch` gives claude, and so the server claude starts,
+  neither `MELRA_PAYLOAD_KEY` nor `MELRA_HTTP_TOKEN`. With the payload key set
+  only in the variable, it refuses with `payload_key_missing` until the key is
+  in `<MELRA_HOME>/payload.key` (mode `0600`).
+- In enforced mode, MELRA warns at startup, and `melra doctor` warns on a new
+  `environment` line, while `MELRA_PAYLOAD_KEY` or `MELRA_HTTP_TOKEN` is set in
+  its own environment, naming the fix: the key in `payload.key` (mode `0600`),
+  the token left unset. Nothing is refused.
+- When a terminal `run` finishes, what it left in its process group now gets
+  SIGKILL a second after SIGTERM if it is still there (POSIX), and MELRA does
+  not exit before that second is out, a one-shot `melra run` included. Its
+  shutdown also stops a run still going, as it stops a background job.
+- On macOS, a file `read`, `hash` or `write` is judged by the path with its
+  links resolved and then opened following no link, so a link that appears in
+  between fails with `path_changed`.
+
+### Security
+
+- File reads, hashes and `file_hash` evidence open a file once and judge what
+  was opened, so something put in its place after the check can neither hang
+  the read nor be read unless it passes the same check (macOS and Linux;
+  Windows opens once only). On macOS a write's temporary file is created the
+  same way.
+- A process a terminal `run` left in its process group can no longer outlive
+  the run, or MELRA's shutdown, by ignoring SIGTERM.
+- Page script in MELRA's own browser can no longer send data over UDP, outside
+  the destination checks, and a browser replaying an HTTP archive sends what
+  the archive does not serve, such as WebSockets, through those checks.
+- The browser MELRA launches, the agent `melra launch` starts, and the helper
+  `serve --open` and `melra console` open a browser with no longer inherit the
+  payload key or the HTTP token from MELRA's environment.
+- The payload key file is decoded without the key ever becoming a string, and
+  its bytes are cleared once read.
+
 ## [0.4.0-alpha.0] - 2026-10-26
 
 ### Added

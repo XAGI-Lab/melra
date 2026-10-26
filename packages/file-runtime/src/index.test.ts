@@ -2,7 +2,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { constants } from "node:fs";
 import { chmod, link, lstat, mkdir, mkdtemp, open, readdir, readFile, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, join, parse } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -10,9 +13,23 @@ import { FileOperationSchema } from "@melra/protocol";
 import { FileRuntime } from "./index.js";
 
 // Counts the runtime's link and identity lookups; each still does the real one.
-const lookups = vi.hoisted(() => ({ realpath: 0, stat: 0 }));
+// `after`, once set, runs when the first `stat` or `open` of its path returns.
+const lookups = vi.hoisted(() => ({
+  realpath: 0,
+  stat: 0,
+  after: undefined as { path: string; then: () => Promise<void> } | undefined,
+}));
 vi.mock("node:fs/promises", async (actual) => {
   const fs = await actual<typeof import("node:fs/promises")>();
+  const looked = async <T>(path: unknown, answer: Promise<T>): Promise<T> => {
+    const value = await answer;
+    const after = lookups.after;
+    if (after !== undefined && String(path) === after.path) {
+      lookups.after = undefined;
+      await after.then();
+    }
+    return value;
+  };
   return {
     ...fs,
     realpath: (...args: Parameters<typeof fs.realpath>) => {
@@ -21,8 +38,9 @@ vi.mock("node:fs/promises", async (actual) => {
     },
     stat: (...args: Parameters<typeof fs.stat>) => {
       lookups.stat += 1;
-      return fs.stat(...args);
+      return looked(args[0], fs.stat(...args));
     },
+    open: (...args: Parameters<typeof fs.open>) => looked(args[0], fs.open(...args)),
   };
 });
 
@@ -107,6 +125,140 @@ describe("FileRuntime", () => {
     await expect(
       runtime.execute(FileOperationSchema.parse({ kind: "file", action: "hash", path: "dir" })),
     ).rejects.toThrow("file_hash_requires_regular_file");
+  });
+
+  // POSIX only: no Unix socket in the Windows file system.
+  it.skipIf(process.platform === "win32")("refuses a Unix socket as not a regular file, not with the open's errno", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-file-"));
+    roots.push(root);
+    const runtime = await FileRuntime.create({ root });
+    const server = createServer();
+    await new Promise<void>((resolve) => server.listen(join(root, "s.sock"), resolve));
+    try {
+      for (const action of ["read", "hash"] as const) {
+        await expect(
+          runtime.execute(FileOperationSchema.parse({ kind: "file", action, path: "s.sock" })),
+          action,
+        ).rejects.toThrow(`file_${action}_requires_regular_file`);
+      }
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  // POSIX only: Windows has no FIFOs.
+  it.skipIf(process.platform === "win32")("reads the file it checked, not a FIFO put in its place after", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-file-")));
+    roots.push(root);
+    const runtime = await FileRuntime.create({ root });
+    const path = join(root, "f.txt");
+    for (const action of ["read", "hash"] as const) {
+      await rm(path, { force: true });
+      await writeFile(path, "checked");
+      // Swapped as the first lookup by name after the check returns: a check
+      // by name and then an open by name blocked on the FIFO, waiting for a
+      // writer that never came. Moved aside, not removed, so on Linux the
+      // descriptor's name is still in the workspace.
+      lookups.after = {
+        path,
+        then: async () => {
+          await rename(path, join(root, "aside"));
+          spawnSync("mkfifo", [path]);
+        },
+      };
+      const outcome = runtime.execute(FileOperationSchema.parse({ kind: "file", action, path: "f.txt" }));
+      try {
+        const settled = await Promise.race([
+          outcome.then((result) => result.sha256, (error: unknown) => String(error)),
+          new Promise((resolve) => setTimeout(() => resolve("still waiting after 5 s"), 5_000)),
+        ]);
+        expect(settled, action).toBe(createHash("sha256").update("checked").digest("hex"));
+      } finally {
+        lookups.after = undefined;
+        // Lets a reader still waiting on the FIFO go, so nothing outlives the test.
+        await open(path, constants.O_WRONLY | constants.O_NONBLOCK).then((handle) => handle.close(), () => undefined);
+        await outcome.catch(() => undefined);
+      }
+    }
+  }, 30_000);
+
+  // POSIX only: a link needs a privilege on Windows, where nothing checks
+  // the descriptor either.
+  it.skipIf(process.platform === "win32")("never reads through a link put in the path after the check", async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), "melra-file-")));
+    roots.push(base);
+    const root = join(base, "ws");
+    await mkdir(join(root, "dir"), { recursive: true });
+    await mkdir(join(base, "outside"));
+    await writeFile(join(root, "dir", "f.txt"), "checked");
+    await writeFile(join(base, "outside", "f.txt"), "outside");
+    const runtime = await FileRuntime.create({ root });
+    const resolvePath = runtime.resolvePath.bind(runtime);
+    const swap = async () => {
+      await rename(join(root, "dir"), join(root, "moved"));
+      await symlink(join(base, "outside"), join(root, "dir"));
+    };
+    for (const action of ["read", "hash"] as const) {
+      let checks = 0;
+      runtime.resolvePath = async (...args: Parameters<typeof resolvePath>) => {
+        const resolved = await resolvePath(...args);
+        checks += 1;
+        if (checks === 1) await swap();
+        return resolved;
+      };
+      // Opened through the link, it was read outside the workspace. macOS
+      // judges where the link leads before opening, Linux what was opened.
+      await expect(
+        runtime.execute(FileOperationSchema.parse({ kind: "file", action, path: "dir/f.txt" })),
+        action,
+      ).rejects.toThrow("path_outside_workspace");
+      runtime.resolvePath = resolvePath;
+      await rm(join(root, "dir"));
+      await rename(join(root, "moved"), join(root, "dir"));
+    }
+  });
+
+  it.runIf(process.platform === "darwin")("on macOS, follows no link put in the path between the last check and the open", async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), "melra-file-")));
+    roots.push(base);
+    const root = join(base, "ws");
+    await mkdir(join(root, "dir"), { recursive: true });
+    await mkdir(join(base, "outside"));
+    await writeFile(join(root, "dir", "f.txt"), "checked");
+    await writeFile(join(base, "outside", "f.txt"), "outside");
+    const runtime = await FileRuntime.create({ root });
+    const resolvePath = runtime.resolvePath.bind(runtime);
+    // The second check is the last before the open: for a read, of the path
+    // with its links resolved; for a write, of the folder the temporary is
+    // created in.
+    const swapAtSecondCheck = () => {
+      let checks = 0;
+      runtime.resolvePath = async (...args: Parameters<typeof resolvePath>) => {
+        const resolved = await resolvePath(...args);
+        checks += 1;
+        if (checks === 2) {
+          await rename(join(root, "dir"), join(root, "moved"));
+          await symlink(join(base, "outside"), join(root, "dir"));
+        }
+        return resolved;
+      };
+    };
+    const restore = async () => {
+      runtime.resolvePath = resolvePath;
+      await rm(join(root, "dir"));
+      await rename(join(root, "moved"), join(root, "dir"));
+    };
+    swapAtSecondCheck();
+    await expect(
+      runtime.execute(FileOperationSchema.parse({ kind: "file", action: "read", path: "dir/f.txt" })),
+    ).rejects.toThrow("path_changed");
+    await restore();
+    swapAtSecondCheck();
+    await expect(
+      runtime.execute(FileOperationSchema.parse({ kind: "file", action: "write", path: "dir/new.txt", content: "x" })),
+    ).rejects.toThrow("path_changed");
+    await restore();
+    expect(await readdir(join(base, "outside"))).toEqual(["f.txt"]);
   });
 
   it("leaves no temporary copy behind when a write cannot land", async () => {

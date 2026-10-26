@@ -2,18 +2,18 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { createHash, randomBytes } from "node:crypto";
-import type { BigIntStats } from "node:fs";
+import { constants, type BigIntStats } from "node:fs";
 import {
   lstat,
   mkdir,
   open,
-  readFile,
   readdir,
   readlink,
   realpath,
   rename,
   rm,
   stat,
+  type FileHandle,
 } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -301,6 +301,73 @@ async function harnessLinks(anchors: string[]): Promise<HarnessLink[]> {
     [...listed].map(async (at) => ({ to: await realpath(at).catch(() => at), listed: at })),
   );
   return found.filter(({ to, listed }) => to !== listed);
+}
+
+/**
+ * macOS open(2)'s O_NOFOLLOW_ANY: no link is followed anywhere in the path,
+ * which fails ELOOP instead. None elsewhere: on Linux `openRegular` judges
+ * where a descriptor led, and Windows has no O_NOFOLLOW at all.
+ */
+const NOFOLLOW_ANY = process.platform === "darwin" ? 0x20000000 : 0;
+
+/** `open` with no link followed on macOS, one met there named for what it means. */
+async function openUnfollowed(path: string, flags: number, mode?: number): Promise<FileHandle> {
+  try {
+    return await open(path, flags | NOFOLLOW_ANY, mode);
+  } catch (error) {
+    // Resolved without one a moment ago, so one was put there since.
+    if (NOFOLLOW_ANY !== 0 && (error as NodeJS.ErrnoException).code === "ELOOP") throw new Error("path_changed");
+    throw error;
+  }
+}
+
+/**
+ * `path` opened once to read and judged by what was opened, never looked up
+ * by name a second time: a check by name then an open by name read whatever
+ * was put there between the two.
+ *
+ * - O_NONBLOCK, so a FIFO opens at once rather than waiting for a writer, and
+ *   then fails the regular-file check like a device, which would never end.
+ * - macOS: the path with its links resolved is judged, then opened with none
+ *   followed, so a link put in it since fails `path_changed`.
+ * - Linux: where the descriptor was opened, read back from /proc/self/fd, is
+ *   judged after the open. ponytail: a refusal there closes a descriptor on
+ *   what it reached, which drops this process's POSIX locks if that is a
+ *   reserved file, so the check by name before stays the guard; openat2's
+ *   RESOLVE_BENEATH would refuse first, and Node has no binding for it.
+ * - Windows: the open alone, with no O_NOFOLLOW and no /proc.
+ *
+ * `judge` throws for a path the caller may not read. Undefined, closed, when
+ * what was opened is not a regular file.
+ */
+export async function openRegular(
+  path: string,
+  judge: (path: string) => Promise<unknown>,
+): Promise<FileHandle | undefined> {
+  let spelled = path;
+  if (NOFOLLOW_ANY !== 0) {
+    spelled = await realpath(path);
+    await judge(spelled);
+  }
+  let handle: FileHandle;
+  try {
+    handle = await openUnfollowed(spelled, constants.O_RDONLY | (process.platform === "win32" ? 0 : constants.O_NONBLOCK));
+  } catch (error) {
+    // A directory, or a socket (ENXIO, EOPNOTSUPP on macOS), can fail the
+    // open itself: named by a stat, which opens nothing, rather than an errno.
+    if ((error as Error).message === "path_changed") throw error;
+    if ((await stat(spelled).catch(() => undefined))?.isFile() === false) return undefined;
+    throw error;
+  }
+  try {
+    if (process.platform === "linux") await judge(await readlink(`/proc/self/fd/${handle.fd}`));
+    if ((await handle.stat()).isFile()) return handle;
+  } catch (error) {
+    await handle.close();
+    throw error;
+  }
+  await handle.close();
+  return undefined;
 }
 
 /**
@@ -604,6 +671,29 @@ export class FileRuntime {
     return new Set(found.flatMap((entry) => (entry === undefined ? [] : [identity(entry)])));
   }
 
+  /**
+   * The regular file at `path`, through one descriptor (`openRegular`), judged
+   * as `resolvePath` judged it, and never more than `maxFileBytes` of it,
+   * however it grows meanwhile.
+   */
+  private async readRegular(path: string, call: object, refusal: string): Promise<Buffer> {
+    const handle = await openRegular(path, (opened) => this.resolvePath(opened, false, false, false, call));
+    if (handle === undefined) throw new Error(refusal);
+    try {
+      if ((await handle.stat()).size > this.maxFileBytes) throw new Error("file_size_limit_exceeded");
+      const chunks: Buffer[] = [];
+      // `end` is inclusive: one byte past the limit says it was passed.
+      for await (const chunk of handle.createReadStream({ end: this.maxFileBytes, autoClose: false })) {
+        chunks.push(chunk as Buffer);
+      }
+      const buffer = Buffer.concat(chunks);
+      if (buffer.byteLength > this.maxFileBytes) throw new Error("file_size_limit_exceeded");
+      return buffer;
+    } finally {
+      await handle.close();
+    }
+  }
+
   async execute(operation: FileOperation): Promise<Record<string, unknown>> {
     // Every check below is made before anything changes, so one look at the
     // reserved entries serves them all.
@@ -637,10 +727,7 @@ export class FileRuntime {
         };
       }
       case "read": {
-        const metadata = await stat(path);
-        if (!metadata.isFile()) throw new Error("file_read_requires_regular_file");
-        if (metadata.size > this.maxFileBytes) throw new Error("file_size_limit_exceeded");
-        const buffer = await readFile(path);
+        const buffer = await this.readRegular(path, call, "file_read_requires_regular_file");
         return {
           path: relative(this.root, path),
           content:
@@ -669,12 +756,9 @@ export class FileRuntime {
         };
       }
       case "hash": {
-        // Checked before reading, as `read` does: hashing a 1.5 GB pack file
-        // read it all into memory first, and a FIFO blocked forever.
-        const metadata = await stat(path);
-        if (!metadata.isFile()) throw new Error("file_hash_requires_regular_file");
-        if (metadata.size > this.maxFileBytes) throw new Error("file_size_limit_exceeded");
-        const buffer = await readFile(path);
+        // Bounded as `read` is: hashing a 1.5 GB pack file read it all into
+        // memory first, and a FIFO blocked forever.
+        const buffer = await this.readRegular(path, call, "file_hash_requires_regular_file");
         return {
           path: relative(this.root, path),
           size: buffer.byteLength,
@@ -698,9 +782,19 @@ export class FileRuntime {
         // checked target without following it.
         if (target !== path) await this.resolvePath(target, false, true, true, call);
         await mkdir(dirname(target), { recursive: true });
+        // On macOS the folder with its links resolved, judged again as where
+        // the file lands, and both the create and the rename below spell it
+        // so: the create follows no link (`openUnfollowed`), so one put in the
+        // folder's path since fails it, and after it the rename finds no
+        // temporary to move through one.
+        let folder = dirname(target);
+        if (NOFOLLOW_ANY !== 0) {
+          folder = await realpath(folder);
+          await this.resolvePath(join(folder, basename(target)), false, true, true, call);
+        }
         // A short name beside it, not one built from it: the target's own name
         // may already be as long as the file system allows.
-        const temporary = join(dirname(target), `.melra-${randomBytes(6).toString("hex")}.tmp`);
+        const temporary = join(folder, `.melra-${randomBytes(6).toString("hex")}.tmp`);
         // The file it replaces keeps its permissions: a private one stays
         // private and a script stays executable. Written private, then set
         // exactly, past the umask; the setuid, setgid and sticky bits are not
@@ -709,7 +803,11 @@ export class FileRuntime {
         const kept = replaced?.isFile() === true ? replaced.mode & 0o777 : undefined;
         // Only the exclusive create is outside the cleanup: a name already
         // taken is not ours to remove.
-        const handle = await open(temporary, "wx", kept === undefined ? 0o666 : 0o600);
+        const handle = await openUnfollowed(
+          temporary,
+          constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL,
+          kept === undefined ? 0o666 : 0o600,
+        );
         try {
           try {
             await handle.writeFile(buffer);
@@ -719,7 +817,7 @@ export class FileRuntime {
           } finally {
             await handle.close();
           }
-          await rename(temporary, target);
+          await rename(temporary, join(folder, basename(target)));
         } catch (error) {
           // A write that failed partway (a full disk), or a rename that failed
           // (the target is a directory, or held open on Windows), would

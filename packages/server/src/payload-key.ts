@@ -35,6 +35,39 @@ function decodeKey(value: string, error: string): Buffer {
   return key;
 }
 
+/**
+ * `decodeKey` for the key file's bytes, which never become a string: V8 keeps
+ * a string until it is collected and never clears it, while these bytes are
+ * zeroed once read. 43 base64url characters, the last with its two spare bits
+ * clear, as `decodeKey` requires of the canonical spelling.
+ */
+function decodeKeyFile(raw: Buffer): Buffer {
+  if (raw.length !== 43) throw new Error("payload_key_file_invalid");
+  const key = Buffer.alloc(32);
+  let pending = 0;
+  let bits = 0;
+  let at = 0;
+  for (const code of raw) {
+    const digit =
+      code >= 65 && code <= 90 ? code - 65
+      : code >= 97 && code <= 122 ? code - 71
+      : code >= 48 && code <= 57 ? code + 4
+      : code === 45 ? 62
+      : code === 95 ? 63
+      : -1;
+    if (digit < 0) throw new Error("payload_key_file_invalid");
+    pending = (pending << 6) | digit;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      key[at++] = pending >> bits;
+      pending &= (1 << bits) - 1;
+    }
+  }
+  if (pending !== 0) throw new Error("payload_key_file_invalid");
+  return key;
+}
+
 async function readKeyFile(path: string): Promise<Buffer> {
   const before = await lstat(path);
   if (before.isSymbolicLink()) {
@@ -67,10 +100,12 @@ async function readKeyFile(path: string): Promise<Buffer> {
     if (process.platform !== "win32" && (metadata.mode & 0o077) !== 0) {
       throw new Error("payload_key_permissions_too_open");
     }
-    return decodeKey(
-      await handle.readFile("utf8"),
-      "payload_key_file_invalid",
-    );
+    const raw = await handle.readFile();
+    try {
+      return decodeKeyFile(raw);
+    } finally {
+      raw.fill(0);
+    }
   } finally {
     await handle.close();
   }

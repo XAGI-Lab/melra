@@ -1,13 +1,16 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: AGPL-3.0-only
 
+import { createSocket } from "node:dgram";
 import { createServer, type Server } from "node:http";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer as createNetServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BrowserOperationSchema } from "@melra/protocol";
 import { chromium } from "playwright-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { connectBrowser } from "./browser-connection.js";
 import { BrowserRuntime, detectBrowserExecutable } from "./index.js";
 
 const roots: string[] = [];
@@ -29,13 +32,13 @@ afterEach(async () => {
   );
 });
 
-async function fixtureServer(): Promise<{ server: Server; url: string }> {
+async function fixtureServer(
+  page = "<!doctype html><html><head><title>HAR fixture</title></head>" +
+    "<body><main>verified page</main></body></html>",
+): Promise<{ server: Server; url: string }> {
   const server = createServer((_request, response) => {
     response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-    response.end(
-      "<!doctype html><html><head><title>HAR fixture</title></head>" +
-        "<body><main>verified page</main></body></html>",
-    );
+    response.end(page);
   });
   servers.push(server);
   await new Promise<void>((resolvePromise) => {
@@ -147,6 +150,177 @@ describe("browser connection evidence", () => {
       await replayer.close();
     }
   }, 180_000);
+
+  it("lets no page send WebRTC's UDP, to a STUN server it names or anywhere", async () => {
+    const executablePath = await detectBrowserExecutable();
+    if (executablePath === undefined) return;
+    const root = await mkdtemp(join(tmpdir(), "melra-browser-webrtc-"));
+    roots.push(root);
+    // A STUN server on this machine, so the test needs no network and any
+    // binding request a page sends is counted here.
+    const stun = createSocket("udp4");
+    let requests = 0;
+    stun.on("message", () => {
+      requests += 1;
+    });
+    await new Promise<void>((resolvePromise) => {
+      stun.bind(0, "127.0.0.1", resolvePromise);
+    });
+    const page =
+      "<!doctype html><html><body><main>gathering</main><script>" +
+      `const connection = new RTCPeerConnection({ iceServers: [{ urls: "stun:127.0.0.1:${stun.address().port}" }] });` +
+      'connection.createDataChannel("probe");' +
+      "connection.createOffer().then((offer) => connection.setLocalDescription(offer));" +
+      "</script></body></html>";
+    // Without the switch a request came within a second; a slow runner gets five.
+    const listen = async (): Promise<void> => {
+      for (let waited = 0; requests === 0 && waited < 5_000; waited += 50) {
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, 50));
+      }
+    };
+    try {
+      // A Chrome launched without the switch sends one, so silence below is
+      // the switch's doing, not a machine with no address to send from.
+      const control = await chromium.launch({ executablePath, headless: true });
+      try {
+        await (await control.newPage()).setContent(page);
+        await listen();
+      } finally {
+        await control.close();
+      }
+      if (requests === 0) return;
+      requests = 0;
+      const { url } = await fixtureServer(page);
+      const runtime = new BrowserRuntime({
+        workspaceRoot: root,
+        artifactDirectory: join(root, "artifacts"),
+        executablePath,
+        allowedDomains: ["127.0.0.1"],
+        allowLocalhost: true,
+      });
+      try {
+        const opened = await runtime.execute(BrowserOperationSchema.parse({ kind: "browser", action: "navigate", url }));
+        expect(opened.text).toContain("gathering");
+        await listen();
+      } finally {
+        await runtime.close();
+      }
+      expect(requests).toBe(0);
+    } finally {
+      stun.close();
+    }
+  }, 120_000);
+
+  it("sends a replayed page's WebRTC over TCP through the destination checks", async () => {
+    const executablePath = await detectBrowserExecutable();
+    if (executablePath === undefined) return;
+    const root = await mkdtemp(join(tmpdir(), "melra-browser-turn-"));
+    roots.push(root);
+    // A TURN server on this machine that only counts who connects to it.
+    let connections = 0;
+    const turn = createNetServer((socket) => {
+      connections += 1;
+      socket.destroy();
+    });
+    await new Promise<void>((resolvePromise) => {
+      turn.listen(0, "127.0.0.1", resolvePromise);
+    });
+    const page =
+      "<!doctype html><html><body><main>gathering</main><script>" +
+      "const connection = new RTCPeerConnection({ iceServers: [{ " +
+      `urls: "turn:127.0.0.1:${(turn.address() as AddressInfo).port}?transport=tcp", username: "u", credential: "p" }] });` +
+      'connection.createDataChannel("probe");' +
+      "connection.createOffer().then((offer) => connection.setLocalDescription(offer));" +
+      "</script></body></html>";
+    const listen = async (): Promise<void> => {
+      for (let waited = 0; connections === 0 && waited < 5_000; waited += 50) {
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, 50));
+      }
+    };
+    try {
+      // Launched as MELRA launches it but with no proxy, the page connects
+      // straight to it, so silence below is the proxy's doing.
+      const control = await chromium.launch({
+        executablePath,
+        headless: true,
+        args: ["--webrtc-ip-handling-policy=disable_non_proxied_udp"],
+      });
+      try {
+        await (await control.newPage()).setContent(page);
+        await listen();
+      } finally {
+        await control.close();
+      }
+      if (connections === 0) return;
+      connections = 0;
+      // Served from an archive at a name the policy lists; the TURN server's
+      // address is not listed, so the pinning proxy refuses it.
+      const url = "http://localhost:9/";
+      const harPath = join(root, "replay.har");
+      await writeFile(
+        harPath,
+        JSON.stringify({
+          log: {
+            version: "1.2",
+            creator: { name: "melra-test", version: "1" },
+            entries: [
+              {
+                request: { method: "GET", url, headers: [] },
+                response: {
+                  status: 200,
+                  headers: [{ name: "content-type", value: "text/html; charset=utf-8" }],
+                  content: { mimeType: "text/html", text: page },
+                },
+              },
+            ],
+          },
+        }),
+      );
+      const runtime = new BrowserRuntime({
+        workspaceRoot: root,
+        artifactDirectory: join(root, "artifacts"),
+        executablePath,
+        allowedDomains: ["localhost"],
+        allowLocalhost: true,
+        replayHarPath: harPath,
+      });
+      try {
+        const opened = await runtime.execute(BrowserOperationSchema.parse({ kind: "browser", action: "navigate", url }));
+        expect(opened.text).toContain("gathering");
+        await listen();
+      } finally {
+        await runtime.close();
+      }
+      expect(connections).toBe(0);
+    } finally {
+      turn.close();
+    }
+  }, 120_000);
+
+  // POSIX only: a shell script stands in for Chrome.
+  it.skipIf(process.platform === "win32")("starts its own browser without the payload key or the HTTP token", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-browser-env-"));
+    roots.push(root);
+    // Writes down its environment beside itself and exits, which fails the
+    // launch.
+    const chrome = join(root, "chrome");
+    const seen = `${chrome}.env`;
+    await writeFile(chrome, `#!/bin/sh\nenv > "$0.env"\nexit 1\n`);
+    await chmod(chrome, 0o755);
+    vi.stubEnv("MELRA_PAYLOAD_KEY", "probe-key");
+    vi.stubEnv("MELRA_HTTP_TOKEN", "probe-token");
+    try {
+      for (const profile of [{}, { userDataDir: join(root, "profile") }]) {
+        await rm(seen, { force: true });
+        await expect(connectBrowser({ executablePath: chrome, headless: true, ...profile })).rejects.toThrow();
+        const environment = await readFile(seen, "utf8");
+        expect(environment).toContain("PATH=");
+        expect(environment).not.toMatch(/MELRA_PAYLOAD_KEY|MELRA_HTTP_TOKEN/);
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
 
   it("refuses to record and replay the same session", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-browser-conflict-"));
