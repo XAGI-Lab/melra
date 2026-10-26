@@ -280,7 +280,7 @@ only the wildcard admits, or whose evidence is checked there, needs an
 operator's approval, so a reviewed policy that names its hosts is also the one
 whose reads run unattended.
 
-## Non-goals for `0.3`
+## Non-goals for `0.4`
 
 - protecting against a compromised operating system or browser binary;
 - deterministic proof from model judgment;

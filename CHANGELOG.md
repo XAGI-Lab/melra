@@ -6,6 +6,8 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0-alpha.0] - 2026-10-26
+
 ### Added
 
 - `melra setup --client claude-code --exclusive` takes Claude Code's own tools
@@ -26,10 +28,11 @@ All notable changes are documented here. The format follows
   managed settings, with each staged file's SHA-256. MELRA never writes that
   folder or runs `sudo`; it refuses an `npx` melra or a melra or `node` inside
   the home folder, a `--managed` folder inside Claude Code's (in any letter
-  case on macOS), and a staged file that differs. `--dry-run` prints every
-  file as it would be written and writes nothing. Other clients are refused.
+  case on macOS), and a staged file that differs. `--dry-run` prints the
+  `.mcp.json` and settings files as they would be written and writes nothing,
+  not even the default policy. Other clients are refused.
   See
-  [Claude Code's settings](docs/INSTALLATION.md#take-claude-codes-own-tools-away-in-its-settings).
+  [Claude Code's settings](https://github.com/XAGI-Lab/melra/blob/main/docs/INSTALLATION.md#take-claude-codes-own-tools-away-in-its-settings).
 - `melra doctor` has a `harness` line, and its JSON a `harness` object,
   wherever Claude Code is in play: it reads the managed files at their
   platform path, the project's settings files and the user's, and reports each
@@ -39,30 +42,32 @@ All notable changes are documented here. The format follows
   admin-group membership and each file's SHA-256. It reads them as strict
   JSON, as Claude Code does. While claude.ai settings holding a policy rank
   above the managed files, it counts that policy's rules and locks in their
-  place, or with them under `managedSourcesBehavior: "merge"`; while an MDM
-  profile it cannot read does, on macOS, it counts no rule from any other
-  file. Either way it says so. It warns in either mode and never fails, and
-  reports observations only.
+  place and names that file; under `managedSourcesBehavior: "merge"` it counts
+  them together with the managed files without naming it. While an MDM
+  profile it cannot read ranks above them on macOS, without merge, it counts
+  no rule from any file and says so. It warns in either mode and never fails,
+  and reports observations only.
 - `melra probe [--json]`, run inside an agent's box before the agent starts,
-  reports whether the box stops what it should. It creates and removes a file
-  in the workspace, opens the database and key in `MELRA_HOME` (set to the
-  server's, as the box sees it) without reading them, makes a TCP connection
-  to a public address (`--public`, default `1.1.1.1:443`) and to another local
-  port (`--local`, default one it listens on itself), and starts the shell, and
-  reports each as `confined` or `open`. Only a refusal counts as confined;
-  what it could not try is open, `not tested`. It then checks that the MELRA
-  running outside the box answers on `--socket` (or `MELRA_SOCKET`) or a
-  loopback `--url`, asking without a token, and refuses to run without one. It
-  exits 0 only when every check is confined and MELRA answers. It sends
-  nothing over its connections, changes no setting, and proves only the checks
-  on its list. See
-  [checking an agent's box](docs/INSTALLATION.md#check-an-agents-box).
+  reports whether the box stops what it should. It creates and removes a file in
+  the workspace, opens the database and key in `MELRA_HOME` (set to the
+  server's, as the box sees it) without reading them, makes a TCP connection to
+  a public address (`--public`, default `1.1.1.1:443`) and to another local port
+  (`--local`, default one it listens on itself), and starts the shell, and
+  reports each as `confined` or `open`. Only a refusal counts as confined; what
+  it could not try is open, `not tested`. It then checks that the MELRA running
+  outside the box answers on `--socket` (or `MELRA_SOCKET`) or a loopback
+  `--url`, asking without a token; with none of the three it refuses to run
+  (`probe_endpoint_missing`). It exits 0 only when every check is confined and
+  MELRA answers. It sends nothing over its connections, changes no setting, and
+  proves only the checks on its list. See [checking an agent's
+  box](https://github.com/XAGI-Lab/melra/blob/main/docs/INSTALLATION.md#check-an-agents-box).
 - `examples/deploy/compose/compose.yaml` runs MELRA and the agent in two
   containers, so the agent's only way to change the workspace or reach the
   network is MELRA's socket. MELRA serves `--socket` in enforced mode with the
   workspace read-write and its data in a volume of its own, on a volume that
   holds only the socket, with no port published. The agent gets the workspace
-  read-only, no MELRA data, no credentials and an internal network with no route
+  read-only, no MELRA data, no credential but the token MELRA's socket asks
+  for, and an internal network with no route
   out and, in gateway mode `isolated` (Docker Engine 28.0 or later), no address
   on the host, and runs as MELRA's user so the mode-`0600` socket admits it.
   Both run with a read-only root, no capabilities, `no-new-privileges`, and caps
@@ -76,7 +81,7 @@ All notable changes are documented here. The format follows
   MELRA's container, must reach `verified_success` with a receipt. The
   `docker run -i` stdio recipe is now described as what it is: it boxes MELRA,
   not the agent, and is a developer-mode recipe. See
-  [MELRA and the agent in two containers](docs/INSTALLATION.md#melra-and-the-agent-in-two-containers).
+  [MELRA and the agent in two containers](https://github.com/XAGI-Lab/melra/blob/main/docs/INSTALLATION.md#melra-and-the-agent-in-two-containers).
 - An operator's deny says why: `melra approve <task-id> --deny` takes
   `--reason wrong_target|too_broad|not_now|never|other` (`other` when left
   out) and `--note <text>`, and the console's Deny takes a reason from a list
@@ -147,13 +152,13 @@ All notable changes are documented here. The format follows
   Apache-2.0, as do `examples/` and the code samples in the documentation, so
   code that only calls MELRA is unaffected. Releases up to and including
   `0.3.0-alpha.22` were Apache-2.0 and stay so. Contributions now need the
-  [Contributor License Agreement](CLA.md) as well as a DCO sign-off, and the
-  MELRA name and logo are covered by [TRADEMARKS.md](TRADEMARKS.md). The
+  [Contributor License Agreement](https://github.com/XAGI-Lab/melra/blob/main/CLA.md) as well as a DCO sign-off, and the
+  MELRA name and logo are covered by [TRADEMARKS.md](https://github.com/XAGI-Lab/melra/blob/main/TRADEMARKS.md). The
   official logo and hero artwork are now all rights reserved instead of CC BY-ND
   4.0; copies already distributed under it keep that license. Each
   published package now ships its own `LICENSE`, and the release archive,
   container image and single executables carry `LICENSE` and `NOTICE`.
-  [LICENSING.md](LICENSING.md) maps each path to its license.
+  [LICENSING.md](https://github.com/XAGI-Lab/melra/blob/main/LICENSING.md) maps each path to its license.
 
 ### Security
 
@@ -4132,7 +4137,8 @@ All notable changes are documented here. The format follows
 - Cross-scope memory overwrite and deletion protection.
 - Patched transitive HTTP adapter enforced through a package override.
 
-[Unreleased]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.22...HEAD
+[Unreleased]: https://github.com/XAGI-Lab/melra/compare/v0.4.0-alpha.0...HEAD
+[0.4.0-alpha.0]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.22...v0.4.0-alpha.0
 [0.3.0-alpha.22]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.21...v0.3.0-alpha.22
 [0.3.0-alpha.21]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.20...v0.3.0-alpha.21
 [0.3.0-alpha.20]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.19...v0.3.0-alpha.20
