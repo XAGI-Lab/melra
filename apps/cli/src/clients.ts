@@ -574,45 +574,49 @@ function settings(config: Record<string, unknown>, at: string[] = []): Array<[st
   );
 }
 
-// `settings` applied to a parsed object, as `upsertJsonc` applies them to text.
-function merged(before: Record<string, unknown>, path: string[], value: unknown): Record<string, unknown> {
+// An edit, applied to a parsed object as `upsertJsonc` applies it to text.
+function merged(before: Record<string, unknown>, path: string[], value: unknown, keep: boolean): Record<string, unknown> {
   const [key, ...rest] = path;
   if (key === undefined) return before;
   if (rest.length === 0) {
-    return key === "melra" || !Object.hasOwn(before, key) ? { ...before, [key]: value } : before;
+    return !keep || !Object.hasOwn(before, key) ? { ...before, [key]: value } : before;
   }
   const inner = before[key];
-  return { ...before, [key]: merged(isObject(inner) ? inner : {}, rest, value) };
+  return { ...before, [key]: merged(isObject(inner) ? inner : {}, rest, value, keep) };
 }
 
-// Merge a JSON-shaped config into a JSON or JSONC file by editing only the
-// members MELRA owns: the `melra` entry is upserted wherever its container
-// is, and a non-object setting (OpenCode's `$schema`) is added only if
-// absent. Plain JSON goes through the same in-place edit as JSONC rather than
+const refusal = (path: string, why: string) =>
+  new Error(`${path}: ${why}; add the printed config to it by hand`);
+
+function parsedObject(path: string, text: string): Record<string, unknown> {
+  let before: unknown;
+  try {
+    before = parseJsonc(text).value;
+  } catch (error) {
+    throw refusal(path, `it is not valid JSON or JSONC (${(error as Error).message})`);
+  }
+  if (!isObject(before)) throw refusal(path, "it does not hold a JSON object");
+  return before;
+}
+
+// Apply `[path, value, keep]` edits to a JSON or JSONC file by editing only
+// the members they name; `keep` leaves a member that is already there alone.
+// Plain JSON goes through the same in-place edit as JSONC rather than
 // JSON.parse → JSON.stringify, so a user's formatting and key order survive
 // there too, and duplicate keys (which JSON.parse silently collapses) are
 // refused everywhere. The result is parsed back and compared, whole, with the
 // merge it was meant to be, so a file is never written that does not say
 // exactly what was intended.
-function withMelraJson(path: string, text: string, config: Record<string, unknown>): string {
-  const refuse = (why: string) =>
-    new Error(`${path}: ${why}; add the printed config to it by hand`);
-  let before: unknown;
-  try {
-    before = parseJsonc(text).value;
-  } catch (error) {
-    throw refuse(`it is not valid JSON or JSONC (${(error as Error).message})`);
-  }
-  if (!isObject(before)) throw refuse("it does not hold a JSON object");
-  let expected = before;
+function withJsonEdits(path: string, text: string, edits: Array<[string[], unknown, boolean]>): string {
+  let expected = parsedObject(path, text);
   let next = text;
   try {
-    for (const [path, value] of settings(config)) {
-      next = upsertJsonc(next, path, value, path.at(-1) !== "melra");
-      expected = merged(expected, path, value);
+    for (const [at, value, keep] of edits) {
+      next = upsertJsonc(next, at, value, keep);
+      expected = merged(expected, at, value, keep);
     }
   } catch (error) {
-    throw refuse((error as Error).message);
+    throw refusal(path, (error as Error).message);
   }
   let after: unknown;
   try {
@@ -621,29 +625,35 @@ function withMelraJson(path: string, text: string, config: Record<string, unknow
     after = undefined;
   }
   if (!isDeepStrictEqual(after, expected)) {
-    throw refuse("editing it in place did not produce the intended settings");
+    throw refusal(path, "editing it in place did not produce the intended settings");
   }
   return next;
 }
 
+async function existingText(path: string): Promise<string | undefined> {
+  try {
+    return await readFile(path, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    return undefined;
+  }
+}
+
 /**
- * Merge MELRA into the client's own config file, keeping everything else in
- * it. The previous file is copied to `<file>.bak` first. JSON and JSONC files
- * are edited in place by `withMelraJson`, so comments, trailing commas, and
- * formatting outside MELRA's own entry survive; a file that is not valid JSONC
- * is refused. Continue's file is MELRA's alone, so it is replaced whole.
+ * The file `writeClientConfig` would write: MELRA merged into the client's own
+ * config, keeping everything else in it. JSON and JSONC files are edited in
+ * place by `withJsonEdits`, the `melra` entry upserted wherever its container
+ * is and a non-object setting (OpenCode's `$schema`) added only if absent, so
+ * comments, trailing commas, and formatting outside MELRA's own entry survive;
+ * a file that is not valid JSONC is refused. Continue's file is MELRA's alone,
+ * so it is replaced whole.
  */
-export async function writeClientConfig(
+export async function clientConfigText(
   path: string,
   config: Record<string, unknown> | string,
   name: string,
-): Promise<{ backup?: string; unchanged?: true }> {
-  let existing: string | undefined;
-  try {
-    existing = await readFile(path, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  }
+): Promise<{ existing?: string; next: string }> {
+  const existing = await existingText(path);
   const shape = CLIENTS[name]?.shape;
   let next: string;
   if (typeof config === "string" && (existing === undefined || shape === "continue")) {
@@ -656,8 +666,54 @@ export async function writeClientConfig(
   } else if (existing === undefined || existing.trim() === "") {
     next = `${JSON.stringify(config, null, 2)}\n`;
   } else {
-    next = withMelraJson(path, existing, config);
+    next = withJsonEdits(
+      path,
+      existing,
+      settings(config).map(([at, value]) => [at, value, at.at(-1) !== "melra"]),
+    );
   }
+  return { ...(existing === undefined ? {} : { existing }), next };
+}
+
+/**
+ * The deny rules `rules` added to a Claude Code settings file as a union:
+ * every rule already in `permissions.deny` stays where it is, the missing ones
+ * follow it, and the rest of the file is edited no more than
+ * `clientConfigText` edits a client config. Unlike a client config, the file
+ * must be strict JSON, as Claude Code reads it.
+ */
+export async function denyRulesText(
+  path: string,
+  rules: readonly string[],
+): Promise<{ existing?: string; next: string }> {
+  const existing = await existingText(path);
+  if (existing === undefined || existing.trim() === "") {
+    const next = `${JSON.stringify({ permissions: { deny: rules } }, null, 2)}\n`;
+    return { ...(existing === undefined ? {} : { existing }), next };
+  }
+  try {
+    JSON.parse(existing);
+  } catch {
+    throw refusal(path, "Claude Code reads its settings as strict JSON, and this file is not; it would not load the deny rules");
+  }
+  const permissions = parsedObject(path, existing).permissions;
+  const deny = isObject(permissions) ? (permissions.deny ?? []) : [];
+  if (!Array.isArray(deny) || !deny.every((rule) => typeof rule === "string")) {
+    throw refusal(path, "permissions.deny is not a list of rules");
+  }
+  const missing = rules.filter((rule) => !deny.includes(rule));
+  if (missing.length === 0) return { existing, next: existing };
+  return { existing, next: withJsonEdits(path, existing, [[["permissions", "deny"], [...deny, ...missing], false]]) };
+}
+
+/**
+ * Replace `path` with `next`, copying the previous file to `<file>.bak` first.
+ */
+export async function replaceFile(
+  path: string,
+  existing: string | undefined,
+  next: string,
+): Promise<{ backup?: string; unchanged?: true }> {
   // Already exactly this: rewriting would only replace a good .bak with a copy.
   if (next === existing) return { unchanged: true };
   await mkdir(dirname(path), { recursive: true });
@@ -665,4 +721,14 @@ export async function writeClientConfig(
   if (backup !== undefined) await copyFile(path, backup);
   await writeFile(path, next);
   return backup === undefined ? {} : { backup };
+}
+
+/** `clientConfigText`, written by `replaceFile`. */
+export async function writeClientConfig(
+  path: string,
+  config: Record<string, unknown> | string,
+  name: string,
+): Promise<{ backup?: string; unchanged?: true }> {
+  const { existing, next } = await clientConfigText(path, config, name);
+  return await replaceFile(path, existing, next);
 }

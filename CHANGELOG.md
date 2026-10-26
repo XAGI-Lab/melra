@@ -8,6 +8,41 @@ All notable changes are documented here. The format follows
 
 ### Added
 
+- `melra setup --client claude-code --exclusive` takes Claude Code's own tools
+  that change anything or reach the network away in its settings, for every
+  session in the workspace: with `--write` it merges a bare deny rule for each
+  of a list pinned to Claude Code's tools reference (`Bash`, `PowerShell`,
+  `Monitor`, `Edit`, `Write`, `NotebookEdit`, `WebFetch`, `WebSearch` and
+  eight more) into the workspace's `.claude/settings.local.json` as a union,
+  keeping every rule there, editing in place and saving the old file as
+  `.bak`, and sets `MELRA_HARNESS_TOOLS=1` in the `.mcp.json` entry; a
+  settings file that is not strict JSON, which Claude Code would not load, is
+  refused.
+  `--managed <dir>` instead stages a `managed-settings.json` (the same list,
+  plus `allowManagedPermissionRulesOnly`, `allowManagedHooksOnly` and
+  `permissions.disableBypassPermissionsMode`) and a `managed-mcp.json` listing
+  only melra, by absolute path, in `<dir>`, and prints the `sudo install`
+  lines (on Windows, the destination) that put them where Claude Code reads
+  managed settings, with each staged file's SHA-256. MELRA never writes that
+  folder or runs `sudo`; it refuses an `npx` melra or a melra or `node` inside
+  the home folder, a `--managed` folder inside Claude Code's (in any letter
+  case on macOS), and a staged file that differs. `--dry-run` prints every
+  file as it would be written and writes nothing. Other clients are refused.
+  See
+  [Claude Code's settings](docs/INSTALLATION.md#take-claude-codes-own-tools-away-in-its-settings).
+- `melra doctor` has a `harness` line, and its JSON a `harness` object,
+  wherever Claude Code is in play: it reads the managed files at their
+  platform path, the project's settings files and the user's, and reports each
+  pinned tool as removed or present, each managed file's owner, mode and
+  writability by this user, the lock keys set or missing, the servers
+  `managed-mcp.json` lists and the executable its melra entry runs,
+  admin-group membership and each file's SHA-256. It reads them as strict
+  JSON, as Claude Code does. While claude.ai settings holding a policy rank
+  above the managed files, it counts that policy's rules and locks in their
+  place, or with them under `managedSourcesBehavior: "merge"`; while an MDM
+  profile it cannot read does, on macOS, it counts no rule from any other
+  file. Either way it says so. It warns in either mode and never fails, and
+  reports observations only.
 - `melra probe [--json]`, run inside an agent's box before the agent starts,
   reports whether the box stops what it should. It creates and removes a file
   in the workspace, opens the database and key in `MELRA_HOME` (set to the

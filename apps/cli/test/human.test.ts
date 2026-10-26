@@ -18,6 +18,7 @@ import {
   renderConformance,
   renderDoctor,
   renderInit,
+  renderManaged,
   setupWizard,
   type DoctorReport,
 } from "../src/human.js";
@@ -194,6 +195,21 @@ describe("human doctor report", () => {
     expect(text).not.toContain("\u001b[");
   });
 
+  it("puts the client lines right under the clients row, wherever it is", () => {
+    const text = renderDoctor(
+      report({
+        checks: [
+          { name: "clients", status: "warn", detail: "" },
+          { name: "harness", status: "warn", detail: "claude-code: present: Bash" },
+        ],
+        clients: [{ client: "claude-code", path: "/w/.mcp.json", state: "configured", command: "melra", problems: [] }],
+      }),
+    );
+    const client = text.search(/\n {6}\S+\s+claude-code\s+configured/);
+    expect(client).toBeGreaterThan(text.indexOf("clients"));
+    expect(client).toBeLessThan(text.indexOf("harness"));
+  });
+
   it("puts a failure ahead of every warning and says Ready only when clean", () => {
     const failing = report({
       checks: [{ name: "node", status: "fail", detail: "v20" }, ...report().checks],
@@ -328,5 +344,47 @@ describe("conformance and setup output", () => {
     expect(renderInit(printedOnly)).toMatch(/Workspace\s+\/w$/m);
     expect(renderInit({ ...result, client: "codex" })).toContain("Next: Restart Codex");
     expect(renderInit({ ...result, unchanged: true })).toContain("already set up; nothing changed");
+  });
+
+  it("shows the Claude Code settings --exclusive writes, a dry run, and the managed install lines", () => {
+    process.env.NO_COLOR = "1";
+    const result = {
+      initialized: true as const,
+      client: "claude-code",
+      workspace: "/w",
+      policyPath: "/p",
+      configPath: "/w/.mcp.json",
+      config: {},
+      settings: { path: "/w/.claude/settings.local.json", deny: ["Bash", "Edit"] },
+      note: "",
+    };
+    expect(renderInit(result)).toContain("And this to /w/.claude/settings.local.json:");
+    expect(renderInit(result)).toContain("melra setup --client claude-code --exclusive --write");
+    const written = renderInit({ ...result, written: true, settings: { ...result.settings, backup: "/w/.claude/settings.local.json.bak" } });
+    expect(written).toMatch(/Settings\s+\/w\/\.claude\/settings\.local\.json$/m);
+    expect(written).toContain("previous file saved as /w/.claude/settings.local.json.bak");
+    expect(written).toContain("denies Bash, Edit");
+    const dry = renderInit({ ...result, dryRun: true, files: [{ path: "/w/.mcp.json", text: "{}\n" }] });
+    expect(dry).toContain("Would write /w/.mcp.json:");
+    expect(dry.trimEnd().endsWith("Nothing was written.")).toBe(true);
+    const staged = {
+      client: "claude-code",
+      managed: "/s",
+      written: true,
+      files: [{ path: "/s/managed-settings.json", text: '{\n  "allowManagedHooksOnly": true\n}\n', sha256: "ab".repeat(32) }],
+      install: ["sudo install -o root -m 0644 /s/managed-settings.json /etc/claude-code/managed-settings.json"],
+    };
+    const managed = renderManaged(staged);
+    expect(managed).toMatch(/Staged\s+\/s\/managed-settings\.json/);
+    expect(managed).toContain("Install them as an administrator; MELRA does not:");
+    expect(managed).toContain("    sudo install -o root -m 0644 /s/managed-settings.json /etc/claude-code/managed-settings.json");
+    expect(managed).toContain(`    ${"ab".repeat(32)}  /s/managed-settings.json`);
+    expect(managed).not.toContain('"allowManagedHooksOnly"');
+    // A dry run shows each file as it would be staged.
+    const planned = renderManaged({ ...staged, written: false });
+    expect(planned).toMatch(/Would stage\s+\/s\/managed-settings\.json/);
+    expect(planned).toContain('Would write /s/managed-settings.json:\n\n    {\n      "allowManagedHooksOnly": true\n    }');
+    expect(planned).toContain(`    ${"ab".repeat(32)}  /s/managed-settings.json`);
+    expect(planned.trimEnd().endsWith("Nothing was written.")).toBe(true);
   });
 });

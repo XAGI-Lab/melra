@@ -11,6 +11,7 @@ import { printable } from "@melra/server/kernel";
 import { CLIENTS } from "./clients.js";
 import { CLAUDE_TOOLS } from "./environment.js";
 import type { ClientChoice, ClientStatus } from "./client-status.js";
+import type { HarnessReport } from "./harness.js";
 import { mark, paint, table, type Status } from "./output.js";
 
 export interface DoctorCheck {
@@ -29,6 +30,8 @@ export interface DoctorReport {
   mode: string;
   checks: DoctorCheck[];
   clients: ClientStatus[];
+  /** What Claude Code would read, where it is in play; the `harness` check says it in words. */
+  harness?: HarnessReport;
 }
 
 export interface InitResult {
@@ -43,6 +46,11 @@ export interface InitResult {
   // The file already held exactly this entry, so it was left alone.
   unchanged?: true;
   config: Record<string, unknown> | string;
+  /** `--exclusive`: the Claude Code settings file and the tools it denies. */
+  settings?: { path: string; deny: readonly string[]; backup?: string; unchanged?: true };
+  /** `--dry-run`: each file as `--write` would leave it. Nothing was written. */
+  dryRun?: true;
+  files?: Array<{ path: string; text: string }>;
   note: string;
 }
 
@@ -142,7 +150,6 @@ function summary(report: DoctorReport): string[] {
 }
 
 function checkRows(checks: DoctorCheck[], report: DoctorReport): string {
-  const lines: string[] = [];
   const rows = checks.map((check) => {
     if (check.name !== "clients" || report.clients.length === 0) {
       return [mark(check.status), check.name, check.detail];
@@ -154,9 +161,12 @@ function checkRows(checks: DoctorCheck[], report: DoctorReport): string {
       none ? paint.dim("none configured yet; run 'melra setup'") : "",
     ];
   });
-  lines.push(table(rows, { indent: 2 }));
-  if (checks.some((check) => check.name === "clients") && report.clients.length > 0) {
-    lines.push(table(report.clients.map(clientLine), { indent: 6 }));
+  // One line per row, and the per-client lines right under the `clients` row,
+  // wherever it is.
+  const lines = table(rows, { indent: 2 }).split("\n");
+  const at = checks.findIndex((check) => check.name === "clients");
+  if (at !== -1 && report.clients.length > 0) {
+    lines.splice(at + 1, 0, table(report.clients.map(clientLine), { indent: 6 }));
   }
   return lines.join("\n");
 }
@@ -185,12 +195,27 @@ export function renderInit(result: InitResult): string {
     [mark("pass"), "Workspace", result.workspace],
     [mark("pass"), "Policy", result.policyPath],
   ];
+  if (result.dryRun === true) {
+    return [
+      table(rows, { indent: 2 }),
+      ...(result.files ?? []).flatMap((file) => ["", `Would write ${paint.bold(printable(file.path))}:`, "", snippet(file.text)]),
+      "",
+      "Nothing was written.",
+    ].join("\n");
+  }
   if (result.written === true && result.configPath !== undefined) {
-    rows.push([mark("pass"), label, result.configPath]);
-    if (result.unchanged === true) {
-      rows.push(["", "", paint.dim("already set up; nothing changed")]);
-    } else if (result.backup !== undefined) {
-      rows.push(["", "", paint.dim(`previous file saved as ${result.backup}`)]);
+    const written = (path: string, unchanged?: true, backup?: string) => {
+      rows.push([mark("pass"), path === result.configPath ? label : "Settings", path]);
+      if (unchanged === true) {
+        rows.push(["", "", paint.dim("already set up; nothing changed")]);
+      } else if (backup !== undefined) {
+        rows.push(["", "", paint.dim(`previous file saved as ${backup}`)]);
+      }
+    };
+    written(result.configPath, result.unchanged, result.backup);
+    if (result.settings !== undefined) {
+      written(result.settings.path, result.settings.unchanged, result.settings.backup);
+      rows.push(["", "", paint.dim(`denies ${result.settings.deny.join(", ")}`)]);
     }
     const next = CLIENTS[result.client]?.next ?? `Restart ${label}, then ask it to use the melra tools.`;
     return [table(rows, { indent: 2 }), "", `Next: ${paint.bold(printable(next))}`].join("\n");
@@ -203,8 +228,45 @@ export function renderInit(result: InitResult): string {
     result.configPath === undefined
       ? `Or name your client to get its own format: ${paint.bold("melra setup --client <name>")}` +
         `, or run ${paint.bold("melra setup")} in a terminal to pick one.`
-      : `Or let MELRA merge it in for you: ${paint.bold(`melra setup --client ${result.client} --write`)}`;
-  return [table(rows, { indent: 2 }), "", where, "", snippet(result.config), "", instead].join("\n");
+      : `Or let MELRA merge it in for you: ${paint.bold(`melra setup --client ${result.client}${result.settings === undefined ? "" : " --exclusive"} --write`)}`;
+  const settings =
+    result.settings === undefined
+      ? []
+      : [`And this to ${paint.bold(result.settings.path)}:`, "", snippet({ permissions: { deny: result.settings.deny } }), ""];
+  return [table(rows, { indent: 2 }), "", where, "", snippet(result.config), "", ...settings, instead].join("\n");
+}
+
+export interface ManagedResult {
+  client: string;
+  managed: string;
+  written: boolean;
+  files: Array<{ path: string; text: string; sha256: string }>;
+  install: string[];
+}
+
+// `setup --exclusive --managed <dir>`: what was staged, the lines an
+// administrator runs, and each file's SHA-256 to compare before installing and
+// with doctor's afterwards; MELRA runs none of them. A dry run shows each file.
+export function renderManaged(result: ManagedResult): string {
+  return [
+    table(
+      result.files.map((file) => [mark("pass"), result.written ? "Staged" : "Would stage", printable(file.path)]),
+      { indent: 2 },
+    ),
+    ...(result.written
+      ? []
+      : result.files.flatMap((file) => ["", `Would write ${paint.bold(printable(file.path))}:`, "", snippet(file.text)])),
+    "",
+    result.written ? "Install them as an administrator; MELRA does not:" : "Once staged, an administrator would run:",
+    "",
+    ...result.install.map((line) => `    ${printable(line)}`),
+    "",
+    "SHA-256:",
+    "",
+    ...result.files.map((file) => `    ${file.sha256}  ${printable(file.path)}`),
+    "",
+    result.written ? `Then ${paint.bold("melra doctor")} reports what Claude Code reads.` : "Nothing was written.",
+  ].join("\n");
 }
 
 // After a setup, only what needs attention: a full doctor report is one

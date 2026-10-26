@@ -26,6 +26,7 @@ import { RESTART_SAFE_WORKFLOW } from "../src/demo-workflow.js";
 import { approverLabel, parseCliEnvironment, serverLaunch } from "../src/environment.js";
 import { approvalConsole, confirmInTerminal, type ConsoleTerminal } from "../src/approval-console.js";
 import { taskTarget } from "../src/activity.js";
+import { CLAUDE_DENIED_TOOLS, claudeManagedDirectory } from "../src/harness.js";
 
 const execute = promisify(execFile);
 const roots: string[] = [];
@@ -1928,7 +1929,6 @@ describe("melra CLI", () => {
     // skipped unchecked and `--write --dry-run` wrote the client config. The
     // timeout stops an unfixed `serve` from waiting on stdin for good.
     for (const args of [
-      ["setup", "--client", "claude-code", "--write", "--dry-run"],
       ["init", "--client", "claude-code", "--write", "--dry-run"],
       ["serve", "--open", "--dry-run"],
     ]) {
@@ -1936,6 +1936,10 @@ describe("melra CLI", () => {
         execute(process.execPath, [entry, ...args], { ...options, timeout: 10_000 }),
       ).rejects.toMatchObject({ stderr: expect.stringContaining("unknown flag --dry-run") });
     }
+    // `setup` knows --dry-run, only with --exclusive.
+    await expect(
+      execute(process.execPath, [entry, "setup", "--client", "claude-code", "--write", "--dry-run"], { ...options, timeout: 10_000 }),
+    ).rejects.toMatchObject({ stderr: expect.stringContaining("--dry-run goes with --exclusive") });
     expect(existsSync(join(root, ".mcp.json"))).toBe(false);
 
     // Without --http, serve speaks MCP over stdio, so a port is refused rather
@@ -2459,6 +2463,128 @@ describe("melra CLI", () => {
       mutations: "confirm",
     });
   });
+
+  it("denies Claude Code's own tools with setup --exclusive, beside the melra entry", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-cli-exclusive-"));
+    roots.push(root);
+    const workspace = join(root, "ws");
+    const local = join(workspace, ".claude", "settings.local.json");
+    const original = '{"permissions": {"deny": ["Read(./.env)"]}}\n';
+    await mkdir(join(workspace, ".claude"), { recursive: true });
+    await writeFile(local, original);
+    const home = join(root, "home");
+    const env = {
+      ...process.env,
+      HOME: home,
+      USERPROFILE: home,
+      CLAUDE_CONFIG_DIR: join(home, ".claude"),
+      MELRA_HOME: join(root, ".melra"),
+      MELRA_WORKSPACE: workspace,
+    };
+    const setup = async (...args: string[]) =>
+      JSON.parse(
+        (await execute(process.execPath, [entry, "setup", "--client", "claude-code", "--exclusive", ...args, "--json"], { cwd: workspace, env }))
+          .stdout,
+      ) as {
+        dryRun?: true;
+        files?: Array<{ path: string; text: string }>;
+        config: { mcpServers: { melra: { env: Record<string, string> } } };
+        settings: { path: string; backup?: string };
+        checks: Array<{ name: string; status: string; detail: string }>;
+        harness?: { files: Array<{ scope: string; path: string }> };
+      };
+
+    // What --write would leave, and nothing written, the policy included.
+    const plan = await setup("--write", "--dry-run");
+    expect(plan.dryRun).toBe(true);
+    expect(plan.files?.map((file) => file.path)).toEqual([join(workspace, ".mcp.json"), local]);
+    expect(JSON.parse(plan.files?.[1]?.text ?? "").permissions.deny).toEqual(["Read(./.env)", ...CLAUDE_DENIED_TOOLS]);
+    expect(existsSync(join(root, ".melra"))).toBe(false);
+    expect(existsSync(join(workspace, ".mcp.json"))).toBe(false);
+    expect(await readFile(local, "utf8")).toBe(original);
+
+    const written = await setup("--write");
+    expect(written.config.mcpServers.melra.env.MELRA_HARNESS_TOOLS).toBe("1");
+    expect(JSON.parse(await readFile(join(workspace, ".mcp.json"), "utf8"))).toEqual(written.config);
+    expect(JSON.parse(await readFile(local, "utf8")).permissions.deny).toEqual(["Read(./.env)", ...CLAUDE_DENIED_TOOLS]);
+    expect(await readFile(written.settings.backup ?? "", "utf8")).toBe(original);
+    // Doctor, run by setup, reads it back.
+    expect(written.checks.find((check) => check.name === "harness")?.detail).toContain(`removed: ${CLAUDE_DENIED_TOOLS.join(", ")}`);
+    expect(written.harness?.files).toContainEqual(expect.objectContaining({ scope: "local", path: local }));
+
+    for (const [args, refusal] of [
+      [["--client", "codex", "--exclusive", "--write"], "--exclusive supports only --client claude-code"],
+      [["--exclusive", "--write"], "--exclusive needs --client claude-code"],
+      [["--client", "claude-code", "--managed", join(root, "stage")], "--managed goes with --exclusive"],
+      [["--client", "claude-code", "--exclusive", "--managed"], "--managed requires a directory"],
+      [["--client", "claude-code", "--exclusive", "--managed", join(root, "stage"), "--write"], "leave out --write"],
+      // A name that only starts with two dots is still inside, and so is the
+      // folder in other letters where the volume ignores case.
+      [
+        ["--client", "claude-code", "--exclusive", "--managed", join(claudeManagedDirectory(), "..stage"), "--dry-run"],
+        "--managed must name a staging folder outside",
+      ],
+      [
+        ["--client", "claude-code", "--exclusive", "--managed", join(claudeManagedDirectory().toLowerCase(), "stage"), "--dry-run"],
+        "--managed must name a staging folder outside",
+      ],
+    ] as const) {
+      await expect(execute(process.execPath, [entry, "setup", ...args], { cwd: workspace, env })).rejects.toMatchObject({
+        stderr: expect.stringContaining(refusal),
+      });
+    }
+  }, 60_000);
+
+  it("stages Claude Code's managed files with --managed and refuses to replace one that differs", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-cli-managed-"));
+    roots.push(root);
+    const staging = join(root, "stage dir");
+    const home = join(root, "home");
+    const env = { ...process.env, HOME: home, USERPROFILE: home, MELRA_HOME: join(root, ".melra"), MELRA_WORKSPACE: root };
+    const managed = async (...args: string[]) =>
+      JSON.parse(
+        (
+          await execute(
+            process.execPath,
+            [entry, "setup", "--client", "claude-code", "--exclusive", "--managed", staging, ...args, "--json"],
+            { cwd: root, env },
+          )
+        ).stdout,
+      ) as { written: boolean; files: Array<{ path: string; text: string; sha256: string }>; install: string[] };
+
+    const plan = await managed("--dry-run");
+    expect(plan.written).toBe(false);
+    expect(existsSync(staging)).toBe(false);
+
+    const staged = await managed();
+    expect(staged.files.map((file) => file.path)).toEqual([join(staging, "managed-settings.json"), join(staging, "managed-mcp.json")]);
+    for (const file of staged.files) {
+      expect(await readFile(file.path, "utf8")).toBe(file.text);
+      // To compare before installing, and with doctor's afterwards.
+      expect(file.sha256).toBe(createHash("sha256").update(file.text).digest("hex"));
+    }
+    expect(JSON.parse(staged.files[0]?.text ?? "")).toMatchObject({
+      permissions: { deny: CLAUDE_DENIED_TOOLS, disableBypassPermissionsMode: "disable" },
+      allowManagedPermissionRulesOnly: true,
+      allowManagedHooksOnly: true,
+    });
+    // Only melra, as this very node and melra, by absolute path.
+    const servers = JSON.parse(staged.files[1]?.text ?? "").mcpServers;
+    expect(Object.keys(servers)).toEqual(["melra"]);
+    expect(servers.melra).toMatchObject({ command: process.execPath, args: [entry, "serve"] });
+    expect(servers.melra.env).toMatchObject({ MELRA_WORKSPACE: root, MELRA_HARNESS_TOOLS: "1" });
+    expect(staged.install.at(-1)).toContain("managed-mcp.json");
+    // Nothing outside the staging folder: no policy, no project config.
+    expect(existsSync(join(root, ".melra"))).toBe(false);
+    expect(existsSync(join(root, ".mcp.json"))).toBe(false);
+
+    // The same files again are fine; one that says something else is refused
+    // and left as it was.
+    await managed();
+    await writeFile(join(staging, "managed-mcp.json"), "{}\n");
+    await expect(managed()).rejects.toMatchObject({ stderr: expect.stringContaining("managed_file_differs") });
+    expect(await readFile(join(staging, "managed-mcp.json"), "utf8")).toBe("{}\n");
+  }, 60_000);
 
   it("will not quietly make the home directory or a filesystem root the workspace", async () => {
     // Real path, so the working directory the CLI reads back is spelled the same.

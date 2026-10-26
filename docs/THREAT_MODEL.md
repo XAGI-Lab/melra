@@ -78,6 +78,32 @@ so what this document says about that user's access to the data directory and
 the policy file still applies. See
 [launching an agent](INSTALLATION.md#launch-an-agent-with-melra-as-its-only-tool).
 
+**Claude Code's own settings.** `melra setup --client claude-code --exclusive`
+removes Claude Code's built-in tools that change anything or reach the network
+in Claude Code's own settings, for every session rather than one launched
+session. Written to the project's `.claude/settings.local.json`, it is a
+default, not a boundary: the agent's OS user owns that file, and only MELRA's
+own file writer refuses to change it. With the files `--managed` stages
+installed root-owned by an administrator, Claude Code ignores permission rules
+and hooks from every other file and loads no MCP server from a user, project,
+plugin or `--mcp-config` but melra, so a user outside the admin groups cannot
+turn those tools back on; servers the hosting app registers in its own process
+(an IDE extension's, the desktop app's connectors) and any `managedMcpServers`
+your organization's policy provides still load. A local admin can undo it, and
+policy from the claude.ai console or an MDM profile, which Claude Code ranks
+above managed-settings.json, replaces it whole by default, so neither the deny
+list nor the locks apply. `setup` never writes the system folder, refuses to
+name an `npx` melra, or a melra or `node` inside the home folder of the user
+running it, and refuses to replace a staged file that differs. Neither tier
+reaches a program MELRA's policy lets the agent run, a tool a later Claude Code
+adds, or another client; other clients are refused. `melra doctor`'s `harness`
+line reports what it reads in those files (each tool removed or present, the
+managed files' owner, mode and writability, the lock keys, the executable
+managed-mcp.json's melra runs, admin-group membership and each file's SHA-256)
+and whether a source ranked above them is there, and warns, never fails: it
+reads files, not the running session. See [Claude Code's
+settings](INSTALLATION.md#take-claude-codes-own-tools-away-in-its-settings).
+
 ## Threats and controls
 
 | Threat | Current control | Residual risk |

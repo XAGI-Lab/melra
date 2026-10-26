@@ -922,6 +922,19 @@ approves its own changes, so enforced mode is how a person decides each one.
 See
 [launching an agent](INSTALLATION.md#launch-an-agent-with-melra-as-its-only-tool).
 
+`melra setup --client claude-code --exclusive` writes the same removal into
+Claude Code's own settings instead, for every session: a deny list in the
+project's `.claude/settings.local.json`, which the agent's OS user can edit, or,
+with `--managed <dir>`, a managed-settings.json and a managed-mcp.json listing
+only melra that an administrator installs root-owned, which a user outside the
+admin groups cannot undo (by default, policy from the claude.ai console or an
+MDM profile replaces managed-settings.json whole; managed-mcp.json still
+applies). MELRA stages those files and prints the install lines; it never
+writes the system folder. `melra doctor` reports what it reads there (the
+`harness` line): an observation of files, not evidence of which path a given
+session took. See [Claude Code's
+settings](INSTALLATION.md#take-claude-codes-own-tools-away-in-its-settings).
+
 One door MELRA does own, in every mode, is its own file writer: it never
 changes the settings files a coding agent's harness loads its permissions,
 hooks and MCP servers from when a session starts (`path_harness_config`; the

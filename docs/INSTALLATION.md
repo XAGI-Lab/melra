@@ -75,7 +75,8 @@ paths, every environment variable, and the hardened Docker invocation.
 
 `setup` adds MELRA beside a client's own tools, so the agent keeps its own
 shell and editor, and you have to ask it to use MELRA. For Claude Code there
-is a way to start it without them:
+is a way to start it without them (and `setup --exclusive` takes them away in
+[its settings](#take-claude-codes-own-tools-away-in-its-settings)):
 
 ```bash
 cd ~/project
@@ -172,6 +173,156 @@ To try it and to test it locally:
   ```bash
   melra launch claude-code -- -p "list the files here" --output-format stream-json --verbose | head -n 1
   ```
+
+## Take Claude Code's own tools away in its settings
+
+`launch` covers the sessions it starts. To take Claude Code's own tools away
+in every session in a workspace, the desktop app's and IDE extensions'
+included, write it into Claude Code's settings:
+
+```bash
+cd ~/project
+npx @melra/cli@alpha setup --client claude-code --exclusive --write
+```
+
+Next to the `melra` entry in the workspace's `.mcp.json`, which now carries
+[`MELRA_HARNESS_TOOLS=1`](#ordinary-tool-names), this adds a bare deny rule
+for each of Claude Code's built-in tools that changes anything or reaches the
+network to `.claude/settings.local.json` in the workspace:
+
+```text
+Bash, PowerShell, Monitor, Edit, Write, NotebookEdit, WebFetch, WebSearch,
+EnterWorktree, ExitWorktree, Artifact, RemoteTrigger, SendMessage,
+SendUserFile, PushNotification, ShareOnboardingGuide
+```
+
+A bare deny rule takes the tool out of the model's context. The list is pinned
+to Claude Code's [tools reference](https://code.claude.com/docs/en/tools-reference)
+as of October 2026; a tool a later Claude Code adds is not on it. Read, Glob,
+Grep, LSP and the session's own planning and task tools stay.
+
+The file is the project's local one, as `.mcp.json` is the project's: the shared
+`.claude/settings.json` would hand the deny list to everyone who clones the
+project, and the user's `~/.claude/settings.json` to every project. The rules
+are added as a union: every rule already there stays where it is, the rest of
+the file is edited in place, the previous file is kept as
+`settings.local.json.bak`, and a file that is not strict JSON (Claude Code reads
+it as JSON, so with a comment or a trailing comma it would load none of the
+rules), has a key twice, or has a `permissions.deny` that is not a list is
+refused rather than guessed at. Run again, it changes nothing. Claude Code keeps
+this file out of git only when it creates it itself, so in a repository add it
+to `.gitignore` if it is not there yet. Without `--write`, `setup` prints both
+additions and the files they belong in.
+
+The agent's own OS user owns this file, and Claude Code reloads settings while
+a session runs. MELRA's file writer refuses to change it
+([`path_harness_config`](CAPABILITIES.md#files)), but a program MELRA's policy
+lets the agent run can still rewrite it. Your other MCP servers, hooks and
+plugins still load, and deny rules do not reach programs MELRA's terminal
+runs.
+
+### The managed tier
+
+On a machine set aside for an agent, Claude Code's managed settings hold
+against every user, project and local settings file and every command-line
+flag, for every session on the machine. `--managed <dir>` stages them in a
+folder of your choosing:
+
+```bash
+melra setup --client claude-code --exclusive --managed ./claude-managed
+```
+
+It writes two files into that folder and nowhere else:
+
+- `managed-settings.json`: the same deny list, plus
+  `allowManagedPermissionRulesOnly` (rules in any other file are ignored),
+  `allowManagedHooksOnly` (only managed hooks run) and
+  `permissions.disableBypassPermissionsMode: "disable"`;
+- `managed-mcp.json`: `melra` as the only MCP server, with this workspace,
+  `MELRA_HOME`, the mode, and `MELRA_POLICY` when you set one. While it is
+  installed Claude Code loads no other server from a user, a project, a
+  plugin or `--mcp-config`; servers the app hosting Claude Code registers in
+  its own process and any `managedMcpServers` your organization's policy
+  provides still load.
+
+Then it prints the lines an administrator runs to install them where Claude
+Code reads managed settings (`/Library/Application Support/ClaudeCode/` on
+macOS, `/etc/claude-code/` on Linux and WSL; on Windows it names
+`C:\Program Files\ClaudeCode\`):
+
+```text
+sudo install -d -o root -m 0755 /etc/claude-code
+sudo install -o root -m 0644 /home/you/claude-managed/managed-settings.json /etc/claude-code/managed-settings.json
+sudo install -o root -m 0644 /home/you/claude-managed/managed-mcp.json /etc/claude-code/managed-mcp.json
+```
+
+It also prints each staged file's SHA-256, to compare before you install it
+and with what doctor reports afterwards.
+
+MELRA never writes that folder and never runs `sudo`; a `--managed` folder
+inside it is refused, in any letter case on macOS. A file already in the staging
+folder that says something else is refused, not replaced. The melra it names is
+the one running `setup`, by absolute path: an `npx` melra is refused, since its
+cache is in your home folder, and so is a melra or a `node` inside your home
+folder, where an agent running as you could replace it. A melra or `node`
+elsewhere that your user can write, such as under a Homebrew prefix, is not
+refused, and doctor does not check it. Install `@melra/cli` where only an
+administrator can write, or use the [single
+executable](#single-executable-experimental), and run `setup` from there.
+`MELRA_WORKSPACE` and `MELRA_HOME` are fixed in the file for every session on
+the machine, so set them first. While `managed-mcp.json` is installed,
+`melra launch claude-code` cannot start Claude Code, which refuses
+`--mcp-config` then; start `claude` itself.
+
+What it does not cover: a user in an admin group can edit the managed files,
+so run the agent as a user outside them; on WSL `/etc/claude-code` is writable
+by the user; servers the app hosting Claude Code registers in its own process,
+such as an IDE extension's or the desktop app's connectors, and any
+`managedMcpServers` your organization's policy provides still load; managed
+settings bind Claude Code only; and policy from the claude.ai console or an
+MDM profile ranks above `managed-settings.json` and by default replaces it
+whole, so neither the deny list nor the locks apply.
+
+`--dry-run`, with `--write` or `--managed`, prints every file as it would be
+written and writes nothing, not even the policy.
+
+### What doctor reads back
+
+Wherever Claude Code is in play (melra in the workspace's `.mcp.json`, managed
+settings installed, or a settings file that denies one of these tools),
+`melra doctor` adds a `harness` line, and its JSON a `harness` object. It reads
+the managed files at their platform path (with `managed-settings.d/`), the
+project's `.claude/settings.json` and `.claude/settings.local.json`, and the
+user's `settings.json` (in `CLAUDE_CONFIG_DIR` when set), all as strict JSON
+as Claude Code reads them, and reports what it sees:
+
+- each tool on the list as removed or present, counting the rules of the
+  managed policy Claude Code applies, and every other file's only when that
+  policy does not set `allowManagedPermissionRulesOnly`, as Claude Code does.
+  Once the claude.ai settings it caches in `remote-settings.json` hold a
+  policy, that policy's rules and locks count in place of the managed files',
+  or, when it sets `managedSourcesBehavior` to `"merge"`, are added to them
+  (lists combined, the strictest lock winning). On macOS it sees only that an
+  MDM profile for its domain is there, not what it holds, so while one is it
+  counts no project or user file's rule, nor the managed files' unless the
+  claude.ai settings merge them (the Windows registry is not inspected);
+- each managed file's owner, mode and whether this user can write it, and
+  whether this user can write the managed folder (not inspected on Windows);
+- each lock key as set or missing, the servers `managed-mcp.json` lists, and
+  the executable its melra entry runs (never the arguments);
+- whether this user is in an `admin`, `sudo` or `wheel` group;
+- the SHA-256 of every file it read (the first twelve digits in the line, all
+  of them in the JSON), so a later edit shows.
+
+It warns, in either mode, when a tool is present, a managed file is not
+root's, it or its folder can be written by this user, a lock is missing, a
+source ranked above the managed files does not merge with them,
+`managed-mcp.json` lists anything but melra or runs it other than by absolute
+paths outside the home folder ending in `serve`, a file does not parse, or,
+with managed files installed, this user is in one of those groups; it never
+fails. It reads files, not the running session: it cannot tell which Claude
+Code started a server, of console policy it reads the copy Claude Code last
+cached, and of an MDM profile it sees only that it is there.
 
 ## Check an agent's box
 

@@ -3,9 +3,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { access, lstat, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { spawn } from "node:child_process";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
@@ -71,6 +72,16 @@ import { clientStatuses, clientsCheck, detectClients } from "./client-status.js"
 import { RESTART_SAFE_WORKFLOW } from "./demo-workflow.js";
 import { detectIsolation, isolationCheck } from "./isolation.js";
 import {
+  CLAUDE_DENIED_TOOLS,
+  claudeHarness,
+  claudeManagedDirectory,
+  claudeManagedFiles,
+  harnessCheck,
+  installLines,
+  managedLaunch,
+  within,
+} from "./harness.js";
+import {
   broadWorkspaceWarning,
   confirmBroadWorkspace,
   prompter,
@@ -78,6 +89,7 @@ import {
   renderDoctor,
   renderInit,
   renderLaunch,
+  renderManaged,
   renderSetup,
   setupWizard,
   type ConformanceReport,
@@ -91,8 +103,10 @@ import {
   CLIENTS,
   clientConfig,
   clientConfigPath,
+  clientConfigText,
+  denyRulesText,
+  replaceFile,
   resolveClient,
-  writeClientConfig,
 } from "./clients.js";
 
 /**
@@ -256,7 +270,7 @@ function rejectUnknownFlags(args: string[], known: readonly string[]): void {
   // slot after any known flag that takes one.
   // Every known flag that takes no value. One missing here had its next
   // token skipped unchecked, so `--write --dry-run` wrote the config.
-  const boolean = new Set(["--http", "--json", "--yes", "--deny", "--write", "--open", "--dry-run"]);
+  const boolean = new Set(["--http", "--json", "--yes", "--deny", "--write", "--open", "--dry-run", "--exclusive"]);
   const valued = new Set(known.filter((flag) => !boolean.has(flag)));
   for (let index = 0; index < args.length; index += 1) {
     const argument_ = args[index];
@@ -808,6 +822,14 @@ async function doctor(env: CliEnvironment): Promise<{
   checks.push(isolationCheck(await detectIsolation(), env.mode));
   const clients = await clientStatuses(env.workspaceRoot);
   checks.push(clientsCheck(clients));
+  // Only where Claude Code is in play: melra configured for it here, managed
+  // settings installed, or a settings file that already denies a pinned tool.
+  const harness = await claudeHarness({ workspace: env.workspaceRoot });
+  const inPlay =
+    clients.some((client) => client.client === "claude-code" && client.state === "configured") ||
+    harness.files.some((file) => file.scope === "managed") ||
+    harness.removed.length > 0;
+  if (inPlay) checks.push(harnessCheck(harness));
   const failed = checks.some((check) => check.status === "fail");
   return {
     report: {
@@ -821,6 +843,7 @@ async function doctor(env: CliEnvironment): Promise<{
       checks,
       // Per client, so a script can find a stale pin without parsing `detail`.
       clients,
+      ...(inPlay ? { harness } : {}),
     },
     failed,
   };
@@ -839,7 +862,9 @@ function serverEnvironment(env: CliEnvironment, policyPath: string | undefined):
 }
 
 async function init(args: string[], env: CliEnvironment): Promise<InitResult> {
-  await mkdir(env.dataDirectory, { recursive: true, mode: 0o700 });
+  // `setup --exclusive --dry-run`: nothing is written, the policy included.
+  const dryRun = args.includes("--dry-run");
+  if (!dryRun) await mkdir(env.dataDirectory, { recursive: true, mode: 0o700 });
   // The operator's MELRA_POLICY when there is one: writing the default path
   // into the client config instead quietly swapped their policy for ours.
   const policyPath = env.policyPath ?? join(env.dataDirectory, "policy.json");
@@ -854,34 +879,62 @@ async function init(args: string[], env: CliEnvironment): Promise<InitResult> {
     // In the mode asked for, so `approve` and `console` run from a shell agree
     // with the server on it; a policy that already exists is the operator's.
     const { workspaceRoot: _shared, ...policy } = createDefaultPolicy(env.workspaceRoot);
-    await writeFile(policyPath, `${JSON.stringify({ ...policy, mode: env.mode }, null, 2)}\n`, { flag: "wx" });
+    if (!dryRun) {
+      await writeFile(policyPath, `${JSON.stringify({ ...policy, mode: env.mode }, null, 2)}\n`, { flag: "wx" });
+    }
   }
   const client = resolveClient(argument("--client", args) ?? "generic");
   const label = CLIENTS[client]?.label ?? client;
+  const exclusive = args.includes("--exclusive");
   const config = clientConfig(client, {
     ...serverLaunch(import.meta.dirname, PRODUCT_VERSION),
-    env: serverEnvironment(env, policyPath),
+    // With its own tools gone, the agent finds MELRA's under names it knows.
+    env: { ...serverEnvironment(env, policyPath), ...(exclusive ? { MELRA_HARNESS_TOOLS: "1" } : {}) },
   });
   const configPath = clientConfigPath(client, env.workspaceRoot);
-  if (args.includes("--write")) {
+  // Project local, beside the project's .mcp.json, rather than the shared
+  // .claude/settings.json, which a commit would hand to everyone who clones
+  // the project, or the user's, which reaches every project.
+  const settings = exclusive
+    ? { path: join(env.workspaceRoot, ".claude", "settings.local.json"), deny: CLAUDE_DENIED_TOOLS }
+    : undefined;
+  if (dryRun || args.includes("--write")) {
     if (configPath === undefined) {
       throw new Error("--write needs a named --client; see 'melra help' for the list");
     }
-    const { backup, unchanged } = await writeClientConfig(configPath, config, client);
+    // Both worked out before either is written, so a file refused stops both.
+    const mcp = await clientConfigText(configPath, config, client);
+    const local = settings === undefined ? undefined : await denyRulesText(settings.path, settings.deny);
+    const base = { initialized: true as const, client, workspace: env.workspaceRoot, policyPath, configPath, config };
+    if (dryRun) {
+      return {
+        ...base,
+        ...(settings === undefined ? {} : { settings }),
+        dryRun: true,
+        files: [
+          { path: configPath, text: mcp.next },
+          ...(settings === undefined || local === undefined ? [] : [{ path: settings.path, text: local.next }]),
+        ],
+        note: "Nothing was written.",
+      };
+    }
+    const { backup, unchanged } = await replaceFile(configPath, mcp.existing, mcp.next);
+    const denied =
+      settings === undefined || local === undefined
+        ? undefined
+        : { ...settings, ...(await replaceFile(settings.path, local.existing, local.next)) };
     const next = CLIENTS[client]?.next ?? `Restart ${label} to load it.`;
     return {
-      initialized: true,
-      client,
-      workspace: env.workspaceRoot,
-      policyPath,
-      configPath,
+      ...base,
       written: true,
       ...(backup === undefined ? {} : { backup }),
       ...(unchanged === undefined ? {} : { unchanged }),
-      config,
-      note: unchanged
-        ? `${configPath} already has this melra entry; nothing changed. ${next}`
-        : `Added melra to ${configPath}. ${next}`,
+      ...(denied === undefined ? {} : { settings: denied }),
+      note:
+        (unchanged
+          ? `${configPath} already has this melra entry; nothing changed. ${next}`
+          : `Added melra to ${configPath}. ${next}`) +
+        (denied === undefined ? "" : ` ${denied.path} denies Claude Code's own ${denied.deny.join(", ")} there.`),
     };
   }
   return {
@@ -891,11 +944,14 @@ async function init(args: string[], env: CliEnvironment): Promise<InitResult> {
     policyPath,
     ...(configPath === undefined ? {} : { configPath }),
     config,
+    ...(settings === undefined ? {} : { settings }),
     note:
       configPath === undefined
         ? "Add the mcpServers.melra entry to your client's MCP configuration, " +
           "or rerun with --client <name> for that client's own format."
-        : `Add this to ${configPath}, or rerun with --write to merge it there for you.`,
+        : settings === undefined
+          ? `Add this to ${configPath}, or rerun with --write to merge it there for you.`
+          : `Add this to ${configPath} and its permissions.deny to ${settings.path}, or rerun with --write to merge both for you.`,
   };
 }
 
@@ -929,6 +985,29 @@ function questions(args: string[]): Prompter | undefined {
 // One command for the whole local setup: write the policy, emit a working
 // client config, and verify the machine can actually run it.
 async function setup(args: string[], env: CliEnvironment): Promise<number> {
+  const exclusive = args.includes("--exclusive");
+  for (const flag of ["--managed", "--dry-run"]) {
+    if (!exclusive && args.includes(flag)) {
+      throw new Error(`${flag} goes with --exclusive: melra setup --client claude-code --exclusive [--write | --managed <dir>] [--dry-run]`);
+    }
+  }
+  const named = argument("--client", args);
+  if (exclusive && (named === undefined || resolveClient(named) !== "claude-code")) {
+    const label = named === undefined ? undefined : CLIENTS[resolveClient(named)]?.label;
+    throw new Error(
+      label === undefined
+        ? "--exclusive needs --client claude-code"
+        : `--exclusive supports only --client claude-code: MELRA does not write ${label}'s settings that take its own tools away; ` +
+            `run 'melra setup --client ${named} --write' without it, or run the agent in a box ('melra probe' checks one)`,
+    );
+  }
+  if (args.includes("--managed")) {
+    const directory = argument("--managed", args);
+    if (directory === undefined || directory.trim() === "" || directory.startsWith("--")) {
+      throw new Error("--managed requires a directory");
+    }
+    if (args.includes("--write")) throw new Error("--managed writes only into its directory; leave out --write");
+  }
   let chosen = args;
   // One reader for the workspace question and the wizard, so answers typed
   // ahead of the second are not dropped with the first.
@@ -949,10 +1028,73 @@ async function setup(args: string[], env: CliEnvironment): Promise<number> {
   } finally {
     reader?.close();
   }
+  if (args.includes("--managed")) return await managedSetup(args, env);
   const initialized = await init(chosen, env);
+  if (initialized.dryRun === true) {
+    // No doctor either: it creates MELRA_HOME.
+    printJsonOrHuman(initialized, renderInit, args);
+    return 0;
+  }
   const { report, failed } = await doctor(env);
   printJsonOrHuman({ ...initialized, ...report }, () => renderSetup(initialized, report), args);
   return failed ? 1 : 0;
+}
+
+/**
+ * `setup --client claude-code --exclusive --managed <dir>`: Claude Code's
+ * managed-settings.json and managed-mcp.json, staged in `<dir>` for an
+ * administrator to install. MELRA never writes Claude Code's own managed
+ * folder and never runs sudo; it prints the lines that do. A file already in
+ * `<dir>` that says something else is refused, not replaced.
+ */
+async function managedSetup(args: string[], env: CliEnvironment): Promise<number> {
+  const directory = resolve(argument("--managed", args) ?? "");
+  // As written and as on disk, so neither a link nor another case gets in.
+  if (within(resolve(claudeManagedDirectory()), directory)) {
+    throw new Error(`--managed must name a staging folder outside ${claudeManagedDirectory()}, where Claude Code reads them; MELRA never writes there`);
+  }
+  const launch = serverLaunch(import.meta.dirname, PRODUCT_VERSION);
+  const self = selfCommand();
+  const files = claudeManagedFiles({
+    ...managedLaunch(launch.command === "npx" ? launch : { command: self.command, args: [...self.args, "serve"] }, homedir()),
+    // MELRA_POLICY only when one is named: the default would be in this
+    // user's MELRA_HOME, which the server finds there by itself.
+    env: { ...serverEnvironment(env, env.policyPath), MELRA_HARNESS_TOOLS: "1" },
+  });
+  const staged = Object.fromEntries(Object.keys(files).map((name) => [name, join(directory, name)]));
+  const fresh: string[] = [];
+  for (const [name, text] of Object.entries(files)) {
+    const path = join(directory, name);
+    const existing = await readFile(path, "utf8").catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    });
+    if (existing === undefined) fresh.push(name);
+    else if (existing !== text) {
+      throw new Error(`managed_file_differs: ${path} already exists and says something else; move it away or name an empty folder`);
+    }
+  }
+  const dryRun = args.includes("--dry-run");
+  if (!dryRun) {
+    await mkdir(directory, { recursive: true });
+    for (const name of fresh) await writeFile(join(directory, name), files[name] ?? "", { flag: "wx", mode: 0o644 });
+  }
+  printJsonOrHuman(
+    {
+      client: "claude-code",
+      managed: directory,
+      written: !dryRun,
+      files: Object.entries(files).map(([name, text]) => ({
+        path: join(directory, name),
+        text,
+        sha256: createHash("sha256").update(text).digest("hex"),
+      })),
+      install: installLines(staged),
+    },
+    renderManaged,
+    args,
+  );
+  return 0;
 }
 
 // Where `--dry-run` shows the config file a real launch writes and removes.
@@ -1379,6 +1521,8 @@ function help(): void {
 
 Usage:
   melra setup [--client <name>] [--write] [--json]
+  melra setup --client claude-code --exclusive [--write | --managed <dir>]
+              [--dry-run] [--json]
   melra doctor [--json]
   melra conformance [--url <mcp-url> --token <token>] [--level <1|2|3>]
   melra init [--client <name>] [--write] [--json]
@@ -1450,6 +1594,23 @@ the pairing. Run it with the MELRA_HOME, MELRA_WORKSPACE and mode your agent's
 server uses, and its MELRA_PAYLOAD_KEY if it sets one. Without a terminal or a
 browser to open, it refuses to start.
 
+'melra setup --client claude-code --exclusive' also denies Claude Code's own
+tools that change anything or reach the network (Bash, PowerShell, Monitor,
+Edit, Write, NotebookEdit, WebFetch, WebSearch and the rest of a list pinned
+to its documentation) and sets MELRA_HARNESS_TOOLS=1 in the melra entry. With
+--write it merges the deny list into .claude/settings.local.json in the
+workspace, keeping every rule there and saving the old file as .bak; the
+agent's own user can edit that file. With --managed <dir> it instead writes
+managed-settings.json (the same list, plus allowManagedPermissionRulesOnly,
+allowManagedHooksOnly and permissions.disableBypassPermissionsMode) and a
+managed-mcp.json listing only melra, by absolute path, into <dir>, refuses to
+replace a file there that says something else, and prints the 'sudo install'
+lines that put them where Claude Code reads managed settings and each file's
+SHA-256. It refuses an npx melra, or one or a node inside your home folder.
+MELRA never writes that system folder itself. --dry-run prints what either
+would write and writes nothing. 'melra doctor' then reports what Claude Code
+would read (harness).
+
 In a terminal, doctor, setup, init, and version print a readable report, and
 'melra setup' with no --client asks which detected client to set up. Piped or
 captured, they print JSON (version: the bare number).
@@ -1470,6 +1631,12 @@ Flags:
                    lmstudio, or generic (default).
   --write          With --client, merge the config into that client's file,
                    keeping everything else and saving the old file as .bak.
+  --exclusive      With --client claude-code: also deny Claude Code's own
+                   tools that change anything (see above).
+  --managed <dir>  With --exclusive: stage Claude Code's managed settings in
+                   <dir> and print the lines that install them.
+  --dry-run        With --exclusive: print what would be written; write
+                   nothing. For 'launch', see above.
   --unsafe-local   Run with no policy and no guardrails. Everything the OS user
                    can do, any caller can now do. Same as MELRA_UNHINGED=1.
                    Refused outright when --mode enforced. Was --unhinged, which
@@ -1631,7 +1798,7 @@ async function main(): Promise<void> {
       return;
     }
     case "setup":
-      rejectUnknownFlags(args, ["--client", "--write", "--json"]);
+      rejectUnknownFlags(args, ["--client", "--write", "--json", "--exclusive", "--managed", "--dry-run"]);
       process.exitCode = await setup(args, env);
       return;
     case "serve": {
