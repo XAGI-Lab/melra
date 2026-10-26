@@ -908,6 +908,11 @@ Those are operating-system primitives; MELRA should use them rather than
 reinvent them. Linux governs access to machine resources. MELRA governs
 autonomous effects performed through those resources. MELRA closes its own
 doors; it does not remove the harness's.
+[MELRA and the agent in two containers](INSTALLATION.md#melra-and-the-agent-in-two-containers)
+is one such deployment as a Compose recipe: the agent's container has the
+workspace read-only, no MELRA data, no network route out and no address on the
+host to connect to, so MELRA's socket is its only way to change the workspace
+or reach the network, and CI checks that from the agent's side.
 
 The one exception is a session MELRA starts itself. `melra launch claude-code`
 starts Claude Code with Read, Glob and Grep as its only built-in tools, melra

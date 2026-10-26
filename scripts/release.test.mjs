@@ -1,8 +1,9 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// The release workflows cannot run outside GitHub, so this holds the scripts
-// they call, and the workflow lines that call them, to what the release needs.
+// The release and container workflows cannot run outside GitHub, so this holds
+// the scripts they call, and the workflow lines that call them, to what they
+// need.
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -152,6 +153,49 @@ test("the release workflows publish in that order, gate the container, and relea
   before(dry, "node scripts/check-changelog.mjs --notes ", "npm publish");
   before(dry, 'channel="$(node scripts/release-channel.mjs)"', 'npm publish "${tarball}" --dry-run --tag "${channel}"');
   assert.doesNotMatch(dry, /--tag alpha/);
+});
+
+test("the container pair's smoke runs the recipe as written, its dry run needs no Docker, and CI runs it", () => {
+  // No PATH, so a dry run that started docker would fail here.
+  const result = spawnSync(process.execPath, [join(root, "scripts/compose-smoke.mjs"), "--dry-run"], {
+    encoding: "utf8",
+    env: { ...process.env, PATH: "" },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const project = /--project-name (melra-compose-smoke-[0-9a-f]{8}) /.exec(result.stdout)?.[1];
+  const compose = `docker compose --file examples/deploy/compose/compose.yaml --project-name ${project}`;
+  const agent = `${compose} run --rm -T --volume ${root}:/melra-src:ro --entrypoint node agent /melra-src/scripts/compose-smoke.mjs --agent`;
+  assert.deepEqual(result.stdout.trim().split("\n"), [
+    `${compose} up --detach --wait melra`,
+    `${compose} create agent`,
+    "docker network inspect bridge --format {{(index .IPAM.Config 0).Gateway}}",
+    `docker network inspect ${project}_agent --format {{json .IPAM.Config}}`,
+    `${compose} run --rm -T agent probe --socket /run/melra/melra.sock --public <bridge-gateway>:<port> --local <agent-gateway>:<port> --json`,
+    agent,
+    `${compose} exec -T melra node /opt/melra/dist/bin.js approve <task-id> --yes --json`,
+    `${agent} <task-id>`,
+    `${compose} down --volumes --remove-orphans`,
+  ]);
+  // The real smoke hands the probe the two addresses it looked up, in that
+  // order, so the probe line above is the one CI runs.
+  assert.match(read("scripts/compose-smoke.mjs"), /docker\(commands\.probe\(bridge, agentGateway, port\), false\)/);
+
+  // What the recipe promises: both services bounded, the agent's workspace
+  // read-only and its network closed with no address on the host, nothing that
+  // hands a container the host.
+  const recipe = read("examples/deploy/compose/compose.yaml");
+  assert.equal(recipe.match(/^ {4}pids_limit: \d+$/gm)?.length, 2);
+  assert.equal(recipe.match(/^ {4}mem_limit: \w+$/gm)?.length, 2);
+  assert.match(recipe, /^ {6}- \$\{WORKSPACE:-\.\.\/\.\.\/\.\.\}:\/workspace:ro$/m);
+  assert.match(
+    recipe,
+    /^ {2}agent:\n {4}internal: true\n(?: {4}#.*\n)* {4}driver_opts:\n {6}com\.docker\.network\.bridge\.gateway_mode_ipv4: isolated$/m,
+  );
+  assert.doesNotMatch(recipe, /docker\.sock|^\s*(privileged|ports|network_mode):/m);
+
+  const container = job(read(".github/workflows/container.yml"), "build");
+  before(container, "docker build --tag melra:ci", "pnpm compose:smoke");
+  before(container, "pnpm build", "pnpm compose:smoke");
 });
 
 test("docs:check fails a row the code no longer reads, and a help line with no row", () => {

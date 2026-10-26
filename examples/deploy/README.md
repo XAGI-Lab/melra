@@ -1,14 +1,16 @@
 # Hardened deployment recipes
 
 Runnable setups where the operating system, not MELRA, keeps the process boxed
-in (#52). Each one is exercised in CI, and `melra doctor` run under it reports
-what actually took effect on its `isolation` line.
+in (#52). Each one is exercised in CI. `melra doctor` run under the first three
+reports what actually took effect on its `isolation` line; the container pair
+also boxes the agent, and `melra probe` checks it from the agent's side.
 
 | Recipe | Platform | What the kernel enforces | CI check |
 |---|---|---|---|
 | [`systemd/melra.service`](systemd/melra.service) | Linux | no capabilities, `no_new_privs`, a seccomp filter (`@system-service`), a read-only filesystem except the workspace and data directory, private `/tmp` and devices, IP and Unix sockets only | `scripts/systemd-smoke.mjs`: `doctor` must show all four restrictions, and conformance must reach L3 inside them |
 | [`macos/melra.sb`](macos/melra.sb) | macOS | writes confined to the workspace, the data directory, and temp folders, for MELRA and every command it runs; `sudo`, `su`, and `login` refused | `scripts/macos-sandbox-smoke.mjs`: conformance must reach L3 inside it, a write inside the workspace must succeed, and a write to the home folder must be refused by the kernel |
 | [Docker](../../docs/INSTALLATION.md#docker) | any OCI host | read-only root, `--cap-drop ALL`, `no-new-privileges`, Docker's default seccomp profile | `scripts/docker-smoke.mjs` |
+| [`compose/compose.yaml`](compose/compose.yaml) | Docker Engine 28.0 or later | MELRA and the agent in separate containers: the agent gets the workspace read-only, no MELRA data, no network route out or address on the host, and MELRA's mode-`0600` socket; both get a read-only root, no capabilities, `no-new-privileges`, and process and memory caps | `scripts/compose-smoke.mjs`: from inside the agent's container, `melra probe` must find a workspace write, MELRA's data, a connection out and one to the host refused (both aimed at the runner), and a file write through the socket, approved from MELRA's side, must reach `verified_success` with a receipt |
 
 The systemd unit serves on a mode-`0600` Unix socket in a runtime directory
 only its user can enter, with `MELRA_MODE=enforced`. Edit the two paths in it,

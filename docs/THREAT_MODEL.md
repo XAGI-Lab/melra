@@ -59,6 +59,20 @@ nothing else, and only for the targets it tried. See
 [deployment modes](INSTALLATION.md#deployment-modes) and
 [checking an agent's box](INSTALLATION.md#check-an-agents-box).
 
+**The container pair.** One such box ships as a recipe,
+[MELRA and the agent in two containers](INSTALLATION.md#melra-and-the-agent-in-two-containers):
+the agent's container gets the workspace read-only, MELRA's mode-`0600` socket,
+no MELRA data, no credentials, no network route out and no address on the host
+to connect to, and both containers run with no capabilities,
+`no-new-privileges`, a read-only root and caps on processes and memory. CI
+checks it from the agent's side with `melra probe` and a write through the
+socket that an operator approves from MELRA's side. It leaves open the agent's
+channel to its model, which the recipe does not provide; the token the agent
+holds, which is the operator's, so its calls are recorded as the operator's,
+though in enforced mode it still cannot approve; the host kernel both containers
+share; and any change to the file that mounts the Docker socket or runs a
+container privileged, which hands that container the host.
+
 **A session `melra launch` starts.** `melra launch claude-code` removes the
 harness's own alternative for the one session it starts, in either mode:
 Claude Code runs with read-only built-in tools, melra as its only MCP server,

@@ -1,0 +1,107 @@
+# MELRA and the agent in two containers, so the agent's only way to change the
+# workspace or reach the network is MELRA's socket.
+#
+#   melra  enforced mode, the workspace read-write, its data volume, and
+#          `serve --socket` on a volume that holds only the socket. No ports.
+#   agent  the workspace read-only, the socket, and a network with no route
+#          out and no address on the host. No MELRA data, no credentials. It
+#          runs as MELRA's user, 1000 (the image's `node`), because the socket
+#          is mode 0600.
+#
+# Run it from a checkout (WORKSPACE defaults to the checkout itself):
+#   docker compose -f examples/deploy/compose/compose.yaml up
+# The agent here is a stand-in that runs `melra probe` against MELRA and exits.
+# Replace its image and command with your agent's, keep everything else, and
+# export MELRA_HTTP_TOKEN before `up` so both get the same token. Approve from
+# MELRA's side:
+#   docker compose -f examples/deploy/compose/compose.yaml exec melra \
+#     node /opt/melra/dist/bin.js approve <task-id>
+# `scripts/compose-smoke.mjs` runs this file as written in CI.
+#
+# Never mount the Docker socket into either container and never run either one
+# privileged: each hands the container the host, and the box is gone.
+
+name: melra-pair
+
+services:
+  melra:
+    build:
+      context: ../../..
+    image: ${MELRA_IMAGE:-melra:local}
+    command: ["serve", "--socket", "/run/melra/melra.sock"]
+    user: "1000:1000"
+    # Reaps what a terminal job leaves behind; node as PID 1 does not.
+    init: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # A ceiling on a runaway fork or a memory blow-up; raise them if your
+    # tasks need more.
+    pids_limit: 512
+    mem_limit: 2g
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    volumes:
+      - ${WORKSPACE:-../../..}:/workspace
+      - melra-data:/data
+      - melra-socket:/run/melra
+    environment:
+      MELRA_MODE: enforced
+      MELRA_WORKSPACE: /workspace
+      MELRA_HOME: /data
+      MELRA_SOCKET: /run/melra/melra.sock
+      # Empty: MELRA makes one up and prints it.
+      MELRA_HTTP_TOKEN: ${MELRA_HTTP_TOKEN:-}
+    healthcheck:
+      test: ["CMD", "test", "-S", "/run/melra/melra.sock"]
+      interval: 2s
+      retries: 30
+
+  agent:
+    image: ${MELRA_IMAGE:-melra:local}
+    command: ["probe", "--socket", "/run/melra/melra.sock"]
+    depends_on:
+      melra:
+        condition: service_healthy
+    user: "1000:1000"
+    init: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 512
+    mem_limit: 2g
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    working_dir: /workspace
+    volumes:
+      - ${WORKSPACE:-../../..}:/workspace:ro
+      - melra-socket:/run/melra
+    environment:
+      MELRA_SOCKET: /run/melra/melra.sock
+      # The token MELRA asks every request for. In enforced mode it lets the
+      # agent ask, not approve.
+      MELRA_HTTP_TOKEN: ${MELRA_HTTP_TOKEN:-}
+    networks:
+      - agent
+
+networks:
+  agent:
+    internal: true
+    # `isolated` leaves the host no address on this network, so the agent
+    # cannot reach the host's services through it either. Docker Engine 28.0
+    # or later.
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv4: isolated
+
+volumes:
+  melra-data:
+  # A tmpfs only MELRA's user can enter, shared by both containers.
+  melra-socket:
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: uid=1000,gid=1000,mode=0700
