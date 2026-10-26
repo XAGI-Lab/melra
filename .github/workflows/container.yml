@@ -7,6 +7,8 @@ on:
       - ".dockerignore"
       - "compose.yaml"
       - "scripts/docker-smoke.mjs"
+      - "scripts/compose-smoke.mjs"
+      - "examples/deploy/compose/**"
       - "apps/**"
       - "packages/**"
       - "package.json"
@@ -19,6 +21,8 @@ on:
       - ".dockerignore"
       - "compose.yaml"
       - "scripts/docker-smoke.mjs"
+      - "scripts/compose-smoke.mjs"
+      - "examples/deploy/compose/**"
       - "apps/**"
       - "packages/**"
       - "package.json"
@@ -45,5 +49,10 @@ jobs:
       - run: docker build --tag melra:ci .
       - run: docker run --rm melra:ci doctor
       - run: pnpm docker:smoke
+        env:
+          MELRA_IMAGE: melra:ci
+      # The container pair; its stand-in agent loads the SDK from this build.
+      - run: pnpm build
+      - run: pnpm compose:smoke
         env:
           MELRA_IMAGE: melra:ci

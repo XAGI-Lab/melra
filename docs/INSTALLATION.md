@@ -427,6 +427,8 @@ any box with its own network namespace. The shell `program-start` tries is the
 box's own, so an image that ships one lets the agent start it, and the probe
 reports that as open; an image without one reports `not tested`, since the
 agent may still start other programs there.
+[MELRA and the agent in two containers](#melra-and-the-agent-in-two-containers)
+sets up such a box with Compose.
 
 ## Requirements
 
@@ -2098,6 +2100,11 @@ including `-i`. `--init` puts a minimal init in front of the server as PID 1,
 so a process a terminal job leaves behind is reaped when it exits; Node
 reaps only the processes it started itself. Do not use `-t`; stdio MCP requires clean JSON-RPC streams.
 
+This boxes MELRA, not the agent: the client that starts the container keeps
+its own tools and everything its user can reach, so it is a developer-mode
+recipe. To box the agent as well, run it in a container of its own, as in
+[MELRA and the agent in two containers](#melra-and-the-agent-in-two-containers).
+
 To see what those flags bought, run `doctor` with the same arguments in place
 of `serve`. Its `isolation` line reads the restrictions from `/proc` inside
 the container:
@@ -2112,6 +2119,75 @@ profile and says so; on native Windows, where MELRA has no isolation recipe of
 its own, it points to Docker or WSL2 instead (see
 [the deployment recipes](../examples/deploy/README.md)). With `MELRA_MODE=enforced`, it
 warns when it finds no restriction at all, or when it cannot read any.
+
+### MELRA and the agent in two containers
+
+[`examples/deploy/compose/compose.yaml`](../examples/deploy/compose/compose.yaml)
+runs MELRA and the agent in two containers on one host, so the agent's only
+way to change the workspace or reach the network is MELRA's socket. From a
+checkout:
+
+```bash
+docker compose -f examples/deploy/compose/compose.yaml up
+```
+
+- `melra` serves on a [Unix socket](#over-a-unix-socket) in enforced mode,
+  with the workspace read-write and its data in a volume of its own. The
+  socket sits on a volume that holds nothing else, a tmpfs only the user both
+  containers run as (`1000`, the image's `node`) can enter. No port is
+  published.
+- `agent` gets the workspace read-only, the socket, and an `internal` network
+  with no route out. Its gateway mode, `isolated`, leaves the host no address
+  on that network either. MELRA's data volume is not mounted there, and no
+  credential is passed in.
+- Both run with a read-only root, no capabilities, `no-new-privileges`, and a
+  cap on processes (`pids_limit`) and memory (`mem_limit`).
+
+The agent in the file is a stand-in: the melra image, running
+[`melra probe`](#check-an-agents-box) once MELRA answers, then exiting. Three
+checks report confined (the workspace write, MELRA's database and key, the
+public connection) and two open, because in a container 127.0.0.1 and the
+shell are the container's own
+(see [In CI or a container](#in-ci-or-a-container)).
+Replace its `image` and `command` with your agent's and keep the rest. To let
+it call MELRA, export `MELRA_HTTP_TOKEN` before `up`, so both containers get
+the same token; left unset, MELRA makes one up and prints it, and the agent
+does not have it. In enforced mode each change the agent plans waits for you;
+approve it from MELRA's side:
+
+```bash
+docker compose -f examples/deploy/compose/compose.yaml exec melra \
+  node /opt/melra/dist/bin.js approve <task-id>
+```
+
+`WORKSPACE` names the directory mounted as the workspace (default: the
+checkout); on a Linux host, user `1000` needs write access to it.
+`MELRA_IMAGE` names the image (default `melra:local`, built from the checkout
+when missing); outside a checkout, set it to a published tag such as
+`ghcr.io/xagi-lab/melra:alpha` and delete the `build:` lines. The agent's
+network needs Docker Engine 28.0 or later, for gateway mode `isolated`.
+
+Never mount the Docker socket into either container, and never run either one
+privileged: each hands the container the host.
+
+What it leaves open:
+
+- An agent that calls a model needs a way to its provider, and the `internal`
+  network has none. Give it one through an allowlisting proxy on that network
+  rather than a route out; this file does not include one yet.
+- The agent holds MELRA's one token, so MELRA records its calls as the
+  operator's. In enforced mode that still does not let it approve.
+- The containers share the host's kernel.
+
+`pnpm compose:smoke` runs the file as written. Inside the agent's container, the
+probe must find the workspace write, MELRA's database and key, a connection out
+and one to the host refused, and MELRA answering. Both connections aim at a port
+the runner listens on, so nothing leaves it. Then the stand-in plans a file
+write through the socket with the TypeScript SDK, `melra approve` in MELRA's
+container approves it, and the write must reach `verified_success` with a
+receipt. It needs Docker with Compose and a built checkout, and runs in CI on
+Linux; `node scripts/compose-smoke.mjs --dry-run` prints the docker commands
+without running them.
 
 ## Python SDK
 

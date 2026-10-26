@@ -57,6 +57,26 @@ All notable changes are documented here. The format follows
   nothing over its connections, changes no setting, and proves only the checks
   on its list. See
   [checking an agent's box](docs/INSTALLATION.md#check-an-agents-box).
+- `examples/deploy/compose/compose.yaml` runs MELRA and the agent in two
+  containers, so the agent's only way to change the workspace or reach the
+  network is MELRA's socket. MELRA serves `--socket` in enforced mode with the
+  workspace read-write and its data in a volume of its own, on a volume that
+  holds only the socket, with no port published. The agent gets the workspace
+  read-only, no MELRA data, no credentials and an internal network with no route
+  out and, in gateway mode `isolated` (Docker Engine 28.0 or later), no address
+  on the host, and runs as MELRA's user so the mode-`0600` socket admits it.
+  Both run with a read-only root, no capabilities, `no-new-privileges`, and caps
+  on processes and memory (`pids_limit`, `mem_limit`). From a checkout,
+  `docker compose -f examples/deploy/compose/compose.yaml up` starts it with a
+  stand-in agent that runs `melra probe`. `pnpm compose:smoke`, run in CI on
+  Linux, checks it from the agent's side: the probe must find the workspace
+  write, MELRA's database and key, and connections out and to the host refused,
+  both aimed at a port on the runner so nothing leaves it, and a file write
+  through the socket with the TypeScript SDK, approved with `melra approve` in
+  MELRA's container, must reach `verified_success` with a receipt. The
+  `docker run -i` stdio recipe is now described as what it is: it boxes MELRA,
+  not the agent, and is a developer-mode recipe. See
+  [MELRA and the agent in two containers](docs/INSTALLATION.md#melra-and-the-agent-in-two-containers).
 - An operator's deny says why: `melra approve <task-id> --deny` takes
   `--reason wrong_target|too_broad|not_now|never|other` (`other` when left
   out) and `--note <text>`, and the console's Deny takes a reason from a list
