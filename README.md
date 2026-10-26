@@ -439,8 +439,10 @@ optional. `MELRA_MODE` is where you say which situation you are in:
 MELRA cannot verify that assertion from inside its own process, and it does not
 pretend to; the isolation is the operating system's job. What enforced mode does is
 close every door MELRA owns: `--unsafe-local` is refused outright, nothing binds
-outside loopback (a `0600` Unix socket is allowed), no client can register itself, and
-`mode` is stamped on every receipt. For the operating-system side,
+outside loopback (a `0600` Unix socket is allowed), no client can register itself,
+every command MELRA runs gets an OS sandbox of its own that keeps it out of MELRA's
+data and your logins (MELRA will not start where none works, unless the policy file
+records the opt-out), and `mode` is stamped on every receipt. For the operating-system side,
 [examples/deploy](examples/deploy/README.md) has a hardened Docker run, a systemd
 unit and a Compose pair that puts the agent in a container of its own, each checked
 in CI, `melra doctor` reports which restrictions are actually in
@@ -454,7 +456,8 @@ For Claude Code, `melra launch claude-code` takes the other path away for the
 session it starts: Read, Glob and Grep are its only built-in tools and melra its
 only MCP server, so the only tools it has that change anything are MELRA's. A
 command MELRA runs for it still has your rights, and in developer mode the agent
-approves its own changes, so `--mode enforced` is how you decide each one. The
+approves its own changes, so `--mode enforced` is how you decide each one, and
+how each runs in a [sandbox](docs/INSTALLATION.md#per-command-sandbox). The
 server it starts leaves `node`, `npm`, `npx` and `pnpm` out of the default
 allowlist, unless the policy file lists them, as one `melra setup` wrote does:
 remove the ones the agent does not need. A `claude` started any other way is

@@ -720,8 +720,9 @@ word, Node gives none and the message says only `not valid JSON`.
 The keys are `version`, `workspaceRoot`, `allowedCommands`, `allowedDomains`,
 `allowLocalhost`, `popups`, `mutations`, `approvalTtlMs`, `maxFileBytes`,
 `memoryRetention`, `deniedTraits`, `capabilities`, `credentials`,
-`circuitBreaker`, `unhinged` and `mode`; there is no comment or `$schema`
-key. `melra doctor` fails its `policy` check with the same message, `melra
+`circuitBreaker`, `unhinged`, `sandbox` (see
+[per-command sandbox](#per-command-sandbox)) and `mode`; there is no comment
+or `$schema` key. `melra doctor` fails its `policy` check with the same message, `melra
 policy test` prints it, and `melra status` and `melra tasks` report it
 (`policyError` in their JSON).
 
@@ -839,6 +840,91 @@ running it:
 echo '{"goal":"install","operation":{"kind":"terminal","action":"run","command":"npm","args":["install","left-pad"]},"requiredEvidence":[{"type":"exit_code","value":0}]}' \
   | melra policy test
 ```
+
+### Per-command sandbox
+
+Every command the terminal adapter starts can run inside an OS sandbox made
+for that one command. It is on in enforced mode, where MELRA refuses to start
+without one, and off in developer mode unless the policy file turns it on.
+Under Seatbelt and bubblewrap, a command in the sandbox:
+
+- writes only in the workspace and the temp folders (`$TMPDIR` and `/tmp`);
+- reads everything else except MELRA's own files (`MELRA_HOME`, the policy
+  file, every credential's `source.file`, the browser profile and HTTP
+  archives) and the logins tools keep under home: `~/.ssh`, `~/.aws`,
+  `~/.azure`, `~/.config/gcloud`, `~/.config/gh`, `~/.config/git/credentials`,
+  `~/.git-credentials`, `~/.docker/config.json`, `~/.kube`, `~/.gnupg`,
+  `~/.netrc`, `~/.npmrc`, `~/.yarnrc.yml`, `~/.pypirc`, `~/.gem/credentials`,
+  `~/.cargo/credentials`, `~/.cargo/credentials.toml`,
+  `~/.terraform.d/credentials.tfrc.json`, `~/.vault-token`,
+  `~/.password-store` and `~/Library/Keychains`;
+- reaches no network unless policy gives the command the `network`
+  [trait](#local-configuration) (`git fetch`, `curl`, an install). Under
+  Seatbelt it opens no socket at all without it, a listening one or one to
+  loopback included, and with it only IP sockets and DNS, never a Unix socket
+  such as an SSH agent's or Docker's. Under bubblewrap it gets an empty
+  network namespace with a loopback of its own, so neither the host's network
+  nor the host's loopback; Unix sockets on the filesystem stay reachable,
+  with the trait or without;
+- makes no symbolic link unless the command carries the `package-install`
+  trait or the policy file names it in `sandbox.symlinks`. Without that a
+  `git checkout` of a repository holding links fails with `EPERM`. Seatbelt
+  also refuses renaming a link; on Linux only creating one is refused, since
+  the filter cannot tell a link from another file, so a command can still
+  rename or hard-link a link already there.
+
+Under `uid` a command only runs as an account that, as MELRA checks at
+startup, cannot read or enter `MELRA_HOME` and cannot read the policy file,
+the secret files or the logins under home; where it writes, what it connects
+to and whether it makes links are the host's to decide for that account.
+
+The policy file sets it under `sandbox`:
+
+```json
+{
+  "sandbox": {
+    "use": "on",
+    "symlinks": ["git"],
+    "readable": ["~/.npmrc"]
+  }
+}
+```
+
+| Key | Meaning |
+|---|---|
+| `use` | `on`: every command runs sandboxed, and MELRA refuses to start (`sandbox_unavailable`) where none works. `off`: none, which enforced mode refuses (`enforced_mode_refuses_sandbox_off`). `if-available`: sandboxed where one works, and started without one where none does; in enforced mode this is the operator's recorded opt-out, and every receipt then says `"sandbox": "none"`. Left out, `on` in enforced mode and `off` in developer mode. Unsafe-local turns it off |
+| `symlinks` | Commands, by name as in `allowedCommands`, that may make symbolic links |
+| `readable` | Entries of the list above to let commands read again, written exactly as listed |
+| `user` | `{ "uid": ..., "gid": ... }`, the account the `uid` sandbox runs commands as; never 0 |
+
+MELRA tries one sandbox per platform at startup, with a harmless command, and
+takes the first that works:
+
+| Sandbox | Where | How |
+|---|---|---|
+| `seatbelt` | macOS | `/usr/bin/sandbox-exec -p` with a deny-default profile written for each command. macOS applies no profile inside another, so not under [`melra.sb`](../examples/deploy/macos/melra.sb) |
+| `bubblewrap` | Linux with `bwrap` installed and unprivileged user namespaces allowed | the root read-only, the workspace and temp writable, MELRA's files hidden, a PID namespace (what a command leaves running, a background job's included, ends with it, and nothing outlives MELRA), an empty network namespace without the `network` trait, and a seccomp filter that fails `symlink`, `symlinkat` and `io_uring_setup` with `EPERM` (x86_64 and aarch64) |
+| `uid` | Linux, MELRA running as root with `CAP_SETUID` and `CAP_SETGID`, and `sandbox.user` set | each command runs as that account. At startup MELRA has it try every path above, and refuses to start (`uid: 1000 can read ...`) if it can read one, or enter `MELRA_HOME`. It is no wrapper: a command so run writes, reaches the network and makes links as the host lets that account. MELRA then creates files group-writable (umask `002`), and so do its commands, so where MELRA shares the account's group each may change what the other makes. For a container, as the [container pair](#melra-and-the-agent-in-two-containers) does |
+
+There is none on Windows: run MELRA under WSL2 with bubblewrap, or in the
+[container pair](#melra-and-the-agent-in-two-containers), or record the
+opt-out. Each receipt names the sandbox its kernel ran commands in
+(`"sandbox": "seatbelt"`, `"bubblewrap"`, `"uid"`, or `"none"` under the
+opt-out) beside its `mode`; a receipt with no `sandbox` came from a kernel that
+had it off.
+
+`melra doctor` reports it on its `sandbox` line: which sandbox works here, or
+why none does and how to fix it. It fails where the server would refuse to
+start, and warns where enforced mode starts on the opt-out. On Ubuntu 24.04,
+bubblewrap needs `sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0`
+or an AppArmor profile that lets `/usr/bin/bwrap` make user namespaces; the
+[systemd unit](../examples/deploy/systemd/melra.service) allows the
+namespaces, mount calls and netlink sockets bubblewrap needs.
+
+Tools that keep a cache or a login under home cannot write it from inside:
+point the cache at the workspace or temp in the project's own configuration
+(a project `.npmrc` takes `cache`), or allow a login back with `readable`.
+Each command takes a few milliseconds more to start.
 
 ### Capability grants
 
@@ -1439,6 +1525,13 @@ closing every door it owns:
   `MELRA_WORKSPACE` at the repository's top level. Developer mode, other `git`
   commands (`commit`, `checkout`, ...), and an approved call with a global
   option before the subcommand use whatever repository git finds.
+- **Every command runs in an OS sandbox, or MELRA does not start.** An
+  approved command used to run with every right MELRA's own OS user has. In
+  enforced mode each one runs in a [per-command sandbox](#per-command-sandbox)
+  that keeps it out of MELRA's data and the logins under home; under Seatbelt
+  and bubblewrap it also writes only the workspace and temp, and stays off the
+  network unless it carries the `network` trait. Where no sandbox works, the process exits with `sandbox_unavailable`,
+  naming why and the fix, unless the policy file records the opt-out.
 - **A browser action that drives a page names it.** `click`, `type`,
   `fill_form`, `select`, `press`, `upload`, `download`, `close` and
   `tab_switch` without a `url` are refused at planning with
@@ -2119,7 +2212,9 @@ reaps only the processes it started itself. Do not use `-t`; stdio MCP requires 
 
 This boxes MELRA, not the agent: the client that starts the container keeps
 its own tools and everything its user can reach, so it is a developer-mode
-recipe. To box the agent as well, run it in a container of its own, as in
+recipe. With every capability dropped there is no
+[per-command sandbox](#per-command-sandbox) in it, so enforced mode refuses to
+start there; the container pair below brings one. To box the agent as well, run it in a container of its own, as in
 [MELRA and the agent in two containers](#melra-and-the-agent-in-two-containers).
 
 To see what those flags bought, run `doctor` with the same arguments in place
@@ -2133,7 +2228,7 @@ the container:
 `pnpm docker:smoke` requires all five, so the recipe above and what `doctor`
 reports stay in step. Outside Linux, `doctor` cannot see a macOS sandbox
 profile and says so; on native Windows, where MELRA has no isolation recipe of
-its own, it points to Docker or WSL2 instead (see
+its own, it points to WSL2 with bubblewrap or the container pair instead (see
 [the deployment recipes](../examples/deploy/README.md)). With `MELRA_MODE=enforced`, it
 warns when it finds no restriction at all, or when it cannot read any.
 
@@ -2149,16 +2244,25 @@ docker compose -f examples/deploy/compose/compose.yaml up
 ```
 
 - `melra` serves on a [Unix socket](#over-a-unix-socket) in enforced mode,
-  with the workspace read-write and its data in a volume of its own. The
-  socket sits on a volume that holds nothing else, a tmpfs only the user both
-  containers run as (`1000`, the image's `node`) can enter. No port is
-  published.
+  with the workspace read-write and its data in a volume of its own, mounted
+  at the image's root-only `/var/lib/melra`, and its policy file in the
+  root-only `/etc/melra`. It runs as root with only `CAP_SETUID` and
+  `CAP_SETGID`, which it uses to run every command as `node` (`1000`), the
+  account [`compose/policy.json`](../examples/deploy/compose/policy.json)
+  names in `sandbox.user`: that account cannot enter MELRA's data or read its
+  policy file (the [`uid` sandbox](#per-command-sandbox)). MELRA runs in that
+  account's group, `1000`, so what either creates in the workspace the other
+  may change. The socket sits on a volume that
+  holds nothing else, a tmpfs only root, the user both containers run as, can
+  enter. No port is published.
 - `agent` gets the workspace read-only, the socket, and an `internal` network
   with no route out. Its gateway mode, `isolated`, leaves the host no address
   on that network either. MELRA's data volume is not mounted there, and no
   credential is passed in.
-- Both run with a read-only root, no capabilities, `no-new-privileges`, and a
-  cap on processes (`pids_limit`) and memory (`mem_limit`).
+- Both run with a read-only root, `no-new-privileges`, and a cap on processes
+  (`pids_limit`) and memory (`mem_limit`), and no capabilities but MELRA's two.
+  Root without the others reads and writes by file modes alone, as any user
+  does.
 
 The agent in the file is a stand-in: the melra image, running
 [`melra probe`](#check-an-agents-box) once MELRA answers, then exiting. Three
@@ -2180,7 +2284,9 @@ docker compose -f examples/deploy/compose/compose.yaml exec melra \
 ```
 
 `WORKSPACE` names the directory mounted as the workspace (default: the
-checkout); on a Linux host, user `1000` needs write access to it.
+checkout); root (without `CAP_DAC_OVERRIDE`) and user `1000` both need write
+access to it and to what it already holds, through group `1000` or its mode.
+What either creates there later is group-writable.
 `MELRA_IMAGE` names the image (default `melra:local`, built from the checkout
 when missing); outside a checkout, set it to a published tag such as
 `ghcr.io/xagi-lab/melra:alpha` and delete the `build:` lines. The agent's
@@ -2197,6 +2303,8 @@ What it leaves open:
 - The agent holds MELRA's one token, so MELRA records its calls as the
   operator's. In enforced mode that still does not let it approve.
 - The containers share the host's kernel.
+- A command MELRA runs is another account, not a sandbox: it can reach the
+  network MELRA's container has, and make symbolic links, whatever its traits.
 
 `pnpm compose:smoke` runs the file as written. Inside the agent's container, the
 probe must find the workspace write, MELRA's database and key, a connection out
@@ -2204,8 +2312,11 @@ and one to the host refused, and MELRA answering. Both connections aim at a port
 the runner listens on, so nothing leaves it. Then the stand-in plans a file
 write through the socket with the TypeScript SDK, `melra approve` in MELRA's
 container approves it, and the write must reach `verified_success` with a
-receipt. It needs Docker with Compose and a built checkout, and runs in CI on
-Linux; `node scripts/compose-smoke.mjs --dry-run` prints the docker commands
+receipt. Then it has MELRA run a `node` command, approved the same way, that
+must report it ran as `1000` and was refused MELRA's data (`EACCES`), after
+it edits the file MELRA wrote and makes a directory; last, MELRA must write
+into that directory. It
+needs Docker with Compose and a built checkout, and runs in CI on Linux; `node scripts/compose-smoke.mjs --dry-run` prints the docker commands
 without running them.
 
 ## Python SDK

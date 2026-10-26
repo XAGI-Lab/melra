@@ -11,7 +11,15 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { detectBrowserExecutable } from "@melra/browser-runtime";
 import { EvidencePredicateSchema, type WorkflowAdvanceResult } from "@melra/protocol";
 import { SqliteStore } from "@melra/storage-sqlite";
-import { createMelraRuntime } from "../src/runtime.js";
+import { createMelraRuntime as createRuntime } from "../src/runtime.js";
+
+// Enforced mode refuses to start where no OS sandbox works, as on a CI host
+// with none. A test about something else gets one that confines nothing.
+const createMelraRuntime = (options: Parameters<typeof createRuntime>[0]) =>
+  createRuntime({
+    detectSandbox: async () => ({ sandbox: { backend: "test", confine: async ({ file, args }) => ({ file, args }) } }),
+    ...options,
+  });
 
 const detectedBrowserExecutable = await detectBrowserExecutable();
 const rootPackage = resolve(import.meta.dirname, "../../..");
@@ -606,6 +614,9 @@ describe("MELRA over real stdio transport", () => {
     const workspace = join(base, "workspace");
     const home = join(base, "data");
     await mkdir(workspace, { recursive: true });
+    // The recorded opt-out, so it starts on a CI host with no OS sandbox.
+    const policy = join(base, "policy.json");
+    await writeFile(policy, JSON.stringify({ sandbox: { use: "if-available" } }));
     const stderr: string[] = [];
     const transport = new StdioClientTransport({
       command: process.execPath,
@@ -615,7 +626,7 @@ describe("MELRA over real stdio transport", () => {
         ...childEnvironment,
         MELRA_WORKSPACE: workspace,
         MELRA_HOME: home,
-        MELRA_POLICY: "",
+        MELRA_POLICY: policy,
         MELRA_MODE: "enforced",
         MELRA_HARNESS_TOOLS: "1",
       },

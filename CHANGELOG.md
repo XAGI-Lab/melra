@@ -6,6 +6,34 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- A per-command OS sandbox: each command the terminal adapter starts can run
+  in one made for it, chosen once at startup by trying a harmless command.
+  Seatbelt on macOS (`sandbox-exec -p` with a deny-default profile),
+  bubblewrap on Linux (with a PID namespace and `--die-with-parent`), or, for
+  a container where MELRA runs as root with `CAP_SETUID` and `CAP_SETGID`,
+  another account (`uid`). In each a command cannot read MELRA's data, the
+  policy file, the secret files or the logins tools keep under home
+  (`~/.ssh`, `~/.aws`, `~/.config/gh`, `~/.npmrc`, `~/.netrc`,
+  `~/.docker/config.json`, `~/.kube`, `~/.gnupg` and more); under `uid` that
+  is the account's own permissions, which MELRA checks at startup. Under
+  Seatbelt and bubblewrap it also writes only in the workspace and temp, makes
+  no symbolic link unless it installs packages or the policy file names it,
+  and reaches no network without the `network` trait: Seatbelt opens it no
+  socket, and with the trait only IP and DNS, while bubblewrap gives it an
+  empty network namespace, where Unix sockets on the filesystem stay
+  reachable. It is on in enforced mode and off in developer mode unless the
+  policy file turns it on. The policy file's `sandbox` key sets `use` (`on`,
+  `off`, `if-available`), `symlinks` (commands that may make links),
+  `readable` (logins to allow back) and `user` (the `uid` sandbox's account).
+  Each receipt names the sandbox beside `mode`, or says `none` where the
+  policy file let enforced mode start without one. See
+  [per-command sandbox](https://github.com/XAGI-Lab/melra/blob/main/docs/INSTALLATION.md#per-command-sandbox).
+- `melra doctor` has a `sandbox` line: which sandbox works on this host, or
+  why none does and how to fix it. It fails where the server would refuse to
+  start, and warns where enforced mode starts on the opt-out.
+
 ### Changed
 
 - **Breaking:** the browser MELRA launches starts with
@@ -27,6 +55,24 @@ All notable changes are documented here. The format follows
 - On macOS, a file `read`, `hash` or `write` is judged by the path with its
   links resolved and then opened following no link, so a link that appears in
   between fails with `path_changed`.
+- **Breaking:** enforced mode refuses to start where no per-command sandbox
+  works (`sandbox_unavailable`, naming why and the fix), and where the policy
+  file turns it off (`enforced_mode_refuses_sandbox_off`): on Windows, on
+  Linux without bubblewrap or unprivileged user namespaces (Ubuntu 24.04 by
+  default), and on a Mac under `examples/deploy/macos/melra.sb`, which macOS
+  will not nest a profile in. `"sandbox": {"use": "if-available"}` in the
+  policy file is the recorded opt-out. Under bubblewrap what a background job
+  leaves running ends when its program does.
+- **Breaking:** the container pair runs MELRA as root in group `1000` with
+  only `CAP_SETUID` and `CAP_SETGID`, its data and policy file in the image's
+  root-only `/var/lib/melra` and `/etc/melra`, and each command as `node`;
+  what either creates in the workspace is group-writable. The agent runs as
+  root with no capabilities, to reach MELRA's socket. The workspace must be
+  writable by both.
+- The systemd unit allows the namespaces, mount calls and netlink sockets
+  bubblewrap needs, and no longer sets `ProtectKernelTunables`,
+  `ProtectKernelLogs` or `ProtectHostname`, under which it cannot mount a
+  `/proc` of its own.
 
 ### Security
 
@@ -45,6 +91,11 @@ All notable changes are documented here. The format follows
   payload key or the HTTP token from MELRA's environment.
 - The payload key file is decoded without the key ever becoming a string, and
   its bytes are cleared once read.
+- Commands MELRA runs in enforced mode no longer have all of MELRA's own
+  rights: the operating system keeps them away from MELRA's records, keys and
+  policy file and from the logins under home, and under Seatbelt or bubblewrap
+  also from writing outside the workspace and temp, from IP networks unless
+  their traits need it, and from making symbolic links.
 
 ## [0.4.0-alpha.0] - 2026-10-26
 

@@ -72,7 +72,7 @@ import {
 import { approvalConsole, assertConsoleTerminal, confirmInTerminal } from "./approval-console.js";
 import { clientStatuses, clientsCheck, detectClients } from "./client-status.js";
 import { RESTART_SAFE_WORKFLOW } from "./demo-workflow.js";
-import { detectIsolation, isolationCheck } from "./isolation.js";
+import { detectIsolation, isolationCheck, sandboxCheck } from "./isolation.js";
 import {
   CLAUDE_DENIED_TOOLS,
   claudeHarness,
@@ -757,11 +757,13 @@ async function doctor(env: CliEnvironment): Promise<{
       : computer.limitations.join("; "),
   });
   let credentials: LocalPolicy["credentials"] = {};
+  let sandbox: { settings: LocalPolicy["sandbox"]; policyPath?: string } | undefined;
   try {
     const path = await existingPolicyPath(env);
     // The server's own parser, so a bad `mode` or grant fails here too.
     const loaded = await loadPolicy(path, env.workspaceRoot);
     credentials = loaded.credentials;
+    sandbox = { settings: loaded.sandbox, ...(path === undefined ? {} : { policyPath: path }) };
     checks.push({
       name: "policy",
       status: "pass",
@@ -823,6 +825,10 @@ async function doctor(env: CliEnvironment): Promise<{
         detail: `could not resolve the workspace: ${error instanceof Error ? error.message : String(error)}`,
       });
     }
+  }
+  if (sandbox !== undefined && checks.some((check) => check.name === "workspace" && check.status === "pass")) {
+    const { settings, policyPath } = sandbox;
+    checks.push(await sandboxCheck(env, settings, { secrets, ...(policyPath === undefined ? {} : { policyPath }) }));
   }
   if (env.socketPath !== undefined) checks.push(await socketCheck(env.socketPath));
   checks.push(isolationCheck(await detectIsolation(), env.mode));

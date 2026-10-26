@@ -3,6 +3,10 @@
 
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { sandboxUse, type LocalPolicy } from "@melra/policy-core";
+import { commandSandbox } from "@melra/server/kernel";
+import type { CliEnvironment } from "./environment.js";
+import type { DoctorCheck } from "./human.js";
 
 /**
  * Which OS-level restrictions this process is actually running under, as far
@@ -79,7 +83,7 @@ export function isolationCheck(
       status: unbacked,
       detail:
         process.platform === "win32"
-          ? "not visible on win32, and MELRA has no native Windows recipe; run it under Docker or WSL2 for OS isolation (examples/deploy)"
+          ? "not visible on win32, and MELRA has no native Windows recipe; for enforced mode run it under WSL2 with bubblewrap (the systemd unit) or in the container pair (examples/deploy/compose)"
           : `not visible on ${process.platform}; a sandbox profile cannot be read from inside`,
     };
   }
@@ -93,4 +97,58 @@ export function isolationCheck(
   return active.length === 0
     ? { name, status: unbacked, detail: "none in effect: full capabilities, no seccomp filter, writable root" }
     : { name, status: "pass", detail: active.join(", ") };
+}
+
+/**
+ * Which OS sandbox commands run in here, or why none would and how to fix
+ * that, found as the server finds it at startup (`detect` absent, this host's
+ * own). A `fail` where the server would refuse to start; a `warn` where the
+ * policy file's `if-available` lets enforced mode start without one.
+ */
+export async function sandboxCheck(
+  env: Pick<CliEnvironment, "mode" | "unhinged" | "workspaceRoot" | "dataDirectory">,
+  settings: LocalPolicy["sandbox"],
+  paths: { policyPath?: string; secrets: Map<string, string> },
+  detect?: Parameters<typeof commandSandbox>[2],
+): Promise<DoctorCheck> {
+  const name = "sandbox";
+  const use = sandboxUse({ sandbox: settings, mode: env.mode, unhinged: env.unhinged });
+  const off = env.unhinged ? "off under unsafe-local" : 'off in developer mode unless the policy file sets "sandbox": {"use": "on"}';
+  if (env.mode === "enforced" && use === "off") {
+    return {
+      name,
+      status: "fail",
+      detail: 'enforced_mode_refuses_sandbox_off: the policy file sets "sandbox": {"use": "off"}',
+      next: 'drop "use": "off", or set it to "if-available" to start without one where none works',
+    };
+  }
+  const found = await commandSandbox(
+    settings,
+    { workspaceRoot: env.workspaceRoot, dataDirectory: env.dataDirectory, ...paths },
+    detect,
+  );
+  if ("sandbox" in found) {
+    return {
+      name,
+      status: "pass",
+      detail:
+        use === "off" ? `${found.sandbox.backend} works here; ${off}` : `${found.sandbox.backend}: every command runs in it`,
+    };
+  }
+  const why = found.problems.join("; ");
+  if (use === "off") return { name, status: "pass", detail: `${off}, and none would work here: ${why}` };
+  if (use === "on") {
+    return {
+      name,
+      status: "fail",
+      detail: `sandbox_unavailable: the server refuses to start: ${why}`,
+      next: 'fix one of those, or set "sandbox": {"use": "if-available"} in the policy file to start without one',
+    };
+  }
+  return {
+    name,
+    status: env.mode === "enforced" ? "warn" : "pass",
+    detail: `none works here, so the policy file's "if-available" starts without one: every command has MELRA's own rights, and every receipt says sandbox: none (${why})`,
+    next: "fix what the sandbox line above names, so commands run in a sandbox",
+  };
 }

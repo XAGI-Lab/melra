@@ -671,6 +671,7 @@ export class TaskController {
 
     task.status = "running";
     task.mode = this.policy.mode;
+    if (this.policy.sandbox.backend !== undefined) task.sandbox = this.policy.sandbox.backend;
     task.updatedAt = now();
     // Status and owner land in one write, so no running row is ever unowned.
     this.leaveUnstarted(task, this.store.ownerId());
@@ -1815,6 +1816,7 @@ export class TaskController {
         request.reconciliation.length > 0,
       ),
       mode: this.runMode(task) ?? this.policy.mode,
+      ...(task.sandbox === undefined ? {} : { sandbox: task.sandbox }),
       policyDecision: {
         outcome: task.policyDecision.outcome,
         policyVersion: task.policyDecision.policyVersion,

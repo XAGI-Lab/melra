@@ -11,9 +11,17 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { TaskRequestSchema, WorkflowDefinitionSchema } from "@melra/protocol";
-import { DEFAULT_HTTP_PORT, configuredHttpPort, createMelraRuntime, serveHttp } from "../src/index.js";
+import { DEFAULT_HTTP_PORT, configuredHttpPort, createMelraRuntime as createRuntime, serveHttp } from "../src/index.js";
 import type { MelraHttpServer } from "../src/http-server.js";
 import type { MelraRuntime } from "../src/runtime.js";
+
+// Enforced mode refuses to start where no OS sandbox works, as on a CI host
+// with none. A test about something else gets one that confines nothing.
+const createMelraRuntime = (options: Parameters<typeof createRuntime>[0]) =>
+  createRuntime({
+    detectSandbox: async () => ({ sandbox: { backend: "test", confine: async ({ file, args }) => ({ file, args }) } }),
+    ...options,
+  });
 
 /**
  * The HTTP surface is a second front door onto the same runtime, so what these

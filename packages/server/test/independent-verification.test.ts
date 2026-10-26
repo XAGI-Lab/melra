@@ -17,8 +17,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { TaskRequestSchema } from "@melra/protocol";
-import { createMelraRuntime } from "../src/index.js";
+import { createMelraRuntime as createRuntime } from "../src/index.js";
 import type { MelraRuntime } from "../src/runtime.js";
+
+// Enforced mode refuses to start where no OS sandbox works, as on a CI host
+// with none. A test about something else gets one that confines nothing.
+const createMelraRuntime = (options: Parameters<typeof createRuntime>[0]) =>
+  createRuntime({
+    detectSandbox: async () => ({ sandbox: { backend: "test", confine: async ({ file, args }) => ({ file, args }) } }),
+    ...options,
+  });
 
 // Every name answers loopback, so a request to a public-looking host the policy
 // does not name lands on the fixture below, where it can be counted. The other

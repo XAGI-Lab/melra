@@ -10,9 +10,17 @@ import { chromium, type Page } from "playwright-core";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { BrowserOperationSchema, TaskRequestSchema, WorkflowDefinitionSchema } from "@melra/protocol";
 import { BrowserRuntime, detectBrowserExecutable } from "@melra/browser-runtime";
-import { createMelraRuntime, serveHttp } from "../src/index.js";
+import { createMelraRuntime as createRuntime, serveHttp } from "../src/index.js";
 import type { MelraHttpServer } from "../src/http-server.js";
 import type { MelraRuntime } from "../src/runtime.js";
+
+// Enforced mode refuses to start where no OS sandbox works, as on a CI host
+// with none. A test about something else gets one that confines nothing.
+const createMelraRuntime = (options: Parameters<typeof createRuntime>[0]) =>
+  createRuntime({
+    detectSandbox: async () => ({ sandbox: { backend: "test", confine: async ({ file, args }) => ({ file, args }) } }),
+    ...options,
+  });
 
 /**
  * The approval console is `melra console`'s server: a door the agent's server

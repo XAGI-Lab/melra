@@ -219,7 +219,11 @@ describe("melra launch claude-code", () => {
   it("follows the mode and policy file every other command would use", async () => {
     const { home, env } = await sandbox();
     const policy = join(home, "policy.json");
-    await writeFile(policy, JSON.stringify({ mode: "enforced", allowedCommands: ["git", "node"] }));
+    // if-available: the server it checks must start on a host with no sandbox backend.
+    await writeFile(
+      policy,
+      JSON.stringify({ mode: "enforced", allowedCommands: ["git", "node"], sandbox: { use: "if-available" } }),
+    );
     const run = await launch(["--dry-run"], { ...env, CLAUDE_BIN: join(home, "no-such-claude") });
     expect(run.code).toBe(0);
     const { mcpConfig } = JSON.parse(run.stdout) as { mcpConfig: { mcpServers: { melra: { env: Record<string, string> } } } };

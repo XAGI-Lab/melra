@@ -20,13 +20,30 @@ import {
   TerminalOperationSchema,
   WorkflowDefinitionSchema,
 } from "@melra/protocol";
-import { OAuthProvider, approvalScreen, createMelraRuntime, printable, serveHttp } from "@melra/server";
+import { OAuthProvider, approvalScreen, createMelraRuntime as createRuntime, printable, serveHttp } from "@melra/server";
 import { runConformance } from "../src/conformance.js";
 import { RESTART_SAFE_WORKFLOW } from "../src/demo-workflow.js";
 import { approverLabel, parseCliEnvironment, serverLaunch } from "../src/environment.js";
 import { approvalConsole, confirmInTerminal, type ConsoleTerminal } from "../src/approval-console.js";
 import { taskTarget } from "../src/activity.js";
 import { CLAUDE_DENIED_TOOLS, claudeManagedDirectory } from "../src/harness.js";
+
+// Enforced mode refuses to start where no OS sandbox works, as on a CI host
+// with none. A test about something else gets one that confines nothing.
+const createMelraRuntime = (options: Parameters<typeof createRuntime>[0]) =>
+  createRuntime({
+    detectSandbox: async () => ({ sandbox: { backend: "test", confine: async ({ file, args }) => ({ file, args }) } }),
+    ...options,
+  });
+
+// An enforced CLI process starts on a CI host with no OS sandbox only with the
+// policy file's recorded opt-out; a runtime this file starts itself brings a
+// stand-in instead.
+async function sandboxOptOut(directory: string): Promise<{ MELRA_POLICY: string }> {
+  const path = join(directory, "sandbox-opt-out.json");
+  await writeFile(path, JSON.stringify({ sandbox: { use: "if-available" } }));
+  return { MELRA_POLICY: path };
+}
 
 const execute = promisify(execFile);
 const roots: string[] = [];
@@ -191,7 +208,13 @@ describe("melra CLI", () => {
           }),
         );
       const planned = plan();
-      const env = { ...process.env, MELRA_HOME: dataDirectory, MELRA_WORKSPACE: root, MELRA_MODE: "enforced" };
+      const env = {
+        ...process.env,
+        MELRA_HOME: dataDirectory,
+        MELRA_WORKSPACE: root,
+        MELRA_MODE: "enforced",
+        ...(await sandboxOptOut(base)),
+      };
 
       // Off a terminal and without --yes: shown, never decided.
       const asked = (await execute(process.execPath, [entry, "approve", planned.id], { cwd: root, env }).catch(
@@ -286,7 +309,14 @@ describe("melra CLI", () => {
         }),
       );
       const taskId = (await server.workflows.advance(run.id)).run.nodes.write!.taskIds[0]!;
-      const env = { ...process.env, MELRA_HOME: dataDirectory, MELRA_WORKSPACE: root, MELRA_MODE: "enforced", MELRA_APPROVER: "alice" };
+      const env = {
+        ...process.env,
+        MELRA_HOME: dataDirectory,
+        MELRA_WORKSPACE: root,
+        MELRA_MODE: "enforced",
+        MELRA_APPROVER: "alice",
+        ...(await sandboxOptOut(base)),
+      };
       await execute(process.execPath, [entry, "approve", taskId, "--yes"], { cwd: root, env });
       await execute(process.execPath, [entry, "workflow", "pause", run.id], { cwd: root, env });
       expect(server.workflows.events(run.id).at(-1)).toMatchObject({
@@ -332,7 +362,14 @@ describe("melra CLI", () => {
       await expect(server.workflows.advance(run.id, [], [{ nodeId: "ask", value: "yes" }])).rejects.toThrow(
         "workflow_input_in_band_refused:ask",
       );
-      const env = { ...process.env, MELRA_HOME: dataDirectory, MELRA_WORKSPACE: root, MELRA_MODE: "enforced", MELRA_APPROVER: "alice" };
+      const env = {
+        ...process.env,
+        MELRA_HOME: dataDirectory,
+        MELRA_WORKSPACE: root,
+        MELRA_MODE: "enforced",
+        MELRA_APPROVER: "alice",
+        ...(await sandboxOptOut(base)),
+      };
       // An approval is refused here from anyone, but only the agent's is
       // recorded: the operator's own is a command to correct. The agent's
       // names no client, since nothing authenticated it.
@@ -457,10 +494,11 @@ describe("melra CLI", () => {
       expect(task.status).toBe("waiting_user");
       return [task.id, "--judgement", task.judgements![0]!.judgementId];
     };
+    const optOut = await sandboxOptOut(base);
     const judge = (args: string[], mode: string, home: string) =>
       execute(process.execPath, [entry, "judge", ...args], {
         cwd: root,
-        env: { ...process.env, MELRA_HOME: home, MELRA_WORKSPACE: root, MELRA_MODE: mode, MELRA_APPROVER: "alice" },
+        env: { ...process.env, MELRA_HOME: home, MELRA_WORKSPACE: root, MELRA_MODE: mode, MELRA_APPROVER: "alice", ...optOut },
       }).catch((error: unknown) => error) as Promise<{ code?: number; stdout: string; stderr: string }>;
     const unknown = ["--judgement", "11111111-1111-4111-8111-111111111111", "--verdict", "no"];
 
@@ -548,7 +586,7 @@ describe("melra CLI", () => {
     // The data outside the workspace, as enforced mode requires.
     const workspace = join(root, "workspace");
     await mkdir(workspace);
-    const env = { ...process.env, MELRA_HOME: join(root, ".melra"), MELRA_WORKSPACE: workspace };
+    const env = { ...process.env, MELRA_HOME: join(root, ".melra"), MELRA_WORKSPACE: workspace, ...(await sandboxOptOut(root)) };
     const requestPath = join(root, "semantic.json");
     await writeFile(
       requestPath,
@@ -1776,7 +1814,7 @@ describe("melra CLI", () => {
     // By the flag, which the spawned server is not given: only its env reaches it.
     const strict = await execute(process.execPath, [entry, "conformance", "--mode", "enforced"], {
       cwd: root,
-      env: { ...env, MELRA_HOME: strictHome },
+      env: { ...env, MELRA_HOME: strictHome, ...(await sandboxOptOut(strictHome)) },
     });
     const strictReport = JSON.parse(strict.stdout) as {
       level: number;
@@ -2325,6 +2363,31 @@ describe("melra CLI", () => {
     });
   });
 
+  it("says which OS sandbox commands run in, or why none would, as the server decides it", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-cli-")));
+    roots.push(root);
+    await mkdir(join(root, "ws"));
+    const env = { ...process.env, MELRA_HOME: join(root, ".melra"), MELRA_WORKSPACE: join(root, "ws") };
+    const sandbox = async (extra: Record<string, string>) => {
+      const result = (await execute(process.execPath, [entry, "doctor", "--json"], {
+        cwd: root,
+        env: { ...env, ...extra },
+      }).catch((error: unknown) => error)) as { stdout: string };
+      return JSON.parse(result.stdout).checks.find((check: { name: string }) => check.name === "sandbox");
+    };
+    // Off in developer mode, which still says whether one would work here.
+    expect(await sandbox({})).toMatchObject({ status: "pass", detail: expect.stringMatching(/works here|none would work here/) });
+    // Enforced mode runs no command bare, and a policy file cannot make it.
+    const off = join(root, "off.json");
+    await writeFile(off, JSON.stringify({ sandbox: { use: "off" } }));
+    expect(await sandbox({ MELRA_MODE: "enforced", MELRA_POLICY: off })).toMatchObject({
+      status: "fail",
+      detail: expect.stringContaining("enforced_mode_refuses_sandbox_off"),
+    });
+    // The opt-out starts it on any host, with a warning where there is none.
+    expect((await sandbox({ MELRA_MODE: "enforced", ...(await sandboxOptOut(root)) })).status).not.toBe("fail");
+  });
+
   it("refuses to start in enforced mode with the local bypass", async () => {
     const root = await mkdtemp(join(tmpdir(), "melra-cli-"));
     roots.push(root);
@@ -2334,6 +2397,7 @@ describe("melra CLI", () => {
       ...process.env,
       MELRA_HOME: join(root, ".melra"),
       MELRA_WORKSPACE: join(root, "ws"),
+      ...(await sandboxOptOut(root)),
     };
     const enforced = await execute(process.execPath, [entry, "doctor"], {
       cwd: root,

@@ -3,9 +3,15 @@
 #
 #   melra  enforced mode, the workspace read-write, its data volume, and
 #          `serve --socket` on a volume that holds only the socket. No ports.
+#          It runs as root with only CAP_SETUID and CAP_SETGID, so it can run
+#          each command it is asked to as 1000 (the image's `node`), which
+#          cannot enter its data: policy.json names that account, and enforced
+#          mode refuses to start where it cannot switch to it or where that
+#          account can read MELRA's files. MELRA is in that account's group
+#          and makes what it creates group-writable, as commands do too.
 #   agent  the workspace read-only, the socket, and a network with no route
 #          out and no address on the host. No MELRA data, no credentials. It
-#          runs as MELRA's user, 1000 (the image's `node`), because the socket
+#          runs as MELRA's user, root with no capabilities, because the socket
 #          is mode 0600.
 #
 # Run it from a checkout (WORKSPACE defaults to the checkout itself):
@@ -29,7 +35,8 @@ services:
       context: ../../..
     image: ${MELRA_IMAGE:-melra:local}
     command: ["serve", "--socket", "/run/melra/melra.sock"]
-    user: "1000:1000"
+    # Root, in the commands' group: what either creates, the other may change.
+    user: "0:1000"
     # Reaps what a terminal job leaves behind; node as PID 1 does not.
     init: true
     read_only: true
@@ -37,6 +44,11 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    # Only to run each command as 1000; root without the others reads and
+    # writes by its file modes alone.
+    cap_add:
+      - SETUID
+      - SETGID
     # A ceiling on a runaway fork or a memory blow-up; raise them if your
     # tasks need more.
     pids_limit: 512
@@ -45,12 +57,17 @@ services:
       - /tmp:size=256m,mode=1777
     volumes:
       - ${WORKSPACE:-../../..}:/workspace
-      - melra-data:/data
+      # The image's root-only /var/lib/melra, so the volume is too. The
+      # workspace has to be writable by root and by 1000 alike.
+      - melra-data:/var/lib/melra
       - melra-socket:/run/melra
+      # In the image's root-only /etc/melra, which 1000 cannot read either.
+      - ./policy.json:/etc/melra/policy.json:ro
     environment:
       MELRA_MODE: enforced
       MELRA_WORKSPACE: /workspace
-      MELRA_HOME: /data
+      MELRA_HOME: /var/lib/melra
+      MELRA_POLICY: /etc/melra/policy.json
       MELRA_SOCKET: /run/melra/melra.sock
       # Empty: MELRA makes one up and prints it.
       MELRA_HTTP_TOKEN: ${MELRA_HTTP_TOKEN:-}
@@ -65,7 +82,7 @@ services:
     depends_on:
       melra:
         condition: service_healthy
-    user: "1000:1000"
+    user: "0:0"
     init: true
     read_only: true
     security_opt:
@@ -82,6 +99,8 @@ services:
       - melra-socket:/run/melra
     environment:
       MELRA_SOCKET: /run/melra/melra.sock
+      # MELRA's data as this box sees it, for `melra probe`: not there.
+      MELRA_HOME: /var/lib/melra
       # The token MELRA asks every request for. In enforced mode it lets the
       # agent ask, not approve.
       MELRA_HTTP_TOKEN: ${MELRA_HTTP_TOKEN:-}
@@ -104,4 +123,4 @@ volumes:
     driver_opts:
       type: tmpfs
       device: tmpfs
-      o: uid=1000,gid=1000,mode=0700
+      o: uid=0,gid=0,mode=0700

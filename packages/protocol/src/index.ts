@@ -820,6 +820,58 @@ export const CredentialsSchema = z
     message: "too_many_credentials",
   });
 
+/**
+ * Where the tools a command may run keep their logins, under home. The
+ * per-command sandbox denies reading or writing each one unless the policy
+ * file allows it back in `sandbox.readable`.
+ */
+export const HOME_SECRETS = [
+  "~/.ssh",
+  "~/.aws",
+  "~/.azure",
+  "~/.config/gcloud",
+  "~/.config/gh",
+  "~/.config/git/credentials",
+  "~/.git-credentials",
+  "~/.docker/config.json",
+  "~/.kube",
+  "~/.gnupg",
+  "~/.netrc",
+  "~/.npmrc",
+  "~/.yarnrc.yml",
+  "~/.pypirc",
+  "~/.gem/credentials",
+  "~/.cargo/credentials",
+  "~/.cargo/credentials.toml",
+  "~/.terraform.d/credentials.tfrc.json",
+  "~/.vault-token",
+  "~/.password-store",
+  "~/Library/Keychains",
+] as const;
+
+/**
+ * The OS sandbox each terminal command runs in. `use` absent follows the
+ * mode: `on` in enforced mode, `off` in developer mode. `if-available` starts
+ * without one where none works, and in enforced mode that is the operator's
+ * recorded opt-out.
+ */
+export const SandboxPolicySchema = z
+  .object({
+    use: z.enum(["on", "off", "if-available"]).exactOptional(),
+    // Programs, by name as in allowedCommands, that may create symbolic links.
+    symlinks: z.array(z.string().min(1).max(256)).max(64).exactOptional(),
+    readable: z.array(z.enum(HOME_SECRETS)).exactOptional(),
+    // The account a command runs as where MELRA itself can switch to one.
+    user: z
+      .object({
+        uid: z.number().int().min(1).max(2 ** 32 - 2),
+        gid: z.number().int().min(1).max(2 ** 32 - 2),
+      })
+      .strict()
+      .exactOptional(),
+  })
+  .strict();
+
 const MAX_APPROVAL_TTL_MS = 24 * 60 * 60_000;
 const APPROVAL_TTL_INVALID = `policy_approval_ttl_invalid: must be a whole number of milliseconds from 1 to ${MAX_APPROVAL_TTL_MS} (24 hours)`;
 
@@ -864,6 +916,7 @@ export const PolicyFileSchema = z
       .strict()
       .exactOptional(),
     unhinged: z.boolean().exactOptional(),
+    sandbox: SandboxPolicySchema.exactOptional(),
     // `deployment_mode_unknown` as the flag and MELRA_MODE give it, but with
     // the file and path, so a typo here is not blamed on the environment.
     mode: z
@@ -1451,6 +1504,8 @@ export interface TaskRecord {
    * process deployed differently still says how the effect was governed.
    */
   mode?: string;
+  /** The per-command sandbox that process ran commands in, written beside `mode`, when it ran them in one or had to start without one. */
+  sandbox?: string;
   result?: Record<string, unknown>;
   error?: string;
   attempts?: number;

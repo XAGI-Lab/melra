@@ -126,6 +126,10 @@ async function open(
     // An empty environment, so a MELRA_UNHINGED or MELRA_MODE in the shell
     // running the self-check cannot change what is measured.
     environment: {},
+    // Nor whether this host has an OS sandbox, which enforced mode needs to
+    // start: commands run as they did before there was one, and the sandbox
+    // has tests of its own.
+    detectSandbox: async () => ({ sandbox: { backend: "test", confine: async ({ file, args }) => ({ file, args }) } }),
   });
 }
 

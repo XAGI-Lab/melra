@@ -10,18 +10,29 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, delimiter, dirname, join, parse, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { deploymentMode, PRODUCT_VERSION, TaskRequestSchema, type TaskRequest } from "@melra/protocol";
+import { deploymentMode, PRODUCT_VERSION, TaskRequestSchema, TerminalOperationSchema, type TaskRequest } from "@melra/protocol";
+import type { SandboxAllowance } from "@melra/terminal-runtime";
 import { serveHttp } from "./http-server.js";
 import { capabilitiesPayload } from "./mcp-server.js";
 import {
   assertEnforceable,
   broadWorkspace,
-  createMelraRuntime,
+  createMelraRuntime as createRuntime,
   unconfinedRoot,
   unhingedFromEnvironment,
   workspaceInsideData,
   type MelraRuntime,
+  type MelraRuntimeOptions,
 } from "./runtime.js";
+
+// Enforced mode refuses to start where no OS sandbox works, as on a CI host
+// with none. A test about something else gets one that confines nothing,
+// unless it brings its own.
+const createMelraRuntime = (options: MelraRuntimeOptions) =>
+  createRuntime({
+    detectSandbox: async () => ({ sandbox: { backend: "test", confine: async ({ file, args }) => ({ file, args }) } }),
+    ...options,
+  });
 
 // Parse rather than hand-build: `TaskRequest` is the post-defaults shape, so a
 // literal has to restate every default the schema already knows.
@@ -371,6 +382,159 @@ describe("enforced mode", () => {
       expect(hits).toBe(1);
     } finally {
       server.close();
+    }
+  });
+});
+
+describe("per-command sandbox", () => {
+  let base: string;
+  let workspace: string;
+  let data: string;
+  let runtime: MelraRuntime | undefined;
+  const none: MelraRuntimeOptions["detectSandbox"] = async () => ({ problems: ["test: no sandbox on this host"] });
+  const policy = async (sandbox: unknown) => {
+    const path = join(base, "policy.json");
+    await writeFile(path, JSON.stringify({ sandbox }), "utf8");
+    return path;
+  };
+  const receiptOf = async (melra: MelraRuntime) =>
+    (await melra.controller.execute(melra.controller.plan(request({ operation: { kind: "system", action: "info" } })).id)).receipt;
+
+  beforeEach(async () => {
+    base = await mkdtemp(join(tmpdir(), "melra-sandbox-"));
+    workspace = join(base, "workspace");
+    data = join(base, "data");
+    await mkdir(workspace, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await runtime?.close();
+    runtime = undefined;
+    await rm(base, { recursive: true, force: true });
+  });
+
+  it("refuses to start enforced mode where no sandbox works, saying why and how to opt out", async () => {
+    await expect(
+      createMelraRuntime({ workspaceRoot: workspace, dataDirectory: data, environment: { MELRA_MODE: "enforced" }, detectSandbox: none }),
+    ).rejects.toThrow(/^sandbox_unavailable: .*test: no sandbox on this host.*"sandbox": \{"use": "if-available"\}/);
+    // Nor will it be told to run commands bare.
+    await expect(
+      createMelraRuntime({
+        workspaceRoot: workspace,
+        dataDirectory: data,
+        environment: { MELRA_MODE: "enforced" },
+        policyPath: await policy({ use: "off" }),
+      }),
+    ).rejects.toThrow(/^enforced_mode_refuses_sandbox_off: /);
+  });
+
+  it("starts on the policy file's opt-out, and every receipt says it ran without one", async () => {
+    runtime = await createMelraRuntime({
+      workspaceRoot: workspace,
+      dataDirectory: data,
+      environment: { MELRA_MODE: "enforced" },
+      policyPath: await policy({ use: "if-available" }),
+      detectSandbox: none,
+    });
+    expect(await receiptOf(runtime)).toMatchObject({ mode: "enforced", sandbox: "none" });
+  });
+
+  it("looks for none in developer mode, unless the policy file asks, and then needs one", async () => {
+    const detect = vi.fn(none);
+    runtime = await createMelraRuntime({ workspaceRoot: workspace, dataDirectory: data, environment: {}, detectSandbox: detect });
+    expect(detect).not.toHaveBeenCalled();
+    expect((await receiptOf(runtime))?.sandbox).toBeUndefined();
+    await runtime.close();
+    runtime = undefined;
+    await expect(
+      createMelraRuntime({
+        workspaceRoot: workspace,
+        dataDirectory: data,
+        environment: {},
+        policyPath: await policy({ use: "on" }),
+        detectSandbox: none,
+      }),
+    ).rejects.toThrow(/^sandbox_unavailable: /);
+  });
+
+  it("runs each command in the sandbox it found, allowed what policy classifies it as reaching for", async () => {
+    const seen: SandboxAllowance[] = [];
+    runtime = await createMelraRuntime({
+      workspaceRoot: workspace,
+      dataDirectory: data,
+      environment: { MELRA_MODE: "enforced", PATH: process.env.PATH ?? "" },
+      policyPath: await policy({ symlinks: ["git"] }),
+      detectSandbox: async () => ({
+        sandbox: {
+          backend: "recording",
+          // Whatever was asked for, what runs is a Node that does nothing,
+          // in words cmd.exe passes through unquoted.
+          confine: async (_command, allowance) => {
+            seen.push(allowance);
+            return { file: process.execPath, args: ["-e", "0"] };
+          },
+        },
+      }),
+    });
+    const calls: Array<[string, string[], SandboxAllowance]> = [
+      [process.execPath, ["-e", ""], { network: false, symlinks: false }],
+      ["curl", ["--version"], { network: true, symlinks: false }],
+      // Named in the policy file.
+      ["git", ["status"], { network: false, symlinks: true }],
+      // An install makes links whether or not it is named.
+      ["npm", ["--version"], { network: true, symlinks: true }],
+    ];
+    for (const [command, args, allowance] of calls) {
+      const result = await runtime.router.execute(TerminalOperationSchema.parse({ kind: "terminal", action: "run", command, args }));
+      expect(result.exitCode, command).toBe(0);
+      expect(seen.at(-1), command).toEqual(allowance);
+    }
+    expect(seen).toHaveLength(calls.length);
+    expect(runtime.policy.sandbox.backend).toBe("recording");
+    expect((await receiptOf(runtime))?.sandbox).toBe("recording");
+  });
+
+  it("keeps MELRA's data, the policy file and the secret files from every command", async () => {
+    const detect = vi.fn<NonNullable<MelraRuntimeOptions["detectSandbox"]>>(none);
+    const source = join(base, "billing.key");
+    await writeFile(source, "sk_live_reservedsecretvalue0000", { mode: 0o600 });
+    const policyPath = join(base, "policy.json");
+    const credential = {
+      source: { file: source },
+      inject: { header: "Authorization", scheme: "Bearer" },
+      hosts: ["api.example.com"],
+      capability: "http.post:*",
+    };
+    await writeFile(policyPath, JSON.stringify({ sandbox: { use: "if-available" }, credentials: { billing: credential } }));
+    runtime = await createMelraRuntime({
+      workspaceRoot: workspace,
+      dataDirectory: data,
+      environment: {},
+      policyPath,
+      browserProfileDir: join(base, "profile"),
+      detectSandbox: detect,
+    });
+    const [options] = detect.mock.calls[0]!;
+    expect(options.dataDirectory).toBe(resolve(data));
+    expect(options.denied).toEqual(
+      expect.arrayContaining([resolve(data), resolve(policyPath), resolve(source), resolve(base, "profile")]),
+    );
+  });
+
+  // The uid backend is Linux-only, and Windows keeps only the user bits of a umask.
+  it.skipIf(process.platform === "win32")("makes what MELRA and the uid sandbox's commands create writable by their shared group", async () => {
+    // Read by setting: `process.umask()` alone is deprecated.
+    const previous = process.umask(0o022);
+    try {
+      runtime = await createMelraRuntime({
+        workspaceRoot: workspace,
+        dataDirectory: data,
+        environment: { MELRA_MODE: "enforced" },
+        detectSandbox: async () => ({ sandbox: { backend: "uid", confine: async ({ file, args }) => ({ file, args }) } }),
+      });
+      expect(process.umask(0o022)).toBe(0o002);
+    } finally {
+      process.umask(previous);
     }
   });
 });

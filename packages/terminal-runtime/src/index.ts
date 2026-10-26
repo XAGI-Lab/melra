@@ -8,9 +8,12 @@ import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep 
 import { outcomeUnknown, terminalArgumentPaths, terminalArgumentReferences, type TerminalOperation } from "@melra/protocol";
 import { redactSecrets } from "@melra/receipt-schema";
 import { resolveCommand } from "./resolve-command.js";
+import { writeSeccomp, type CommandSandbox, type SandboxAllowance } from "./sandbox.js";
 
 export { quoteForCmd, resolveCommand } from "./resolve-command.js";
 export type { ResolvedCommand } from "./resolve-command.js";
+export { bwrapArgv, detectSandbox, seatbeltProfile, symlinkFilter } from "./sandbox.js";
+export type { BwrapPaths, CommandSandbox, ConfinedSpawn, SandboxAllowance, SandboxOptions, SandboxPaths } from "./sandbox.js";
 
 export interface TerminalRuntimeOptions {
   root: string;
@@ -39,6 +42,10 @@ export interface TerminalRuntimeOptions {
    * given.
    */
   pathOutside?: string;
+  /** The OS sandbox every command runs in (`detectSandbox`). Absent, a command has MELRA's own rights. */
+  sandbox?: CommandSandbox;
+  /** What a command may do in the sandbox: the policy's answer, which this package cannot import. Absent, nothing. */
+  allowance?: (command: string, args: readonly string[]) => SandboxAllowance;
 }
 
 /**
@@ -290,6 +297,10 @@ interface PreparedCommand {
   maxOutputChars: number;
   /** Whether the child keeps a writable stdin for `send`. */
   interactive: boolean;
+  /** The account the sandbox runs it as, and a filter for descriptor 3. */
+  uid?: number;
+  gid?: number;
+  seccomp?: Buffer;
 }
 
 /**
@@ -325,8 +336,16 @@ const GROUP_POLL_MS = 100;
  */
 const OWN_GROUP = process.platform !== "win32";
 
+/** How to signal a child running as an account MELRA may not signal itself. */
+const signallers = new WeakMap<ChildProcess, NonNullable<CommandSandbox["signal"]>>();
+
 function signalTree(child: ChildProcess, signal: NodeJS.Signals): void {
   if (child.pid === undefined) return;
+  const signaller = signallers.get(child);
+  if (signaller !== undefined) {
+    signaller(child.pid, signal);
+    return;
+  }
   if (!OWN_GROUP) {
     // `/F` because Windows has no SIGTERM to trap: TerminateProcess is all
     // `child.kill` did there too.
@@ -352,9 +371,10 @@ function groupAlive(child: ChildProcess): boolean {
   try {
     process.kill(-child.pid, 0);
     return true;
-  } catch {
-    // ESRCH: empty. EPERM: a process we may not signal, which nothing here can stop.
-    return false;
+  } catch (error) {
+    // ESRCH: empty. EPERM: a process we may not signal, which nothing here
+    // can stop, unless it runs as the sandbox's account, which can.
+    return signallers.has(child) && (error as NodeJS.ErrnoException).code === "EPERM";
   }
 }
 
@@ -445,6 +465,8 @@ export class TerminalRuntime {
   private readonly confineArguments: boolean;
   /** The protected workspace, as spelled and resolved; absent, PATH is not filtered. */
   private readonly pathOutside: string[] | undefined;
+  private readonly sandbox: CommandSandbox | undefined;
+  private readonly allowance: (command: string, args: readonly string[]) => SandboxAllowance;
   private readonly jobs = new Map<string, BackgroundJob>();
   /**
    * Foreground runs whose program is still running, or whose group is still
@@ -468,6 +490,8 @@ export class TerminalRuntime {
     this.reserved = options.reserved ?? (async () => false);
     this.holdsReserved = options.holdsReserved ?? (async () => false);
     this.confineArguments = options.confineArguments ?? false;
+    this.sandbox = options.sandbox;
+    this.allowance = options.allowance ?? (() => ({ network: false, symlinks: false }));
   }
 
   static async create(options: TerminalRuntimeOptions): Promise<TerminalRuntime> {
@@ -651,11 +675,20 @@ export class TerminalRuntime {
       ? undefined
       : hardenGitRead(resolved.executable, resolved.args, this.confineArguments ? dirname(this.root) : undefined);
     if (hardened !== undefined && this.confineArguments) await this.confineGitRead(cwd, environment);
+    // Last, so the sandbox wraps exactly what would have run, judged by what
+    // the caller asked for.
+    const confined = await this.sandbox?.confine(
+      { file: resolved.file, args: hardened?.args ?? resolved.args, cwd, path: environment["PATH"] },
+      this.allowance(operation.command, operation.args),
+    );
     return {
       command: operation.command,
       args: operation.args,
-      file: resolved.file,
-      spawnArgs: hardened?.args ?? resolved.args,
+      file: confined?.file ?? resolved.file,
+      spawnArgs: confined?.args ?? hardened?.args ?? resolved.args,
+      ...(confined?.uid === undefined ? {} : { uid: confined.uid }),
+      ...(confined?.gid === undefined ? {} : { gid: confined.gid }),
+      ...(confined?.seccomp === undefined ? {} : { seccomp: confined.seccomp }),
       windowsVerbatimArguments: resolved.windowsVerbatimArguments,
       executable: resolved.executable,
       cwd,
@@ -672,15 +705,7 @@ export class TerminalRuntime {
   ): Promise<Record<string, unknown>> {
     if (signal?.aborted === true) throw new Error("task_cancelled");
     return await new Promise<Record<string, unknown>>((resolvePromise, reject) => {
-      const child = spawn(prepared.file, prepared.spawnArgs, {
-        cwd: prepared.cwd,
-        env: prepared.environment,
-        shell: false,
-        detached: OWN_GROUP,
-        windowsHide: true,
-        windowsVerbatimArguments: prepared.windowsVerbatimArguments,
-        stdio: ["ignore", "pipe", "pipe"],
-      });
+      const child = this.spawn(prepared, "ignore");
       // No pid: it never started, and there is nothing to stop.
       if (child.pid !== undefined) this.foreground.add(child);
       let stdout = "";
@@ -690,8 +715,8 @@ export class TerminalRuntime {
       let settled = false;
 
       // Decoded across chunks, so a character split between two reads stays one.
-      child.stdout.setEncoding("utf8");
-      child.stderr.setEncoding("utf8");
+      child.stdout?.setEncoding("utf8");
+      child.stderr?.setEncoding("utf8");
       const append = (current: string, chunk: string): string => {
         const next = current + chunk;
         if (next.length > prepared.maxOutputChars) {
@@ -700,10 +725,10 @@ export class TerminalRuntime {
         }
         return next;
       };
-      child.stdout.on("data", (chunk: string) => {
+      child.stdout?.on("data", (chunk: string) => {
         stdout = append(stdout, chunk);
       });
-      child.stderr.on("data", (chunk: string) => {
+      child.stderr?.on("data", (chunk: string) => {
         stderr = append(stderr, chunk);
       });
 
@@ -800,15 +825,7 @@ export class TerminalRuntime {
       this.jobs.delete(finished.id);
     }
     const id = randomUUID();
-    const child = spawn(prepared.file, prepared.spawnArgs, {
-      cwd: prepared.cwd,
-      env: prepared.environment,
-      shell: false,
-      detached: OWN_GROUP,
-      windowsHide: true,
-      windowsVerbatimArguments: prepared.windowsVerbatimArguments,
-      stdio: [prepared.interactive ? "pipe" : "ignore", "pipe", "pipe"],
-    });
+    const child = this.spawn(prepared, prepared.interactive ? "pipe" : "ignore");
     const timer = setTimeout(() => {
       signalTree(child, "SIGTERM");
       setTimeout(() => {
@@ -889,6 +906,24 @@ export class TerminalRuntime {
       cwd: relative(this.root, prepared.cwd) || ".",
       interactive: prepared.interactive,
     };
+  }
+
+  /** The child for a prepared command, in its sandbox's account and with its filter. */
+  private spawn(prepared: PreparedCommand, stdin: "ignore" | "pipe"): ChildProcess {
+    const child = spawn(prepared.file, prepared.spawnArgs, {
+      cwd: prepared.cwd,
+      env: prepared.environment,
+      shell: false,
+      detached: OWN_GROUP,
+      windowsHide: true,
+      windowsVerbatimArguments: prepared.windowsVerbatimArguments,
+      ...(prepared.uid === undefined ? {} : { uid: prepared.uid }),
+      ...(prepared.gid === undefined ? {} : { gid: prepared.gid }),
+      stdio: [stdin, "pipe", "pipe", ...(prepared.seccomp === undefined ? [] : ["pipe" as const])],
+    });
+    if (prepared.seccomp !== undefined) writeSeccomp(child, prepared.seccomp);
+    if (prepared.uid !== undefined && this.sandbox?.signal !== undefined) signallers.set(child, this.sandbox.signal);
+    return child;
   }
 
   /**

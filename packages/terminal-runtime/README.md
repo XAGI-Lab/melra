@@ -40,6 +40,13 @@ stdout more often than anyone expects. It applies the same `SECRET_PATTERNS`
 list as receipts and memory, from
 [`@melra/receipt-schema`](https://www.npmjs.com/package/@melra/receipt-schema).
 
+Given a `sandbox` from `detectSandbox`, every command runs in an OS sandbox
+made for it: a deny-default Seatbelt profile on macOS (`seatbeltProfile`),
+bubblewrap on Linux (`bwrapArgv`, with `symlinkFilter` on descriptor 3), or
+another account. `allowance` says whether a command may reach the network or
+make symbolic links, which Seatbelt and bubblewrap enforce and the `uid`
+backend does not; MELRA answers it from the command's policy traits.
+
 Allowlisting decides which commands may run at all, and that lives in
 [`@melra/policy-core`](https://www.npmjs.com/package/@melra/policy-core), not
 here.
