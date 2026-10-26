@@ -1131,15 +1131,7 @@ export class WorkflowController {
       // they can be stale. Re-deriving the forward nodes would rank their
       // tasks differently from the live path and could take the run out of
       // failed: a branch awaiting approval beside a failed one reopened.
-      // An undecided condition with an effect under its keys is kept available
-      // for resolution (#331).
-      if (
-        stored.status === "failed" &&
-        node.type !== "compensation" &&
-        !this.hasUndecidedConditionWithEffect(definition, stored)
-      ) {
-        continue;
-      }
+      if (stored.status === "failed" && node.type !== "compensation") continue;
       const { state } = this.recoveredNode(stored.id, node, definition, replayed.nodes[node.id]!);
       if (canonicalJson(draft.nodes[node.id]) === canonicalJson(state)) {
         continue;
@@ -1659,8 +1651,11 @@ export class WorkflowController {
                   // (#270), rather than wait or fail naming nothing while a
                   // failed sibling unwinds past it (#318).
                   const unknown = this.unsettledUnder(keys);
-                  if (!(error instanceof NodeRefused) || unknown.length === 0) throw error;
-                  throw new NodeRefused(error.reason, { state: recoveredNodeState(node, unknown, state), tasks: [] });
+                  if (!(error instanceof NodeRefused)) throw error;
+                  if (unknown.length > 0) throw new NodeRefused(error.reason, { state: recoveredNodeState(node, unknown, state), tasks: [] });
+                  if (this.undecidedConditionsWithEffect(definition, run).some((c) => c.id === node.id))
+                    throw new NodeRefused(error.reason, { state: { ...state, status: "pending", taskIds: [] }, tasks: [] });
+                  throw error;
                 });
         // The other branch is settled by the advance that decides, or one that
         // finds the run naming it: only then can an advance that lost its

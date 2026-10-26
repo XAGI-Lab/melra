@@ -328,6 +328,13 @@ All notable changes are documented here. The format follows
   the workspace and temp, from IP networks unless their traits need it, and from
   making symbolic links unless they install packages or the policy file names
   them.
+### Fixed
+
+- A step that took effect under an undecided condition but failed its evidence
+  (partial) is no longer left off the workflow run's record when its advance
+  lost its commit and a sibling step failed. Compensations remain parked while
+  the condition is undecided, and the condition is offered for resolution so
+  its branch is decided and its effect recorded before unwinding (#331).
 
 ## [0.4.0-alpha.0] - 2026-10-26
 
@@ -701,12 +708,6 @@ All notable changes are documented here. The format follows
   It covers those files only: other files a harness loads, such as agent, skill
   and command definitions, are not refused, and an approved terminal command
   can still write any of them.
-
-- A step that took effect under an undecided condition but failed its evidence
-  (partial) is no longer left off the workflow run's record when its advance
-  lost its commit and a sibling step failed. Compensations remain parked while
-  the condition is undecided, and the condition is offered for resolution so
-  its branch is decided and its effect recorded before unwinding (#331).
 
 ## [0.3.0-alpha.21] - 2026-10-25
 
