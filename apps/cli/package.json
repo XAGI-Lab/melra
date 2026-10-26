@@ -15,7 +15,7 @@
     "verification"
   ],
   "mcpName": "io.github.XAGI-Lab/melra",
-  "license": "Apache-2.0",
+  "license": "AGPL-3.0-only",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/XAGI-Lab/melra.git",
@@ -38,7 +38,9 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "NOTICE",
+    "LICENSES/Apache-2.0.txt"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json && chmod +x dist/bin.js dist/index.js",

@@ -1,5 +1,5 @@
 // Copyright 2026 XAGI Labs Private Limited
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: AGPL-3.0-only
 
 // Checks a `pnpm build:sea` binary the way a user without Node would meet it:
 // a PATH holding only the system directories, a fresh home and workspace.

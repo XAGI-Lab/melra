@@ -1,5 +1,5 @@
 // Copyright 2026 XAGI Labs Private Limited
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: AGPL-3.0-only
 
 // The release workflows cannot run outside GitHub, so this holds the scripts
 // they call, and the workflow lines that call them, to what the release needs.
@@ -251,4 +251,80 @@ const fresh = process.env.MELRA_FRESH;
   }));
   assert.match(result.stderr, /could not find help\(\) and the end of its template literal/);
   assert.match(result.stderr, /MELRA_FRESH \(first seen at apps\/cli\/src\/index\.ts:7\) has no row/);
+});
+
+test("licenses:check holds headers, manifests and LICENSE files to the path, and --fix sets them", () => {
+  const header = (mark, id) => `${mark} Copyright 2026 XAGI Labs Private Limited\n${mark} SPDX-License-Identifier: ${id}\n`;
+  const manifest = (license, files) => `${JSON.stringify({ name: "x", license, files }, null, 2)}\n`;
+  const dir = scratch({
+    "LICENSES/AGPL-3.0-only.txt": "agpl\n",
+    "LICENSES/Apache-2.0.txt": "apache\n",
+    LICENSE: "agpl\n",
+    NOTICE: "notice\n",
+    "package.json": manifest("AGPL-3.0-only"),
+    // Holds outside contributors' Apache-2.0 code, so ships NOTICE and its text.
+    "packages/server/package.json": manifest("AGPL-3.0-only", ["dist", "NOTICE", "LICENSES/Apache-2.0.txt"]),
+    "packages/server/LICENSE": "agpl\n",
+    "packages/sdk-ts/package.json": manifest("AGPL-3.0-only"),
+    // Windows line endings, which --fix keeps.
+    "packages/sdk-ts/src/index.ts": `${header("//", "AGPL-3.0-only")}export {};\n`.replaceAll("\n", "\r\n"),
+    "packages/core/src/index.ts": `${header("//", "Apache-2.0")}export {};\n`,
+    "scripts/run.mjs": "#!/usr/bin/env node\nconsole.log(1);\n",
+    "sdk-py/src/melra/__init__.py": header("#", "Apache-2.0"),
+    // A byte order mark, which --fix keeps.
+    "sdk-py/src/melra/bom.py": `\uFEFF${header("#", "AGPL-3.0-only")}`,
+  });
+  assert.equal(spawnSync("git", ["init", "-q"], { cwd: dir }).status, 0);
+  const check = (args = []) => node("scripts/check-license-headers.mjs", args, dir);
+
+  const failed = check();
+  assert.equal(failed.status, 1);
+  assert.deepEqual(failed.stderr.split("\n").filter((line) => line.includes(": ")).sort(), [
+    "packages/core/src/index.ts: Apache-2.0, should be AGPL-3.0-only",
+    "packages/sdk-ts/LICENSE: missing or not the text of LICENSES/Apache-2.0.txt, which packages/sdk-ts/package.json ships",
+    "packages/sdk-ts/package.json: license is AGPL-3.0-only, should be Apache-2.0",
+    "packages/sdk-ts/src/index.ts: AGPL-3.0-only, should be Apache-2.0",
+    "packages/server/LICENSES/Apache-2.0.txt: missing or not the text of LICENSES/Apache-2.0.txt, which packages/server/package.json ships for the Apache-2.0 code in it",
+    "packages/server/NOTICE: missing or not the text of NOTICE, which packages/server/package.json ships for the Apache-2.0 code in it",
+    'scripts/run.mjs: no "// Copyright" / "// SPDX-License-Identifier: AGPL-3.0-only" header',
+    "sdk-py/src/melra/bom.py: AGPL-3.0-only, should be Apache-2.0",
+  ]);
+
+  assert.equal(check(["--fix"]).status, 0);
+  const file = (path) => readFileSync(join(dir, path), "utf8");
+  assert.equal(file("packages/sdk-ts/src/index.ts"), `${header("//", "Apache-2.0")}export {};\n`.replaceAll("\n", "\r\n"));
+  assert.equal(file("packages/core/src/index.ts"), `${header("//", "AGPL-3.0-only")}export {};\n`);
+  assert.match(file("scripts/run.mjs"), /^#!\/usr\/bin\/env node\n\/\/ Copyright \d{4} XAGI Labs Private Limited\n\/\/ SPDX-License-Identifier: AGPL-3\.0-only\n\nconsole\.log\(1\);\n$/);
+  assert.equal(file("packages/sdk-ts/package.json"), manifest("Apache-2.0"));
+  assert.equal(file("packages/sdk-ts/LICENSE"), "apache\n");
+  assert.equal(file("packages/server/NOTICE"), "notice\n");
+  assert.equal(file("packages/server/LICENSES/Apache-2.0.txt"), "apache\n");
+  assert.equal(file("sdk-py/src/melra/bom.py"), `\uFEFF${header("#", "Apache-2.0")}`);
+  assert.equal(check().status, 0);
+  // From a subdirectory the paths still resolve against the root.
+  assert.equal(node("scripts/check-license-headers.mjs", ["--fix"], join(dir, "packages/sdk-ts")).status, 0);
+  assert.equal(file("packages/sdk-ts/src/index.ts"), `${header("//", "Apache-2.0")}export {};\n`.replaceAll("\n", "\r\n"));
+
+  // A second identifier, or a copy left out of "files", is for a person: --fix
+  // fails and leaves the file as it was.
+  const twice = `${header("//", "AGPL-3.0-only")}\n// SPDX-License-Identifier: Apache-2.0\n`;
+  writeFileSync(join(dir, "packages/core/src/twice.ts"), twice);
+  writeFileSync(join(dir, "packages/server/package.json"), manifest("AGPL-3.0-only", ["dist"]));
+  const refused = check(["--fix"]);
+  assert.equal(refused.status, 1);
+  assert.match(refused.stderr, /^packages\/core\/src\/twice\.ts: an SPDX-License-Identifier line outside the header$/m);
+  assert.match(refused.stderr, /^packages\/server\/package\.json: "files" does not list NOTICE$/m);
+  assert.equal(file("packages/core/src/twice.ts"), twice);
+});
+
+test("the CLA check runs no code from the pull request it is triggered for", () => {
+  // pull_request_target runs with this repository's token, so a checkout or a
+  // run step here would hand that token to whoever opened the pull request.
+  const cla = read(".github/workflows/cla.yml");
+  assert.match(cla, /^ {2}pull_request_target:$/m);
+  assert.doesNotMatch(cla, /actions\/checkout|^\s*(- )?run:/m);
+  assert.deepEqual(cla.match(/^\s*- uses: .*$/gm).map((line) => line.trim().split("@")[0]), ["- uses: contributor-assistant/github-action"]);
+  assert.match(cla, /contributor-assistant\/github-action@[0-9a-f]{40} # v/);
+  assert.match(cla, /^ {6}contents: write # commit signatures to the cla-signatures branch$/m);
+  assert.match(cla, /^ {10}branch: cla-signatures$/m);
 });

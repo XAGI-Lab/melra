@@ -1,5 +1,5 @@
 // Copyright 2026 XAGI Labs Private Limited
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: AGPL-3.0-only
 
 // Exercises the published artifact the way an end user gets it: a `melra` that
 // came from the registry, on a machine that never built this repo. Everything

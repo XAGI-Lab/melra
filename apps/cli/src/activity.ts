@@ -1,5 +1,5 @@
 // Copyright 2026 XAGI Labs Private Limited
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: AGPL-3.0-only
 
 // `melra tasks`, `melra watch`, and `melra status`: the terminal's view of what
 // MELRA is doing, without starting a server. Everything here reads the store

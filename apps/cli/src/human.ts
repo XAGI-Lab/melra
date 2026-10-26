@@ -1,5 +1,5 @@
 // Copyright 2026 XAGI Labs Private Limited
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: AGPL-3.0-only
 
 // What `doctor`, `setup`, and `init` show a person at a terminal, and the
 // question `setup` asks when nobody named a client. Kept out of `index.ts`

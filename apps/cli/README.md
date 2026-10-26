@@ -52,3 +52,6 @@ given no phrase and one it sends is refused.
 
 Requires Node.js 22.13 or newer, or 23.4 or newer. Full documentation:
 [github.com/XAGI-Lab/melra](https://github.com/XAGI-Lab/melra)
+
+AGPL-3.0-only, or a commercial license from XAGI Labs Private Limited. See
+[licensing](https://github.com/XAGI-Lab/melra/blob/main/LICENSING.md).

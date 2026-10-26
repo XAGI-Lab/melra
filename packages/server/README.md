@@ -105,4 +105,5 @@ refuses a bind outside loopback and serves no client-registration endpoint, and
 Requires Node.js 22.13 or newer, or 23.4 or newer. Full documentation:
 [github.com/XAGI-Lab/melra](https://github.com/XAGI-Lab/melra)
 
-Apache-2.0
+AGPL-3.0-only, or a commercial license from XAGI Labs Private Limited. See
+[licensing](https://github.com/XAGI-Lab/melra/blob/main/LICENSING.md).

@@ -1,5 +1,5 @@
 // Copyright 2026 XAGI Labs Private Limited
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: AGPL-3.0-only
 
 import { createServer, type Server } from "node:http";
 import { mkdir, mkdtemp, readdir, realpath, rm, writeFile } from "node:fs/promises";

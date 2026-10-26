@@ -14,7 +14,7 @@ runs:
         version="$(node -p "require('./package.json').version")"
         mkdir -p release/node release/python
         pnpm deploy --filter @melra/cli --prod release/node
-        cp LICENSE NOTICE README.md release/node/
+        cp -R LICENSE LICENSES NOTICE README.md release/node/
         tar -C release/node -czf \
           "${GITHUB_WORKSPACE}/release/melra-node-${version}.tar.gz" .
         uv build sdk-py --out-dir release/python --no-create-gitignore

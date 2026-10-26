@@ -1,0 +1,62 @@
+name: CLA
+
+# Every contributor outside the allowlist signs CLA.md once, by commenting on a
+# pull request; LICENSING.md says why the dual license needs it. This checks a
+# pull request's commit authors against the recorded signatures, and records a
+# new one when its author posts the sign comment.
+#
+# pull_request_target, so that it can comment on and record a signature for a
+# pull request from a fork. That trigger runs with this repository's token,
+# which is why the job never checks out or runs anything from the pull
+# request: it runs one pinned action that reads the pull request through the
+# API.
+#
+# path-to-document follows main, but a signature is to CLA.md's text as it
+# stood (it has a version line); CONTRIBUTING.md says how a new version is
+# signed again.
+#
+# Signatures are committed to signatures/cla.json on the cla-signatures
+# branch, which holds nothing else; no rule may require a pull request
+# there, because the action commits to it directly.
+#
+# Only pull requests from forks are checked: a branch in this repository can
+# only be pushed by a maintainer, who is covered already.
+
+on: # zizmor: ignore[dangerous-triggers] -- needs no code from the pull request (above)
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+  issue_comment:
+    types: [created]
+
+permissions: {}
+
+jobs:
+  cla:
+    # A comment on an issue, or any other comment on a pull request, needs no
+    # run. Expression == ignores case, as the action does.
+    if: >-
+      (github.event_name == 'pull_request_target' &&
+        github.event.pull_request.head.repo.full_name != github.repository) ||
+      (github.event.issue.pull_request &&
+        (github.event.comment.body == 'recheck' ||
+          github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA'))
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write # re-run the failed check once everyone has signed
+      contents: write # commit signatures to the cla-signatures branch
+      pull-requests: write # read the commits, comment on the pull request
+    steps:
+      # The action's repository was archived in 2026; its releases still run.
+      # Pinned, so nothing can change under this SHA; moving to a maintained
+      # fork or another CLA check is a follow-up.
+      - uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08 # v2.6.1
+        env: # zizmor: ignore[archived-uses]
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          path-to-signatures: signatures/cla.json
+          path-to-document: https://github.com/XAGI-Lab/melra/blob/main/CLA.md
+          branch: cla-signatures
+          allowlist: dhe-eraj-s,bhavana-sanal,dependabot[bot],Copilot,copilot-swe-agent[bot],github-actions[bot]
+          # The signatures file is the record, so pull requests are not
+          # locked once they close.
+          lock-pullrequest-aftermerge: false

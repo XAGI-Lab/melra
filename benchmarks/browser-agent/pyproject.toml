@@ -7,7 +7,7 @@ name = "melra-browser-bench"
 version = "0.1.0"
 description = "Representative browser-agent benchmarks for MELRA."
 requires-python = ">=3.11,<3.12"
-license = { text = "Apache-2.0" }
+license = { text = "AGPL-3.0-only" }
 dependencies = [
   "melra",
   "httpx>=0.28,<1",

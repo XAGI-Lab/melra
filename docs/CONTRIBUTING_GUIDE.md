@@ -20,8 +20,8 @@ pnpm melra doctor   # should print a green report
 through their `exports` map, which points at `dist/`. A test failing with an
 unresolved `@melra/*` import means a stale or missing `dist`, not a broken test.
 
-The full gate is `pnpm check` (versions + doc links + typecheck + README examples + tests +
-Python). It is what CI runs. On a 16 GiB machine it peaks around 13 GiB, so
+The full gate is `pnpm check` (versions + doc links + license headers + typecheck + README
+examples + tests + Python). It is what CI runs. On a 16 GiB machine it peaks around 13 GiB, so
 close your browser first — or run the pieces individually while iterating:
 
 ```bash
@@ -132,7 +132,9 @@ skips both is a data leak with a passing test suite.
   why the codebase writes `...(x === undefined ? {} : { x })` instead of passing
   `undefined`. Match it rather than loosening the types.
 - Every source file carries the two-line copyright and `SPDX-License-Identifier`
-  header.
+  header. The identifier follows the path: `Apache-2.0` under `packages/sdk-ts`,
+  `packages/protocol`, `sdk-py` and `examples/`, `AGPL-3.0-only` everywhere else
+  ([LICENSING.md](../LICENSING.md)). `pnpm licenses:check --fix` writes it.
 - Comments explain *why*, not *what*. If a line needs a comment saying what it
   does, the line is the problem.
 - Commit subjects are `type(scope): summary` — `fix(terminal):`, `docs:`,
@@ -149,7 +151,7 @@ skips both is a data leak with a passing test suite.
 - [ ] `pnpm evals` still reports 55/55 (or more, with your new scenario) if you touched policy or execution
 - [ ] docs updated for any public contract
 - [ ] `CHANGELOG.md` entry under `## [Unreleased]` if a user would notice
-- [ ] commits signed off
+- [ ] commits signed off, and the [CLA](../CLA.md) signed once
 
 CI runs the gate on ubuntu/macOS/windows × Node 22/24, so avoid
 platform-specific paths and shell assumptions. Windows is the one that catches

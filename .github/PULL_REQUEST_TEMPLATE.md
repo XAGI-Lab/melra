@@ -16,5 +16,6 @@
 ## Checklist
 
 - [ ] I have signed off my commits under the DCO.
+- [ ] I have signed the CLA (`CLA.md`), or will when the CLA check asks.
 - [ ] I have not included secrets, customer data, or deployment details.
 - [ ] API changes include documentation and tests.

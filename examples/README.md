@@ -1,5 +1,10 @@
 # Runnable examples
 
+Everything in `examples/` is licensed under the
+[Apache License 2.0](../LICENSES/Apache-2.0.txt), unlike the AGPL-3.0 kernel, so
+you can copy it into your own project under any license
+([LICENSING.md](../LICENSING.md)).
+
 Each numbered directory contains a complete task request accepted by:
 
 ```bash

@@ -1,5 +1,5 @@
 // Copyright 2026 XAGI Labs Private Limited
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: AGPL-3.0-only
 
 // Every package publishes `dist/`, so whatever the build leaves there ships to
 // npm. Test files did, for 0.3.0-alpha.11: 164 of them, importing `vitest`,
