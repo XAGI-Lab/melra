@@ -48,7 +48,15 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+      # The runner as it comes: enforced mode must refuse to start.
       - run: node scripts/systemd-smoke.mjs
+      # With bubblewrap installed and let make user namespaces, which Ubuntu
+      # 24.04's AppArmor refuses by default: every command must run in it.
+      - run: |
+          sudo apt-get update
+          sudo apt-get install --yes bubblewrap
+          sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0
+      - run: node scripts/systemd-smoke.mjs --bubblewrap
 
   macos-sandbox:
     runs-on: macos-latest

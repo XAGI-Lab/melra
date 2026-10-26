@@ -40,9 +40,13 @@ COPY --from=build --chown=node:node /release ./
 COPY NOTICE ./
 COPY LICENSES ./LICENSES/
 
+# /var/lib/melra and /etc/melra are for MELRA run as root, as
+# examples/deploy/compose runs it, so that it can run each command as node:
+# only root may enter them, for its data and its policy file.
 RUN mkdir -p /workspace /data \
     && chown -R node:node /workspace /data \
-    && chmod 700 /data
+    && chmod 700 /data \
+    && install -d -m 0700 /var/lib/melra /etc/melra
 
 USER node
 VOLUME ["/workspace", "/data"]

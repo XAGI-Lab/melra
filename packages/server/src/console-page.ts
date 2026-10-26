@@ -587,7 +587,7 @@ async function renderTaskDetail(id, into) {
   for (const r of receipts?.receipts ?? []) {
     parts.push(el("div", { class: "section" }, el("h2", { text: "Receipt" }), kv([
       ["Capability", mono(r.capability)], ["Principal", mono(r.principal)], ["Guarantee", r.executionGuarantee],
-      ["Mode", r.mode], ["Target", r.target ? mono(r.target) : null], ["Input digest", mono(r.inputDigest)],
+      ["Mode", r.mode], ["Sandbox", r.sandbox], ["Target", r.target ? mono(r.target) : null], ["Input digest", mono(r.inputDigest)],
       ["Ran", r.startedAt ? when(r.startedAt) : null],
       ["Redactions", r.redactions?.length ? chips(r.redactions) : null],
     ])));

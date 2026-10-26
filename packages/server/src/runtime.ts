@@ -24,9 +24,12 @@ import { FileRuntime } from "@melra/file-runtime";
 import { HttpRuntime } from "@melra/http-runtime";
 import { LocalMemory } from "@melra/memory";
 import {
+  classifyCommand,
   CredentialBroker,
   loadPolicy,
   localhostAllowed,
+  normalizeCommandName,
+  sandboxUse,
   type LocalPolicy,
 } from "@melra/policy-core";
 import {
@@ -36,7 +39,7 @@ import {
   type OperationExecutor,
 } from "@melra/runtime-core";
 import { SqliteStore } from "@melra/storage-sqlite";
-import { TerminalRuntime } from "@melra/terminal-runtime";
+import { detectSandbox, TerminalRuntime, type CommandSandbox } from "@melra/terminal-runtime";
 import { Verifier, type RegisteredVerifier } from "@melra/verifier-core";
 import { loadPayloadKey } from "./payload-key.js";
 
@@ -79,6 +82,12 @@ export interface MelraRuntimeOptions {
    * file or an environment variable should be able to swap in.
    */
   evidenceVerifiers?: ReadonlyArray<RegisteredVerifier>;
+  /**
+   * How the OS sandbox commands run in is found. Code only, like
+   * `computerAdapter`: a seam for tests, which no file or variable can swap.
+   * Absent, this host's own (`detectSandbox`).
+   */
+  detectSandbox?: typeof detectSandbox;
   environment?: NodeJS.ProcessEnv;
 }
 
@@ -215,6 +224,31 @@ export async function secretInsideWorkspace(
     if (await files.holdsReserved(files.root)) return name;
   }
   return undefined;
+}
+
+/**
+ * The OS sandbox commands run in on this host, found as `createMelraRuntime`
+ * finds it at startup, so `melra doctor` cannot disagree with the server it
+ * describes. No command may read or write the data directory, the policy
+ * file, a secret file, or a login under home the policy file does not allow
+ * back.
+ */
+export async function commandSandbox(
+  settings: LocalPolicy["sandbox"],
+  paths: { workspaceRoot: string; dataDirectory: string; policyPath?: string; secrets: Map<string, string> },
+  detect: typeof detectSandbox = detectSandbox,
+): ReturnType<typeof detectSandbox> {
+  return await detect({
+    workspace: paths.workspaceRoot,
+    denied: [
+      resolve(paths.dataDirectory),
+      ...(paths.policyPath === undefined ? [] : [resolve(paths.policyPath)]),
+      ...paths.secrets.values(),
+    ],
+    readable: settings.readable,
+    user: settings.user,
+    dataDirectory: resolve(paths.dataDirectory),
+  });
 }
 
 /**
@@ -524,6 +558,45 @@ export async function createMelraRuntime(
   for (const path of [options.browserProfileDir, options.browserHarPath]) {
     if (path !== undefined) await mkdir(dirname(resolve(path)), { recursive: true }).catch(() => undefined);
   }
+  // Every command in an OS sandbox: always in enforced mode, and where the
+  // policy file asks in developer mode. Found once, here, so a host with none
+  // refuses to start rather than run commands with MELRA's own rights; with
+  // `if-available`, the operator's recorded opt-out, it starts and every
+  // receipt says `sandbox: none`.
+  const use = sandboxUse(policy);
+  if (mode === "enforced" && use === "off") {
+    store.close();
+    throw new Error(
+      'enforced_mode_refuses_sandbox_off: enforced mode runs every command in an OS sandbox; drop "use": "off" ' +
+        'from "sandbox" in the policy file, or set it to "if-available" to start without one where none works.',
+    );
+  }
+  let sandbox: CommandSandbox | undefined;
+  if (use !== "off") {
+    const found = await commandSandbox(
+      policy.sandbox,
+      {
+        workspaceRoot: runtimeRoot,
+        dataDirectory,
+        secrets,
+        ...(options.policyPath === undefined ? {} : { policyPath: options.policyPath }),
+      },
+      options.detectSandbox,
+    );
+    if ("problems" in found && use === "on") {
+      store.close();
+      throw new Error(
+        `sandbox_unavailable: no per-command OS sandbox works on this host. ${found.problems.join(". ")}. ` +
+          'Or set "sandbox": {"use": "if-available"} in the policy file to start without one, which every receipt records.',
+      );
+    }
+    sandbox = "sandbox" in found ? found.sandbox : undefined;
+    policy.sandbox = { ...policy.sandbox, backend: sandbox?.backend ?? "none" };
+    // The `uid` sandbox's account shares MELRA's group, as in the container
+    // pair: what either one creates, the other may change. Commands inherit it.
+    if (sandbox?.backend === "uid") process.umask(0o002);
+  }
+  const symlinkers = new Set(policy.sandbox.symlinks.map(normalizeCommandName));
   const terminal = await TerminalRuntime.create({
     root: runtimeRoot,
     reserved: (path, call) => files.isReserved(path, false, call),
@@ -532,6 +605,21 @@ export async function createMelraRuntime(
     // MELRA's judgement about approved writes, so unsafe-local, which approves
     // nothing, keeps the operator's PATH as given.
     ...(unhinged ? {} : { pathOutside: policy.workspaceRoot }),
+    ...(sandbox === undefined
+      ? {}
+      : {
+          sandbox,
+          // By what the call asks for, as policy classified it: the network
+          // only for the `network` trait, links for installs and the
+          // programs the policy file names.
+          allowance: (command: string, args: readonly string[]) => {
+            const { traits } = classifyCommand(command, args);
+            return {
+              network: traits.includes("network"),
+              symlinks: traits.includes("package-install") || symlinkers.has(normalizeCommandName(command)),
+            };
+          },
+        }),
   });
   const browser = new BrowserRuntime({
     artifactDirectory: artifacts,

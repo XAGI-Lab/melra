@@ -15,6 +15,7 @@ import {
   defaultEvidenceFor,
   evaluatePolicy,
   loadPolicy,
+  sandboxUse,
   validateApproval,
   type LocalPolicy,
 } from "./index.js";
@@ -100,6 +101,8 @@ describe("policy file", () => {
         },
         "credentials.gh.inject.schema",
       ],
+      [{ sandbox: { symlink: ["git"] } }, "sandbox.symlink"],
+      [{ sandbox: { user: { uid: 1000, gid: 1000, groups: [] } } }, "sandbox.user.groups"],
     ];
     for (const [policy, at] of unknown) {
       await expect(load(policy), at).rejects.toThrow(`policy_invalid: ${file()}: ${at}: unknown key`);
@@ -119,6 +122,11 @@ describe("policy file", () => {
       [{ memoryRetention: { maxAgeDays: "30" } }, "memoryRetention.maxAgeDays"],
       [{ circuitBreaker: { threshold: "3" } }, "circuitBreaker.threshold"],
       [{ capabilities: [{ id: "r", capability: "file.read", effects: "read" }] }, "capabilities[0].effects"],
+      [{ sandbox: { use: "yes" } }, "sandbox.use"],
+      // Only a listed login can be allowed back, so a typo is not a silent no-op.
+      [{ sandbox: { readable: ["~/.bashrc"] } }, "sandbox.readable[0]"],
+      // Commands never run as root.
+      [{ sandbox: { user: { uid: 0, gid: 0 } } }, "sandbox.user.uid"],
       [[], "(root)"],
     ];
     for (const [policy, at] of wrong) {
@@ -172,6 +180,25 @@ describe("policy file", () => {
     expect(await refusal('{\n  "allowedCommands": ["git"],\n}')).toBe(
       `policy_invalid: ${file()}: not valid JSON at line 3 column 1`,
     );
+  });
+
+  it("reads the sandbox settings over the defaults, and follows the mode where it names none", async () => {
+    const loaded = await load({
+      sandbox: { use: "if-available", symlinks: ["git"], readable: ["~/.npmrc"], user: { uid: 1000, gid: 1000 } },
+    });
+    expect(loaded.sandbox).toEqual({
+      use: "if-available",
+      symlinks: ["git"],
+      readable: ["~/.npmrc"],
+      user: { uid: 1000, gid: 1000 },
+    });
+    expect((await load({ sandbox: { symlinks: ["git"] } })).sandbox).toEqual({ symlinks: ["git"], readable: [] });
+    const defaults = createDefaultPolicy(directory);
+    expect(sandboxUse(defaults)).toBe("off");
+    expect(sandboxUse({ ...defaults, mode: "enforced" })).toBe("on");
+    expect(sandboxUse({ ...loaded, mode: "enforced" })).toBe("if-available");
+    // Unsafe-local turns off every guardrail, this one too.
+    expect(sandboxUse({ ...defaults, sandbox: { ...defaults.sandbox, use: "on" }, unhinged: true })).toBe("off");
   });
 
   it("fingerprints the file as sha256sum would, and the defaults by version", async () => {

@@ -155,6 +155,16 @@ test("the release workflows publish in that order, gate the container, and relea
   assert.doesNotMatch(dry, /--tag alpha/);
 });
 
+test("the systemd smoke runs refused on the runner as it comes, then in bubblewrap once it can run", () => {
+  const systemd = job(read(".github/workflows/deploy-recipes.yml"), "systemd");
+  before(systemd, "run: node scripts/systemd-smoke.mjs\n", "apt-get install --yes bubblewrap");
+  before(systemd, "apt-get install --yes bubblewrap", "sysctl kernel.apparmor_restrict_unprivileged_userns=0");
+  before(systemd, "sysctl kernel.apparmor_restrict_unprivileged_userns=0", "run: node scripts/systemd-smoke.mjs --bubblewrap");
+  const smoke = read("scripts/systemd-smoke.mjs");
+  assert.match(smoke, /process\.argv\.includes\("--bubblewrap"\) \? "bubblewrap" : "refused"/);
+  assert.match(smoke, /if \(!\(expected === "bubblewrap" \? inBubblewrap : refused\)\)/);
+});
+
 test("the container pair's smoke runs the recipe as written, its dry run needs no Docker, and CI runs it", () => {
   // No PATH, so a dry run that started docker would fail here.
   const result = spawnSync(process.execPath, [join(root, "scripts/compose-smoke.mjs"), "--dry-run"], {
@@ -171,9 +181,11 @@ test("the container pair's smoke runs the recipe as written, its dry run needs n
     "docker network inspect bridge --format {{(index .IPAM.Config 0).Gateway}}",
     `docker network inspect ${project}_agent --format {{json .IPAM.Config}}`,
     `${compose} run --rm -T agent probe --socket /run/melra/melra.sock --public <bridge-gateway>:<port> --local <agent-gateway>:<port> --json`,
-    agent,
+    `${agent} write`,
     `${compose} exec -T melra node /opt/melra/dist/bin.js approve <task-id> --yes --json`,
     `${agent} <task-id>`,
+    `${agent} command`,
+    `${agent} into`,
     `${compose} down --volumes --remove-orphans`,
   ]);
   // The real smoke hands the probe the two addresses it looked up, in that
@@ -192,6 +204,15 @@ test("the container pair's smoke runs the recipe as written, its dry run needs n
     /^ {2}agent:\n {4}internal: true\n(?: {4}#.*\n)* {4}driver_opts:\n {6}com\.docker\.network\.bridge\.gateway_mode_ipv4: isolated$/m,
   );
   assert.doesNotMatch(recipe, /docker\.sock|^\s*(privileged|ports|network_mode):/m);
+  // MELRA alone gets capabilities back, and only the two that run each
+  // command as the account its policy names.
+  assert.equal(recipe.match(/^ {4}cap_add:$/gm)?.length, 1);
+  assert.deepEqual(recipe.match(/^ {6}- [A-Z_]+$/gm), ["      - ALL", "      - SETUID", "      - SETGID", "      - ALL"]);
+  assert.deepEqual(JSON.parse(read("examples/deploy/compose/policy.json")).sandbox.user, { uid: 1000, gid: 1000 });
+  // MELRA in that account's group, so each may change what the other makes;
+  // its data and policy file where only root may enter.
+  assert.deepEqual(recipe.match(/^ {4}user: .*$/gm), ['    user: "0:1000"', '    user: "0:0"']);
+  assert.match(read("Dockerfile"), /install -d -m 0700 \/var\/lib\/melra \/etc\/melra$/m);
 
   const container = job(read(".github/workflows/container.yml"), "build");
   before(container, "docker build --tag melra:ci", "pnpm compose:smoke");

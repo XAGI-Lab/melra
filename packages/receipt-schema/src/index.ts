@@ -335,6 +335,13 @@ export interface ActionReceipt {
    * owns the vocabulary.
    */
   mode?: string;
+  /**
+   * The OS sandbox that kernel ran terminal commands in (`seatbelt`,
+   * `bubblewrap`, `uid`), or `none` when the policy file let it start without
+   * one. Absent when the sandbox was off, as it is by default in developer
+   * mode, and on receipts written before it existed.
+   */
+  sandbox?: string;
   policyDecision: {
     outcome: "allow" | "deny" | "confirm";
     policyVersion: string;

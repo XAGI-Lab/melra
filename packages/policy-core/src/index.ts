@@ -142,6 +142,25 @@ export interface LocalPolicy {
    */
   unhinged: boolean;
   /**
+   * The OS sandbox every terminal command runs in. Under Seatbelt and
+   * bubblewrap: writes only to the workspace and temp, no reads of MELRA's
+   * own files or the logins under home (`HOME_SECRETS`, less `readable`), the
+   * network (IP and DNS under Seatbelt) only for a command with the `network`
+   * trait, and symbolic links only for one with the `package-install` trait or
+   * named in `symlinks`. Under `uid`, only the reads are held, checked at
+   * startup; writes, network and links are what the host lets that account do. `use` absent follows the
+   * mode (`sandboxUse`). `backend` is what `createMelraRuntime` found on this
+   * host, or `none` when `if-available` let it start without one; it is
+   * stamped on receipts and never read from the file.
+   */
+  sandbox: {
+    use?: "on" | "off" | "if-available";
+    symlinks: string[];
+    readable: string[];
+    user?: { uid: number; gid: number };
+    backend?: string;
+  };
+  /**
    * How this kernel is deployed, and therefore what it refuses about its own
    * setup rather than about a caller's request.
    *
@@ -582,8 +601,15 @@ export function createDefaultPolicy(workspaceRoot: string, runtimes = true): Loc
     credentials: {},
     circuitBreaker: { threshold: 3, cooldownMs: 60_000 },
     unhinged: false,
+    sandbox: { symlinks: [], readable: [] },
     mode: "developer",
   };
+}
+
+/** Whether commands run sandboxed: as the policy says, or only in enforced mode. Never under unsafe-local. */
+export function sandboxUse(policy: Pick<LocalPolicy, "sandbox" | "mode" | "unhinged">): "on" | "off" | "if-available" {
+  if (policy.unhinged) return "off";
+  return policy.sandbox.use ?? (policy.mode === "enforced" ? "on" : "off");
 }
 
 /** The approval window a policy gives: its own, or 5 minutes in developer mode and 30 in enforced. */
@@ -668,6 +694,7 @@ export async function loadPolicy(
     // drop `maxAgeDays` to `undefined` and make compaction delete everything.
     memoryRetention: { ...defaults.memoryRetention, ...parsed.memoryRetention },
     circuitBreaker: { ...defaults.circuitBreaker, ...parsed.circuitBreaker },
+    sandbox: { ...defaults.sandbox, ...parsed.sandbox },
     deniedTraits: parsed.deniedTraits ?? defaults.deniedTraits,
     // Through `PolicyFileSchema`, never spread raw: a grant is the file claiming
     // authority exists, and a malformed grant or credential definition must

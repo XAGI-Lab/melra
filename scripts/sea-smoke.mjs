@@ -9,7 +9,7 @@
 // `approve`, which is the only check of that path from a single executable.
 
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -39,9 +39,13 @@ try {
   const doctor = JSON.parse(run("doctor", "--json"));
   const conformance = JSON.parse(run("conformance", "--json"));
   await mkdir(workspace);
+  // The recorded opt-out: Linux runners may have no OS sandbox, and Windows
+  // has none, which enforced mode otherwise refuses to start without.
+  const policy = join(home, "sandbox-opt-out.json");
+  await writeFile(policy, JSON.stringify({ sandbox: { use: "if-available" } }));
   const enforced = JSON.parse(
     execFileSync(binary, ["conformance", "--json"], {
-      env: { ...env, MELRA_WORKSPACE: workspace, MELRA_MODE: "enforced" },
+      env: { ...env, MELRA_WORKSPACE: workspace, MELRA_MODE: "enforced", MELRA_POLICY: policy },
       cwd: workspace,
       encoding: "utf8",
       timeout: 180_000,

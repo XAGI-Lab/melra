@@ -21,9 +21,17 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { createMelraRuntime, serveHttp } from "../src/index.js";
+import { createMelraRuntime as createRuntime, serveHttp } from "../src/index.js";
 import type { MelraHttpServer } from "../src/http-server.js";
 import type { MelraRuntime } from "../src/runtime.js";
+
+// Enforced mode refuses to start where no OS sandbox works, as on a CI host
+// with none. A test about something else gets one that confines nothing.
+const createMelraRuntime = (options: Parameters<typeof createRuntime>[0]) =>
+  createRuntime({
+    detectSandbox: async () => ({ sandbox: { backend: "test", confine: async ({ file, args }) => ({ file, args }) } }),
+    ...options,
+  });
 
 /**
  * `fetch` over a Unix socket, built on `http.request`, which is the one client

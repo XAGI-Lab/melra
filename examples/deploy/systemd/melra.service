@@ -8,6 +8,9 @@
 #   sudo install -m 0644 melra.service /etc/systemd/system/melra@.service
 #   sudo systemctl enable --now melra@$USER
 # Then point an SDK or a socket-aware client at /run/melra-$USER/melra.sock.
+# Enforced mode runs every command in a bubblewrap sandbox of its own and
+# refuses to start without one: install bubblewrap, and on Ubuntu 24.04 let
+# unprivileged programs make user namespaces (`melra doctor` names how).
 # `scripts/systemd-smoke.mjs` runs `doctor` under the [Service] settings here,
 # so this file and what CI checks cannot drift apart.
 
@@ -38,20 +41,25 @@ ProtectHome=read-only
 ReadWritePaths=/home/%i/project /home/%i/.melra
 PrivateTmp=yes
 PrivateDevices=yes
-ProtectKernelTunables=yes
+# Not ProtectKernelTunables=, ProtectKernelLogs= or ProtectHostname=: each
+# mounts over part of /proc (ProtectHostname its hostname files, once the
+# options above give the service a mount namespace), and a command's sandbox
+# then cannot mount a /proc of its own.
 ProtectKernelModules=yes
-ProtectKernelLogs=yes
 ProtectControlGroups=yes
 ProtectClock=yes
-ProtectHostname=yes
 RestrictSUIDSGID=yes
 RestrictRealtime=yes
-RestrictNamespaces=yes
+# Only the namespaces bubblewrap makes for each command: its own user, mounts,
+# process IDs and an empty network.
+RestrictNamespaces=user mnt pid net
 LockPersonality=yes
-# Unix sockets for the transport, IP for the HTTP and browser adapters.
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-# A seccomp filter: the syscalls an ordinary service needs, nothing more.
-SystemCallFilter=@system-service
+# Unix sockets for the transport, IP for the HTTP and browser adapters, and
+# netlink for bubblewrap to bring up loopback in a command's empty network.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+# A seccomp filter: the syscalls an ordinary service needs, and the mount
+# calls bubblewrap builds each command's view of the filesystem with.
+SystemCallFilter=@system-service @mount
 SystemCallArchitectures=native
 # Deliberately absent: MemoryDenyWriteExecute=yes. V8's JIT writes and then
 # executes code, so Node exits at startup under it.

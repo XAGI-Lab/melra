@@ -10,7 +10,15 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { TOOL_NAMES, type Principal } from "@melra/protocol";
 import { createMcpServer, harnessToolsEnabled, SERVER_INSTRUCTIONS } from "./mcp-server.js";
 import { HARNESS_TOOLS, registerHarnessTools } from "./harness-tools.js";
-import { createMelraRuntime, type MelraRuntime } from "./runtime.js";
+import { createMelraRuntime as createRuntime, type MelraRuntime } from "./runtime.js";
+
+// Enforced mode refuses to start where no OS sandbox works, as on a CI host
+// with none. A test about something else gets one that confines nothing.
+const createMelraRuntime = (options: Parameters<typeof createRuntime>[0]) =>
+  createRuntime({
+    detectSandbox: async () => ({ sandbox: { backend: "test", confine: async ({ file, args }) => ({ file, args }) } }),
+    ...options,
+  });
 
 type Handler = (args: Record<string, unknown>) => Promise<{
   content: { type: "text"; text: string }[];

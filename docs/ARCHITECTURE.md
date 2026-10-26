@@ -70,12 +70,14 @@ kernel at send time, scoped by host and capability, and never returned to the
 caller ([P4](../ROADMAP.md#p4--credentials-and-api-effects)). Other adapters
 still use the ambient process environment, so an agent that can reach the
 kernel can reach whatever the kernel's process can. Its programs see less of
-it: the terminal passes an allowlist, the computer adapter's helpers start
-without `MELRA_PAYLOAD_KEY`, `MELRA_HTTP_TOKEN` or any variable a credential is
-read from, and the browser MELRA launches and the agent `melra launch` starts
-get neither of the first two (enforced mode warns while either is set at all,
-since a process of the same OS user can read MELRA's own environment).
-Authenticating identity is
+it: the terminal passes an allowlist, and in enforced mode runs each program in
+an OS sandbox that cannot read MELRA's data or the logins under home
+([per-command sandbox](INSTALLATION.md#per-command-sandbox)); the computer
+adapter's helpers start without `MELRA_PAYLOAD_KEY`, `MELRA_HTTP_TOKEN` or any
+variable a credential is read from; and the browser MELRA launches and the agent
+`melra launch` starts get neither of the first two (enforced mode warns while
+either is set at all, since a process of the same OS user can read MELRA's own
+environment). Authenticating identity is
 [P2](../ROADMAP.md#p2--hard-capability-boundary) work, listed here because the
 lifecycle is the contract even where the implementation is still one step.
 
@@ -616,7 +618,7 @@ implementations that must pass through those services to reach anything.
 | Reference effect adapter | Effects it can perform |
 |---|---|
 | `@melra/file-runtime` | Root-confined filesystem operations |
-| `@melra/terminal-runtime` | Shell-free process and background-job control |
+| `@melra/terminal-runtime` | Shell-free process and background-job control, each command in a per-command OS sandbox (Seatbelt, bubblewrap, or another account) where one is on |
 | `@melra/browser-runtime` | Isolated Playwright browser execution |
 | `@melra/computer-runtime` | Typed local computer-use adapters |
 | `@melra/http-runtime` | One bounded HTTP request, pinned to a checked address |
@@ -699,7 +701,11 @@ Beside it, every receipt carries `mode` — `developer` or `enforced`. It says
 nothing about the request; it records the deployment the operator declared for
 the kernel that ran the effect; it is not evidence that no other path existed.
 That is not recoverable after the fact, so it is written at the same time as
-the outcome rather than left for an auditor to infer.
+the outcome rather than left for an auditor to infer. Beside `mode`, a kernel
+that ran commands in a per-command OS sandbox names it in `sandbox`
+(`seatbelt`, `bubblewrap`, `uid`), and one the policy file let start without
+one says `none`; the task records it in the same save as `mode`, so a receipt
+recovery writes later still says it.
 See [deployment modes](INSTALLATION.md#deployment-modes).
 
 `policyDecision` names the policy as well as the outcome: `policyVersion`, the
@@ -903,7 +909,7 @@ did with it. Recovery asks *what do the durable facts say happened*, never
 | Boundary | A policy file the caller can edit | Not reachable by the caller |
 | Harness | Holds credentials, may also hold native tools | Sandboxed, no privileged secrets, no raw production shell |
 | Transport | stdio, loopback HTTP, or a Unix socket | Token-authenticated IPC: a mode-`0600` Unix socket or loopback, never a public bind |
-| Status | Shipped | `MELRA_MODE=enforced` ships the refusals MELRA owns; the OS isolation around the harness is the operator's ([P2](../ROADMAP.md#p2--hard-capability-boundary)) |
+| Status | Shipped | `MELRA_MODE=enforced` ships the refusals MELRA owns and an OS sandbox around each command it runs; the OS isolation around the harness is the operator's ([P2](../ROADMAP.md#p2--hard-capability-boundary)) |
 
 Developer mode is the honest default for adoption: MELRA is a governed path, and
 a harness that also has an unrestricted native terminal can simply not use it.
@@ -929,7 +935,8 @@ as its only MCP server, and its user, project and local settings files
 ignored, so the only tools it has that change anything are MELRA's. That holds
 for that session only, in either mode: a `claude` started any other way keeps
 its own tools, and a program MELRA's policy lets the agent run has the OS
-user's rights, whichever allowed command starts it. The server launch starts
+user's rights, whichever allowed command starts it, less what the per-command
+sandbox takes away in enforced mode. The server launch starts
 leaves `node`, `npm`, `npx` and `pnpm` out of its default `allowedCommands`,
 which narrows that list without closing it; in developer mode the agent
 approves its own changes, so enforced mode is how a person decides each one.

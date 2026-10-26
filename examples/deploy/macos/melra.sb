@@ -9,6 +9,10 @@
 ;;     -D WORKSPACE="$PWD" -D MELRA_HOME="$HOME/.melra" \
 ;;     melra serve
 ;;
+;; Developer mode only. Enforced mode runs each command under a deny-default
+;; profile of its own, which replaces this one: macOS does not apply a profile
+;; inside another, so enforced mode under this one refuses to start.
+;;
 ;; Not covered: the browser adapter. Chrome brings its own Seatbelt sandbox and
 ;; will not start inside another one; leave it to a separate, unsandboxed MELRA
 ;; or to the Docker / systemd recipes. `sandbox-exec` is marked deprecated by

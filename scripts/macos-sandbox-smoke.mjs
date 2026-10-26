@@ -4,8 +4,9 @@
 // Runs the built CLI under examples/deploy/macos/melra.sb with sandbox-exec and
 // checks both sides: MELRA works inside it (doctor ready, conformance L3,
 // which writes, reads, and deletes a workspace file), and the kernel refuses a
-// write outside the workspace from a process MELRA could run. macOS only; CI
-// runs it on macos-latest.
+// write outside the workspace from a process MELRA could run. Enforced mode,
+// whose per-command profiles macOS will not nest inside this one, says so
+// and would refuse to start. macOS only; CI runs it on macos-latest.
 
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -33,6 +34,12 @@ const melra = (...args) => {
   const [command, argv] = sandboxed(process.execPath, [join(root, "apps/cli/dist/bin.js"), ...args]);
   return JSON.parse(execFileSync(command, argv, { env, cwd: workspace, encoding: "utf8", timeout: 180_000 }));
 };
+// doctor in enforced mode, which exits 1 with its report on stdout.
+const enforcedSandbox = () => {
+  const [command, argv] = sandboxed(process.execPath, [join(root, "apps/cli/dist/bin.js"), "doctor", "--json"]);
+  const result = spawnSync(command, argv, { env: { ...env, MELRA_MODE: "enforced" }, cwd: workspace, encoding: "utf8" });
+  return JSON.parse(result.stdout).checks.find((check) => check.name === "sandbox");
+};
 // What a terminal task could run: plain Node writing a file.
 const write = (path) => {
   const [command, argv] = sandboxed(process.execPath, ["-e", `require("fs").writeFileSync(${JSON.stringify(path)}, "x")`]);
@@ -44,15 +51,17 @@ try {
   const conformance = melra("conformance", "--json");
   const inside = write(join(workspace, "inside.txt"));
   const outside = write(escape);
+  const sandbox = enforcedSandbox();
   const result = {
     ready: doctor.ready,
     level: conformance.level,
     insideWrite: inside.status === 0,
     outsideRefused: outside.status !== 0 && /EPERM|not permitted/i.test(outside.stderr),
+    enforcedRefused: sandbox?.status === "fail" && sandbox.detail.includes("already runs inside a sandbox"),
   };
   process.stdout.write(`${JSON.stringify(result)}\n`);
   if (existsSync(escape)) throw new Error("macos_sandbox_smoke_escaped");
-  if (!result.ready || result.level !== 3 || !result.insideWrite || !result.outsideRefused) {
+  if (!result.ready || result.level !== 3 || !result.insideWrite || !result.outsideRefused || !result.enforcedRefused) {
     throw new Error("macos_sandbox_smoke_failed");
   }
 } finally {

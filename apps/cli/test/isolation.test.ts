@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { describe, expect, it } from "vitest";
-import { isolationCheck, parseIsolation } from "../src/isolation.js";
+import { isolationCheck, parseIsolation, sandboxCheck } from "../src/isolation.js";
 
 // Trimmed from a container started with the docs/INSTALLATION.md#docker recipe.
 const HARDENED_STATUS = "Name:\tnode\nCapEff:\t0000000000000000\nNoNewPrivs:\t1\nSeccomp:\t2\n";
@@ -49,5 +49,38 @@ describe("doctor isolation check", () => {
     if (process.platform === "win32") {
       expect(isolationCheck(undefined, "developer").detail).toContain("WSL2");
     }
+  });
+});
+
+describe("doctor sandbox check", () => {
+  // A host where no sandbox works, such as Windows or a Linux runner without
+  // bubblewrap.
+  const none = async () => ({ problems: ["test: none here"] });
+  const env = (mode: "developer" | "enforced") => ({ mode, unhinged: false, workspaceRoot: "/w", dataDirectory: "/d" });
+  const check = (mode: "developer" | "enforced", use?: "on" | "off" | "if-available") =>
+    sandboxCheck(env(mode), { symlinks: [], readable: [], ...(use === undefined ? {} : { use }) }, { secrets: new Map() }, none);
+
+  it("fails where the server would refuse to start, and says how to fix it", async () => {
+    for (const [mode, use] of [["enforced", undefined], ["enforced", "on"], ["developer", "on"]] as const) {
+      expect(await check(mode, use), `${mode} ${use}`).toMatchObject({
+        status: "fail",
+        detail: expect.stringMatching(/^sandbox_unavailable: .*test: none here/),
+        next: expect.stringContaining('"sandbox": {"use": "if-available"}'),
+      });
+    }
+    expect(await check("enforced", "off")).toMatchObject({
+      status: "fail",
+      detail: expect.stringMatching(/^enforced_mode_refuses_sandbox_off: /),
+      next: expect.stringContaining("if-available"),
+    });
+  });
+
+  it("warns where enforced mode starts on the opt-out, and passes in developer mode", async () => {
+    expect(await check("enforced", "if-available")).toMatchObject({
+      status: "warn",
+      detail: expect.stringContaining("every receipt says sandbox: none (test: none here)"),
+    });
+    expect((await check("developer", "if-available")).status).toBe("pass");
+    expect(await check("developer")).toMatchObject({ status: "pass", detail: expect.stringContaining("none would work here") });
   });
 });

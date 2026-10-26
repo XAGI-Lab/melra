@@ -184,6 +184,16 @@ Actions: `run`, `start`, `status`, `output`, `stop`, `send`.
   changes.
 - Command, arguments, working directory, environment, duration, and output are
   bounded.
+- In enforced mode, and in developer mode where the policy file asks, each
+  command runs in an OS sandbox of its own, where it cannot read MELRA's data,
+  the policy file, the secret files or the logins under home. Under Seatbelt
+  and bubblewrap it also writes only in the workspace and temp, reaches no
+  network without the `network` trait (Seatbelt: no socket; bubblewrap: an
+  empty network namespace, Unix sockets on the filesystem still reachable),
+  and makes no symbolic link unless it installs packages or the policy file
+  names it; under `uid` it only runs as an account that cannot read those
+  ([per-command sandbox](INSTALLATION.md#per-command-sandbox)). Where none
+  works, enforced mode does not start.
 - Only a read runs without approval. A read is a read-only program (`cat`,
   `head`, `rg`, `git status`/`log`/`diff`, listing `git branch`/`tag`, ...)
   called with arguments that all keep it one: no option that runs a program,
@@ -203,6 +213,7 @@ Actions: `run`, `start`, `status`, `output`, `stop`, `send`.
   background job. A process that leaves its group, with `setsid` for one, is
   not reached.
 - Background jobs are supervised only for the life of the server process.
+  Under bubblewrap what a job's program leaves running ends when it does.
 
 A job started with `interactive: true` keeps stdin open, and `send` writes a line
 to it ([commands that ask a question](INSTALLATION.md#commands-that-ask-a-question)).
