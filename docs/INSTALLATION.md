@@ -1504,7 +1504,8 @@ requests, in three views:
   mode; the effect adapters on offer; and recent activity.
 - **Tasks**: every task, filterable by outcome and searchable by id, operation,
   target, or policy reason. A task opens to its policy decision, each evidence
-  item with how it is known, its receipts, and the redacted stored record.
+  item with how it is known, the checks MELRA made itself apart from those,
+  its receipts, and the redacted stored record.
 - **Workflows**: every run, each node's status with links to its tasks, the
   command that advances it, and a live event tail.
 
@@ -1872,6 +1873,15 @@ as JSON and exits:
 | 4 | Policy blocked it (`policy_blocked`). Nothing ran. |
 | 5 | It ran and waits in `waiting_user` for a [semantic judgement](#judging-from-the-command-line). `next` holds the `melra judge` command that answers each of its judgements, one per line, with both ids whole. Replace its `<yes\|no\|cannot_tell>` with your verdict before you run it; as printed, a shell refuses it. |
 
+The receipt and certificate it prints keep what the request's
+`requiredEvidence` found in `evidence`, and what MELRA's own checks of a file
+write, mkdir, delete or move or a memory delete found in `kernelEvidence`
+([kernel checks](ARCHITECTURE.md#kernel-checks)); the task lists those checks as
+`kernelChecks`, a written file's hash masked in what is stored (with exit 3, or
+exit 4 when planning blocked it, the printed task is the plan, which carries
+the real hash beside the request's content). A kernel check that fails makes the task `partial`, exit 2,
+even when every declared predicate held.
+
 ## Approving from the command line
 
 `melra approve <task-id>` shows an approver the effect a task is waiting on (the
@@ -2138,7 +2148,7 @@ What is off, precisely:
 - **Approvals.** No challenge is issued, so nothing has to be echoed back before
   a destructive operation runs.
 - **Evidence.** A mutation with no `requiredEvidence` is allowed instead of
-  denied. Nothing is verified that you did not ask to be verified.
+  denied, where MELRA has no default to derive for it.
 - **Workspace confinement.** File and terminal operations are rooted at the
   filesystem root instead of `MELRA_WORKSPACE`, so any path the OS user can
   reach is reachable. The verifier is rooted there too.
@@ -2162,6 +2172,10 @@ What stays on, and why:
   the host, not a restriction on what you are allowed to touch.
 - Receipts and certificates. A destructive operation is still recorded as
   destructive; allowing everything is not the same as reporting nothing.
+- Verification. What a task declares, a default MELRA derives for a mutation
+  that declares none, and MELRA's own [kernel
+  checks](ARCHITECTURE.md#kernel-checks) still decide between
+  `verified_success` and `partial`.
 - Secret redaction before persistence. Raw output still reaches the caller; the
   database still gets the redacted copy.
 - The file capability's fixed path checks. It still never changes a coding

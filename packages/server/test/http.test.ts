@@ -218,6 +218,8 @@ describe("melra http server", () => {
     expect(page).not.toMatch(/href="https?:/);
     // Values reach the DOM as text only.
     expect(page).not.toContain("innerHTML");
+    // A task's detail shows the kernel's own checks apart from the agent's.
+    expect(page).toContain("kernelEvidence");
   });
 
   it("pins the console's own script and style by hash and refuses framing", async () => {

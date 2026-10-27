@@ -51,7 +51,8 @@ CREDENTIALS  the kernel acquires what the effect needs; the caller never sees it
 IDEMPOTENCY  logical attempt key; a committed attempt is not re-run
 EXECUTION    the adapter runs under an AbortSignal and a budget
 OBSERVATION  raw adapter result, redacted before persistence
-VERIFICATION independent predicates decide success, not the adapter
+VERIFICATION the caller's predicates and the kernel's own checks decide
+             success, not the adapter
 COMMIT       terminal status, events, projection, certificate
 RECEIPT      redacted, append-only evidence and a self-digested certificate,
              retained locally
@@ -537,7 +538,8 @@ interface is served.
   (`committed_before_interruption`) and is not run again.
 - A mutation in `verifying` may become `verified_success` only when all
   required predicates are independent filesystem observations
-  (`file_exists`, `file_absent`, or `file_hash`).
+  (`file_exists`, `file_absent`, or `file_hash`) and its
+  [kernel checks](#kernel-checks) hold when observed again.
 - Other interrupted mutations enter `recovery_required`; MELRA does not repeat
   them automatically.
 - After verification, everything that records a task's outcome (its
@@ -722,6 +724,46 @@ restart recovery leaves it alone; the startup pass and the 30 s sweep settle one
 past its expiry. A verifier that guesses is useful; a verifier that guesses
 while presenting itself as proof is worse than none.
 
+### Kernel checks
+
+The caller writes `requiredEvidence`, so a weak predicate (`file_exists` after
+a write) proves little. Where the request itself fixes the end state, the
+kernel derives its own checks at planning (`kernelChecksFor` in
+`@melra/verifier-core`) and makes them after the effect, whatever was declared:
+
+| Operation | Kernel check |
+|---|---|
+| file `write` | `file_hash`: the file holds exactly the bytes the content decodes to, in either encoding |
+| file `mkdir` | `directory_exists`: a directory is there, through links |
+| file `delete` | `file_absent` |
+| file `move` | `file_absent` on the source and `file_present` (any entry, by `lstat`) on the destination; not its content, which the request does not name |
+| memory `delete` | `memory_absent`: no record with that id in that scope |
+
+Nothing is derived for a memory `put`, whose stored copy is redacted, may get
+an id the adapter mints and may be compacted or evicted at once, nor for a
+memory `clear`, nor for terminal, browser, HTTP or desktop effects, whose
+intended end state the kernel cannot know from the request; there the caller's
+predicates are the only evidence. Checks are listed as `kernelChecks` on the
+plan response and the task record (a task an earlier version planned is checked
+all the same, from its sealed request, without the list) and recorded as
+`kernelEvidence` on the receipt and the certificate, apart from the caller's
+`evidence`, and the certificate's digest covers them. A failed one makes the
+task `partial`, as a failed declared check does, and one MELRA cannot make
+fails: a write to a file MELRA cannot read back, such as one kept write-only,
+ends `partial`. They are made wherever `requiredEvidence` is checked: after the
+adapter returns, and when recovery observes an interrupted change again. A
+reconciliation is held to them too: one whose predicates hold while a kernel
+check fails leaves the task `recovery_required`
+(`reconciliation_kernel_check_failed`). It has no move result to read, so on a
+disk that ignores case a move that only changed the case of a name stays parked
+there. On such a disk a move that only changes the case of a non-ASCII letter
+in the name of a file with another hard link ends `partial`: MELRA folds only
+ASCII letters, as every such disk does, so it cannot tell that the old
+spelling now reaches only the renamed entry. They do not count toward the evidence a mutation must declare, are not
+part of the effect contract an approver is shown, since they only narrow what
+counts as success, and run in every mode, unsafe-local included. A write's hash
+is masked on the stored task and in every stored item, as its content is.
+
 ## Execution guarantees
 
 Distributed systems did not become easy because an LLM is calling them. MELRA
@@ -866,6 +908,7 @@ safe thing:
 | Provider says | Task becomes |
 |---|---|
 | the effect is applied | `verified_success`, receipted as `recovered` |
+| the effect is applied, but a [kernel check](#kernel-checks) fails | stays `recovery_required`, `reconciliation_kernel_check_failed` |
 | no such effect, inside the settle window | stays `recovery_required`, `reconciliation_settling` |
 | no such effect, after the settle window | `failed`, `reconciliation_confirms_effect_not_applied` |
 | nothing — unreachable | stays `recovery_required`, `reconciliation_inconclusive` |
@@ -1038,7 +1081,10 @@ which in enforced mode goes to a host only `"*"` admits once an operator has
 approved the task, and never from a workflow check.
 Result, terminal, URL, and page predicates evaluate adapter-returned
 observations (level 0). Predicates are caller-authored, so a weak predicate can
-prove too little. Models and adapters cannot approve actions or mark a workflow
+prove too little; for a file write, mkdir, delete or move and a memory delete
+the kernel's own [checks](#kernel-checks) hold the effect to the end state the
+request names, and for every other operation the caller's predicates are all
+there is. Models and adapters cannot approve actions or mark a workflow
 complete, but MELRA is not yet an independent semantic judge of arbitrary goals.
 
 See [THREAT_MODEL.md](THREAT_MODEL.md) and

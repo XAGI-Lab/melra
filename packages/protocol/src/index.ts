@@ -496,6 +496,20 @@ export const EvidencePredicateSchema = z.discriminatedUnion("type", [
 
 export type EvidencePredicate = z.infer<typeof EvidencePredicateSchema>;
 
+/**
+ * A check MELRA derives from the request itself and makes after the effect,
+ * whatever the caller declared, recorded apart from the caller's evidence.
+ * Only where the request fixes the end state exactly: a file write, mkdir,
+ * delete or move, and a memory delete. `directory_exists` (through links, as
+ * mkdir is satisfied), `file_present` (the entry itself, a dangling link
+ * included) and `memory_absent` are the kernel's alone; a request cannot
+ * declare them.
+ */
+export type KernelCheck =
+  | Extract<EvidencePredicate, { type: "file_hash" | "file_absent" }>
+  | { type: "directory_exists" | "file_present"; path: string }
+  | { type: "memory_absent"; id: string; scope: MemoryScope };
+
 export const PrincipalKindSchema = z.enum([
   "organization",
   "human",
@@ -624,7 +638,7 @@ export const TaskRequestSchema = z
       .max(20)
       .default([])
       .describe(
-        "Predicates that must hold after execution for the task to be verified_success. A non-read operation needs them unless MELRA derives a default for it; outside unsafe-local mode one with neither is denied with mutation_requires_evidence. An adapter that succeeded while a predicate failed is partial, never success. A semantic predicate is never answered by MELRA: the task waits in waiting_user for melra_task_judge and fails closed at expiry. Beside semantic, a destructive effect also needs file_exists, file_absent, file_hash or http_resource_matches, or outside unsafe-local mode it is denied with semantic_only_destructive; semantic beside reconciliation is denied with semantic_evidence_not_reconcilable.",
+        "Predicates that must hold after execution for the task to be verified_success. A non-read operation needs them unless MELRA derives a default for it; outside unsafe-local mode one with neither is denied with mutation_requires_evidence. An adapter that succeeded while a predicate failed is partial, never success. These do not replace the checks MELRA makes of its own after a file write, mkdir, delete or move or a memory delete (the task's kernelChecks), and one of those failing is partial too. A semantic predicate is never answered by MELRA: the task waits in waiting_user for melra_task_judge and fails closed at expiry. Beside semantic, a destructive effect also needs file_exists, file_absent, file_hash or http_resource_matches, or outside unsafe-local mode it is denied with semantic_only_destructive; semantic beside reconciliation is denied with semantic_evidence_not_reconcilable.",
       ),
     reconciliation: z
       .array(EvidencePredicateSchema)
@@ -1516,6 +1530,13 @@ export interface TaskRecord {
   certificateId?: string;
   /** The semantic questions a `waiting_user` task waits on (#54). */
   judgements?: SemanticJudgement[];
+  /**
+   * What the kernel checks after the effect beside `requiredEvidence`,
+   * derived from the request at planning. A write's `sha256` is masked on the
+   * stored row, as its content is; the plan response carries it. Absent where
+   * nothing is derived, and on a task an earlier version planned.
+   */
+  kernelChecks?: KernelCheck[];
   /**
    * Who planned it, as `callerRef` names them; a workflow step's task names
    * its run's. Another authenticated client may not act on it or read it. A

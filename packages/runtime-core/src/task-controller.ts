@@ -11,6 +11,7 @@ import type {
   EffectContract,
   EvidencePredicate,
   Identity,
+  KernelCheck,
   MelraTaskJudgeInput,
   Operation,
   PolicyDecision,
@@ -59,7 +60,7 @@ import {
   type ExecutionCertificate,
 } from "@melra/receipt-schema";
 import { SqliteStore } from "@melra/storage-sqlite";
-import { Verifier } from "@melra/verifier-core";
+import { kernelChecksFor, Verifier } from "@melra/verifier-core";
 import { CircuitBreaker } from "./circuit-breaker.js";
 import { PayloadCipher } from "./payload-cipher.js";
 
@@ -205,10 +206,21 @@ function maskResultDigest(result: Record<string, unknown>, operation: Operation)
     : result;
 }
 
-/** The same list when there is nothing to mask, so a caller can tell. */
-function maskEvidenceDigests(evidence: EvidenceItem[]): EvidenceItem[] {
-  const hides = (item: EvidenceItem) => item.type === "file_hash" && !item.passed && item.digest !== undefined && item.digest !== MASKED;
+/**
+ * The same list when there is nothing to mask, so a caller can tell. A kernel
+ * check's `file_hash` hashes what the write carried, so with `kernel` its
+ * digest goes whether it passed or not.
+ */
+function maskEvidenceDigests(evidence: EvidenceItem[], kernel = false): EvidenceItem[] {
+  const hides = (item: EvidenceItem) =>
+    item.type === "file_hash" && (kernel || !item.passed) && item.digest !== undefined && item.digest !== MASKED;
   return evidence.some(hides) ? evidence.map((item) => (hides(item) ? { ...item, digest: MASKED } : item)) : evidence;
+}
+
+/** Kernel checks as the task row stores them: redacted, a write's hash masked. */
+function storedKernelChecks(checks: KernelCheck[]): KernelCheck[] {
+  return redactStructuredValue(checks.map((check) => (check.type === "file_hash" ? { ...check, sha256: MASKED } : check)))
+    .value as KernelCheck[];
 }
 
 /** Statuses a task leaves only once: by starting, by a deny, or by a refusal. */
@@ -374,6 +386,7 @@ export class TaskController {
     const timestamp = now();
     const sanitizedRequest = redactStructuredValue(parsedRequest)
       .value as TaskRequest;
+    const kernelChecks = kernelChecksFor(parsedRequest.operation);
     const task: TaskRecord = {
       id,
       request: sanitizedRequest,
@@ -392,6 +405,7 @@ export class TaskController {
       receiptIds: [],
       ...(client === undefined ? {} : { client }),
       ...(options.workflowId === undefined ? {} : { workflowId: options.workflowId }),
+      ...(kernelChecks.length === 0 ? {} : { kernelChecks: storedKernelChecks(kernelChecks) }),
       createdAt: timestamp,
       updatedAt: timestamp,
     };
@@ -411,7 +425,7 @@ export class TaskController {
     // The plaintext request goes back to the caller with the contract derived
     // from it, so what a caller reads before approving is the same object the
     // execution path will load.
-    const planned = { ...task, request: parsedRequest };
+    const planned = { ...task, request: parsedRequest, ...(kernelChecks.length === 0 ? {} : { kernelChecks }) };
     return {
       ...planned,
       contract: effectContract(planned, classifyOperation(parsedRequest.operation)),
@@ -753,6 +767,8 @@ export class TaskController {
         request.requiredEvidence,
         result,
       );
+      const kernelEvidence = await this.kernelEvidence(request.operation, result);
+      const kernelHeld = kernelEvidence.every((item) => item.passed);
       const actionSucceeded =
         result.success === undefined || result.success === true;
       if (actionSucceeded) this.breaker.recordSuccess(classified.target);
@@ -770,13 +786,17 @@ export class TaskController {
               },
             ]
           : verification.evidence;
+      // The kernel's own checks decide beside the caller's: one that failed
+      // is `partial`, as a failed declared check is.
       const verified =
         actionSucceeded &&
+        kernelHeld &&
         (request.requiredEvidence.length === 0 || verification.verified);
       // Every check the kernel can make held; what is left is a question only
       // someone outside answers (#54).
       const awaitingJudgement =
         actionSucceeded &&
+        kernelHeld &&
         evidence.some((item) => item.type === "semantic") &&
         evidence.every((item) => item.passed || item.type === "semantic");
       // The effect ran and passed every kernel check, so it is committed now:
@@ -793,6 +813,8 @@ export class TaskController {
         actionSucceeded,
         result,
         evidence,
+        undefined,
+        kernelEvidence,
       );
       // Everything that records the outcome commits at once: the key, the
       // draw, the receipt, the task and its certificate. A crash before the
@@ -838,7 +860,7 @@ export class TaskController {
         this.store.saveTask(task);
         // A wait lands with its certificate or not at all: written apart, a
         // peer's expiry between the two was overwritten by the second.
-        if (task.status === "waiting_user") return this.createAndSaveCertificate(task, evidence, true);
+        if (task.status === "waiting_user") return this.createAndSaveCertificate(task, evidence, true, kernelEvidence);
         // Any other outcome stands without its certificate. Rewriting it
         // would contradict its receipt and commit, and an error would read
         // as the effect not having happened, so the caller gets what was
@@ -846,7 +868,7 @@ export class TaskController {
         // next advance (`certify`). A failure SQLite rolled the whole
         // transaction back for fails the commit instead, and the catch has it.
         try {
-          return this.createAndSaveCertificate(task, evidence, true);
+          return this.createAndSaveCertificate(task, evidence, true, kernelEvidence);
         } catch {
           return undefined;
         }
@@ -1070,6 +1092,12 @@ export class TaskController {
       return park("reconciliation_inconclusive");
     }
     if (verification.verified) {
+      // Held to the kernel's own checks too, or a weak reconciliation settled
+      // what recovery had just seen fail. Parked rather than partial: these
+      // facts carry no move result, so a case-only rename's source reads as
+      // still there.
+      const kernelEvidence = await this.kernelEvidence(request.operation, {});
+      if (!kernelEvidence.every((item) => item.passed)) return park("reconciliation_kernel_check_failed");
       return this.settleParked(taskId, () =>
         this.resolveAsVerified(
           task,
@@ -1077,6 +1105,7 @@ export class TaskController {
           classified,
           verification.evidence,
           { reconciliation: "provider_state_confirms_effect" },
+          kernelEvidence,
         ),
       );
     }
@@ -1149,6 +1178,7 @@ export class TaskController {
     classified: ReturnType<typeof classifyOperation>,
     evidence: EvidenceItem[],
     observed: Record<string, unknown>,
+    kernelEvidence: EvidenceItem[] = [],
   ): ExecutionResult {
     if (
       task.idempotencyKey !== undefined &&
@@ -1172,6 +1202,8 @@ export class TaskController {
       true,
       observed,
       evidence,
+      undefined,
+      kernelEvidence,
     );
     this.store.saveReceipt(receipt);
     task.receiptIds.push(receipt.receiptId);
@@ -1182,7 +1214,7 @@ export class TaskController {
     task.status = "verified_success";
     delete task.error;
     task.updatedAt = now();
-    const certificate = this.createAndSaveCertificate(task, evidence);
+    const certificate = this.createAndSaveCertificate(task, evidence, false, kernelEvidence);
     return { task, receipt, certificate };
   }
 
@@ -1376,7 +1408,7 @@ export class TaskController {
     if (error === undefined) delete task.error;
     else task.error = error;
     task.updatedAt = now();
-    return { task, certificate: this.createAndSaveCertificate(task, evidence) };
+    return { task, certificate: this.createAndSaveCertificate(task, evidence, false, receipt?.kernelEvidence) };
   }
 
   /**
@@ -1513,13 +1545,21 @@ export class TaskController {
         request.requiredEvidence,
         reported ?? {},
       );
+      // The kernel's own checks are observed again too, as on the live path.
+      const kernelEvidence = await this.kernelEvidence(request.operation, reported ?? {});
       if (
         actionSucceeded &&
-        verification.evidence.every((item) => item.passed || item.type === "semantic")
+        verification.evidence.every((item) => item.passed || item.type === "semantic") &&
+        kernelEvidence.every((item) => item.passed)
       ) {
-        this.resolveAsVerified(task, request, classified, verification.evidence, {
-          recovery: "independent_reobservation",
-        });
+        this.resolveAsVerified(
+          task,
+          request,
+          classified,
+          verification.evidence,
+          { recovery: "independent_reobservation" },
+          kernelEvidence,
+        );
         return task;
       }
     }
@@ -1778,7 +1818,7 @@ export class TaskController {
     const receipt = last === undefined ? undefined : this.store.getReceipt(last);
     if (task?.status !== "verified_success" || receipt === undefined) return undefined;
     try {
-      return this.createAndSaveCertificate(task, receipt.evidence, true);
+      return this.createAndSaveCertificate(task, receipt.evidence, true, receipt.kernelEvidence);
     } catch {
       return undefined;
     }
@@ -1806,6 +1846,7 @@ export class TaskController {
     result: Record<string, unknown>,
     evidence: EvidenceItem[],
     error?: string,
+    kernelEvidence: EvidenceItem[] = [],
   ): ActionReceipt {
     // From the task, not the caller: recovery and reconciliation write
     // receipts with no caller in sight. A task running since before
@@ -1818,18 +1859,26 @@ export class TaskController {
     // A verifier's summary and source are stored text like any other.
     const sanitizedEvidence = redactStructuredValue(evidence);
     const storedEvidence = maskEvidenceDigests(sanitizedEvidence.value as EvidenceItem[]);
+    const sanitizedKernel = redactStructuredValue(kernelEvidence);
+    const storedKernel = maskEvidenceDigests(sanitizedKernel.value as EvidenceItem[], true);
     // The declared chain, redacted as the task row, a judge's name and a
     // certificate's `executedBy` are, so it reads the same as `executedBy`.
     const principal = redactSecrets(delegationChain(request.identity ?? LOCAL_IDENTITY));
     const adapterRedactions = Array.isArray(result.redactions)
       ? result.redactions.filter((item): item is string => typeof item === "string")
       : [];
-    const masked = observedEffect !== sanitized.value || storedEvidence !== sanitizedEvidence.value ? [MASKED] : [];
+    const masked =
+      observedEffect !== sanitized.value ||
+      storedEvidence !== sanitizedEvidence.value ||
+      storedKernel !== sanitizedKernel.value
+        ? [MASKED]
+        : [];
     const redactions = [
       ...new Set([
         ...adapterRedactions,
         ...sanitized.redactions,
         ...sanitizedEvidence.redactions,
+        ...sanitizedKernel.redactions,
         ...principal.redactions,
         ...masked,
       ]),
@@ -1876,9 +1925,28 @@ export class TaskController {
       success,
       observedEffect,
       evidence: storedEvidence,
+      ...(storedKernel.length === 0 ? {} : { kernelEvidence: storedKernel }),
       redactions,
       ...(error === undefined ? {} : { error }),
     };
+  }
+
+  /**
+   * What the kernel's own checks of this effect found (`kernelChecksFor`),
+   * apart from the caller's. A memory record is read back from this store,
+   * the one the memory adapter writes; the rest go through the verifier and
+   * its confinement.
+   */
+  private async kernelEvidence(operation: Operation, result: Record<string, unknown>): Promise<EvidenceItem[]> {
+    const checks = kernelChecksFor(operation);
+    if (checks.length === 0) return [];
+    if (operation.kind !== "memory") return (await this.verifier.verify(checks, result)).evidence;
+    return checks.flatMap((check): EvidenceItem[] => {
+      if (check.type !== "memory_absent") return [];
+      const passed = this.store.getMemory(check.id)?.scope !== check.scope;
+      const summary = `memory record ${passed ? "is absent" : "still exists"}`;
+      return [{ type: check.type, passed, strength: evidenceStrength(check.type), summary }];
+    });
   }
 
   private loadRequest(taskId: string): TaskRequest {
@@ -1934,6 +2002,7 @@ export class TaskController {
     evidence: EvidenceItem[],
     // A task's first: one another writer stored meanwhile stays, and is used.
     first = false,
+    kernelEvidence: EvidenceItem[] = [],
   ): ExecutionCertificate {
     const approvalChannel =
       task.approvedBy?.channel ??
@@ -1960,6 +2029,9 @@ export class TaskController {
       // Doing either again changes nothing, so one written from a stored
       // receipt's items (`certify`) says what one written from the verifier's would.
       evidence: maskEvidenceDigests(redactStructuredValue(evidence).value as EvidenceItem[]),
+      ...(kernelEvidence.length === 0
+        ? {}
+        : { kernelEvidence: maskEvidenceDigests(redactStructuredValue(kernelEvidence).value as EvidenceItem[], true) }),
       createdAt: now(),
       ...(mode === undefined ? {} : { mode }),
       ...(approvalChannel === undefined ? {} : { approvalChannel }),

@@ -184,7 +184,9 @@ the moment it runs. Risky changes wait for your exact approval.
 ### ✅ Did it really work?
 
 "No error" is not success. An action counts only when the **evidence you declared**
-holds: the file exists, the exit code is 0, the page says what it should.
+holds: the file exists, the exit code is 0, the page says what it should. For a
+file change or a memory delete MELRA also checks the end state itself: a written
+file holds exactly the bytes sent.
 
 </td>
 <td width="25%" valign="top">
@@ -311,8 +313,8 @@ sequenceDiagram
 
 | Status | Meaning | Next step |
 |---|---|---|
-| 🟢 `verified_success` | It ran and every declared check passed | Done |
-| 🟡 `partial` | It ran, but the evidence did not hold, or a `semantic` question was answered no | Look at the evidence, then decide; a change answered no stays in place, so fixing it takes a new plan |
+| 🟢 `verified_success` | It ran and every declared check passed, and so did MELRA's own for a file change or memory delete | Done |
+| 🟡 `partial` | It ran, but the evidence, declared or MELRA's own, did not hold, or a `semantic` question was answered no | Look at the evidence, then decide; a change answered no stays in place, so fixing it takes a new plan |
 | 🔴 `policy_blocked` | Refused before anything ran | Read the reason; the same request will be refused again |
 | 🔵 `awaiting_approval` | A change is waiting for your approval | Developer mode: approve it from the agent that planned it. Enforced mode: `melra approve <task-id>` |
 | ⏳ `waiting_user` | It ran and every check MELRA can make passed; a `semantic` question waits for an answer from outside | A principal other than the one that planned it answers with `melra_task_judge`; in enforced mode, an operator with `melra judge <task-id>`. Unanswered, it settles closed at expiry |
@@ -507,7 +509,7 @@ factored out and made agent-independent.
 <td>
 
 - **Plan** and **execute** are separate calls
-- Success = declared evidence passed
+- Success = declared evidence and MELRA's own checks passed
 - Policy checked again **at execution time**
 - Changes need evidence **and** an exact approval
 - Page content is explicitly untrusted

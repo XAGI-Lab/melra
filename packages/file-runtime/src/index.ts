@@ -375,9 +375,10 @@ export async function openRegular(
  * stops at the first padding, skips what is not base64, and decoded two joined
  * chunks as the first, plain text as noise and "!!!!" as nothing, each written
  * as a success. So base64 is checked to be canonical first; line breaks and
- * spaces are allowed, as MIME wraps it.
+ * spaces are allowed, as MIME wraps it. Exported so the kernel's own check of
+ * a write hashes exactly the bytes written.
  */
-function decodeContent(content: string, encoding: "utf8" | "base64"): Buffer {
+export function decodeContent(content: string, encoding: "utf8" | "base64"): Buffer {
   if (encoding !== "base64") return Buffer.from(content, encoding);
   // The URL-safe alphabet too, which Node always decoded the same way.
   const compact = content.replace(/\s+/g, "").replaceAll("-", "+").replaceAll("_", "/");
