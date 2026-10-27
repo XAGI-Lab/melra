@@ -145,6 +145,10 @@ All notable changes are documented here. The format follows
   letters in the name of a file with another hard link, on a disk that ignores
   case, now passes once its directory no longer lists the old spelling; it
   failed, and the move ended `partial`.
+- A stdio `melra serve` whose client closed stdin exited without running
+  MELRA's shutdown path, leaving background jobs and their process groups
+  running until recovery cleaned them up on the next start. Stdin EOF now runs
+  the runtime's `close()` before exiting (#467).
 
 ### Security
 
