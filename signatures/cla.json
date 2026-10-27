@@ -1,3 +1,12 @@
 {
-  "signedContributors": []
+  "signedContributors": [
+    {
+      "name": "yunusarda-sudo",
+      "id": 64425746,
+      "comment_id": 6441081364,
+      "created_at": "2026-10-27T11:45:45Z",
+      "repoId": 1314829929,
+      "pullRequestNo": 440
+    }
+  ]
 }
