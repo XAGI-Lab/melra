@@ -1913,16 +1913,20 @@ async function main(): Promise<void> {
         );
         if (args.includes("--open") && endpoint.openUrl !== undefined) void openInBrowser(endpoint.openUrl);
       }
-      const close = async () => {
-        await server?.close();
-        await endpoint?.close();
-        await melra.close();
-      };
-      process.once("SIGINT", () => void close().finally(() => process.exit(0)));
-      process.once("SIGTERM", () => void close().finally(() => process.exit(0)));
+      // Once, whichever signal comes first, or a second one would exit
+      // mid-close; the same one again ends it at once.
+      let closing: Promise<void> | undefined;
+      const close = () =>
+        (closing ??= (async () => {
+          await server?.close();
+          await endpoint?.close();
+          await melra.close();
+        })());
       // A hangup (its terminal closing) too: by default it ends the process
       // with no exit event, leaving the package caches in temp.
-      process.once("SIGHUP", () => void close().finally(() => process.exit(0)));
+      for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+        process.once(signal, () => void close().finally(() => process.exit(0)));
+      }
       return;
     }
     case "launch":
@@ -1979,15 +1983,16 @@ async function main(): Promise<void> {
         await melra.close();
         throw error;
       });
-      const close = async () => {
-        await endpoint.close();
-        await melra.close();
-      };
-      process.once("SIGINT", () => void close().finally(() => process.exit(0)));
-      process.once("SIGTERM", () => void close().finally(() => process.exit(0)));
-      // A hangup (its terminal closing) too: by default it ends the process
-      // with no exit event, leaving the package caches in temp.
-      process.once("SIGHUP", () => void close().finally(() => process.exit(0)));
+      // Once, as for serve.
+      let closing: Promise<void> | undefined;
+      const close = () =>
+        (closing ??= (async () => {
+          await endpoint.close();
+          await melra.close();
+        })());
+      for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+        process.once(signal, () => void close().finally(() => process.exit(0)));
+      }
       return;
     }
     case "approve":

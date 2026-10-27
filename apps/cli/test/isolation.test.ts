@@ -115,9 +115,8 @@ describe("doctor protection line", () => {
     expect(check.detail).toContain("commands: in seatbelt, writing only the workspace and temp");
     // Only a listed few logins are denied; the rest of home stays readable.
     expect(check.detail).toContain(
-      "reading neither MELRA's files nor the logins MELRA lists under home (other files there stay readable), and off the network without the network trait (the host's loopback stays reachable);",
+      "reading neither MELRA's files nor the logins MELRA lists under home (other files there stay readable), and off the network without the network trait;",
     );
-    expect(protectionCheck(enforced, "seatbelt").detail).toContain("off the network without the network trait;");
     expect(protectionCheck(developer, "bubblewrap").detail).toContain(
       "off the network without the network trait (Unix sockets on the filesystem stay reachable);",
     );

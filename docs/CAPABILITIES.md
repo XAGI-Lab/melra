@@ -201,9 +201,8 @@ Actions: `run`, `start`, `status`, `output`, `stop`, `send`.
   readable). Under Seatbelt and bubblewrap it also
   writes only in the workspace and temp (shared with your other processes),
   reaches no network without the `network` trait (Seatbelt: no socket, a
-  loopback one included, except the host's loopback in developer mode;
-  bubblewrap: an empty network namespace, Unix sockets on the filesystem
-  still reachable), makes no symbolic link unless it
+  loopback one included; bubblewrap: an empty network namespace, Unix sockets
+  on the filesystem still reachable), makes no symbolic link unless it
   installs packages, the policy file names it or, in developer mode, it is
   git, and gets npm and pnpm caches in a private folder in temp (npm's
   outranking a project `.npmrc` setting `cache`); under `uid` it only runs as

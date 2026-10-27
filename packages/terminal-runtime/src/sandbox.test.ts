@@ -39,14 +39,6 @@ describe("sandbox generators", () => {
       "(allow network-inbound network-bind (local ip))",
     ];
     expect(seatbeltProfile(paths, { network: true, symlinks: true })).toBe([...head, ...network, denied].join("\n"));
-    // Developer mode's loopback: no other host, no DNS, no Unix socket.
-    const loopback = [
-      '(allow network-bind network-inbound (local ip "localhost:*"))',
-      '(allow network-outbound (remote ip "localhost:*"))',
-    ];
-    expect(seatbeltProfile(paths, { network: false, symlinks: true, loopback: true })).toBe(
-      [...head, ...loopback, denied].join("\n"),
-    );
   });
 
   it("writes a bubblewrap argv that hides MELRA's files and the network", () => {

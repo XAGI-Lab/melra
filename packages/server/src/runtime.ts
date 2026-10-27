@@ -616,14 +616,12 @@ export async function createMelraRuntime(
           sandbox,
           // By what the call asks for, as policy classified it: the network
           // only for the `network` trait, links for installs, the programs
-          // the policy file names and, in developer mode, git. Developer
-          // mode keeps the loopback too, for test suites and dev servers.
+          // the policy file names and, in developer mode, git.
           allowance: (command: string, args: readonly string[]) => {
             const { traits } = classifyCommand(command, args);
             return {
               network: traits.includes("network"),
               symlinks: traits.includes("package-install") || symlinkers.has(normalizeCommandName(command)),
-              loopback: mode === "developer",
             };
           },
         }),

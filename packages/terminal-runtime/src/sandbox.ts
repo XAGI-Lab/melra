@@ -22,13 +22,6 @@ export interface SandboxAllowance {
    * seccomp filter cannot see a file's type, so it refuses only creating one.
    */
   symlinks: boolean;
-  /**
-   * Without `network`, still bind and reach the loopback, so a test suite's
-   * or dev server's port works: Seatbelt opens the host's (whatever listens
-   * there is reachable); bubblewrap gives every command a loopback of its own
-   * already, so it ignores this.
-   */
-  loopback?: boolean;
 }
 
 /**
@@ -87,9 +80,7 @@ export function seatbeltProfile(paths: SandboxPaths, allowance: SandboxAllowance
           '(allow network-outbound (remote ip) (literal "/private/var/run/mDNSResponder"))',
           "(allow network-inbound network-bind (local ip))",
         ]
-      : allowance.loopback === true
-        ? ['(allow network-bind network-inbound (local ip "localhost:*"))', '(allow network-outbound (remote ip "localhost:*"))']
-        : []),
+      : []),
     ...(paths.denied.length === 0 ? [] : [`(deny file-read* file-write* ${subpaths(paths.denied)})`]),
     ...(allowance.symlinks ? [] : ["(deny file-write-create (vnode-type SYMLINK))"]),
   ].join("\n");
@@ -324,10 +315,12 @@ function packageCaches(temp: string | undefined): { environment(): Promise<Recor
     },
     async close() {
       const root = await made;
+      // Kept until the folder is gone, for an exit before then.
+      const listener = atExit;
       made = undefined;
-      if (atExit !== undefined) process.off("exit", atExit);
       atExit = undefined;
       if (root !== undefined) await rm(root, { recursive: true, force: true });
+      if (listener !== undefined) process.off("exit", listener);
     },
   };
 }

@@ -2398,9 +2398,10 @@ describe("melra CLI", () => {
   });
 
   // A stdio client ends the server by closing its input, which runs no
-  // shutdown, or its terminal hangs up: the npm and pnpm caches made in temp
-  // at the first sandboxed command must still go.
-  it.for(["closes its input", "hangs up"])("leaves no package cache in temp when a stdio client %s", { timeout: 60_000 }, async (how, context) => {
+  // shutdown, or its terminal hangs up, with a SIGTERM close behind it: the
+  // npm and pnpm caches made in temp at the first sandboxed command must
+  // still go.
+  it.for(["closes its input", "hangs up", "hangs up and is terminated"])("leaves no package cache in temp when a stdio client %s", { timeout: 60_000 }, async (how, context) => {
     const root = await realpath(await mkdtemp(join(tmpdir(), "melra-cli-")));
     roots.push(root);
     const temp = join(root, "tmp");
@@ -2445,8 +2446,11 @@ describe("melra CLI", () => {
       await exited;
       throw error;
     }
-    if (how === "hangs up") server.kill("SIGHUP");
-    else server.stdin.end();
+    if (how === "closes its input") server.stdin.end();
+    else {
+      server.kill("SIGHUP");
+      if (how === "hangs up and is terminated") server.kill("SIGTERM");
+    }
     expect(await exited).toBe(0);
     expect(await caches()).toEqual([]);
   });

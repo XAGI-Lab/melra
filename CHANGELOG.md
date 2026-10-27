@@ -64,10 +64,11 @@ All notable changes are documented here. The format follows
   Linux): a policy file without `sandbox.use` means `if-available` there, not
   `off`. An approved command can then no longer write outside the workspace
   and temp, read MELRA's files or the login files MELRA lists (see
-  INSTALLATION), or reach the network without the `network` trait, though a
-  test suite or dev server keeps the loopback (under Seatbelt the host's, so
-  what listens there stays reachable). In either sandbox `git add` and `git
-  commit` fail in a worktree whose git directory is outside the workspace. Git may make symbolic links there, as if `sandbox.symlinks` named
+  INSTALLATION), or reach the network without the `network` trait. Under
+  Seatbelt that also stops a test suite or dev server that opens a loopback
+  port (`npm test` and `npm run` carry no trait), and in either sandbox `git
+  add` and `git commit` in a worktree whose git directory is outside the
+  workspace. Git may make symbolic links there, as if `sandbox.symlinks` named
   it: without them a clone exits 0 with each link checked out as a plain file
   and `core.symlinks=false` written into the repository. Where none works,
   developer mode starts without one as before, and its receipts now say

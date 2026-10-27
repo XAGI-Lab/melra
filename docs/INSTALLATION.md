@@ -876,13 +876,13 @@ your rights. Under Seatbelt and bubblewrap, a command in the sandbox:
 - reaches no network unless policy gives the command the `network`
   [trait](#local-configuration) (`git fetch`, `curl`, an install). Under
   Seatbelt it opens no socket at all without it, a listening one or one to
-  loopback included, except in developer mode, where it may listen on and
-  connect to the host's loopback (so a test suite's or dev server's port
-  works, and so does anything else listening there); with the trait only IP
-  sockets and DNS, never a Unix socket such as an SSH agent's or Docker's.
-  Under bubblewrap it gets an empty network namespace with a loopback of its
-  own, so neither the host's network nor the host's loopback; Unix sockets on
-  the filesystem stay reachable, with the trait or without;
+  loopback included, and with it only IP sockets and DNS, never a Unix socket
+  such as an SSH agent's or Docker's. (Seatbelt cannot open the loopback
+  alone: its `localhost` filter matches every address of the Mac, so a
+  listener it allowed would be reachable from the network.) Under bubblewrap
+  it gets an empty network namespace with a loopback of its own, so neither
+  the host's network nor the host's loopback; Unix sockets on the filesystem
+  stay reachable, with the trait or without;
 - makes no symbolic link unless the command carries the `package-install`
   trait, the policy file names it in `sandbox.symlinks`, or, in developer
   mode, it is `git`. Refused links do not make git fail: a `git clone` or
@@ -983,11 +983,10 @@ loopback; `npm pack`; Python's `tempfile`; and the Command
 Line Tools shims. What fails in the sandbox, and needs `"use": "off"` where a
 project depends on it:
 
-- listening or connecting without the `network` trait, beyond the loopback.
-  `npm test` and `npm run` carry none: under bubblewrap a test suite or dev
-  server gets a loopback of its own, which nothing outside the command
-  reaches; under Seatbelt it gets the host's in developer mode, and fails
-  with `EPERM` in enforced mode;
+- listening or connecting without the `network` trait. `npm test` and `npm
+  run` carry none, so under Seatbelt a test suite or dev server that opens a
+  loopback port fails with `EPERM`; under bubblewrap it gets a loopback of
+  its own, which nothing outside the command reaches;
 - a checkout whose `.git` names a git directory outside the workspace, as a
   git worktree's does: `git status` reads it, but `git add` and `git commit`
   write there and fail;

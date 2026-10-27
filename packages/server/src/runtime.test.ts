@@ -494,12 +494,12 @@ describe("per-command sandbox", () => {
       }),
     });
     const calls: Array<[string, string[], SandboxAllowance]> = [
-      [process.execPath, ["-e", ""], { network: false, symlinks: false, loopback: false }],
-      ["curl", ["--version"], { network: true, symlinks: false, loopback: false }],
+      [process.execPath, ["-e", ""], { network: false, symlinks: false }],
+      ["curl", ["--version"], { network: true, symlinks: false }],
       // Named in the policy file.
-      ["git", ["status"], { network: false, symlinks: true, loopback: false }],
+      ["git", ["status"], { network: false, symlinks: true }],
       // An install makes links whether or not it is named.
-      ["npm", ["--version"], { network: true, symlinks: true, loopback: false }],
+      ["npm", ["--version"], { network: true, symlinks: true }],
     ];
     for (const [command, args, allowance] of calls) {
       const result = await runtime.router.execute(TerminalOperationSchema.parse({ kind: "terminal", action: "run", command, args }));
@@ -537,8 +537,8 @@ describe("per-command sandbox", () => {
       runtime = undefined;
     }
     expect(seen).toEqual([
-      { network: false, symlinks: true, loopback: true },
-      { network: false, symlinks: false, loopback: false },
+      { network: false, symlinks: true },
+      { network: false, symlinks: false },
     ]);
   });
 
@@ -649,24 +649,19 @@ describe.runIf(seatbelt)("developer mode's default sandbox", () => {
     expect(existsSync(outside)).toBe(false);
   }, 30_000);
 
-  it("lets a command serve and reach a port on the loopback, as a test suite does", async () => {
+  // Seatbelt's only loopback filter, `localhost`, matches every address of the
+  // Mac, so a listener it allowed would serve the network: none is allowed.
+  it("refuses a command without the network trait a listening socket", async () => {
     const workspace = join(base, "workspace");
     runtime = await createRuntime({ workspaceRoot: workspace, dataDirectory: join(base, "data"), environment: {} });
-    const served = await approved({
+    const listened = await approved({
       kind: "terminal",
       action: "run",
       command: "node",
-      args: [
-        "-e",
-        `const s = require("http").createServer((q, r) => r.end("ok")).listen(0, "127.0.0.1", async () => {
-          const text = await (await fetch("http://127.0.0.1:" + s.address().port)).text();
-          s.close();
-          process.exit(text === "ok" ? 0 : 1);
-        });`,
-      ],
+      args: ["-e", `require("net").createServer().listen(0, "0.0.0.0", () => process.exit(0)).on("error", () => process.exit(1))`],
     });
-    expect(served.receipt?.sandbox).toBe("seatbelt");
-    expect(served.task.status).toBe("verified_success");
+    expect(listened.receipt?.sandbox).toBe("seatbelt");
+    expect(listened.task.status).toBe("failed");
   }, 30_000);
 
   // Refused a link, git still exits 0: each link a plain file, and
