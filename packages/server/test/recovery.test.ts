@@ -8,6 +8,7 @@
 import { link, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { detectBrowserExecutable } from "@melra/browser-runtime";
@@ -291,5 +292,78 @@ describe("recovery between runtimes sharing a home", () => {
     finish!();
     await closing;
     expect(closed).toBe(true);
+  });
+
+  it("seals an older writer's records during the periodic recovery sweep without restarting (#466)", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-runtime-recovery-"));
+    roots.push(root);
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const runtime = await createMelraRuntime({
+      workspaceRoot: root,
+      dataDirectory: join(root, ".melra"),
+      environment: {},
+    });
+    runtimes.push(runtime);
+
+    const database = new DatabaseSync(join(root, ".melra", "melra.sqlite"));
+    try {
+      const taskId = "00000000-0000-4000-8000-0000000000a1";
+      const receiptId = "00000000-0000-4000-8000-0000000000b1";
+      database
+        .prepare(`
+          INSERT INTO receipts(id, task_id, data, created_at)
+          VALUES (?, ?, ?, ?)
+        `)
+        .run(receiptId, taskId, JSON.stringify({ receiptId, taskId, endedAt: "2026-01-01T00:00:00.000Z" }), "2026-01-01T00:00:00.000Z");
+
+      const unsealedBefore = database
+        .prepare("SELECT COUNT(*) AS count FROM record_chain WHERE record_table = 'receipts' AND record_key = ?")
+        .get(JSON.stringify([receiptId])) as { count: number };
+      expect(unsealedBefore.count).toBe(0);
+
+      // Advance timers by 30 seconds to trigger the periodic recovery sweep
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      const sealedAfter = database
+        .prepare("SELECT swept FROM record_chain WHERE record_table = 'receipts' AND record_key = ?")
+        .get(JSON.stringify([receiptId])) as { swept: number } | undefined;
+      expect(sealedAfter).toBeDefined();
+      expect(sealedAfter?.swept).toBe(1);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("seals an older writer's records when sweep() is invoked directly", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-runtime-recovery-"));
+    roots.push(root);
+    const runtime = await createMelraRuntime({
+      workspaceRoot: root,
+      dataDirectory: join(root, ".melra"),
+      environment: {},
+    });
+    runtimes.push(runtime);
+
+    const database = new DatabaseSync(join(root, ".melra", "melra.sqlite"));
+    try {
+      const taskId = "00000000-0000-4000-8000-0000000000a2";
+      const receiptId = "00000000-0000-4000-8000-0000000000b2";
+      database
+        .prepare(`
+          INSERT INTO receipts(id, task_id, data, created_at)
+          VALUES (?, ?, ?, ?)
+        `)
+        .run(receiptId, taskId, JSON.stringify({ receiptId, taskId, endedAt: "2026-01-01T00:00:00.000Z" }), "2026-01-01T00:00:00.000Z");
+
+      await runtime.sweep();
+
+      const sealedAfter = database
+        .prepare("SELECT swept FROM record_chain WHERE record_table = 'receipts' AND record_key = ?")
+        .get(JSON.stringify([receiptId])) as { swept: number } | undefined;
+      expect(sealedAfter).toBeDefined();
+      expect(sealedAfter?.swept).toBe(1);
+    } finally {
+      database.close();
+    }
   });
 });

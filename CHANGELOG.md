@@ -145,6 +145,8 @@ All notable changes are documented here. The format follows
   letters in the name of a file with another hard link, on a disk that ignores
   case, now passes once its directory no longer lists the old spelling; it
   failed, and the move ended `partial`.
+- The periodic recovery sweep seals records written by older clients without
+  waiting for a server restart (fixes #466).
 
 ### Security
 

@@ -89,6 +89,11 @@ export interface MelraRuntimeOptions {
    */
   detectSandbox?: typeof detectSandbox;
   environment?: NodeJS.ProcessEnv;
+  /**
+   * How often the running runtime sweeps for abandoned tasks and seals records
+   * written by older clients without a link. Default: 30,000 ms.
+   */
+  recoverySweepMs?: number;
 }
 
 /**
@@ -446,6 +451,11 @@ export interface MelraRuntime {
   router: RuntimeRouter;
   workspaceRoot: string;
   dataDirectory: string;
+  /**
+   * Runs the recovery sweep immediately: recovers abandoned tasks/workflows
+   * and seals records written by older clients without a link.
+   */
+  sweep(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -732,11 +742,26 @@ export async function createMelraRuntime(
   // The workflow pass runs the task pass first.
   await workflows.recoverInterrupted();
   // Startup only sees processes that died before it. The sweep picks up work
-  // left by ones that die later, while this one keeps running.
+  // left by ones that die later, and seals what older writers wrote to the home
+  // meanwhile without a link (#466), while this one keeps running.
+  const runRecoverySweep = async () => {
+    let firstError: unknown;
+    try {
+      await workflows.recoverInterrupted({ abandonedOnly: true });
+    } catch (error) {
+      firstError = error;
+    }
+    try {
+      store.sealRecords(cipher.chainKey());
+    } catch (error) {
+      firstError ??= error;
+    }
+    if (firstError !== undefined) throw firstError;
+  };
   let sweeping: Promise<unknown> | undefined;
+  const sweepIntervalMs = options.recoverySweepMs ?? RECOVERY_SWEEP_MS;
   const sweep = setInterval(() => {
-    sweeping ??= workflows
-      .recoverInterrupted({ abandonedOnly: true })
+    sweeping ??= runRecoverySweep()
       .catch((error: unknown) =>
         process.emitWarning(
           `melra recovery sweep: ${error instanceof Error ? error.message : String(error)}`,
@@ -745,7 +770,7 @@ export async function createMelraRuntime(
       .finally(() => {
         sweeping = undefined;
       });
-  }, RECOVERY_SWEEP_MS);
+  }, sweepIntervalMs);
   sweep.unref();
   // Once started: a process that refuses to start has nothing to warn about.
   const exposed = mode === "enforced" ? environmentSecrets(environment, dataDirectory) : undefined;
@@ -759,6 +784,12 @@ export async function createMelraRuntime(
     router,
     workspaceRoot,
     dataDirectory,
+    async sweep() {
+      if (sweeping !== undefined) {
+        await sweeping;
+      }
+      await runRecoverySweep();
+    },
     async close() {
       clearInterval(sweep);
       await sweeping;
