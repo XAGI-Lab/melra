@@ -137,8 +137,8 @@ describe("melra tasks, status, and watch", { timeout: 60_000 }, () => {
       (error: { stdout: string }) => error,
     );
     expect((JSON.parse(first.stdout) as { task: { status: string } }).task.status).toBe("awaiting_approval");
-    await new Promise((resolve) => setTimeout(resolve, 600));
     await run(fileWrite);
+    await new Promise((resolve) => setTimeout(resolve, 600));
     // The first can no longer be approved: counted as waiting, it was reported
     // forever and pointed at `melra approve`, which refused it.
     const status = JSON.parse((await execute(process.execPath, [entry, "status", "--json"], options)).stdout) as {

@@ -1400,10 +1400,28 @@ export class TaskController {
       } finally {
         this.store.inFlight.delete(task.id);
       }
-    }
     await this.expireJudgements(failures);
+    this.sweepExpiredApprovals(failures);
     if (failed === undefined && failures.size > 0) throw failures.values().next().value;
     return recovered;
+  }
+
+  /**
+   * Standalone tasks awaiting approval whose challenge has expired without an
+   * operator decision (#462) settle cancelled with error `approval_expired`.
+   * A task with a recorded decision, and a workflow step's task, are left alone.
+   */
+  private sweepExpiredApprovals(failures: Map<string, unknown>): void {
+    for (const listed of this.store.listExpiredApprovalTasks(now())) {
+      try {
+        // Re-check: a decision may have been recorded since the query ran.
+        if (listed.approval === undefined) continue;
+        if (this.store.getApprovalDecision(listed.approval.approvalId) !== undefined) continue;
+        this.cancel(listed.id, "approval_expired");
+      } catch (error) {
+        failures.set(listed.id, error);
+      }
+    }
   }
 
   /**
