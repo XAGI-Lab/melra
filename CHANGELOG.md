@@ -10,6 +10,12 @@ All notable changes are documented here. The format follows
 
 ### Added
 
+- `@melra/server` and `@melra/server/kernel` export `verifyRecords`, which opens
+  the home's database read-only, loads the key with `mint: false`, and returns
+  `verifyChain`'s result mapped to `{ ok, problems, report }`. This enables
+  offline and evaluation harnesses like AARM to verify record chain integrity
+  (`r2t2.chain` and `r5t3.sqlite.*`) without starting a full server (#465).
+
 - Two policy file keys bound how hard one caller can lean on the kernel.
   `maxPendingApprovals` (default `64`) is how many approval challenges one
   caller may have open at once: awaiting a decision and not expired.
