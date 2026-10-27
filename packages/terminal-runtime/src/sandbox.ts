@@ -271,8 +271,8 @@ async function probe(
 const SANDBOX_EXEC = "/usr/bin/sandbox-exec";
 const NO_ALLOWANCE: SandboxAllowance = { network: false, symlinks: false };
 
-async function seatbelt(paths: SandboxPaths): Promise<CommandSandbox | string> {
-  const tried = await probe(SANDBOX_EXEC, ["-p", seatbeltProfile(paths, NO_ALLOWANCE), "/usr/bin/true"], {
+async function seatbelt(paths: SandboxPaths, reach: typeof probe): Promise<CommandSandbox | string> {
+  const tried = await reach(SANDBOX_EXEC, ["-p", seatbeltProfile(paths, NO_ALLOWANCE), "/usr/bin/true"], {
     cwd: paths.workspace,
   });
   if ("error" in tried) return `seatbelt: ${SANDBOX_EXEC} could not start (${tried.error})`;
@@ -299,7 +299,7 @@ const BWRAP_FIX =
   "on older Debian, kernel.unprivileged_userns_clone=1), and under systemd allow them as " +
   "examples/deploy/systemd/melra.service does";
 
-async function bubblewrap(paths: SandboxPaths): Promise<CommandSandbox | string> {
+async function bubblewrap(paths: SandboxPaths, reach: typeof probe): Promise<CommandSandbox | string> {
   const seccomp = symlinkFilter();
   if (seccomp === undefined) return `bubblewrap: no symbolic-link filter for ${process.arch}`;
   // Each time: bwrap mounts over a denied path only if it is there, and one
@@ -321,7 +321,7 @@ async function bubblewrap(paths: SandboxPaths): Promise<CommandSandbox | string>
   } catch {
     return "bubblewrap: bwrap is not installed; install the bubblewrap package";
   }
-  const tried = await probe(bwrap, bwrapArgv(await split(), NO_ALLOWANCE, paths.workspace, ["true"]), { seccomp });
+  const tried = await reach(bwrap, bwrapArgv(await split(), NO_ALLOWANCE, paths.workspace, ["true"]), { seccomp });
   if ("error" in tried || tried.code !== 0) {
     return `bubblewrap: ${"error" in tried ? tried.error : tried.stderr || `exited ${tried.code}`}; ${BWRAP_FIX}`;
   }
@@ -363,25 +363,12 @@ export function signaller(user: { uid: number; gid: number }, group: number, sig
   };
 }
 
-/**
- * The `uid` backend: no wrapper, only another account, for a container where
- * MELRA runs as root with CAP_SETUID and CAP_SETGID alone. The account cannot
- * read MELRA's data or any denied path, which the probe checks; nothing here
- * stops it writing elsewhere, reaching the network or making a link, which
- * the container decides. MELRA, holding no CAP_KILL, signals its commands as
- * that account.
- */
-async function switchUser(
+/** Why the `uid` backend's probe refuses the sandbox, or nothing when the account reached none of its paths. */
+export function uidRefusal(
+  tried: Awaited<ReturnType<typeof probe>>,
   user: { uid: number; gid: number },
   dataDirectory: string,
-  denied: readonly string[],
-): Promise<CommandSandbox | string> {
-  if (process.getuid?.() === user.uid) return `uid: sandbox.user ${user.uid} is the account MELRA runs as`;
-  // As that account, which proves the switch works and MELRA's files are out of reach.
-  const tried = await probe(process.execPath, reachableProbe([...new Set([dataDirectory, ...denied])]), {
-    ...user,
-    cwd: "/",
-  });
+): string | undefined {
   if ("error" in tried) {
     return (
       `uid: cannot run a command as ${user.uid}:${user.gid} (${tried.error}); run MELRA as root with ` +
@@ -394,6 +381,32 @@ async function switchUser(
       : `uid: ${user.uid} can read ${tried.stderr}; make it unreadable to it`;
   }
   if (tried.code !== 0) return `uid: a command as ${user.uid}:${user.gid} exited ${tried.code}: ${tried.stderr}`;
+  return undefined;
+}
+
+/**
+ * The `uid` backend: no wrapper, only another account, for a container where
+ * MELRA runs as root with CAP_SETUID and CAP_SETGID alone. The account cannot
+ * read MELRA's data or any denied path, which the probe checks; nothing here
+ * stops it writing elsewhere, reaching the network or making a link, which
+ * the container decides. MELRA, holding no CAP_KILL, signals its commands as
+ * that account. `reach` runs the probe, a test's stand-in in place of a real
+ * account.
+ */
+export async function switchUser(
+  user: { uid: number; gid: number },
+  dataDirectory: string,
+  denied: readonly string[],
+  reach: typeof probe = probe,
+): Promise<CommandSandbox | string> {
+  if (process.getuid?.() === user.uid) return `uid: sandbox.user ${user.uid} is the account MELRA runs as`;
+  // As that account, which proves the switch works and MELRA's files are out of reach.
+  const tried = await reach(process.execPath, reachableProbe([...new Set([dataDirectory, ...denied])]), {
+    ...user,
+    cwd: "/",
+  });
+  const refused = uidRefusal(tried, user, dataDirectory);
+  if (refused !== undefined) return refused;
   return {
     backend: "uid",
     async confine(command) {
@@ -424,9 +437,14 @@ async function darwinUserTemp(): Promise<string[]> {
 /**
  * The first sandbox that works on this host, each tried with a harmless
  * command: Seatbelt on macOS; bubblewrap, then another account, on Linux.
- * None, it gives what each one said, with how to fix it.
+ * None, it gives what each one said, with how to fix it. `reach` runs each
+ * probe and `platform` picks the backends, for a test's stand-ins.
  */
-export async function detectSandbox(options: SandboxOptions): Promise<{ sandbox: CommandSandbox } | { problems: string[] }> {
+export async function detectSandbox(
+  options: SandboxOptions,
+  reach: typeof probe = probe,
+  platform: NodeJS.Platform = process.platform,
+): Promise<{ sandbox: CommandSandbox } | { problems: string[] }> {
   const home = options.home ?? homedir();
   const allowed = new Set(options.readable ?? []);
   const logins = HOME_SECRETS.filter((entry) => !allowed.has(entry)).map((entry) => join(home, entry.slice(2)));
@@ -436,17 +454,17 @@ export async function detectSandbox(options: SandboxOptions): Promise<{ sandbox:
     denied: [...new Set(await Promise.all([...options.denied, ...logins].map(resolved)))],
   };
   const tries =
-    process.platform === "darwin"
-      ? [() => seatbelt(paths)]
-      : process.platform === "linux"
+    platform === "darwin"
+      ? [() => seatbelt(paths, reach)]
+      : platform === "linux"
         ? [
-            () => bubblewrap(paths),
+            () => bubblewrap(paths, reach),
             () =>
               options.user === undefined
                 ? Promise.resolve(
                     "uid: no sandbox.user in the policy file, for a container where MELRA runs as root with CAP_SETUID and CAP_SETGID",
                   )
-                : switchUser(options.user, options.dataDirectory, paths.denied),
+                : switchUser(options.user, options.dataDirectory, paths.denied, reach),
           ]
         : [];
   const problems: string[] = [];
@@ -457,9 +475,9 @@ export async function detectSandbox(options: SandboxOptions): Promise<{ sandbox:
   }
   if (tries.length === 0) {
     problems.push(
-      process.platform === "win32"
+      platform === "win32"
         ? "none on win32: run MELRA under WSL2 with bubblewrap, or in the container pair (examples/deploy/compose)"
-        : `none on ${process.platform}`,
+        : `none on ${platform}`,
     );
   }
   return { problems };

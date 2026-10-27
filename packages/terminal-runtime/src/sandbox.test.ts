@@ -3,14 +3,14 @@
 
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { TerminalOperationSchema } from "@melra/protocol";
+import { HOME_SECRETS, TerminalOperationSchema } from "@melra/protocol";
 import { TerminalRuntime, bwrapArgv, detectSandbox, seatbeltProfile, symlinkFilter, type CommandSandbox } from "./index.js";
-import { reachableProbe, signaller } from "./sandbox.js";
+import { reachableProbe, signaller, switchUser, uidRefusal } from "./sandbox.js";
 
 describe("sandbox generators", () => {
   const paths = { workspace: "/w", temp: ["/t"], denied: ["/d", '/q"x'] };
@@ -101,6 +101,68 @@ describe("sandbox generators", () => {
       args: ["-e", expect.any(String), "42", "SIGTERM"],
       options: { uid: 1000, gid: 1000, cwd: "/", env: {}, stdio: "ignore" },
     });
+  });
+});
+
+// The `uid` backend with its probe stood in for, so on every OS and with no
+// second account: what it asks the account to try, and what it says back.
+describe("the uid backend's verdict", () => {
+  const user = { uid: (process.getuid?.() ?? 0) + 1, gid: 4242 };
+
+  it("has its account try MELRA's data and every denied path", async () => {
+    const calls: unknown[][] = [];
+    const found = await switchUser(user, "/data", ["/etc/policy.json", "/home/.ssh", "/data"], async (...call) => {
+      calls.push(call);
+      return { code: 0, stderr: "" };
+    });
+    expect(typeof found === "string" ? found : found.backend).toBe("uid");
+    expect(calls).toEqual([[process.execPath, reachableProbe(["/data", "/etc/policy.json", "/home/.ssh"]), { ...user, cwd: "/" }]]);
+    const reached = await switchUser(user, "/data", ["/home/.ssh"], async () => ({ code: 3, stderr: "/home/.ssh" }));
+    expect(reached).toBe(`uid: ${user.uid} can read /home/.ssh; make it unreadable to it`);
+  });
+
+  it("names the data directory, or the other path, its account could read", () => {
+    expect(uidRefusal({ code: 3, stderr: "/data" }, user, "/data")).toBe(`uid: ${user.uid} can read /data; make it MELRA's own, mode 0700`);
+    expect(uidRefusal({ code: 3, stderr: "/etc/policy.json" }, user, "/data")).toBe(
+      `uid: ${user.uid} can read /etc/policy.json; make it unreadable to it`,
+    );
+    expect(uidRefusal({ error: "EPERM" }, user, "/data")).toMatch(/^uid: cannot run a command as \d+:4242 \(EPERM\)/);
+    expect(uidRefusal({ code: 0, stderr: "" }, user, "/data")).toBeUndefined();
+  });
+
+  // Through detectSandbox, with Linux's backends on every OS and bubblewrap's
+  // probe failing, so the uid one is tried with what startup resolved.
+  it("is handed the resolved deny list, the logins under home among it", async () => {
+    const base = await mkdtemp(join(tmpdir(), "melra-sandbox-uid-"));
+    try {
+      const [workspace, data, home, policy] = ["workspace", "data", "home", "policy.json"].map((name) => join(base, name)) as [
+        string, string, string, string,
+      ];
+      for (const directory of [workspace, data, join(home, ".ssh")]) await mkdir(directory, { recursive: true });
+      await writeFile(policy, "{}");
+      const calls: unknown[][] = [];
+      const options = { workspace, denied: [data, policy], dataDirectory: data, user, home, temp: [base] };
+      const found = await detectSandbox(
+        options,
+        async (...call) => {
+          calls.push(call);
+          return { error: "ENOENT" };
+        },
+        "linux",
+      );
+      expect("problems" in found).toBe(true);
+      const real = await realpath(base);
+      const denied = [
+        join(real, "data"),
+        join(real, "policy.json"),
+        ...HOME_SECRETS.map((entry) => join(real, "home", entry.slice(2))),
+      ];
+      expect(calls.filter(([file]) => file === process.execPath)).toEqual([
+        [process.execPath, reachableProbe([...new Set([data, ...denied])]), { ...user, cwd: "/" }],
+      ]);
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
   });
 });
 

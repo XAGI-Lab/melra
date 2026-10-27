@@ -64,6 +64,10 @@ SystemCallArchitectures=native
 # Deliberately absent: MemoryDenyWriteExecute=yes. V8's JIT writes and then
 # executes code, so Node exits at startup under it.
 UMask=0077
+# A ceiling on a runaway fork or a memory blow-up, for MELRA and every command
+# it runs together (threads count as tasks); raise them if your tasks need more.
+TasksMax=512
+MemoryMax=2G
 
 [Install]
 WantedBy=multi-user.target

@@ -165,6 +165,13 @@ test("the systemd smoke runs refused on the runner as it comes, then in bubblewr
   assert.match(smoke, /if \(!\(expected === "bubblewrap" \? inBubblewrap : refused\)\)/);
 });
 
+test("the systemd unit caps processes and memory where its smoke runs under them", () => {
+  // The smoke hands systemd-run every setting below this marker.
+  const hardening = read("examples/deploy/systemd/melra.service").split("# --- hardening")[1].split("[Install]")[0];
+  assert.match(hardening, /^TasksMax=\d+$/m);
+  assert.match(hardening, /^MemoryMax=\d+[KMG]$/m);
+});
+
 test("the container pair's smoke runs the recipe as written, its dry run needs no Docker, and CI runs it", () => {
   // No PATH, so a dry run that started docker would fail here.
   const result = spawnSync(process.execPath, [join(root, "scripts/compose-smoke.mjs"), "--dry-run"], {

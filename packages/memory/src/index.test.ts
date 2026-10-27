@@ -439,6 +439,21 @@ describe("LocalMemory", () => {
     expect(lookups).toBeLessThan(5 * (1_000 * 11 + 2_001));
   });
 
+  it("searches the newest records only as far as a fixed amount of text", () => {
+    store = new SqliteStore(":memory:");
+    const memory = new LocalMemory(store);
+    // Thirty values at the schema's limit, six million characters in all.
+    const value = "orbit ".repeat(33_333);
+    for (let index = 0; index < 30; index += 1) {
+      memory.execute(MemoryOperationSchema.parse({ kind: "memory", action: "put", key: `note ${index}`, value }));
+    }
+    const result = memory.execute(MemoryOperationSchema.parse({ kind: "memory", action: "search", query: "orbit" })) as {
+      candidateCount: number;
+    };
+    expect(result.candidateCount).toBeGreaterThan(0);
+    expect(result.candidateCount).toBeLessThan(30);
+  }, 30_000);
+
   it("edits a superseding record without losing it or the one it replaced", () => {
     store = new SqliteStore(":memory:");
     const memory = new LocalMemory(store);

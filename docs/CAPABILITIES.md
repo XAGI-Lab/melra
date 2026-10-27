@@ -416,7 +416,8 @@ Scopes: `session`, `task`, `project`, `workspace`, `user`, `procedural`.
   explicit speaker matching, bounded adjacent episode context, confidence,
   freshness, and bounded head diversity.
 - Search ranks at most the 5,000 most recently updated in-scope candidates per
-  query and returns at most 100 results.
+  query, fewer once their keys, values and tags pass 4,000,000 characters
+  together, and returns at most 100 results.
 - Records can expire or supersede older facts. Expired and superseded records
   are excluded by default.
 

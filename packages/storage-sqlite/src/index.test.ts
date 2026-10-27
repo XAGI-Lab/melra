@@ -5,7 +5,7 @@ import { chmodSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { TaskRequestSchema } from "@melra/protocol";
 import { createCertificate } from "@melra/receipt-schema";
 import { SqliteStore } from "./index.js";
@@ -169,6 +169,26 @@ describe("SqliteStore", () => {
     });
     expect(store.memoryCandidates("workspace", 5)).toHaveLength(1);
     expect(store.listMemories("user", 5)).toHaveLength(0);
+  });
+
+  it("reads memory candidates newest first from an index, sorting nothing", () => {
+    store = new SqliteStore(":memory:");
+    // A sort would read every row in the scope, values included, before the
+    // first came back, so a search's budget would not bound SQLite's work.
+    // The plan of the statement memoryCandidates prepares, not a copy of it.
+    const prepared: string[] = [];
+    const prepare = store.database.prepare.bind(store.database);
+    vi.spyOn(store.database, "prepare").mockImplementation((sql: string) => {
+      prepared.push(sql);
+      return prepare(sql);
+    });
+    store.memoryCandidates("workspace", 5_000);
+    vi.restoreAllMocks();
+    expect(prepared).toHaveLength(1);
+    const plan = store.database
+      .prepare(`EXPLAIN QUERY PLAN ${prepared[0]!}`)
+      .all("workspace", new Date().toISOString(), 0, 5_000) as Array<{ detail: string }>;
+    expect(plan.map(({ detail }) => detail).join("\n")).not.toMatch(/TEMP B-TREE/);
   });
 
   it("opens read-only beside a writer without blocking it", () => {
