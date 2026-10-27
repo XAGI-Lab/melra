@@ -253,6 +253,9 @@ All notable changes are documented here. The format follows
   letters in the name of a file with another hard link, on a disk that ignores
   case, now passes once its directory no longer lists the old spelling; it
   failed, and the move ended `partial`.
+- A running MELRA now seals an older MELRA's records at its 30 s recovery
+  sweep, not only at the next start, so `melra audit verify` stops reporting
+  them as `unsealed_rows` within a sweep.
 
 ### Security
 

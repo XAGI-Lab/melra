@@ -1772,26 +1772,28 @@ found it:
 An older MELRA sharing the home writes its records without links. The next
 process of this version to start on the home seals them: `serve`, `run`,
 `approve`, `inspect` and every other command that starts the runtime. Until
-then `verify` reports them as `unsealed_rows`; check those before starting
-MELRA on the home, because a start seals them as they then are. Anything else
-inserted into the file meanwhile, and any record whose link was removed, is
-sealed with them, so the chain shows that a record has not changed since it
-was last sealed, not who wrote it.
+then `verify` reports them as `unsealed_rows`. A process of this version seals
+them as they then are when it starts and, while it runs, within 30 s. So on a
+home where `serve` runs, `unsealed_rows` shows only briefly, and what shows a
+change afterwards is `swept`, `late` and a head kept with `melra audit head`.
+Anything else inserted into the file meanwhile, and any record whose link was
+removed, is sealed with them, so the chain shows that a record has not changed
+since it was last sealed, not who wrote it.
 
 A write seals only a record holding exactly what it wrote: a row under the
 same key holding anything else, one planted there first or stored in place of
-MELRA's by a trigger added to the file, is left for the next start to seal.
+MELRA's by a trigger added to the file, is left for a start or sweep to seal.
 
-Each link records whether a start sealed it rather than the write. `verify`
-counts those in `swept`, and in `late` gives the first of them that follows a
-link sealed when written, with `count`, how many do. Neither fails `verify`:
-a home first sealed when it was migrated has swept links and none late, and
-an older MELRA writing beside this version leaves late ones at every start.
-Compare both with what an earlier `verify` printed.
+Each link records whether a start or sweep sealed it rather than the write.
+`verify` counts those in `swept`, and in `late` gives the first of them that
+follows a link sealed when written, with `count`, how many do. Neither fails
+`verify`: a home first sealed when it was migrated has swept links and none late,
+and an older MELRA writing beside this version leaves late ones at every start or
+sweep. Compare both with what an earlier `verify` printed.
 
 Three changes pass `verify` on its own. Anyone who can write `melra.sqlite`
 can, without the key, remove a record's link and every later one, change or
-remove the records from there, and leave the next start to seal what is left
+remove the records from there, and leave a start or sweep to seal what is left
 again; that shows only in `swept`, and in `late` when a link sealed when
 written comes before the removed ones. The newest
 records can be removed together with their links, which leaves no mark. And
