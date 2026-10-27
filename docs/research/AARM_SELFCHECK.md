@@ -32,9 +32,9 @@ along with the decisions of theirs that hold today.
   nothing happened but the record fell short. Content from outside the
   workspace handed back by a read counts as something that happened.
 - A case that needs an interface MELRA does not have yet (defer, modify, a
-  read-only record verifier, signed receipts, an audit export, sessions,
-  sensitivity labels) is `not_implemented`, and so is one whose steps are not
-  written yet, whatever the interface probes report. It is never run, and it
+  read-only record verifier the harness can call, signed receipts, an audit
+  export, sessions, sensitivity labels) is `not_implemented`, and so is one
+  whose steps are not written yet, whatever the interface probes report. It is never run, and it
   counts as a fail.
 - A test passes only when every case passes. A case skipped for the
   environment (no symlinks, no POSIX file modes) is reported and never counts
@@ -47,7 +47,12 @@ along with the decisions of theirs that hold today.
 Most cases run in process. The tamper cases write `melra.sqlite` directly as a
 full writer of the file, dropping the append-only triggers first, and then ask
 the record verifier. The signature cases export receipts and check them with
-`node:crypto` and the public key alone. Both wait on interfaces MELRA lacks.
+`node:crypto` and the public key alone. Both wait on interfaces MELRA lacks:
+since 0.4.0-alpha.2 the records are chained and `melra audit verify` checks
+them read-only, but `@melra/server` does not export the `verifyRecords`
+function the harness probes for yet
+([#465](https://github.com/XAGI-Lab/melra/issues/465)), so the tamper cases
+stay `not_implemented`.
 
 ## Sources and pre-registration
 

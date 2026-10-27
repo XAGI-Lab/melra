@@ -1093,10 +1093,11 @@ line, last, says what guards an effect here: who approves a change (in
 developer mode the agent, from its plan response, so an approval is a record,
 not a boundary; in enforced mode only an operator), what a command runs in, or
 that it has MELRA's own rights, and, where doctor can read Claude Code's
-settings, which of Claude Code's own shell, file and web tools they leave it;
-for any other harness it says it did not look. It warns under unsafe-local,
-and in enforced mode where commands run without a sandbox or Claude Code keeps
-one of those tools. On Ubuntu 24.04,
+settings, which of Claude Code's own shell, file and web tools they leave it,
+and which OpenClaw or Hermes configs leave theirs; for any other harness it
+says it did not look. It warns under unsafe-local, and in enforced mode where
+commands run without a sandbox or Claude Code, OpenClaw or Hermes keeps tools
+of its own. On Ubuntu 24.04,
 bubblewrap needs `sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0`
 or an AppArmor profile that lets `/usr/bin/bwrap` make user namespaces; the
 [systemd unit](../examples/deploy/systemd/melra.service) allows the

@@ -30,8 +30,9 @@ All notable changes are documented here. The format follows
   boundary; in enforced mode only an operator, out of band), the sandbox
   commands run in or that they have MELRA's own rights, and, where doctor can
   read Claude Code's settings, which of its own shell, file and web tools they
-  leave it. It warns under unsafe-local, and in enforced mode where commands
-  run without a sandbox or Claude Code keeps one of those tools.
+  leave it, and which OpenClaw or Hermes configs leave theirs. It warns under
+  unsafe-local, and in enforced mode where commands run without a sandbox or
+  Claude Code, OpenClaw or Hermes keeps tools of its own.
   `melra_capabilities` reports the same in `policy.approvals` (`in_band`,
   `out_of_band`, or `none` under unsafe-local) and `policy.sandbox` (the
   sandbox, `none`, or `off`).

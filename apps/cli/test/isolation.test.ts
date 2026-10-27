@@ -138,6 +138,11 @@ describe("doctor protection line", () => {
       detail: expect.stringContaining("approvals: only an operator's, out of band"),
     });
     expect(protectionCheck(enforced, "none").status).toBe("warn");
+    // OpenClaw's or Hermes's config leaving it a shell is a gap too.
+    const native = protectionCheck(enforced, "bubblewrap", [], ["openclaw"]);
+    expect(native.status).toBe("warn");
+    expect(native.detail).toContain("openclaw: its config leaves it tools of its own, which go around MELRA");
+    expect(protectionCheck(developer, "seatbelt", undefined, ["hermes"]).status).toBe("pass");
     expect(protectionCheck(enforced, "bubblewrap", ["Bash"]).status).toBe("warn");
     expect(protectionCheck({ mode: "developer", unhinged: true }, "off")).toMatchObject({
       status: "warn",
