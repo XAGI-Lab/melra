@@ -695,7 +695,7 @@ pnpm --filter @melra/evals evaluate:durable-core -- --publishable
 # memory, browser, terminal and computer microbenchmarks
 pnpm benchmark:core
 
-# governance benchmark: 362 model-free cases, loopback fixtures only
+# governance benchmark: 363 model-free cases, loopback fixtures only
 pnpm benchmark:govbench
 
 # LoCoMo (dataset not vendored: CC BY-NC 4.0)

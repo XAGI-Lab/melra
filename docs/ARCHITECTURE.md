@@ -58,7 +58,11 @@ RECEIPT      redacted, append-only evidence and a self-digested certificate,
 RESULT       returned to the caller
 ```
 
-`melra_plan` stops after `APPROVAL` and returns the challenge.
+`melra_plan` stops after `APPROVAL` and returns the challenge. It refuses one
+that would put its caller over `maxPendingApprovals` open challenges before
+`RECORD` writes anything (`too_many_pending_approvals`). So does a workflow
+advance, for any step, a compensation or one asked again after expiry
+included, and leaves that step for a later advance.
 `melra_execute` **re-runs** `CAPABILITY` and `POLICY` before `EXECUTION`, so a
 plan cannot ride a policy that has since been tightened.
 
@@ -575,6 +579,12 @@ same durable record; none of them is a shortcut past a stage of the lifecycle.
 | Python SDK | stdio subprocess, or a running server over loopback HTTP or the Unix socket | Python applications and custom harnesses |
 | JSON API | loopback HTTP or the Unix socket, read-only, the operator's token only | Consoles and dashboards |
 | Approval console | `melra console`: its own loopback HTTP server, no MCP endpoint | An operator approving or denying in a browser tab paired with it |
+
+Every MCP transport builds its server with `createMcpServer`, which spends each
+tool call from its caller's token bucket (`maxCallsPerMinute`, one per caller
+in each server process, shared by its sessions there) before the tool runs,
+harness tools included. The CLI's operator commands use the runtime directly
+and are not counted.
 
 The MCP surface is exactly twelve tools:
 

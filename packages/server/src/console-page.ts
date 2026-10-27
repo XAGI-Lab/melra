@@ -279,7 +279,7 @@ if (approvals) {
   addEventListener("scroll", unsettle, true);
   unsettle();
 }
-const state = { caps: null, tasks: [], workflows: [], approvalPendingIds: new Set(), attentionCount: 0, filter: "all", query: "", stream: null, streamId: null, events: [], sig: "" };
+const state = { caps: null, tasks: [], workflows: [], approvalPendingIds: new Set(), alike: new Map(), attentionCount: 0, filter: "all", query: "", stream: null, streamId: null, events: [], sig: "" };
 
 const TASK_TONE = {
   verified_success: "ok", partial: "warn", awaiting_approval: "info", waiting_user: "info",
@@ -387,6 +387,7 @@ async function refresh() {
     const [caps, tasks, runs] = await Promise.all([get("/api/capabilities"), get("/api/tasks?limit=500"), get("/api/workflows")]);
     state.caps = caps; state.tasks = tasks.tasks; state.workflows = runs.workflows;
     state.approvalPendingIds = new Set(tasks.approvalPendingIds); state.attentionCount = tasks.attentionCount;
+    state.alike = new Map((tasks.approvalGroups ?? []).flatMap((ids) => ids.map((id) => [id, ids])));
     setLive(true, "Live · updated " + new Date().toLocaleTimeString() + (paired.pairedAt ? " · paired at " + clock(paired.pairedAt) : ""));
     document.getElementById("version").textContent = "v" + caps.version + " · " + caps.policy.mode + " mode";
     document.getElementById("count-tasks").textContent = String(state.tasks.length || "");
@@ -510,7 +511,8 @@ function taskRow(task, current) {
   return el("button", { class: "row", type: "button", "data-key": task.id, "aria-current": String(current), onclick: () => go("tasks", task.id) },
     el("span", { class: "what", text: op.kind + "." + op.action + (target(op) ? "  " + target(op) : "") }),
     badge(task.status, TASK_TONE),
-    el("span", { class: "sub" }, (task.policyDecision ? task.policyDecision.effect + " · " + task.policyDecision.risk + " risk · " : ""), when(task.updatedAt)),
+    el("span", { class: "sub" }, (state.alike.has(task.id) ? state.alike.get(task.id).length + " pending ask for this · " : ""),
+      (task.policyDecision ? task.policyDecision.effect + " · " + task.policyDecision.risk + " risk · " : ""), when(task.updatedAt)),
   );
 }
 
@@ -519,6 +521,16 @@ function renderTasks(id) {
   const q = state.query.toLowerCase();
   const shown = state.tasks.filter(filter[2]).filter((task) => !q || [task.id, task.status, task.request?.operation?.kind,
     task.request?.operation?.action, target(task.request?.operation ?? {}), task.policyDecision?.reason].join(" ").toLowerCase().includes(q));
+  // Pending tasks asking for the same operation sit together under the first
+  // of them shown, each still listed with how many ask (#422).
+  const index = new Map(shown.map((task, i) => [task.id, i]));
+  const lead = new Map();
+  for (const ids of new Set(state.alike.values())) {
+    const first = Math.min(...ids.map((key) => index.get(key) ?? Infinity));
+    for (const key of ids) lead.set(key, first);
+  }
+  const place = (task) => lead.get(task.id) ?? index.get(task.id);
+  shown.sort((a, b) => place(a) - place(b) || index.get(a.id) - index.get(b.id));
   const search = el("input", { type: "search", placeholder: "Search by id, operation, target, reason…", "aria-label": "Search tasks", value: state.query,
     oninput: (e) => { state.query = e.target.value; const pos = e.target.selectionStart; render(); const s = view.querySelector("input[type=search]"); s.focus(); s.setSelectionRange(pos, pos); } });
   const filters = FILTERS.map(([key, label, f]) => el("button", { class: "filter", type: "button", "aria-pressed": String(state.filter === key),

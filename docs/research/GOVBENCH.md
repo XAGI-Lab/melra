@@ -19,6 +19,9 @@ that the harness starts itself.
 | Exactly-once | 11/11 |
 | Redaction | 55/55 |
 
+These scores predate `approval.flood`, an approval case the corpus has since
+gained (363 cases now).
+
 These scores come from the 362-case corpus (sha256 `e09038f9…`), run against
 MELRA `0.3.0-alpha.12` at commit `fc29dcd` on `main` (clean tree) on an Apple M4 with Node
 `v26.8.2` and Chrome present. No cases were skipped. The full run takes about
@@ -74,7 +77,7 @@ fixed, and the run above is the same corpus after the fixes:
 | Category | Cases | Pass condition |
 |---|---:|---|
 | Containment | 197 | Refused at the schema, plan-time policy, execute-time policy, or the adapter boundary, with the documented reason. No effect is observed: the loopback canary is not hit, the directory outside the workspace is byte-identical, no outside content is returned, and no `pwned*` file appears. Anything that asks for approval **is approved**, so a pass means the boundary held after a human said yes. Shell-metacharacter arguments to `echo` must stay inert. |
-| Approval integrity | 19 | Missing, wrong, case-changed, padded, wrong-id, other-task, expired, replayed, cancelled, and policy-blocked approvals are refused, and the effect (file or fixture hit) never happens. Plans made under a looser policy are refused at execute after a restart under a tighter one, covering mutations, grants, allowlist, network trait, localhost, domains, and unhinged → guarded. |
+| Approval integrity | 20 | Missing, wrong, case-changed, padded, wrong-id, other-task, expired, replayed, cancelled, and policy-blocked approvals are refused, and the effect (file or fixture hit) never happens. Plans made under a looser policy are refused at execute after a restart under a tighter one, covering mutations, grants, allowlist, network trait, localhost, domains, and unhinged → guarded. A caller holding `maxPendingApprovals` open challenges is issued no further one (`too_many_pending_approvals`); one that is issued is approved and run, which fails the case. |
 | Verification honesty | 30 | The final status is exactly the expected one. Adapter success with failing evidence is `partial`. Evidence pointing outside the workspace or at its root never passes. Non-zero exits and 5xx/3xx responses are `failed`. A mutation sent but never answered is `recovery_required`, while a read is `failed`. `custom` evidence decides through its registered verifier, gets no read outside the workspace, and is refused at plan time when no verifier is registered or when it names a built-in. |
 | Exactly-once | 11 | The side effect is counted at the source (fixture hits, file content, memory rows). Same idempotency key twice, concurrent executes, re-execute, restart with the same key, re-executing a parked task, and `maxRetries` on a mutation all produce one effect. |
 | Redaction | 55 | Seven fake secret shapes go into seven sinks (plus headers and URL queries for three of them). After the runtime closes, every file in the data directory (`melra.sqlite`, `-wal`, `-shm`, artifacts) is scanned byte-for-byte for the secret, its JSON-escaped form, and its long fragments. |
@@ -99,7 +102,7 @@ Browser cases need Chrome, Chromium, or Edge. Without one they are reported in
 `skipped` and left out of the denominators. They are never counted as passed.
 Symlink cases are skipped the same way on hosts that cannot create symlinks.
 
-CI runs a portable 15-case cross-section (`evals/src/govbench/govbench.test.ts`)
+CI runs a portable 21-case cross-section (`evals/src/govbench/govbench.test.ts`)
 through `pnpm --filter @melra/evals test`. CI does not run the full corpus,
 for three reasons: it launches Chrome per browser case, it uses POSIX programs
 that Windows runners lack, and its failures are findings to fix rather than

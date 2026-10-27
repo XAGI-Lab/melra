@@ -21,7 +21,7 @@ import { approvalTtl, classifyOperation, loadPolicy, type LocalPolicy } from "@m
 import { SqliteStore } from "@melra/storage-sqlite";
 import type { CliEnvironment } from "./environment.js";
 import { isHuman, paint, table } from "./output.js";
-import { DEFAULT_HTTP_PORT, configuredHttpPort, printable, workflowStepJudge } from "@melra/server";
+import { DEFAULT_HTTP_PORT, alikeGroups, configuredHttpPort, printable, workflowStepJudge } from "@melra/server";
 
 const POLL_MS = 1_000;
 const APPROVAL_HINT = "approve with `melra approve <task-id>`";
@@ -163,6 +163,8 @@ interface ApprovalCounts {
   waiting: number;
   expired: number;
   expiredSteps: number;
+  /** The waiting ones that ask for the same operation, two or more apiece. */
+  alike: TaskRecord[][];
 }
 
 /**
@@ -182,6 +184,7 @@ function approvalCounts(
   const now = Date.now();
   let step: ((task: TaskRecord) => boolean) | undefined;
   const counts = { waiting: 0, expired: 0, expiredSteps: 0 };
+  const waiting: TaskRecord[] = [];
   for (const task of store.listTasks(100_000, "awaiting_approval")) {
     const expiresAt = task.approval === undefined ? Infinity : Date.parse(task.approval.expiresAt);
     const decision = task.approval === undefined ? undefined : store.getApprovalDecision(task.approval.approvalId);
@@ -191,6 +194,7 @@ function approvalCounts(
       if (now < decidedAt + approvalTtl(window)) continue;
     } else if (!unusable && now < expiresAt) {
       counts.waiting += 1;
+      waiting.push(task);
       continue;
     }
     // Judged only once something has expired: a store keeps every run.
@@ -198,7 +202,7 @@ function approvalCounts(
       counts.expiredSteps += 1;
     } else counts.expired += 1;
   }
-  return counts;
+  return { ...counts, alike: alikeGroups(waiting) };
 }
 
 interface JudgementCounts {
@@ -277,7 +281,7 @@ export function tasksCommand(env: CliEnvironment, options: TasksOptions): number
     env,
     {
       tasks: [] as TaskRecord[],
-      approvals: { waiting: 0, expired: 0, expiredSteps: 0 },
+      approvals: { waiting: 0, expired: 0, expiredSteps: 0, alike: [] as TaskRecord[][] },
       judgements: { waiting: 0, expired: 0 },
       refused: { count: 0, latest: [] } as Refusals,
       tried: new Set<string>(),
@@ -353,6 +357,13 @@ export function tasksCommand(env: CliEnvironment, options: TasksOptions): number
   );
   const hints = [
     ...(approvals.waiting > 0 ? [approvalHint(approvals.waiting)] : []),
+    // Every one named, so grouping hides none (#422).
+    ...approvals.alike.map(
+      (group) =>
+        `  ${group.length} ask for the same ${[operationName(group[0]!), truncate(printable(taskTarget(group[0]!)), 48)]
+          .filter((part) => part !== "")
+          .join(" ")}: ${group.map((task) => shortId(task.id)).join(" ")}`,
+    ),
     ...expiredHints(approvals),
     ...(judgements.waiting > 0 ? [judgementHint(judgements.waiting)] : []),
     ...(judgements.expired > 0 ? [expiredJudgementHint(judgements.expired)] : []),
@@ -591,7 +602,7 @@ export async function statusCommand(
       tasks: {} as Record<string, number>,
       workflows: {} as Record<string, number>,
       lastActivity: undefined as string | undefined,
-      approvals: { waiting: 0, expired: 0, expiredSteps: 0 },
+      approvals: { waiting: 0, expired: 0, expiredSteps: 0, alike: [] as TaskRecord[][] },
       judgements: { waiting: 0, expired: 0 },
       refused: { count: 0, latest: [] } as Refusals,
     },

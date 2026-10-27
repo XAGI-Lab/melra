@@ -6,6 +6,46 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Two policy file keys bound how hard one caller can lean on the kernel.
+  `maxPendingApprovals` (default `64`) is how many approval challenges one
+  caller may have open at once: awaiting a decision and not expired.
+  `maxCallsPerMinute` (default `1200`) is how many MCP tool calls one client
+  may make in a minute, as a token bucket that holds that many and refills at
+  that rate, one per authenticated client and one for the operator's token or
+  a stdio session. `melra_capabilities` publishes both under `policy`, with
+  `pendingApprovals`, the caller's own open count. See [flood
+  limits](https://github.com/XAGI-Lab/melra/blob/main/docs/INSTALLATION.md#flood-limits).
+- `melra tasks` and the console's task list group pending approvals that ask
+  for the same operation: `melra tasks` says how many and names each one under
+  its approval count, and the console lists them together with the count on
+  each row. Nothing is hidden. `/api/tasks` returns the groups as
+  `approvalGroups`, of challenges not yet expired.
+- A GovBench case, `approval.flood`, holds that a caller at
+  `maxPendingApprovals` is issued no further challenge.
+
+### Changed
+
+- **Breaking:** `melra_plan`, the harness tools, `melra run` and a workflow
+  advance refuse a request needing approval while its caller already has
+  `maxPendingApprovals` challenges open (`too_many_pending_approvals`, naming
+  the cap and how to make room), before any task is written. An approval,
+  deny, cancel or expiry makes room. A workflow step refused this way, a
+  compensation or a challenge due to be asked again after expiry included,
+  waits for a later advance.
+- **Breaking:** an MCP tool call past `maxCallsPerMinute` fails with
+  `rate_limited`, saying in how many milliseconds to retry, over stdio,
+  loopback HTTP and the Unix socket alike. Every call counts, one naming an
+  unknown tool or failing its input schema too. The operator's CLI commands,
+  which read and write the store directly, are not counted.
+
+### Security
+
+- An agent can no longer fill the operator's approval queue with near-identical
+  challenges, which pushes a person towards approving without reading, and
+  tool calls are rate limited per client, as the MCP specification asks.
+
 ## [0.4.0-alpha.1] - 2026-10-27
 
 ### Added

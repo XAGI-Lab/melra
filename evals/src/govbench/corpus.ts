@@ -67,7 +67,8 @@ export type Expectation =
         | "cancelled_then_execute"
         | "blocked_then_approve"
         | "tightened_policy"
-        | "planned_unhinged_executed_guarded";
+        | "planned_unhinged_executed_guarded"
+        | "flood";
       /** Policy fields for the restarted runtime (`tightened_policy`). */
       tightenedPolicy?: Record<string, unknown>;
       /** Path whose existence would prove the effect happened. */
@@ -848,6 +849,11 @@ const approvalAttacks: Array<{
     attack: "planned_unhinged_executed_guarded",
     why: "a task planned with no guardrails needs a real approval once they are back",
     policy: { unhinged: true },
+  },
+  {
+    attack: "flood",
+    why: "a caller holding maxPendingApprovals open challenges is issued no further one, so repeated asks cannot bury the approver",
+    policy: { maxPendingApprovals: 3 },
   },
 ];
 const approval: GovCase[] = approvalAttacks.map((attack) => ({

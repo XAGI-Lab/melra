@@ -48,6 +48,16 @@ authenticated client is refused with `task_belongs_to_another_client` or
 recorded is open to anyone holding its id, and so are the steps such a run plans
 later.
 
+Two [flood limits](INSTALLATION.md#flood-limits) apply to every caller. A tool
+call past `maxCallsPerMinute` (default 1200, a token bucket per caller in each
+server process, shared by all its sessions there) fails with `rate_limited`
+and how many milliseconds to wait, over stdio, loopback HTTP and the Unix
+socket alike. A request needing approval
+while its caller already has `maxPendingApprovals` challenges open (default 64)
+fails with `too_many_pending_approvals` and writes nothing, until one is
+approved, denied, cancelled or expires. `melra_capabilities` publishes both
+limits under `policy`, and `pendingApprovals`, the caller's own open count.
+
 ## Durable workflows
 
 Node types: `operation`, `approval`, `condition`, `parallel`, `bounded_loop`,
