@@ -247,6 +247,10 @@ export class SqliteStore {
         updated_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS memories_scope ON memories(scope);
+      -- Newest first without sorting the scope, so a search reads no further
+      -- than its budget. Descending, so a tie still comes out in the order it
+      -- was written, as the sort gave it.
+      CREATE INDEX IF NOT EXISTS memories_scope_updated ON memories(scope, updated_at DESC);
       CREATE INDEX IF NOT EXISTS memories_key ON memories(key);
     `);
     this.addColumnIfMissing("memories", "tags", "TEXT NOT NULL DEFAULT '[]'");
@@ -1687,10 +1691,16 @@ export class SqliteStore {
     return rows.map(toMemoryRecord);
   }
 
+  /**
+   * The newest `limit` memories, read no further once their keys, values and
+   * tags pass `maxChars` together: a search tokenises every one, so a few
+   * large values would otherwise fill the heap.
+   */
   memoryCandidates(
     scope: MemoryScope,
     limit: number,
     includeSuperseded = false,
+    maxChars = Infinity,
   ): MemoryRecord[] {
     const rows = this.database
       .prepare(`
@@ -1706,13 +1716,20 @@ export class SqliteStore {
         ORDER BY updated_at DESC
         LIMIT ?
       `)
-      .all(
+      .iterate(
         scope,
         new Date().toISOString(),
         includeSuperseded ? 1 : 0,
         limit,
-      ) as unknown as MemoryRow[];
-    return rows.map(toMemoryRecord);
+      ) as unknown as Iterable<MemoryRow>;
+    const records: MemoryRecord[] = [];
+    let chars = 0;
+    for (const row of rows) {
+      records.push(toMemoryRecord(row));
+      chars += row.key.length + row.value.length + row.tags.length;
+      if (chars >= maxChars) break;
+    }
+    return records;
   }
 
   supersedeMemory(

@@ -57,6 +57,10 @@ export interface RankedMemory extends MemoryRecord {
 const DAY_MS = 86_400_000;
 const DEFAULT_HALF_LIFE_DAYS = 30;
 const MAX_CANDIDATES = 5_000;
+// What a search tokenises at most, about 5,000 records of 800 characters: a
+// few hundred milliseconds, where 5,000 values at the 200,000 limit would be
+// a gigabyte of text.
+const MAX_CANDIDATE_CHARS = 4_000_000;
 const CONTEXT_ANCHORS = 20;
 const CONTEXT_DEPTH = 2;
 const CONTEXT_DECAY = 0.9;
@@ -477,6 +481,7 @@ export class LocalMemory {
           operation.scope,
           MAX_CANDIDATES,
           operation.includeSuperseded,
+          MAX_CANDIDATE_CHARS,
         );
         return {
           memories: rankMemories(

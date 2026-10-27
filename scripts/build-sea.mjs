@@ -109,7 +109,12 @@ await writeFile(
     mainFormat: "module",
     output: binary,
     disableExperimentalSEAWarning: true,
-    useCodeCache: false,
+    // The bundle compiled at build time, so a start skips most of compiling
+    // it: `melra version` went from about 220 ms to 120 ms on an Apple Silicon
+    // Mac. V8's cache holds only for the platform that made it, and each
+    // target builds its own binary. Two builds of one commit then differ in
+    // bytes, where without it they did not.
+    useCodeCache: true,
   }),
 );
 execFileSync(process.execPath, ["--build-sea", config], { stdio: "inherit" });

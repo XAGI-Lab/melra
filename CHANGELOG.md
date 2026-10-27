@@ -39,12 +39,24 @@ All notable changes are documented here. The format follows
   loopback HTTP and the Unix socket alike. Every call counts, one naming an
   unknown tool or failing its input schema too. The operator's CLI commands,
   which read and write the store directly, are not counted.
+- A memory search stops reading candidates once their keys, values and tags
+  pass 4,000,000 characters together, newest first, as well as at 5,000
+  records, so a scope of large records no longer fills the heap on every
+  query. `candidateCount` says how many it ranked. An index on scope and
+  update time lets SQLite read them newest first, where it sorted the whole
+  scope before returning one; a home gains it when MELRA next opens it.
+- The single executable carries V8's compiled code for the CLI, so it starts
+  in about half the time (`melra version` in about 120 ms rather than 220 ms
+  on an Apple Silicon Mac). Two builds of one commit now differ in bytes.
 
 ### Security
 
 - An agent can no longer fill the operator's approval queue with near-identical
   challenges, which pushes a person towards approving without reading, and
   tool calls are rate limited per client, as the MCP specification asks.
+- `examples/deploy/systemd/melra.service` caps the processes and memory MELRA
+  and every command it runs use together (`TasksMax=512`, `MemoryMax=2G`), as
+  the container pair already did, and its smoke runs under them.
 
 ## [0.4.0-alpha.1] - 2026-10-27
 
