@@ -172,6 +172,7 @@ export interface LocalPolicy {
   sandbox: {
     use?: "on" | "off" | "if-available";
     symlinks: string[];
+    listen: string[];
     readable: string[];
     user?: { uid: number; gid: number };
     backend?: string;
@@ -621,7 +622,7 @@ export function createDefaultPolicy(workspaceRoot: string, runtimes = true): Loc
     credentials: {},
     circuitBreaker: { threshold: 3, cooldownMs: 60_000 },
     unhinged: false,
-    sandbox: { symlinks: [], readable: [] },
+    sandbox: { symlinks: [], listen: [], readable: [] },
     mode: "developer",
   };
 }

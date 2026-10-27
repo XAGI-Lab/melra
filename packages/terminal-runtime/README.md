@@ -43,9 +43,12 @@ list as receipts and memory, from
 Given a `sandbox` from `detectSandbox`, every command runs in an OS sandbox
 made for it: a deny-default Seatbelt profile on macOS (`seatbeltProfile`),
 bubblewrap on Linux (`bwrapArgv`, with `symlinkFilter` on descriptor 3), or
-another account. `allowance` says whether a command may reach the network or
-make symbolic links, which Seatbelt and bubblewrap enforce and the `uid`
-backend does not; MELRA answers it from the command's policy traits.
+another account. `allowance` says whether a command may reach the network,
+bind and listen on localhost under Seatbelt, or make symbolic links, which
+Seatbelt and bubblewrap enforce and the `uid` backend does not; MELRA answers it
+from the command's policy traits and the `sandbox.listen` policy list. Note that
+on macOS Seatbelt's localhost filter matches every address of the host, so a
+listener permitted by `sandbox.listen` is reachable on all host interfaces.
 
 Allowlisting decides which commands may run at all, and that lives in
 [`@melra/policy-core`](https://www.npmjs.com/package/@melra/policy-core), not

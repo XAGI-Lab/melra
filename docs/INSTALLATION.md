@@ -919,6 +919,7 @@ The policy file sets it under `sandbox`:
 |---|---|
 | `use` | `on`: every command runs sandboxed, and MELRA refuses to start (`sandbox_unavailable`) where none works. `off`: none, which enforced mode refuses (`enforced_mode_refuses_sandbox_off`). `if-available`: sandboxed where one works, and started without one where none does; in enforced mode this is the operator's recorded opt-out, and every receipt then says `"sandbox": "none"`. Left out, `on` in enforced mode and `if-available` in developer mode. Unsafe-local turns it off |
 | `symlinks` | Commands, by name as in `allowedCommands`, that may make symbolic links; in developer mode `git` may without being named |
+| `listen` | Commands, by name as in `allowedCommands`, that may bind and listen on localhost under Seatbelt on macOS. Note that Seatbelt's localhost filter matches every host address, so a listener permitted here is reachable on all host interfaces |
 | `readable` | Entries of the list above to let commands read again, written exactly as listed |
 | `user` | `{ "uid": ..., "gid": ... }`, the account the `uid` sandbox runs commands as; never 0 |
 

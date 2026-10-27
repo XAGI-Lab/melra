@@ -615,7 +615,8 @@ export async function createMelraRuntime(
     // pair: what either one creates, the other may change. Commands inherit it.
     if (sandbox?.backend === "uid") process.umask(0o002);
   }
-  const symlinkers = new Set(policy.sandbox.symlinks.map(normalizeCommandName));
+  const symlinkers = new Set((policy.sandbox.symlinks ?? []).map(normalizeCommandName));
+  const listeners = new Set((policy.sandbox.listen ?? []).map(normalizeCommandName));
   // Without links git still exits 0: a clone or init writes core.symlinks=false
   // and checks each link out as a plain file. Developer mode, sandboxed by
   // default, lets it make them; enforced mode only where the policy names it.
@@ -640,6 +641,7 @@ export async function createMelraRuntime(
             return {
               network: traits.includes("network"),
               symlinks: traits.includes("package-install") || symlinkers.has(normalizeCommandName(command)),
+              listen: listeners.has(normalizeCommandName(command)),
             };
           },
         }),

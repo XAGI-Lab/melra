@@ -58,7 +58,7 @@ describe("doctor sandbox check", () => {
   const none = async () => ({ problems: ["test: none here"] });
   const env = (mode: "developer" | "enforced") => ({ mode, unhinged: false, workspaceRoot: "/w", dataDirectory: "/d" });
   const found = (mode: "developer" | "enforced", use?: "on" | "off" | "if-available") =>
-    sandboxCheck(env(mode), { symlinks: [], readable: [], ...(use === undefined ? {} : { use }) }, { secrets: new Map() }, none);
+    sandboxCheck(env(mode), { symlinks: [], listen: [], readable: [], ...(use === undefined ? {} : { use }) }, { secrets: new Map() }, none);
   const check = async (mode: "developer" | "enforced", use?: "on" | "off" | "if-available") => (await found(mode, use)).check;
 
   it("fails where the server would refuse to start, and says how to fix it", async () => {
@@ -96,7 +96,7 @@ describe("doctor sandbox check", () => {
 
   it("names the sandbox commands run in where one works", async () => {
     const works = async () => ({ sandbox: { backend: "seatbelt", confine: async ({ file, args }: { file: string; args: string[] }) => ({ file, args }) } });
-    const settings = { symlinks: [], readable: [] };
+    const settings = { symlinks: [], listen: [], readable: [] };
     expect(await sandboxCheck(env("developer"), settings, { secrets: new Map() }, works)).toEqual({
       check: { name: "sandbox", status: "pass", detail: "seatbelt: every command runs in it" },
       commands: "seatbelt",

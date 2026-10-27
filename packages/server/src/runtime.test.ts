@@ -494,12 +494,12 @@ describe("per-command sandbox", () => {
       }),
     });
     const calls: Array<[string, string[], SandboxAllowance]> = [
-      [process.execPath, ["-e", ""], { network: false, symlinks: false }],
-      ["curl", ["--version"], { network: true, symlinks: false }],
+      [process.execPath, ["-e", ""], { network: false, symlinks: false, listen: false }],
+      ["curl", ["--version"], { network: true, symlinks: false, listen: false }],
       // Named in the policy file.
-      ["git", ["status"], { network: false, symlinks: true }],
+      ["git", ["status"], { network: false, symlinks: true, listen: false }],
       // An install makes links whether or not it is named.
-      ["npm", ["--version"], { network: true, symlinks: true }],
+      ["npm", ["--version"], { network: true, symlinks: true, listen: false }],
     ];
     for (const [command, args, allowance] of calls) {
       const result = await runtime.router.execute(TerminalOperationSchema.parse({ kind: "terminal", action: "run", command, args }));
@@ -537,9 +537,31 @@ describe("per-command sandbox", () => {
       runtime = undefined;
     }
     expect(seen).toEqual([
-      { network: false, symlinks: true },
-      { network: false, symlinks: false },
+      { network: false, symlinks: true, listen: false },
+      { network: false, symlinks: false, listen: false },
     ]);
+  });
+
+  it("gives a program named in sandbox.listen the listen allowance", async () => {
+    const seen: SandboxAllowance[] = [];
+    runtime = await createMelraRuntime({
+      workspaceRoot: workspace,
+      dataDirectory: data,
+      policyPath: await policy({ listen: ["vitest"] }),
+      detectSandbox: async () => ({
+        sandbox: {
+          backend: "recording",
+          confine: async (_command, allowance) => {
+            seen.push(allowance);
+            return { file: process.execPath, args: ["-e", "0"] };
+          },
+        },
+      }),
+    });
+    await runtime.router.execute(TerminalOperationSchema.parse({ kind: "terminal", action: "run", command: process.execPath, args: ["-e", "0"] }));
+    expect(seen.at(-1)).toEqual({ network: false, symlinks: false, listen: false });
+    await runtime.router.execute(TerminalOperationSchema.parse({ kind: "terminal", action: "run", command: "vitest", args: ["--version"] }));
+    expect(seen.at(-1)).toEqual({ network: false, symlinks: false, listen: true });
   });
 
   it("keeps MELRA's data, the policy file and the secret files from every command", async () => {

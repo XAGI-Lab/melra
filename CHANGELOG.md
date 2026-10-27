@@ -8,6 +8,11 @@ All notable changes are documented here. The format follows
 
 ### Added
 
+- `sandbox.listen`: an opt-in list of commands in the policy file that may bind
+  and listen on localhost under Seatbelt on macOS. Under Seatbelt, commands
+  without the `network` trait cannot open sockets; `sandbox.listen` permits
+  dev servers and test runners to bind localhost, noting that Seatbelt's
+  `localhost` rule matches every interface on macOS. Closes [#471](https://github.com/XAGI-Lab/melra/issues/471).
 - Two policy file keys bound how hard one caller can lean on the kernel.
   `maxPendingApprovals` (default `64`) is how many approval challenges one
   caller may have open at once: awaiting a decision and not expired.
