@@ -8,11 +8,16 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   CLAUDE_DENIED_TOOLS,
+  HERMES_DISABLED_TOOLSETS,
+  OPENCLAW_DENIED_TOOLS,
   claudeHarness,
   claudeManagedFiles,
   harnessCheck,
   installLines,
   managedLaunch,
+  nativeTools,
+  nativeToolsCheck,
+  nativeToolsOff,
 } from "../src/harness.js";
 
 const roots: string[] = [];
@@ -409,5 +414,81 @@ describe("doctor harness check", () => {
     // The executable only: arguments are where a user would put a token.
     expect(check.detail).not.toMatch(/\/bin\/sh -c/);
     expect(check.next).toMatch(/--managed <dir>/);
+  });
+});
+
+describe("OpenClaw's and Hermes's own tools", () => {
+  it("takes away the tools that send or publish outside or start a session, and Hermes's MCP and plugin installers", () => {
+    expect(OPENCLAW_DENIED_TOOLS).toEqual(
+      expect.arrayContaining([
+        "sessions_create",
+        "sessions_spawn",
+        "sessions_send",
+        "conversations_send",
+        "conversations_turn",
+        "github_publish",
+      ]),
+    );
+    expect(HERMES_DISABLED_TOOLSETS).toEqual(expect.arrayContaining(["connections", "catalog"]));
+  });
+
+  it("reports OpenClaw's exec as still enabled until tools.deny removes it, by any name OpenClaw takes", async () => {
+    const path = join(await scratch(), "openclaw.json");
+    await put(path, { tools: { profile: "coding", deny: ["browser"] } });
+    const before = await nativeTools("openclaw", path);
+    expect(before).toMatchObject({ key: "tools.deny", shell: "enabled", removed: [], present: OPENCLAW_DENIED_TOOLS });
+    const warned = nativeToolsCheck(before);
+    expect(warned.status).toBe("warn");
+    expect(warned.detail).toMatch(/^openclaw: native exec still enabled; present: group:runtime, write/);
+    expect(warned.next).toBe("run 'melra setup --client openclaw --exclusive --write' to turn them off in tools.deny");
+    // Its alias, any letter case and a pattern over tool names count, as
+    // OpenClaw counts them; a pattern over group names or the alias does not.
+    for (const [deny, shell] of [
+      [["bash"], "removed"],
+      [["EXEC"], "removed"],
+      [["Group:Runtime"], "removed"],
+      [["ex*"], "removed"],
+      [["*"], "removed"],
+      [["group:*", "b*"], "enabled"],
+      [["ba*"], "enabled"],
+    ] as const) {
+      await put(path, { tools: { deny } });
+      const report = await nativeTools("openclaw", path);
+      expect(report.shell, deny.join()).toBe(shell);
+      if (shell === "enabled") expect(nativeToolsCheck(report)).toMatchObject({ status: "warn", detail: expect.stringContaining("native exec still enabled") });
+    }
+    // What setup writes, beside the entry: everything removed, and the file's hash.
+    const text = await put(path, '{\n  // mine\n  "tools": { "deny": ["browser"] },\n}\n');
+    await put(path, nativeToolsOff("openclaw", path, text));
+    const after = await nativeTools("openclaw", path);
+    expect(after).toMatchObject({ shell: "removed", removed: OPENCLAW_DENIED_TOOLS, present: [] });
+    const passed = nativeToolsCheck(after);
+    expect(passed.status).toBe("pass");
+    expect(passed.next).toBeUndefined();
+    expect(passed.detail).toContain(`sha256 ${path} ${after.sha256?.slice(0, 12)}`);
+  });
+
+  it("reports Hermes's terminal by agent.disabled_toolsets, counting names, not composite toolsets", async () => {
+    const path = join(await scratch(), "config.yaml");
+    // `debugging` holds the terminal tools, but doctor counts only what is named.
+    const text = await put(path, "agent:\n  disabled_toolsets:\n  - debugging\n  - web\n");
+    const before = await nativeTools("hermes", path);
+    expect(before).toMatchObject({ key: "agent.disabled_toolsets", shell: "enabled", removed: ["web"] });
+    expect(nativeToolsCheck(before).detail).toMatch(/^hermes: native terminal still enabled; present: terminal, code_execution, file/);
+    await put(path, nativeToolsOff("hermes", path, text));
+    const after = await nativeTools("hermes", path);
+    expect(after).toMatchObject({ shell: "removed", removed: HERMES_DISABLED_TOOLSETS, present: [] });
+    expect(nativeToolsCheck(after).status).toBe("pass");
+  });
+
+  it("warns, saying why, when the switch cannot be read", async () => {
+    const path = join(await scratch(), "config.yaml");
+    await put(path, "agent:\n  disabled_toolsets: terminal\n");
+    const report = await nativeTools("hermes", path);
+    expect(report.shell).toBeUndefined();
+    const check = nativeToolsCheck(report);
+    expect(check.status).toBe("warn");
+    expect(check.detail).toMatch(/could not read agent\.disabled_toolsets in .*is not a list of names/);
+    expect((await nativeTools("openclaw", join(path, "..", "missing.json"))).unreadable).toBe("ENOENT");
   });
 });

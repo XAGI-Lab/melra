@@ -18,7 +18,8 @@ import { access, readdir, readFile, stat } from "node:fs/promises";
 import { homedir, userInfo } from "node:os";
 import { basename, dirname, isAbsolute, join, posix, relative, sep, win32 } from "node:path";
 import { launchOf } from "./client-status.js";
-import { clientConfig, isObject, type ServerEntry } from "./clients.js";
+import { clientConfig, isObject, withJsonListUnion, withYamlListUnion, yamlList, type ServerEntry } from "./clients.js";
+import { parseJsonc } from "./jsonc.js";
 
 /**
  * Claude Code's built-in tools that change something or reach the network:
@@ -482,6 +483,212 @@ export function harnessCheck(report: HarnessReport, platform: NodeJS.Platform = 
     name: "harness",
     status: gaps ? "warn" : "pass",
     detail: `claude-code: ${parts.join("; ")}`,
+    ...(next === undefined ? {} : { next }),
+  };
+}
+
+// OpenClaw's and Hermes Agent's own tools, as `melra setup --client openclaw
+// --exclusive` and `--client hermes --exclusive` turn them off, in the file
+// that holds the melra entry, and `melra doctor` reads them back. Each is the
+// agent's own documented switch, checked on 2026-10-27. OpenClaw's
+// `tools.deny` removes a tool, or a `group:*` of them, for every agent,
+// sub-agent and channel, and no later layer grants it back:
+// https://github.com/openclaw/openclaw/blob/main/docs/gateway/config-tools/tool-policy.md
+// https://github.com/openclaw/openclaw/blob/main/docs/concepts/session-tool.md
+// https://github.com/openclaw/openclaw/blob/main/src/agents/tool-policy-shared.ts
+// https://github.com/openclaw/openclaw/blob/main/docs/tools/multi-agent-sandbox-tools.md
+// https://github.com/openclaw/openclaw/blob/main/docs/gateway/security/hardened-baseline.md
+// https://github.com/openclaw/openclaw/blob/main/src/config/zod-schema.agent-runtime.ts
+// Hermes's `agent.disabled_toolsets` removes each named toolset's tools on the
+// CLI and every gateway platform, whatever a platform's own list says:
+// https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/configuration.md
+// https://github.com/NousResearch/hermes-agent/blob/main/website/docs/reference/toolsets-reference.md
+// https://github.com/NousResearch/hermes-agent/blob/main/website/docs/reference/tools-reference.md
+// https://github.com/NousResearch/hermes-agent/blob/main/hermes_cli/tools_config.py
+// https://github.com/NousResearch/hermes-agent/blob/main/tools/delegate_tool_toolsets.py
+
+/**
+ * OpenClaw's tools that change something or reach the network: the runtime
+ * group (exec, process, code_execution), the file editors (read stays), the
+ * web group (web_search, x_search, web_fetch), the UI group (browser, screen,
+ * theme, dashboard, terminal, portal, canvas, show_widget), the nodes group
+ * (nodes, computer), the automation group (automations, gateway, plugins,
+ * openclaw), the messaging group (message), and the session tools that create,
+ * spawn or run another session, which can start an outside harness, or send to
+ * an outside conversation, and github_publish, which opens a draft pull
+ * request from the session's worktree. Its hardened baseline denies the
+ * runtime and automation groups, sessions_spawn and sessions_send too. Pinned
+ * to its documentation, as the Claude Code list is. Other documented tools stay
+ * on, the ones that write the agent's own memory, skills or instructions
+ * (group:memory, skill_workshop, personal_instructions) included, as does a
+ * tool a later OpenClaw adds outside these groups.
+ */
+export const OPENCLAW_DENIED_TOOLS: readonly string[] = [
+  "group:runtime",
+  "write",
+  "edit",
+  "apply_patch",
+  "group:web",
+  "group:ui",
+  "group:nodes",
+  "group:automation",
+  "group:messaging",
+  "sessions_create",
+  "sessions_spawn",
+  "sessions_send",
+  "conversations_send",
+  "conversations_turn",
+  "github_publish",
+];
+
+/**
+ * Hermes's toolsets that change something or reach the network: the terminal
+ * and code runner, the file tools (Hermes has no toolset that only reads, so
+ * reading goes too), the browser, computer use, web and X search, scheduled
+ * jobs, delegation, whose child agents get their toolsets from Hermes code
+ * that can fall back to terminal, file and web, connections, which can install
+ * or enable an MCP server with no card where there is none to show, and the
+ * desktop app's plugin and skill installer. Pinned too. Other documented
+ * toolsets stay on: memory, skills (whose skill_manage writes skill files),
+ * kanban, and the ones that act on the platform the agent is deployed on
+ * (discord, discord_admin, yuanbao, feishu_drive), as does a toolset a later
+ * Hermes adds.
+ */
+export const HERMES_DISABLED_TOOLSETS: readonly string[] = [
+  "terminal",
+  "code_execution",
+  "file",
+  "browser",
+  "computer_use",
+  "web",
+  "x_search",
+  "cronjob",
+  "delegation",
+  "connections",
+  "catalog",
+];
+
+type NativeClient = "openclaw" | "hermes";
+
+// Each client's switch, its pinned list, and the names that remove its shell.
+const NATIVE: Record<NativeClient, { key: string; names: readonly string[]; shell: string[] }> = {
+  openclaw: { key: "tools.deny", names: OPENCLAW_DENIED_TOOLS, shell: ["exec", "group:runtime"] },
+  hermes: { key: "agent.disabled_toolsets", names: HERMES_DISABLED_TOOLSETS, shell: ["terminal"] },
+};
+
+export const nativeClient = (client: string): client is NativeClient => Object.hasOwn(NATIVE, client);
+
+/** The client's own switch and the list `--exclusive` adds to it. */
+export const nativeSwitch = (client: NativeClient) => ({ key: NATIVE[client].key, deny: NATIVE[client].names });
+
+/**
+ * `text`, the client's config with the melra entry in it, with the pinned
+ * list added to the client's own switch as a union: every name already there
+ * stays, and the file is edited as `setup --write` edits it, or refused.
+ */
+export function nativeToolsOff(client: NativeClient, path: string, text: string): string {
+  return client === "openclaw"
+    ? withJsonListUnion(path, text, ["tools", "deny"], OPENCLAW_DENIED_TOOLS)
+    : withYamlListUnion(path, text, "agent", "disabled_toolsets", HERMES_DISABLED_TOOLSETS);
+}
+
+export interface NativeToolsReport {
+  client: NativeClient;
+  path: string;
+  /** The client's own switch in that file. */
+  key: string;
+  /** Names on the pinned list the switch turns off, and the rest. */
+  removed: string[];
+  present: string[];
+  /** Whether the client's own shell (OpenClaw's exec, Hermes's terminal) is still there. */
+  shell?: "removed" | "enabled";
+  sha256?: string;
+  /** Why the switch could not be read; nothing above is known then. */
+  unreadable?: string;
+}
+
+// OpenClaw lowercases a policy entry and reads an alias as the tool it names.
+// A group is removed only by its exact name; a `*` pattern matches tool names,
+// never group names.
+const OPENCLAW_ALIASES = new Map([
+  ["bash", "exec"],
+  ["apply-patch", "apply_patch"],
+  ["cron", "automations"],
+]);
+const openclawRule = (rule: string) => OPENCLAW_ALIASES.get(rule.toLowerCase()) ?? rule.toLowerCase();
+const policyMatches = (rule: string, name: string) =>
+  name.startsWith("group:")
+    ? rule === name
+    : new RegExp(`^${rule.split("*").map((part) => part.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join(".*")}$`).test(name);
+
+/**
+ * What the client's config file says of its own tools. Read-only, and it
+ * reads the file, not the running agent. An entry counts as removed when the
+ * switch names it (OpenClaw: ignoring case, an alias for the tool, or a `*`
+ * pattern that matches a tool's name, never a group's); a list that names a
+ * group's tools one by one, or a Hermes composite toolset holding one, is not
+ * counted.
+ */
+export async function nativeTools(client: NativeClient, path: string): Promise<NativeToolsReport> {
+  const { key, names, shell } = NATIVE[client];
+  const base = { client, path, key, removed: [], present: [] };
+  let bytes: Buffer;
+  try {
+    bytes = await readFile(path);
+  } catch (error) {
+    return { ...base, unreadable: (error as NodeJS.ErrnoException).code ?? String(error) };
+  }
+  const sha256 = createHash("sha256").update(bytes).digest("hex");
+  let rules: string[];
+  try {
+    if (client === "openclaw") {
+      const deny = at(parseJsonc(bytes.toString("utf8")).value, key) ?? [];
+      if (!Array.isArray(deny)) throw new Error(`${key} is not a list`);
+      rules = deny.filter((rule): rule is string => typeof rule === "string").map(openclawRule);
+    } else {
+      rules = yamlList(path, bytes.toString("utf8"), "agent", "disabled_toolsets") ?? [];
+    }
+  } catch (error) {
+    return { ...base, sha256, unreadable: error instanceof Error ? error.message : String(error) };
+  }
+  const off = (name: string) =>
+    client === "openclaw" ? rules.some((rule) => policyMatches(rule, name)) : rules.includes(name);
+  const removed = names.filter(off);
+  return {
+    ...base,
+    removed,
+    present: names.filter((name) => !removed.includes(name)),
+    shell: shell.some(off) ? "removed" : "enabled",
+    sha256,
+  };
+}
+
+/** The doctor line for OpenClaw or Hermes: what the file says, a `warn` at worst. */
+export function nativeToolsCheck(report: NativeToolsReport): {
+  name: string;
+  status: "pass" | "warn";
+  detail: string;
+  next?: string;
+} {
+  const shell = NATIVE[report.client].shell[0];
+  const parts =
+    report.unreadable !== undefined
+      ? [`could not read ${report.key} in ${report.path}: ${report.unreadable}`]
+      : [
+          `native ${shell} ${report.shell === "removed" ? "removed" : "still enabled"}`,
+          report.present.length === 0
+            ? `removed: ${report.removed.join(", ")}`
+            : `present: ${report.present.join(", ")}${report.removed.length === 0 ? "" : `; removed: ${report.removed.join(", ")}`}`,
+          `read from ${report.key} in ${report.path}`,
+        ];
+  const next =
+    report.present.length > 0
+      ? `run 'melra setup --client ${report.client} --exclusive --write' to turn them off in ${report.key}`
+      : undefined;
+  return {
+    name: "harness",
+    status: next !== undefined || report.unreadable !== undefined ? "warn" : "pass",
+    detail: `${report.client}: ${[...parts, ...(report.sha256 === undefined ? [] : [`sha256 ${report.path} ${report.sha256.slice(0, 12)}`])].join("; ")}`,
     ...(next === undefined ? {} : { next }),
   };
 }

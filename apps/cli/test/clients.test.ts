@@ -12,7 +12,10 @@ import {
   denyRulesText,
   replaceFile,
   resolveClient,
+  withJsonListUnion,
+  withYamlListUnion,
   writeClientConfig,
+  yamlList,
 } from "../src/clients.js";
 import { parseJsonc } from "../src/jsonc.js";
 
@@ -452,6 +455,47 @@ describe("client configs", () => {
       writeClientConfig(path, clientConfig("hermes", entry), "hermes"),
     ).rejects.toThrow(/by hand/);
     expect(await readFile(path, "utf8")).toBe(original);
+  });
+
+  it("adds names to Hermes's agent.disabled_toolsets as a union, in any list style Hermes writes", () => {
+    const add = (yaml: string) => withYamlListUnion("c.yaml", yaml, "agent", "disabled_toolsets", ["terminal", "file"]);
+    // No agent map, an agent map without the key, and PyYAML's indentless list.
+    expect(add("model: x\n")).toBe('model: x\nagent:\n  disabled_toolsets:\n    - "terminal"\n    - "file"\n');
+    expect(add("agent:\n  max_turns: 9\n# tail\nterminal:\n  backend: local\n")).toBe(
+      'agent:\n  max_turns: 9\n  disabled_toolsets:\n    - "terminal"\n    - "file"\n# tail\nterminal:\n  backend: local\n',
+    );
+    const indentless = "agent:\n  disabled_toolsets:\n  - memory  # mine\n  - 'terminal'\n  max_turns: 9\n";
+    expect(yamlList("c.yaml", indentless, "agent", "disabled_toolsets")).toEqual(["memory", "terminal"]);
+    expect(add(indentless)).toBe('agent:\n  disabled_toolsets:\n    - "memory"\n    - "terminal"\n    - "file"\n  max_turns: 9\n');
+    expect(add('agent:\n    disabled_toolsets: [memory, "web"]\n')).toBe(
+      'agent:\n    disabled_toolsets:\n      - "memory"\n      - "web"\n      - "terminal"\n      - "file"\n',
+    );
+    // Every name already there: the file as it was, byte for byte.
+    const done = "agent:\r\n  disabled_toolsets:\r\n    - file\r\n    - terminal\r\n";
+    expect(add(done)).toBe(done);
+    expect(yamlList("c.yaml", "model: x\n", "agent", "disabled_toolsets")).toBeUndefined();
+    for (const [yaml, why] of [
+      ["agent:\n  disabled_toolsets: memory\n", /is not a list of names/],
+      ["agent:\n  disabled_toolsets:\n    - {name: memory}\n", /is not a list of names/],
+      ["agent:\n  disabled_toolsets: []\nagent:\n  x: 1\n", /more than one `agent:`/],
+      ["agent:\n  disabled_toolsets: []\n  disabled_toolsets: [web]\n", /appears more than once/],
+      ["agent: {disabled_toolsets: [memory]}\n", /not a block mapping/],
+    ] as const) {
+      expect(() => add(yaml), yaml).toThrow(why);
+    }
+  });
+
+  it("adds names to OpenClaw's tools.deny as a union, keeping the rest of the file", () => {
+    const original = '{\n  // mine\n  "tools": { "profile": "coding", "deny": ["browser"] },\n  "mcp": {},\n}\n';
+    const next = withJsonListUnion("o.json", original, ["tools", "deny"], ["exec", "browser"]);
+    expect(next.startsWith('{\n  // mine\n  "tools": { "profile": "coding", "deny": [')).toBe(true);
+    expect(parseJsonc(next).value).toEqual({ tools: { profile: "coding", deny: ["browser", "exec"] }, mcp: {} });
+    expect(withJsonListUnion("o.json", next, ["tools", "deny"], ["exec"])).toBe(next);
+    expect(parseJsonc(withJsonListUnion("o.json", "{}", ["tools", "deny"], ["exec"])).value).toEqual({ tools: { deny: ["exec"] } });
+    expect(() => withJsonListUnion("o.json", '{"tools": {"deny": "exec"}}', ["tools", "deny"], ["exec"])).toThrow(
+      /tools\.deny is not a list of rules/,
+    );
+    expect(() => withJsonListUnion("o.json", '{"tools": []}', ["tools", "deny"], ["exec"])).toThrow(/"tools" is not an object/);
   });
 
   it("emits Copilot CLI's, Factory Droid's, and Kilo Code's own entries", () => {

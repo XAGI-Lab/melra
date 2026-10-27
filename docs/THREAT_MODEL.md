@@ -122,13 +122,37 @@ list nor the locks apply. `setup` never writes the system folder, refuses to
 name an `npx` melra, or a melra or `node` inside the home folder of the user
 running it, and refuses to replace a staged file that differs. Neither tier
 reaches a program MELRA's policy lets the agent run, a tool a later Claude Code
-adds, or another client; other clients are refused. `melra doctor`'s `harness`
-line reports what it reads in those files (each tool removed or present, the
+adds, or another client; clients other than OpenClaw and Hermes, below, are
+refused. `melra doctor`'s `harness` line reports what it reads in those files (each tool removed or present, the
 managed files' owner, mode and writability, the lock keys, the executable
 managed-mcp.json's melra runs, admin-group membership and each file's SHA-256)
 and whether a source ranked above them is there, and warns, never fails: it
 reads files, not the running session. See [Claude Code's
 settings](INSTALLATION.md#take-claude-codes-own-tools-away-in-its-settings).
+
+**OpenClaw's and Hermes's own tools.** `melra setup --client openclaw
+--exclusive` and `--client hermes --exclusive` add a pinned list to each
+agent's own documented switch, beside the melra entry in its config file:
+OpenClaw's `tools.deny` (its shell group, file editors, web, UI, nodes,
+automation and messaging tools, the session tools that create, spawn or run
+another session, the ones that send to an outside conversation, and
+`github_publish`) and Hermes's `agent.disabled_toolsets` (terminal, code
+runner, file tools, browser, computer use, web and X search, scheduled jobs,
+delegation, and the installers of MCP servers, connectors and plugins). It
+does not change who approves: both agents run as always-on gateways, where
+developer mode, in which the agent approves its own changes, protects even
+less, so enforced mode is the one to run them in. It is a default, not a
+boundary: the agent's OS user owns the file, only MELRA's own file writer
+refuses to change it, a person can turn a tool back on, and neither agent has
+a tier an administrator owns. Outside it are the tools both agents document
+that write their own memory, skills or instructions, Hermes's kanban and the
+toolsets that act on the platform it is deployed on, a tool a later version
+adds, the agents' other plugins and MCP servers, and a program MELRA's policy
+lets the agent run. `melra doctor`'s
+`harness` line reports what the file's list says, whether the agent's own
+shell is still enabled among it, and warns, never fails. See
+[OpenClaw's and Hermes Agent's
+tools](INSTALLATION.md#take-openclaws-and-hermes-agents-own-tools-away).
 
 ## Threats and controls
 

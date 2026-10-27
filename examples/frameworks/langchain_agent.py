@@ -4,8 +4,10 @@
 # LangChain / LangGraph through langchain-mcp-adapters: MELRA's tools become
 # ordinary LangChain tools.
 # pip install langchain langchain-mcp-adapters langchain-openai
+# With --no-model it stops after the MCP part, needing no model or API key.
 import asyncio
 import os
+import sys
 
 from langchain.agents import create_agent
 from langchain_mcp_adapters.client import MultiServerMCPClient
@@ -23,6 +25,11 @@ async def main() -> None:
         }
     )
     tools = await client.get_tools()
+    if "--no-model" in sys.argv:
+        print([tool.name for tool in tools])
+        capabilities = next(tool for tool in tools if tool.name == "melra_capabilities")
+        print(await capabilities.ainvoke({}))
+        return
     agent = create_agent("openai:gpt-4.1", tools)
     result = await agent.ainvoke(
         {"messages": [{"role": "user", "content": "What can you do on this machine?"}]}

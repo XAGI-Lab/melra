@@ -11,7 +11,7 @@ import { printable } from "@melra/server/kernel";
 import { CLIENTS } from "./clients.js";
 import { CLAUDE_TOOLS } from "./environment.js";
 import type { ClientChoice, ClientStatus } from "./client-status.js";
-import type { HarnessReport } from "./harness.js";
+import type { HarnessReport, NativeToolsReport } from "./harness.js";
 import { mark, paint, table, type Status } from "./output.js";
 
 export interface DoctorCheck {
@@ -32,6 +32,8 @@ export interface DoctorReport {
   clients: ClientStatus[];
   /** What Claude Code would read, where it is in play; the `harness` check says it in words. */
   harness?: HarnessReport;
+  /** What OpenClaw's or Hermes's config says of its own tools, where melra is configured for it; a `harness` check each. */
+  nativeTools?: NativeToolsReport[];
 }
 
 export interface InitResult {
@@ -46,8 +48,12 @@ export interface InitResult {
   // The file already held exactly this entry, so it was left alone.
   unchanged?: true;
   config: Record<string, unknown> | string;
-  /** `--exclusive`: the Claude Code settings file and the tools it denies. */
-  settings?: { path: string; deny: readonly string[]; backup?: string; unchanged?: true };
+  /**
+   * `--exclusive`: the file and key that turn the client's own tools off, and
+   * what they name: Claude Code's settings.local.json, or OpenClaw's or
+   * Hermes's own switch in `configPath`.
+   */
+  settings?: { path: string; key: string; deny: readonly string[]; backup?: string; unchanged?: true };
   /** `--dry-run`: each file as `--write` would leave it. Nothing was written. */
   dryRun?: true;
   files?: Array<{ path: string; text: string }>;
@@ -214,8 +220,10 @@ export function renderInit(result: InitResult): string {
     };
     written(result.configPath, result.unchanged, result.backup);
     if (result.settings !== undefined) {
-      written(result.settings.path, result.settings.unchanged, result.settings.backup);
-      rows.push(["", "", paint.dim(`denies ${result.settings.deny.join(", ")}`)]);
+      const { path, key, deny, unchanged, backup } = result.settings;
+      // OpenClaw's and Hermes's switch is in the file just listed.
+      if (path !== result.configPath) written(path, unchanged, backup);
+      rows.push(["", "", paint.dim(`${path === result.configPath ? `${key} turns off` : "denies"} ${deny.join(", ")}`)]);
     }
     const next = CLIENTS[result.client]?.next ?? `Restart ${label}, then ask it to use the melra tools.`;
     return [table(rows, { indent: 2 }), "", `Next: ${paint.bold(printable(next))}`].join("\n");
@@ -232,7 +240,22 @@ export function renderInit(result: InitResult): string {
   const settings =
     result.settings === undefined
       ? []
-      : [`And this to ${paint.bold(result.settings.path)}:`, "", snippet({ permissions: { deny: result.settings.deny } }), ""];
+      : [
+          `And this to ${paint.bold(result.settings.path)}:`,
+          "",
+          // The key's own nesting: in YAML for Hermes, JSON for the rest.
+          snippet(
+            typeof result.config === "string"
+              ? [
+                  ...result.settings.key.split(".").map((step, depth) => `${"  ".repeat(depth)}${step}:`),
+                  ...result.settings.deny.map((name) => `    - ${name}`),
+                ].join("\n")
+              : (result.settings.key
+                  .split(".")
+                  .reduceRight<unknown>((inner, step) => ({ [step]: inner }), result.settings.deny) as Record<string, unknown>),
+          ),
+          "",
+        ];
   return [table(rows, { indent: 2 }), "", where, "", snippet(result.config), "", ...settings, instead].join("\n");
 }
 

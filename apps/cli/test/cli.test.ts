@@ -26,7 +26,9 @@ import { RESTART_SAFE_WORKFLOW } from "../src/demo-workflow.js";
 import { approverLabel, parseCliEnvironment, serverLaunch } from "../src/environment.js";
 import { approvalConsole, confirmInTerminal, type ConsoleTerminal } from "../src/approval-console.js";
 import { taskTarget } from "../src/activity.js";
-import { CLAUDE_DENIED_TOOLS, claudeManagedDirectory } from "../src/harness.js";
+import { yamlList } from "../src/clients.js";
+import { CLAUDE_DENIED_TOOLS, OPENCLAW_DENIED_TOOLS, claudeManagedDirectory } from "../src/harness.js";
+import { parseJsonc } from "../src/jsonc.js";
 
 // Enforced mode refuses to start where no OS sandbox works, as on a CI host
 // with none. A test about something else gets one that confines nothing.
@@ -2677,8 +2679,9 @@ describe("melra CLI", () => {
     expect(written.harness?.files).toContainEqual(expect.objectContaining({ scope: "local", path: local }));
 
     for (const [args, refusal] of [
-      [["--client", "codex", "--exclusive", "--write"], "--exclusive supports only --client claude-code"],
-      [["--exclusive", "--write"], "--exclusive needs --client claude-code"],
+      [["--client", "codex", "--exclusive", "--write"], "--exclusive supports only --client claude-code, openclaw or hermes"],
+      [["--exclusive", "--write"], "--exclusive needs --client claude-code, openclaw or hermes"],
+      [["--client", "openclaw", "--exclusive", "--managed", join(root, "stage")], "--managed stages Claude Code's managed settings"],
       [["--client", "claude-code", "--managed", join(root, "stage")], "--managed goes with --exclusive"],
       [["--client", "claude-code", "--exclusive", "--managed"], "--managed requires a directory"],
       [["--client", "claude-code", "--exclusive", "--managed", join(root, "stage"), "--write"], "leave out --write"],
@@ -2696,6 +2699,66 @@ describe("melra CLI", () => {
       await expect(execute(process.execPath, [entry, "setup", ...args], { cwd: workspace, env })).rejects.toMatchObject({
         stderr: expect.stringContaining(refusal),
       });
+    }
+  }, 60_000);
+
+  it("turns OpenClaw's and Hermes's own tools off with setup --exclusive, in the file beside the melra entry", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-cli-exclusive-native-"));
+    roots.push(root);
+    const workspace = join(root, "ws");
+    await mkdir(workspace);
+    const openclaw = join(root, ".openclaw", "openclaw.json");
+    const hermes = join(root, ".hermes", "config.yaml");
+    const originals = {
+      [openclaw]: '{\n  // mine\n  "tools": { "deny": ["browser"] },\n}\n',
+      [hermes]: "agent:\n  disabled_toolsets:\n  - memory\n",
+    };
+    for (const [path, text] of Object.entries(originals)) {
+      await mkdir(join(path, ".."), { recursive: true });
+      await writeFile(path, text);
+    }
+    const env = {
+      ...process.env,
+      HOME: join(root, "home"),
+      USERPROFILE: join(root, "home"),
+      MELRA_HOME: join(root, ".melra"),
+      MELRA_WORKSPACE: workspace,
+      OPENCLAW_CONFIG_PATH: openclaw,
+      HERMES_HOME: join(root, ".hermes"),
+    };
+    const setup = async (client: string, ...args: string[]) =>
+      JSON.parse(
+        (await execute(process.execPath, [entry, "setup", "--client", client, "--exclusive", ...args, "--json"], { cwd: workspace, env })).stdout,
+      ) as {
+        files?: Array<{ path: string; text: string }>;
+        backup?: string;
+        settings: { path: string; key: string; deny: string[]; backup?: string };
+        checks: Array<{ name: string; status: string; detail: string }>;
+        nativeTools?: Array<{ client: string; shell: string; present: string[] }>;
+      };
+
+    const plan = await setup("openclaw", "--write", "--dry-run");
+    expect(plan.files?.map((file) => file.path)).toEqual([openclaw]);
+    expect(parseJsonc(plan.files?.[0]?.text ?? "").value).toMatchObject({ tools: { deny: ["browser", ...OPENCLAW_DENIED_TOOLS] } });
+    expect(await readFile(openclaw, "utf8")).toBe(originals[openclaw]);
+
+    for (const [client, path, at] of [
+      ["openclaw", openclaw, (text: string) => (parseJsonc(text).value as { tools: { deny: string[] } }).tools.deny],
+      ["hermes", hermes, (text: string) => yamlList(hermes, text, "agent", "disabled_toolsets")],
+    ] as const) {
+      const written = await setup(client, "--write");
+      const text = await readFile(path, "utf8");
+      expect(written.settings).toMatchObject({ path, key: client === "openclaw" ? "tools.deny" : "agent.disabled_toolsets" });
+      expect(at(text)).toEqual([client === "openclaw" ? "browser" : "memory", ...written.settings.deny]);
+      expect(text).toContain('"MELRA_HARNESS_TOOLS": "1"');
+      // One file, one backup: the one it was before.
+      expect(written.backup).toBe(`${path}.bak`);
+      expect(await readFile(`${path}.bak`, "utf8")).toBe(originals[path]);
+      // Doctor, run by setup, reads the switch back.
+      const check = written.checks.find((each) => each.name === "harness" && each.detail.startsWith(`${client}:`));
+      expect(check).toMatchObject({ status: "pass" });
+      expect(check?.detail).toContain(`native ${client === "openclaw" ? "exec" : "terminal"} removed`);
+      expect(written.nativeTools).toContainEqual(expect.objectContaining({ client, shell: "removed", present: [] }));
     }
   }, 60_000);
 

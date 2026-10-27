@@ -204,7 +204,7 @@ export function protectionCheck(
               (commands === "bubblewrap" ? " (Unix sockets on the filesystem stay reachable)" : "");
   const harness =
     harnessTools === undefined
-      ? "harness: not inspected (doctor reads only Claude Code's settings, once melra is set up there); a harness that keeps a shell or file tools of its own can go around MELRA"
+      ? "harness: not inspected here (Claude Code's settings are read once melra is set up there; OpenClaw's and Hermes's get harness lines of their own); a harness that keeps a shell or file tools of its own can go around MELRA"
       : harnessTools.length === 0
         ? "Claude Code: its settings remove its own shell, file and web tools"
         : `Claude Code: its settings leave it ${harnessTools.join(", ")}, which go around MELRA (melra launch claude-code starts it without them)`;

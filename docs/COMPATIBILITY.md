@@ -90,10 +90,15 @@ throwaway `HOME`, and each harness's **own CLI** was asked about it:
 That is a real handshake and tool discovery by the client, which the file
 check above is not, but it is still short of the in-app checklist: no task was
 planned, approved, or executed from inside these harnesses, so none of them is
-marked verified. Agent frameworks used from code (LangChain/LangGraph, the OpenAI
-Agents SDK, the Vercel AI SDK) are covered only by documentation snippets in
-[examples/frameworks](../examples/frameworks/README.md), which are not run in
-CI.
+marked verified. Of the snippets in
+[examples/frameworks](../examples/frameworks/README.md), the two for the official
+MCP SDKs run in CI (the `framework-examples` job) against the built CLI over
+stdio, at the exact versions that folder locks: they list MELRA's tools and call
+`melra_capabilities`, with no model, and the job fails unless MELRA's
+capabilities come back. Agent frameworks used from code
+(LangChain/LangGraph, the OpenAI Agents SDK, the Vercel AI SDK) are covered only
+by their snippets, whose `--no-model` path does the same, and none of which is
+run in CI.
 
 ### Recording an in-client run
 

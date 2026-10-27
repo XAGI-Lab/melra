@@ -81,6 +81,11 @@ import {
   harnessCheck,
   installLines,
   managedLaunch,
+  nativeClient,
+  nativeSwitch,
+  nativeTools,
+  nativeToolsCheck,
+  nativeToolsOff,
   within,
 } from "./harness.js";
 import {
@@ -845,6 +850,13 @@ async function doctor(env: CliEnvironment): Promise<{
     harness.files.some((file) => file.scope === "managed") ||
     harness.removed.length > 0;
   if (inPlay) checks.push(harnessCheck(harness));
+  // OpenClaw's and Hermes's own tools, wherever melra is configured for them.
+  const natives = await Promise.all(
+    clients.flatMap((status) =>
+      nativeClient(status.client) && status.state === "configured" ? [nativeTools(status.client, status.path)] : [],
+    ),
+  );
+  checks.push(...natives.map(nativeToolsCheck));
   // Last, as the sum of the lines above: what actually guards an effect.
   checks.push(protectionCheck(env, commands, inPlay ? harness.present : undefined));
   const failed = checks.some((check) => check.status === "fail");
@@ -861,6 +873,7 @@ async function doctor(env: CliEnvironment): Promise<{
       // Per client, so a script can find a stale pin without parsing `detail`.
       clients,
       ...(inPlay ? { harness } : {}),
+      ...(natives.length === 0 ? {} : { nativeTools: natives }),
     },
     failed,
   };
@@ -909,19 +922,24 @@ async function init(args: string[], env: CliEnvironment): Promise<InitResult> {
     env: { ...serverEnvironment(env, policyPath), ...(exclusive ? { MELRA_HARNESS_TOOLS: "1" } : {}) },
   });
   const configPath = clientConfigPath(client, env.workspaceRoot);
-  // Project local, beside the project's .mcp.json, rather than the shared
-  // .claude/settings.json, which a commit would hand to everyone who clones
-  // the project, or the user's, which reaches every project.
-  const settings = exclusive
-    ? { path: join(env.workspaceRoot, ".claude", "settings.local.json"), deny: CLAUDE_DENIED_TOOLS }
-    : undefined;
+  // Claude Code's: project local, beside the project's .mcp.json, rather than
+  // the shared .claude/settings.json, which a commit would hand to everyone
+  // who clones the project, or the user's, which reaches every project.
+  // OpenClaw's and Hermes's: their own switch, in the file the entry is in.
+  const settings = !exclusive
+    ? undefined
+    : nativeClient(client) && configPath !== undefined
+      ? { path: configPath, ...nativeSwitch(client) }
+      : { path: join(env.workspaceRoot, ".claude", "settings.local.json"), key: "permissions.deny", deny: CLAUDE_DENIED_TOOLS };
+  const beside = settings !== undefined && settings.path === configPath;
   if (dryRun || args.includes("--write")) {
     if (configPath === undefined) {
       throw new Error("--write needs a named --client; see 'melra help' for the list");
     }
     // Both worked out before either is written, so a file refused stops both.
     const mcp = await clientConfigText(configPath, config, client);
-    const local = settings === undefined ? undefined : await denyRulesText(settings.path, settings.deny);
+    if (beside && nativeClient(client)) mcp.next = nativeToolsOff(client, configPath, mcp.next);
+    const local = settings === undefined || beside ? undefined : await denyRulesText(settings.path, settings.deny);
     const base = { initialized: true as const, client, workspace: env.workspaceRoot, policyPath, configPath, config };
     if (dryRun) {
       return {
@@ -937,9 +955,11 @@ async function init(args: string[], env: CliEnvironment): Promise<InitResult> {
     }
     const { backup, unchanged } = await replaceFile(configPath, mcp.existing, mcp.next);
     const denied =
-      settings === undefined || local === undefined
+      settings === undefined
         ? undefined
-        : { ...settings, ...(await replaceFile(settings.path, local.existing, local.next)) };
+        : local === undefined
+          ? { ...settings, ...(backup === undefined ? {} : { backup }), ...(unchanged === undefined ? {} : { unchanged }) }
+          : { ...settings, ...(await replaceFile(settings.path, local.existing, local.next)) };
     const next = CLIENTS[client]?.next ?? `Restart ${label} to load it.`;
     return {
       ...base,
@@ -951,7 +971,11 @@ async function init(args: string[], env: CliEnvironment): Promise<InitResult> {
         (unchanged
           ? `${configPath} already has this melra entry; nothing changed. ${next}`
           : `Added melra to ${configPath}. ${next}`) +
-        (denied === undefined ? "" : ` ${denied.path} denies Claude Code's own ${denied.deny.join(", ")} there.`),
+        (denied === undefined
+          ? ""
+          : beside
+            ? ` ${denied.key} there turns off ${label}'s own ${denied.deny.join(", ")}.`
+            : ` ${denied.path} denies Claude Code's own ${denied.deny.join(", ")} there.`),
     };
   }
   return {
@@ -968,7 +992,9 @@ async function init(args: string[], env: CliEnvironment): Promise<InitResult> {
           "or rerun with --client <name> for that client's own format."
         : settings === undefined
           ? `Add this to ${configPath}, or rerun with --write to merge it there for you.`
-          : `Add this to ${configPath} and its permissions.deny to ${settings.path}, or rerun with --write to merge both for you.`,
+          : beside
+            ? `Add this and its ${settings.key} to ${configPath}, or rerun with --write to merge both for you.`
+            : `Add this to ${configPath} and its permissions.deny to ${settings.path}, or rerun with --write to merge both for you.`,
   };
 }
 
@@ -1009,14 +1035,18 @@ async function setup(args: string[], env: CliEnvironment): Promise<number> {
     }
   }
   const named = argument("--client", args);
-  if (exclusive && (named === undefined || resolveClient(named) !== "claude-code")) {
-    const label = named === undefined ? undefined : CLIENTS[resolveClient(named)]?.label;
+  const client = named === undefined ? undefined : resolveClient(named);
+  if (exclusive && (client === undefined || (client !== "claude-code" && !nativeClient(client)))) {
+    const label = client === undefined ? undefined : CLIENTS[client]?.label;
     throw new Error(
       label === undefined
-        ? "--exclusive needs --client claude-code"
-        : `--exclusive supports only --client claude-code: MELRA does not write ${label}'s settings that take its own tools away; ` +
+        ? "--exclusive needs --client claude-code, openclaw or hermes"
+        : `--exclusive supports only --client claude-code, openclaw or hermes: MELRA does not write ${label}'s settings that take its own tools away; ` +
             `run 'melra setup --client ${named} --write' without it, or run the agent in a box ('melra probe' checks one)`,
     );
+  }
+  if (args.includes("--managed") && client !== "claude-code") {
+    throw new Error("--managed stages Claude Code's managed settings: melra setup --client claude-code --exclusive --managed <dir>");
   }
   if (args.includes("--managed")) {
     const directory = argument("--managed", args);
@@ -1553,6 +1583,8 @@ Usage:
   melra setup [--client <name>] [--write] [--json]
   melra setup --client claude-code --exclusive [--write | --managed <dir>]
               [--dry-run] [--json]
+  melra setup --client openclaw|hermes --exclusive [--write] [--dry-run]
+              [--json]
   melra doctor [--json]
   melra conformance [--url <mcp-url> --token <token>] [--level <1|2|3>]
   melra init [--client <name>] [--write] [--json]
@@ -1606,7 +1638,10 @@ claude command and MCP config instead of running them. CLAUDE_BIN or
 --claude-bin names the claude to run, a relative path from here (default:
 claude in one of PATH's absolute directories). Neither claude nor the server
 it starts gets MELRA_PAYLOAD_KEY or MELRA_HTTP_TOKEN, so a payload key must be
-in MELRA_HOME/payload.key.
+in MELRA_HOME/payload.key. --restricted keeps your managed settings and drops
+your user, project and local settings files, and the hooks and permission
+rules in them, so none of them can hand a tool back; to keep them, use 'melra
+setup --client claude-code --exclusive' instead.
 
 'melra probe', run inside an agent's box before the agent starts, tries what
 the box should stop and reports each as confined or open: creating and
@@ -1657,6 +1692,19 @@ MELRA never writes that system folder itself. --dry-run prints what either
 would write and writes nothing. 'melra doctor' then reports what Claude Code
 would read (harness).
 
+'melra setup --client openclaw --exclusive' adds OpenClaw's runtime group
+(exec, process, code_execution), write, edit, apply_patch, its web, ui, nodes,
+automation (automations, gateway, plugins, openclaw) and messaging groups,
+sessions_create, sessions_spawn, sessions_send, conversations_send,
+conversations_turn and github_publish to tools.deny in openclaw.json;
+'--client hermes --exclusive' adds the terminal, code_execution, file,
+browser, computer_use, web, x_search, cronjob, delegation, connections and
+catalog toolsets to agent.disabled_toolsets in Hermes's config.yaml. Each is
+that agent's own documented switch, in the file the melra entry goes in,
+added as a union with --write (the old file saved as .bak), and the agent's
+own user can edit it. 'melra doctor' then reports whether each one's native
+exec or terminal is still enabled (harness).
+
 In a terminal, doctor, setup, init, and version print a readable report, and
 'melra setup' with no --client asks which detected client to set up. Piped or
 captured, they print JSON (version: the bare number).
@@ -1677,10 +1725,12 @@ Flags:
                    lmstudio, or generic (default).
   --write          With --client, merge the config into that client's file,
                    keeping everything else and saving the old file as .bak.
-  --exclusive      With --client claude-code: also deny Claude Code's own
-                   tools that change anything (see above).
-  --managed <dir>  With --exclusive: stage Claude Code's managed settings in
-                   <dir> and print the lines that install them.
+  --exclusive      With --client claude-code, openclaw or hermes: also turn
+                   off the client's own tools that change anything (see
+                   above).
+  --managed <dir>  With --client claude-code --exclusive: stage Claude Code's
+                   managed settings in <dir> and print the lines that install
+                   them.
   --dry-run        With --exclusive: print what would be written; write
                    nothing. For 'launch', see above.
   --unsafe-local   Run with no policy and no guardrails. Everything the OS user

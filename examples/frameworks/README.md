@@ -6,19 +6,34 @@ spawning `melra serve` and speaking MCP over stdio. MELRA then owns the effect
 lifecycle (policy, approval, execution, verification, receipt) whatever the
 framework above it decides.
 
-| File | Framework | Install |
-|---|---|---|
-| [`mcp_sdk.ts`](mcp_sdk.ts) | Official MCP TypeScript SDK | `npm install @modelcontextprotocol/sdk` |
-| [`mcp_sdk.py`](mcp_sdk.py) | Official MCP Python SDK | `pip install mcp` |
-| [`langchain_agent.py`](langchain_agent.py) | LangChain / LangGraph via `langchain-mcp-adapters` | `pip install langchain langchain-mcp-adapters langchain-openai` |
-| [`openai_agents.py`](openai_agents.py) | OpenAI Agents SDK (`MCPServerStdio`) | `pip install openai-agents` |
-| [`vercel_ai_sdk.ts`](vercel_ai_sdk.ts) | Vercel AI SDK (`@ai-sdk/mcp`) | `npm install ai @ai-sdk/mcp @ai-sdk/openai @modelcontextprotocol/sdk` |
+| File | Framework | Install | Tested |
+|---|---|---|---|
+| [`mcp_sdk.ts`](mcp_sdk.ts) | Official MCP TypeScript SDK | `npm install @modelcontextprotocol/sdk` | run in CI |
+| [`mcp_sdk.py`](mcp_sdk.py) | Official MCP Python SDK | `pip install mcp` | run in CI |
+| [`langchain_agent.py`](langchain_agent.py) | LangChain / LangGraph via `langchain-mcp-adapters` | `pip install langchain langchain-mcp-adapters langchain-openai` | documented only |
+| [`openai_agents.py`](openai_agents.py) | OpenAI Agents SDK (`MCPServerStdio`) | `pip install openai-agents` | documented only |
+| [`vercel_ai_sdk.ts`](vercel_ai_sdk.ts) | Vercel AI SDK (`@ai-sdk/mcp`) | `npm install ai @ai-sdk/mcp @ai-sdk/openai @modelcontextprotocol/sdk` | documented only |
 
-None of these libraries is a dependency of this repository, and the snippets
-are not built, type-checked, or run by `pnpm check` (`pnpm readme:check` covers
-only the `ts` blocks in `apps/*` and `packages/*` READMEs). They were written
-against each library's documentation as of October 2026; if an import has moved,
-the library's own MCP page is the authority. LangChain is also folding MCP
+Each one does the MCP part with no model and no API key: start MELRA over
+stdio, list its tools and call `melra_capabilities`. The two MCP SDK snippets
+do nothing else; the other three do it and stop when given `--no-model`
+(`python langchain_agent.py --no-model`, `node vercel_ai_sdk.ts --no-model`),
+and otherwise go on to a model.
+
+CI's `framework-examples` job runs the two MCP SDK snippets against the built
+CLI, from a `melra` on `PATH`, and fails unless each prints MELRA's
+capabilities, at exact versions: the TypeScript SDK from this
+folder's [`package.json`](package.json) and `package-lock.json` (with
+`npm ci`, never the workspace's own dependencies), and the Python SDK from
+[`requirements.txt`](requirements.txt), hashes and all, with
+`--require-hashes`, which is the tree `sdk-py/uv.lock` pins. The other three
+are not run anywhere, and are not in those files yet: their snippets and their
+`--no-model` path were written against each library's documentation and source
+as of October 2026, and none of these libraries is a dependency of this
+repository. The snippets are not type-checked by `pnpm check` either
+(`pnpm readme:check` covers only the `ts` blocks in `apps/*` and `packages/*`
+READMEs). If an import has moved, the library's own MCP page is the
+authority. LangChain is also folding MCP
 support into a `langchain.mcp` namespace (`MCPAdapter`, beta in
 `langchain[mcp]>=1.4`) that takes the same `mcpServers` object `melra setup`
 prints.

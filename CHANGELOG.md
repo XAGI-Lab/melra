@@ -66,6 +66,44 @@ All notable changes are documented here. The format follows
   `memory_absent` are the kernel's alone: a request cannot declare them. The
   console shows these checks apart from the agent's evidence. See [kernel
   checks](https://github.com/XAGI-Lab/melra/blob/main/docs/ARCHITECTURE.md#kernel-checks).
+- `melra setup --client openclaw --exclusive` and `--client hermes --exclusive`
+  take the agent's own tools away through the switch each one documents, in
+  the config file the melra entry goes in: OpenClaw's `tools.deny` gets its
+  runtime group (exec, process, code_execution), `write`, `edit`,
+  `apply_patch`, its web, ui, nodes, automation (automations, gateway, plugins,
+  openclaw) and messaging groups, `sessions_create`, `sessions_spawn`,
+  `sessions_send`, `conversations_send`, `conversations_turn` and
+  `github_publish`; Hermes's
+  `agent.disabled_toolsets` gets the terminal, code_execution, file, browser,
+  computer_use, web, x_search, cronjob, delegation, connections and catalog
+  toolsets. Both lists are pinned to each agent's documentation and source,
+  linked in `apps/cli/src/harness.ts`. With `--write` the names are added as a
+  union to what the list already holds, the rest of the file is kept as for
+  the melra entry, and the old file is saved as `.bak`; `--dry-run` prints it,
+  and the melra entry gets `MELRA_HARNESS_TOOLS=1`, as for Claude Code.
+  `--managed` stays Claude Code's only. See [OpenClaw's and Hermes Agent's
+  tools](https://github.com/XAGI-Lab/melra/blob/main/docs/INSTALLATION.md#take-openclaws-and-hermes-agents-own-tools-away).
+- `melra doctor` adds a `harness` line for OpenClaw and for Hermes wherever
+  melra is configured for them, and its JSON a `nativeTools` entry: whether
+  the agent's own `exec` or `terminal` is still enabled, each name on the list
+  as removed or present, and the file's SHA-256, matching OpenClaw's names as
+  OpenClaw does: ignoring case, `bash` read as `exec`, and a `*` pattern
+  against tool names only, never group names. It warns while one is present
+  and never fails.
+- CI's `framework-examples` job runs the official MCP SDK snippets in
+  `examples/frameworks` against the built CLI over stdio, with no model, and
+  fails unless each gets MELRA's capabilities back: the TypeScript SDK at the
+  exact version that folder's own `package.json` and lockfile pin, the Python
+  SDK from a hashed `requirements.txt`. The LangChain, OpenAI Agents SDK and
+  Vercel AI SDK snippets take `--no-model` to do only the same MCP part, and
+  stay documented only. The README's integration table says how far each
+  client has been tested.
+- [What `melra launch`
+  keeps](https://github.com/XAGI-Lab/melra/blob/main/docs/INSTALLATION.md#what-launch-keeps-and-drops),
+  in INSTALLATION and `melra help`: your login and managed settings, and none
+  of your user, project or local settings files, so no hook, permission rule
+  or other key in one can hand a tool back; `setup --exclusive` is the way to
+  keep them.
 
 ### Changed
 
