@@ -1,17 +1,17 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { execFileSync, spawnSync } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { basename, delimiter, dirname, join, parse, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { deploymentMode, PRODUCT_VERSION, TaskRequestSchema, TerminalOperationSchema, type TaskRequest } from "@melra/protocol";
-import type { SandboxAllowance } from "@melra/terminal-runtime";
+import { detectSandbox, type SandboxAllowance } from "@melra/terminal-runtime";
 import { serveHttp } from "./http-server.js";
 import { capabilitiesPayload } from "./mcp-server.js";
 import {
@@ -437,13 +437,30 @@ describe("per-command sandbox", () => {
       detectSandbox: none,
     });
     expect(await receiptOf(runtime)).toMatchObject({ mode: "enforced", sandbox: "none" });
+    expect(capabilitiesPayload(runtime)).toMatchObject({ policy: { approvals: "out_of_band", sandbox: "none" } });
   });
 
-  it("looks for none in developer mode, unless the policy file asks, and then needs one", async () => {
+  it("looks for one in developer mode too, and runs without one only where none works or the policy file says off", async () => {
     const detect = vi.fn(none);
     runtime = await createMelraRuntime({ workspaceRoot: workspace, dataDirectory: data, environment: {}, detectSandbox: detect });
+    expect(detect).toHaveBeenCalledOnce();
+    // Said where an auditor and the agent look: no sandbox, and approvals the agent can give itself.
+    expect(await receiptOf(runtime)).toMatchObject({ mode: "developer", sandbox: "none" });
+    expect(capabilitiesPayload(runtime)).toMatchObject({ policy: { approvals: "in_band", sandbox: "none" } });
+    await runtime.close();
+    runtime = undefined;
+    // `off` is the old developer mode: looked for nowhere, stamped nowhere.
+    detect.mockClear();
+    runtime = await createMelraRuntime({
+      workspaceRoot: workspace,
+      dataDirectory: data,
+      environment: {},
+      policyPath: await policy({ use: "off" }),
+      detectSandbox: detect,
+    });
     expect(detect).not.toHaveBeenCalled();
     expect((await receiptOf(runtime))?.sandbox).toBeUndefined();
+    expect(capabilitiesPayload(runtime)).toMatchObject({ policy: { sandbox: "off" } });
     await runtime.close();
     runtime = undefined;
     await expect(
@@ -477,12 +494,12 @@ describe("per-command sandbox", () => {
       }),
     });
     const calls: Array<[string, string[], SandboxAllowance]> = [
-      [process.execPath, ["-e", ""], { network: false, symlinks: false }],
-      ["curl", ["--version"], { network: true, symlinks: false }],
+      [process.execPath, ["-e", ""], { network: false, symlinks: false, loopback: false }],
+      ["curl", ["--version"], { network: true, symlinks: false, loopback: false }],
       // Named in the policy file.
-      ["git", ["status"], { network: false, symlinks: true }],
+      ["git", ["status"], { network: false, symlinks: true, loopback: false }],
       // An install makes links whether or not it is named.
-      ["npm", ["--version"], { network: true, symlinks: true }],
+      ["npm", ["--version"], { network: true, symlinks: true, loopback: false }],
     ];
     for (const [command, args, allowance] of calls) {
       const result = await runtime.router.execute(TerminalOperationSchema.parse({ kind: "terminal", action: "run", command, args }));
@@ -492,6 +509,37 @@ describe("per-command sandbox", () => {
     expect(seen).toHaveLength(calls.length);
     expect(runtime.policy.sandbox.backend).toBe("recording");
     expect((await receiptOf(runtime))?.sandbox).toBe("recording");
+    expect(capabilitiesPayload(runtime)).toMatchObject({ policy: { sandbox: "recording" } });
+  });
+
+  // Refused a link, git exits 0 and checks it out as a plain file, so
+  // developer mode, sandboxed by default, does not refuse git one.
+  it("lets git make links in developer mode unnamed, and in enforced mode only where the policy file names it", async () => {
+    const seen: SandboxAllowance[] = [];
+    for (const MELRA_MODE of ["developer", "enforced"]) {
+      runtime = await createMelraRuntime({
+        workspaceRoot: workspace,
+        dataDirectory: data,
+        environment: { MELRA_MODE, PATH: process.env.PATH ?? "" },
+        detectSandbox: async () => ({
+          sandbox: {
+            backend: "recording",
+            confine: async (_command, allowance) => {
+              seen.push(allowance);
+              return { file: process.execPath, args: ["-e", "0"] };
+            },
+          },
+        }),
+      });
+      const result = await runtime.router.execute(TerminalOperationSchema.parse({ kind: "terminal", action: "run", command: "git", args: ["status"] }));
+      expect(result.exitCode, MELRA_MODE).toBe(0);
+      await runtime.close();
+      runtime = undefined;
+    }
+    expect(seen).toEqual([
+      { network: false, symlinks: true, loopback: true },
+      { network: false, symlinks: false, loopback: false },
+    ]);
   });
 
   it("keeps MELRA's data, the policy file and the secret files from every command", async () => {
@@ -537,6 +585,115 @@ describe("per-command sandbox", () => {
       process.umask(previous);
     }
   });
+});
+
+// Whether this host's Seatbelt applies a profile, as the server finds it:
+// sandbox-exec is there inside another sandbox too, and applies none.
+const seatbelt = await (async () => {
+  if (process.platform !== "darwin") return false;
+  const directory = await mkdtemp(join(tmpdir(), "melra-seatbelt-probe-"));
+  try {
+    const found = await detectSandbox({ workspace: directory, denied: [], dataDirectory: join(directory, "data") });
+    return "sandbox" in found && found.sandbox.backend === "seatbelt";
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+})();
+
+// The outside tester's case, on this host's own Seatbelt: developer mode with
+// no policy file, whose agent approves its own `node -e` from the plan
+// response. It may write the workspace; under home, which is neither the
+// workspace nor temp, it is refused.
+describe.runIf(seatbelt)("developer mode's default sandbox", () => {
+  let base: string;
+  let runtime: MelraRuntime | undefined;
+  const outside = join(homedir(), `.melra-sandbox-test-${randomUUID()}`);
+  // Planned, then run with the phrase the plan response hands the agent.
+  const approved = async (operation: Record<string, unknown>) => {
+    const task = runtime!.controller.plan(request({ operation, requiredEvidence: [{ type: "exit_code", value: 0 }] }));
+    expect(task.status).toBe("awaiting_approval");
+    return await runtime!.controller.execute(task.id, { approvalId: task.approval!.approvalId, phrase: task.approval!.phrase! });
+  };
+
+  beforeEach(async () => {
+    base = await mkdtemp(join(tmpdir(), "melra-developer-sandbox-"));
+    await mkdir(join(base, "workspace"));
+  });
+
+  afterEach(async () => {
+    await runtime?.close();
+    runtime = undefined;
+    await rm(base, { recursive: true, force: true });
+    await rm(outside, { force: true });
+  });
+
+  it("lets a self-approved command write the workspace, and not outside it and temp", async () => {
+    const workspace = join(base, "workspace");
+    // No detectSandbox: the one this host has.
+    runtime = await createRuntime({ workspaceRoot: workspace, dataDirectory: join(base, "data"), environment: {} });
+    const write = async (path: string) =>
+      await approved({
+        kind: "terminal",
+        action: "run",
+        // As the default allowlist names it, found on PATH.
+        command: "node",
+        args: ["-e", `require("fs").writeFileSync(${JSON.stringify(path)}, "x")`],
+      });
+    const inside = await write(join(workspace, "inside.txt"));
+    expect(inside.task.status).toBe("verified_success");
+    expect(inside.receipt?.sandbox).toBe("seatbelt");
+    expect(existsSync(join(workspace, "inside.txt"))).toBe(true);
+    const escaped = await write(outside);
+    // Node exits with EPERM, so the adapter reports the command failed.
+    expect(escaped.task.status).toBe("failed");
+    expect(existsSync(outside)).toBe(false);
+  }, 30_000);
+
+  it("lets a command serve and reach a port on the loopback, as a test suite does", async () => {
+    const workspace = join(base, "workspace");
+    runtime = await createRuntime({ workspaceRoot: workspace, dataDirectory: join(base, "data"), environment: {} });
+    const served = await approved({
+      kind: "terminal",
+      action: "run",
+      command: "node",
+      args: [
+        "-e",
+        `const s = require("http").createServer((q, r) => r.end("ok")).listen(0, "127.0.0.1", async () => {
+          const text = await (await fetch("http://127.0.0.1:" + s.address().port)).text();
+          s.close();
+          process.exit(text === "ok" ? 0 : 1);
+        });`,
+      ],
+    });
+    expect(served.receipt?.sandbox).toBe("seatbelt");
+    expect(served.task.status).toBe("verified_success");
+  }, 30_000);
+
+  // Refused a link, git still exits 0: each link a plain file, and
+  // core.symlinks=false written into the clone for every later checkout.
+  it.runIf(spawnSync("git", ["--version"]).status === 0)("lets git clone a repository's links as links", async () => {
+    const workspace = join(base, "workspace");
+    const source = join(workspace, "source");
+    await mkdir(source);
+    await writeFile(join(source, "target"), "x");
+    await symlink("target", join(source, "link"));
+    // Made outside MELRA, as a repository to clone usually is.
+    const git = (cwd: string, ...args: string[]) => spawnSync("git", args, { cwd, encoding: "utf8" });
+    for (const args of [
+      ["init", "-q"],
+      ["add", "."],
+      ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "link"],
+    ]) {
+      expect(git(source, ...args).status, args.join(" ")).toBe(0);
+    }
+    runtime = await createRuntime({ workspaceRoot: workspace, dataDirectory: join(base, "data"), environment: {} });
+    const cloned = await approved({ kind: "terminal", action: "run", command: "git", args: ["clone", "-q", "source", "clone"] });
+    expect(cloned.task.status).toBe("verified_success");
+    expect(cloned.receipt?.sandbox).toBe("seatbelt");
+    expect((await lstat(join(workspace, "clone", "link"))).isSymbolicLink()).toBe(true);
+    // Unset: `git config` exits 1.
+    expect(git(join(workspace, "clone"), "config", "--local", "core.symlinks").status).toBe(1);
+  }, 30_000);
 });
 
 describe("policy digest", () => {

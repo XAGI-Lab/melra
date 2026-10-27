@@ -72,7 +72,7 @@ import {
 import { approvalConsole, assertConsoleTerminal, confirmInTerminal } from "./approval-console.js";
 import { clientStatuses, clientsCheck, detectClients } from "./client-status.js";
 import { RESTART_SAFE_WORKFLOW } from "./demo-workflow.js";
-import { detectIsolation, isolationCheck, sandboxCheck } from "./isolation.js";
+import { detectIsolation, isolationCheck, protectionCheck, sandboxCheck } from "./isolation.js";
 import {
   CLAUDE_DENIED_TOOLS,
   claudeHarness,
@@ -826,9 +826,12 @@ async function doctor(env: CliEnvironment): Promise<{
       });
     }
   }
+  let commands: string | undefined;
   if (sandbox !== undefined && checks.some((check) => check.name === "workspace" && check.status === "pass")) {
     const { settings, policyPath } = sandbox;
-    checks.push(await sandboxCheck(env, settings, { secrets, ...(policyPath === undefined ? {} : { policyPath }) }));
+    const found = await sandboxCheck(env, settings, { secrets, ...(policyPath === undefined ? {} : { policyPath }) });
+    checks.push(found.check);
+    commands = found.commands;
   }
   if (env.socketPath !== undefined) checks.push(await socketCheck(env.socketPath));
   checks.push(isolationCheck(await detectIsolation(), env.mode));
@@ -842,6 +845,8 @@ async function doctor(env: CliEnvironment): Promise<{
     harness.files.some((file) => file.scope === "managed") ||
     harness.removed.length > 0;
   if (inPlay) checks.push(harnessCheck(harness));
+  // Last, as the sum of the lines above: what actually guards an effect.
+  checks.push(protectionCheck(env, commands, inPlay ? harness.present : undefined));
   const failed = checks.some((check) => check.status === "fail");
   return {
     report: {
@@ -1915,6 +1920,9 @@ async function main(): Promise<void> {
       };
       process.once("SIGINT", () => void close().finally(() => process.exit(0)));
       process.once("SIGTERM", () => void close().finally(() => process.exit(0)));
+      // A hangup (its terminal closing) too: by default it ends the process
+      // with no exit event, leaving the package caches in temp.
+      process.once("SIGHUP", () => void close().finally(() => process.exit(0)));
       return;
     }
     case "launch":
@@ -1977,6 +1985,9 @@ async function main(): Promise<void> {
       };
       process.once("SIGINT", () => void close().finally(() => process.exit(0)));
       process.once("SIGTERM", () => void close().finally(() => process.exit(0)));
+      // A hangup (its terminal closing) too: by default it ends the process
+      // with no exit event, leaving the package caches in temp.
+      process.once("SIGHUP", () => void close().finally(() => process.exit(0)));
       return;
     }
     case "approve":

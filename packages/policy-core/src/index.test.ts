@@ -204,7 +204,9 @@ describe("policy file", () => {
     });
     expect((await load({ sandbox: { symlinks: ["git"] } })).sandbox).toEqual({ symlinks: ["git"], readable: [] });
     const defaults = createDefaultPolicy(directory);
-    expect(sandboxUse(defaults)).toBe("off");
+    // Developer mode too, wherever one works; `off` is the policy file's to say.
+    expect(sandboxUse(defaults)).toBe("if-available");
+    expect(sandboxUse({ ...defaults, sandbox: { ...defaults.sandbox, use: "off" } })).toBe("off");
     expect(sandboxUse({ ...defaults, mode: "enforced" })).toBe("on");
     expect(sandboxUse({ ...loaded, mode: "enforced" })).toBe("if-available");
     // Unsafe-local turns off every guardrail, this one too.

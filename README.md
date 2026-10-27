@@ -414,6 +414,17 @@ Content-Security-Policy.
 | 🔑 | **Secrets are redacted** before anything is stored, and agents get capabilities, never your raw credentials. |
 | ⏱️ | **Every call is bounded** by a budget and a cancel signal; a stalled browser fails with a clear error instead of hanging. |
 
+What actually guards an effect depends on the mode:
+
+| | `developer` (default) | `enforced` |
+|---|---|---|
+| Approving a change | The agent can, with the phrase its own plan response carries: a record, not a boundary | Only an operator, out of band (`melra approve`, `melra console`, `melra run`'s prompt) |
+| An approved command | Runs in an [OS sandbox](docs/INSTALLATION.md#per-command-sandbox) where one works (Seatbelt on macOS, bubblewrap on Linux): it writes only the workspace and temp, cannot read MELRA's files or the login files MELRA lists (see [INSTALLATION](docs/INSTALLATION.md#per-command-sandbox); the rest of home stays readable), and has no network without the `network` trait beyond the loopback (under Seatbelt the host's; under bubblewrap one of its own, and Unix sockets on the filesystem stay reachable). Where none works (Windows, Linux where bubblewrap cannot run) it has your rights, and every receipt says `sandbox: none` | The same sandbox (in the container pair, another account), and MELRA will not start without one unless the policy file records the opt-out |
+| The agent's own tools | Untouched: a native shell or editor goes around MELRA | Yours to remove; MELRA's server cannot see them, `melra doctor` reads Claude Code's settings, and [`melra probe`](docs/INSTALLATION.md#check-an-agents-box) checks from inside the agent's box |
+
+`melra doctor` says which of these hold on its `protection` line, and
+`melra_capabilities` reports `approvals` and `sandbox` beside `mode`.
+
 <details>
 <summary><b>Unsafe-local mode and the two deployment modes</b></summary>
 
@@ -454,10 +465,10 @@ the [threat model](docs/THREAT_MODEL.md) and the [security policy](SECURITY.md).
 
 For Claude Code, `melra launch claude-code` takes the other path away for the
 session it starts: Read, Glob and Grep are its only built-in tools and melra its
-only MCP server, so the only tools it has that change anything are MELRA's. A
-command MELRA runs for it still has your rights, and in developer mode the agent
-approves its own changes, so `--mode enforced` is how you decide each one, and
-how each runs in a [sandbox](docs/INSTALLATION.md#per-command-sandbox). The
+only MCP server, so the only tools it has that change anything are MELRA's. In
+developer mode the agent approves its own changes, and a command MELRA runs for
+it has your rights wherever no [sandbox](docs/INSTALLATION.md#per-command-sandbox)
+works, so `--mode enforced` is how you decide each one. The
 server it starts leaves `node`, `npm`, `npx` and `pnpm` out of the default
 allowlist, unless the policy file lists them, as one `melra setup` wrote does:
 remove the ones the agent does not need. A `claude` started any other way is

@@ -98,7 +98,7 @@ Starting Claude Code. MELRA's tools are the only ones it has that change anythin
   Agent has  Read, Glob, Grep, which only read the workspace, and MELRA's tools for everything else
   Off        Bash, Edit, Write, WebFetch and the other built-in tools, every other MCP server, and your user, project and local Claude Code settings
   Commands   cat, echo, findstr, git, head, ls, pwd, rg, tail, tasklist, wc, where; node, npm, npx and pnpm only if the policy file lists them
-  Approve    the agent can echo MELRA's phrase itself, and an approved command runs with your rights; launch with --mode enforced to approve each change yourself
+  Approve    the agent can echo MELRA's phrase itself; an approved command runs in the per-command sandbox where one works, with your rights where none does or the policy file turns it off; launch with --mode enforced to approve each change yourself
 ```
 
 Under `--unsafe-local` the summary says so on every row: no policy, any
@@ -126,8 +126,10 @@ with your rights. A policy file whose own `allowedCommands` lists one keeps it,
 and the summary warns about it; a `policy.json` that `melra init` or `melra
 setup` wrote lists all four, so remove the ones the agent does not need. This
 narrows the list without making the rest harmless: any allowed command run as
-an approved change has your rights, and in developer mode the agent approves its
-own changes, so `--mode enforced` is how you decide each one.
+an approved change has your rights, less what the
+[per-command sandbox](#per-command-sandbox) takes away where one works, and in
+developer mode the agent approves its own changes, so `--mode enforced` is how
+you decide each one.
 
 After `--`, `launch` passes claude prompt arguments, `-p`/`--print`, `--model
 <model>`, `--output-format <format>`, `--verbose`, `-c`/`--continue` and
@@ -148,7 +150,8 @@ melra launch claude-code -- -p "list the TODO comments in src" --output-format j
 
 What stays outside it: a `claude` started any other way keeps its own tools; a
 program MELRA's policy lets the agent run, whichever allowed command starts it,
-has your OS user's rights and is not limited to MELRA's tools; desktop clients
+has your OS user's rights, less what the per-command sandbox takes away where
+one works, and is not limited to MELRA's tools; desktop clients
 are not covered; and whether plugin hooks still load under `--restricted` has
 not been verified.
 
@@ -846,10 +849,21 @@ echo '{"goal":"install","operation":{"kind":"terminal","action":"run","command":
 
 Every command the terminal adapter starts can run inside an OS sandbox made
 for that one command. It is on in enforced mode, where MELRA refuses to start
-without one, and off in developer mode unless the policy file turns it on.
-Under Seatbelt and bubblewrap, a command in the sandbox:
+without one. In developer mode it is on wherever one works, and MELRA starts
+without one where none does, each receipt then saying `"sandbox": "none"`:
+there the agent approves its own changes, so the sandbox, not the approval, is
+what bounds an approved command. `"sandbox": {"use": "off"}` in the policy file
+restores the developer mode of 0.4.0-alpha.1 and earlier, every command with
+your rights. Under Seatbelt and bubblewrap, a command in the sandbox:
 
-- writes only in the workspace and the temp folders (`$TMPDIR` and `/tmp`);
+- writes only in the workspace and the temp folders (`$TMPDIR`, `/tmp` and,
+  on macOS, the per-user temp folder `getconf DARWIN_USER_TEMP_DIR` names).
+  The temp folders are shared with your other processes, so a command can
+  still leave a file in `/tmp` or change one left there. MELRA does not give
+  each command a temp folder of its own: inside a sandbox the Command Line
+  Tools shims (`/usr/bin/git`, `/usr/bin/python3`, `/usr/bin/make`) point
+  `TMPDIR` at the per-user folder whatever it was, so on macOS that one would
+  stay writable anyway;
 - reads everything else except MELRA's own files (`MELRA_HOME`, the policy
   file, every credential's `source.file`, the browser profile and HTTP
   archives) and the logins tools keep under home: `~/.ssh`, `~/.aws`,
@@ -862,17 +876,27 @@ Under Seatbelt and bubblewrap, a command in the sandbox:
 - reaches no network unless policy gives the command the `network`
   [trait](#local-configuration) (`git fetch`, `curl`, an install). Under
   Seatbelt it opens no socket at all without it, a listening one or one to
-  loopback included, and with it only IP sockets and DNS, never a Unix socket
-  such as an SSH agent's or Docker's. Under bubblewrap it gets an empty
-  network namespace with a loopback of its own, so neither the host's network
-  nor the host's loopback; Unix sockets on the filesystem stay reachable,
-  with the trait or without;
+  loopback included, except in developer mode, where it may listen on and
+  connect to the host's loopback (so a test suite's or dev server's port
+  works, and so does anything else listening there); with the trait only IP
+  sockets and DNS, never a Unix socket such as an SSH agent's or Docker's.
+  Under bubblewrap it gets an empty network namespace with a loopback of its
+  own, so neither the host's network nor the host's loopback; Unix sockets on
+  the filesystem stay reachable, with the trait or without;
 - makes no symbolic link unless the command carries the `package-install`
-  trait or the policy file names it in `sandbox.symlinks`. Without that a
-  `git checkout` of a repository holding links fails with `EPERM`. Seatbelt
-  also refuses renaming a link; on Linux only creating one is refused, since
-  the filter cannot tell a link from another file, so a command can still
-  rename or hard-link a link already there.
+  trait, the policy file names it in `sandbox.symlinks`, or, in developer
+  mode, it is `git`. Refused links do not make git fail: a `git clone` or
+  `git init` exits 0 having written `core.symlinks=false` into the
+  repository, a clone checking each link out as a plain file holding its
+  target, and a `git checkout` in a repository made outside MELRA prints
+  `unable to create symlink`, exits 0 and leaves the link missing. In
+  enforced mode, name git in
+  `sandbox.symlinks` where a repository holds links; to repair one checked
+  out without them, run `git config --unset core.symlinks` and then `git
+  checkout -- .` where git may make links. Seatbelt also refuses renaming a
+  link; on Linux only creating one is refused, since the filter cannot tell a
+  link from another file, so a command can still rename or hard-link a link
+  already there.
 
 Under `uid` a command only runs as an account that, as MELRA checks at
 startup, cannot read or enter `MELRA_HOME` and cannot read the policy file,
@@ -893,8 +917,8 @@ The policy file sets it under `sandbox`:
 
 | Key | Meaning |
 |---|---|
-| `use` | `on`: every command runs sandboxed, and MELRA refuses to start (`sandbox_unavailable`) where none works. `off`: none, which enforced mode refuses (`enforced_mode_refuses_sandbox_off`). `if-available`: sandboxed where one works, and started without one where none does; in enforced mode this is the operator's recorded opt-out, and every receipt then says `"sandbox": "none"`. Left out, `on` in enforced mode and `off` in developer mode. Unsafe-local turns it off |
-| `symlinks` | Commands, by name as in `allowedCommands`, that may make symbolic links |
+| `use` | `on`: every command runs sandboxed, and MELRA refuses to start (`sandbox_unavailable`) where none works. `off`: none, which enforced mode refuses (`enforced_mode_refuses_sandbox_off`). `if-available`: sandboxed where one works, and started without one where none does; in enforced mode this is the operator's recorded opt-out, and every receipt then says `"sandbox": "none"`. Left out, `on` in enforced mode and `if-available` in developer mode. Unsafe-local turns it off |
+| `symlinks` | Commands, by name as in `allowedCommands`, that may make symbolic links; in developer mode `git` may without being named |
 | `readable` | Entries of the list above to let commands read again, written exactly as listed |
 | `user` | `{ "uid": ..., "gid": ... }`, the account the `uid` sandbox runs commands as; never 0 |
 
@@ -910,22 +934,67 @@ takes the first that works:
 There is none on Windows: run MELRA under WSL2 with bubblewrap, or in the
 [container pair](#melra-and-the-agent-in-two-containers), or record the
 opt-out. Each receipt names the sandbox its kernel ran commands in
-(`"sandbox": "seatbelt"`, `"bubblewrap"`, `"uid"`, or `"none"` under the
-opt-out) beside its `mode`; a receipt with no `sandbox` came from a kernel that
-had it off.
+(`"sandbox": "seatbelt"`, `"bubblewrap"`, `"uid"`, or `"none"` where
+`if-available` started without one) beside its `mode`; a receipt with no
+`sandbox` came from a kernel that had it off, or from one older than the
+sandbox. `melra_capabilities` says the same in `policy.sandbox` (`"off"` when
+it is off), beside `policy.approvals`: `in_band` in developer mode, where the
+caller can approve its own changes, `out_of_band` in enforced mode.
 
 `melra doctor` reports it on its `sandbox` line: which sandbox works here, or
 why none does and how to fix it. It fails where the server would refuse to
-start, and warns where enforced mode starts on the opt-out. On Ubuntu 24.04,
+start, and warns where enforced mode starts on the opt-out. Its `protection`
+line, last, says what guards an effect here: who approves a change (in
+developer mode the agent, from its plan response, so an approval is a record,
+not a boundary; in enforced mode only an operator), what a command runs in, or
+that it has MELRA's own rights, and, where doctor can read Claude Code's
+settings, which of Claude Code's own shell, file and web tools they leave it;
+for any other harness it says it did not look. It warns under unsafe-local,
+and in enforced mode where commands run without a sandbox or Claude Code keeps
+one of those tools. On Ubuntu 24.04,
 bubblewrap needs `sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0`
 or an AppArmor profile that lets `/usr/bin/bwrap` make user namespaces; the
 [systemd unit](../examples/deploy/systemd/melra.service) allows the
 namespaces, mount calls and netlink sockets bubblewrap needs.
 
-Tools that keep a cache or a login under home cannot write it from inside:
-point the cache at the workspace or temp in the project's own configuration
-(a project `.npmrc` takes `cache`), or allow a login back with `readable`.
-Each command takes a few milliseconds more to start.
+npm and pnpm keep their caches under home, where no command may write. Under
+Seatbelt and bubblewrap every command's environment therefore sets
+`npm_config_cache` and `PNPM_HOME` to a private folder MELRA makes in temp at
+its first command and removes when its process exits (not after a
+`SIGKILL`), so each server process starts with empty caches. The ones under
+home stay out of reach on purpose: installs outside the sandbox trust them
+(npx runs packages from npm's cache, pnpm links projects to files in its
+store), so a command that could write there could change what runs outside
+it. As a variable, MELRA's `npm_config_cache` outranks a project `.npmrc`
+setting `cache`, so npm does not use a cache named there, for an offline
+install either; `--cache <dir>` on the command line still wins. Other tools
+that keep a cache or a login under home cannot write it from inside: point
+the tool's own setting at the workspace or temp, or, in developer mode, set
+`"sandbox": {"use": "off"}`. `readable` lets a command read one of the logins
+listed above, never write it. Each command takes a few milliseconds more to
+start.
+
+Checked on macOS under Seatbelt through MELRA's own terminal adapter, with no
+`sandbox` in the policy file: `git init`, `status`, `add`, `commit` and `log`
+in a repository inside the workspace, and a `git clone` that keeps a
+repository's links; `node` scripts; `npm run`; `npm install` and `pnpm
+install` of a `file:` directory or tarball dependency and from a registry on
+loopback; `npm pack`; Python's `tempfile`; and the Command
+Line Tools shims. What fails in the sandbox, and needs `"use": "off"` where a
+project depends on it:
+
+- listening or connecting without the `network` trait, beyond the loopback.
+  `npm test` and `npm run` carry none: under bubblewrap a test suite or dev
+  server gets a loopback of its own, which nothing outside the command
+  reaches; under Seatbelt it gets the host's in developer mode, and fails
+  with `EPERM` in enforced mode;
+- a checkout whose `.git` names a git directory outside the workspace, as a
+  git worktree's does: `git status` reads it, but `git add` and `git commit`
+  write there and fail;
+- writing anywhere else under home, a global install (`npm install -g`)
+  included, and, under Seatbelt, a program that needs a macOS service other
+  than the temp folder and user and group lookup, such as the keychain's
+  `security`.
 
 ### Capability grants
 
@@ -1596,11 +1665,14 @@ closing every door it owns:
   option before the subcommand use whatever repository git finds.
 - **Every command runs in an OS sandbox, or MELRA does not start.** An
   approved command used to run with every right MELRA's own OS user has. In
-  enforced mode each one runs in a [per-command sandbox](#per-command-sandbox)
-  that keeps it out of MELRA's data and the logins under home; under Seatbelt
-  and bubblewrap it also writes only the workspace and temp, and stays off the
-  network unless it carries the `network` trait. Where no sandbox works, the process exits with `sandbox_unavailable`,
-  naming why and the fix, unless the policy file records the opt-out.
+  enforced mode, as in developer mode wherever one works, each one runs in a
+  [per-command sandbox](#per-command-sandbox) that keeps it out of MELRA's
+  data and the login files MELRA lists; under Seatbelt and bubblewrap it also
+  writes
+  only the workspace and temp, and stays off the network unless it carries the
+  `network` trait. Where no sandbox works, the process exits with
+  `sandbox_unavailable`, naming why and the fix, unless the policy file
+  records the opt-out; developer mode starts without one instead.
 - **A browser action that drives a page names it.** `click`, `type`,
   `fill_form`, `select`, `press`, `upload`, `download`, `close` and
   `tab_switch` without a `url` are refused at planning with

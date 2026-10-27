@@ -163,7 +163,7 @@ export interface LocalPolicy {
    * own files or the logins under home (`HOME_SECRETS`, less `readable`), the
    * network (IP and DNS under Seatbelt) only for a command with the `network`
    * trait, and symbolic links only for one with the `package-install` trait or
-   * named in `symlinks`. Under `uid`, only the reads are held, checked at
+   * named in `symlinks` (and git in developer mode). Under `uid`, only the reads are held, checked at
    * startup; writes, network and links are what the host lets that account do. `use` absent follows the
    * mode (`sandboxUse`). `backend` is what `createMelraRuntime` found on this
    * host, or `none` when `if-available` let it start without one; it is
@@ -626,10 +626,15 @@ export function createDefaultPolicy(workspaceRoot: string, runtimes = true): Loc
   };
 }
 
-/** Whether commands run sandboxed: as the policy says, or only in enforced mode. Never under unsafe-local. */
+/**
+ * Whether commands run sandboxed: as the policy says, else `on` in enforced
+ * mode and `if-available` in developer mode, where the agent approves its own
+ * changes and so only the sandbox bounds what an approved command reaches.
+ * Never under unsafe-local.
+ */
 export function sandboxUse(policy: Pick<LocalPolicy, "sandbox" | "mode" | "unhinged">): "on" | "off" | "if-available" {
   if (policy.unhinged) return "off";
-  return policy.sandbox.use ?? (policy.mode === "enforced" ? "on" : "off");
+  return policy.sandbox.use ?? (policy.mode === "enforced" ? "on" : "if-available");
 }
 
 /** The approval window a policy gives: its own, or 5 minutes in developer mode and 30 in enforced. */

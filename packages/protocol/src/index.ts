@@ -851,9 +851,10 @@ export const HOME_SECRETS = [
 
 /**
  * The OS sandbox each terminal command runs in. `use` absent follows the
- * mode: `on` in enforced mode, `off` in developer mode. `if-available` starts
- * without one where none works, and in enforced mode that is the operator's
- * recorded opt-out.
+ * mode: `on` in enforced mode, `if-available` in developer mode. `if-available`
+ * starts without one where none works, and in enforced mode that is the
+ * operator's recorded opt-out. `off` runs every command with MELRA's own
+ * rights, which enforced mode refuses.
  */
 export const SandboxPolicySchema = z
   .object({

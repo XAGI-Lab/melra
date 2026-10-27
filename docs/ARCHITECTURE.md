@@ -74,8 +74,9 @@ kernel at send time, scoped by host and capability, and never returned to the
 caller ([P4](../ROADMAP.md#p4--credentials-and-api-effects)). Other adapters
 still use the ambient process environment, so an agent that can reach the
 kernel can reach whatever the kernel's process can. Its programs see less of
-it: the terminal passes an allowlist, and in enforced mode runs each program in
-an OS sandbox that cannot read MELRA's data or the logins under home
+it: the terminal passes an allowlist, and runs each program in an OS sandbox
+that cannot read MELRA's data or the login files it lists, in enforced mode and,
+wherever one works, in developer mode too
 ([per-command sandbox](INSTALLATION.md#per-command-sandbox)); the computer
 adapter's helpers start without `MELRA_PAYLOAD_KEY`, `MELRA_HTTP_TOKEN` or any
 variable a credential is read from; and the browser MELRA launches and the agent
@@ -713,9 +714,10 @@ the kernel that ran the effect; it is not evidence that no other path existed.
 That is not recoverable after the fact, so it is written at the same time as
 the outcome rather than left for an auditor to infer. Beside `mode`, a kernel
 that ran commands in a per-command OS sandbox names it in `sandbox`
-(`seatbelt`, `bubblewrap`, `uid`), and one the policy file let start without
-one says `none`; the task records it in the same save as `mode`, so a receipt
-recovery writes later still says it.
+(`seatbelt`, `bubblewrap`, `uid`), and one that `if-available` (developer
+mode's default, or the policy file's) let start without one says `none`; the
+task records it in the same save as `mode`, so a receipt recovery writes later
+still says it.
 See [deployment modes](INSTALLATION.md#deployment-modes).
 
 `policyDecision` names the policy as well as the outcome: `policyVersion`, the
@@ -919,12 +921,15 @@ did with it. Recovery asks *what do the durable facts say happened*, never
 | Boundary | A policy file the caller can edit | Not reachable by the caller |
 | Harness | Holds credentials, may also hold native tools | Sandboxed, no privileged secrets, no raw production shell |
 | Transport | stdio, loopback HTTP, or a Unix socket | Token-authenticated IPC: a mode-`0600` Unix socket or loopback, never a public bind |
+| Approvals | The agent's own, from its plan response: a record, not a boundary | An operator's, out of band |
+| Commands MELRA runs | In an OS sandbox wherever one works; with the user's rights where none does, or under `"use": "off"` | In an OS sandbox, or MELRA does not start unless the policy file records the opt-out |
 | Status | Shipped | `MELRA_MODE=enforced` ships the refusals MELRA owns and an OS sandbox around each command it runs; the OS isolation around the harness is the operator's ([P2](../ROADMAP.md#p2--hard-capability-boundary)) |
 
 Developer mode is the honest default for adoption: MELRA is a governed path, and
 a harness that also has an unrestricted native terminal can simply not use it.
 That is a useful convenience, not a trust boundary, and this repository does not
-claim otherwise.
+claim otherwise. Its per-command sandbox bounds what a command MELRA runs can
+reach, not whether the agent runs it.
 
 Enforced mode assumes the operator has taken the alternatives away —
 containers, separate OS users, filesystem ACLs, namespaces, network isolation,
@@ -946,7 +951,7 @@ ignored, so the only tools it has that change anything are MELRA's. That holds
 for that session only, in either mode: a `claude` started any other way keeps
 its own tools, and a program MELRA's policy lets the agent run has the OS
 user's rights, whichever allowed command starts it, less what the per-command
-sandbox takes away in enforced mode. The server launch starts
+sandbox takes away wherever one works. The server launch starts
 leaves `node`, `npm`, `npx` and `pnpm` out of its default `allowedCommands`,
 which narrows that list without closing it; in developer mode the agent
 approves its own changes, so enforced mode is how a person decides each one.

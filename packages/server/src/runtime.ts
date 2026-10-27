@@ -558,11 +558,12 @@ export async function createMelraRuntime(
   for (const path of [options.browserProfileDir, options.browserHarPath]) {
     if (path !== undefined) await mkdir(dirname(resolve(path)), { recursive: true }).catch(() => undefined);
   }
-  // Every command in an OS sandbox: always in enforced mode, and where the
-  // policy file asks in developer mode. Found once, here, so a host with none
-  // refuses to start rather than run commands with MELRA's own rights; with
-  // `if-available`, the operator's recorded opt-out, it starts and every
-  // receipt says `sandbox: none`.
+  // Every command in an OS sandbox: always in enforced mode, and wherever one
+  // works in developer mode, unless the policy file says `off`. Found once,
+  // here, so a host with none refuses to start rather than run commands with
+  // MELRA's own rights; with `if-available`, developer mode's default or the
+  // operator's recorded opt-out, it starts and every receipt says
+  // `sandbox: none`.
   const use = sandboxUse(policy);
   if (mode === "enforced" && use === "off") {
     store.close();
@@ -597,6 +598,10 @@ export async function createMelraRuntime(
     if (sandbox?.backend === "uid") process.umask(0o002);
   }
   const symlinkers = new Set(policy.sandbox.symlinks.map(normalizeCommandName));
+  // Without links git still exits 0: a clone or init writes core.symlinks=false
+  // and checks each link out as a plain file. Developer mode, sandboxed by
+  // default, lets it make them; enforced mode only where the policy names it.
+  if (mode === "developer") symlinkers.add("git");
   const terminal = await TerminalRuntime.create({
     root: runtimeRoot,
     reserved: (path, call) => files.isReserved(path, false, call),
@@ -610,13 +615,15 @@ export async function createMelraRuntime(
       : {
           sandbox,
           // By what the call asks for, as policy classified it: the network
-          // only for the `network` trait, links for installs and the
-          // programs the policy file names.
+          // only for the `network` trait, links for installs, the programs
+          // the policy file names and, in developer mode, git. Developer
+          // mode keeps the loopback too, for test suites and dev servers.
           allowance: (command: string, args: readonly string[]) => {
             const { traits } = classifyCommand(command, args);
             return {
               network: traits.includes("network"),
               symlinks: traits.includes("package-install") || symlinkers.has(normalizeCommandName(command)),
+              loopback: mode === "developer",
             };
           },
         }),

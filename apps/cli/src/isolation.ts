@@ -102,24 +102,29 @@ export function isolationCheck(
 /**
  * Which OS sandbox commands run in here, or why none would and how to fix
  * that, found as the server finds it at startup (`detect` absent, this host's
- * own). A `fail` where the server would refuse to start; a `warn` where the
- * policy file's `if-available` lets enforced mode start without one.
+ * own). A `fail` where the server would refuse to start; a `warn` where
+ * `if-available` lets enforced mode start without one. `commands` is what
+ * the protection line needs: the sandbox, `none`, `off`, or `refused` where
+ * the server would not start.
  */
 export async function sandboxCheck(
   env: Pick<CliEnvironment, "mode" | "unhinged" | "workspaceRoot" | "dataDirectory">,
   settings: LocalPolicy["sandbox"],
   paths: { policyPath?: string; secrets: Map<string, string> },
   detect?: Parameters<typeof commandSandbox>[2],
-): Promise<DoctorCheck> {
+): Promise<{ check: DoctorCheck; commands: string }> {
   const name = "sandbox";
   const use = sandboxUse({ sandbox: settings, mode: env.mode, unhinged: env.unhinged });
-  const off = env.unhinged ? "off under unsafe-local" : 'off in developer mode unless the policy file sets "sandbox": {"use": "on"}';
+  const off = env.unhinged ? "off under unsafe-local" : 'off: the policy file sets "sandbox": {"use": "off"}';
   if (env.mode === "enforced" && use === "off") {
     return {
-      name,
-      status: "fail",
-      detail: 'enforced_mode_refuses_sandbox_off: the policy file sets "sandbox": {"use": "off"}',
-      next: 'drop "use": "off", or set it to "if-available" to start without one where none works',
+      check: {
+        name,
+        status: "fail",
+        detail: 'enforced_mode_refuses_sandbox_off: the policy file sets "sandbox": {"use": "off"}',
+        next: 'drop "use": "off", or set it to "if-available" to start without one where none works',
+      },
+      commands: "refused",
     };
   }
   const found = await commandSandbox(
@@ -129,26 +134,84 @@ export async function sandboxCheck(
   );
   if ("sandbox" in found) {
     return {
-      name,
-      status: "pass",
-      detail:
-        use === "off" ? `${found.sandbox.backend} works here; ${off}` : `${found.sandbox.backend}: every command runs in it`,
+      check: {
+        name,
+        status: "pass",
+        detail:
+          use === "off" ? `${found.sandbox.backend} works here; ${off}` : `${found.sandbox.backend}: every command runs in it`,
+      },
+      commands: use === "off" ? "off" : found.sandbox.backend,
     };
   }
   const why = found.problems.join("; ");
-  if (use === "off") return { name, status: "pass", detail: `${off}, and none would work here: ${why}` };
+  if (use === "off") return { check: { name, status: "pass", detail: `${off}, and none would work here: ${why}` }, commands: "off" };
   if (use === "on") {
     return {
-      name,
-      status: "fail",
-      detail: `sandbox_unavailable: the server refuses to start: ${why}`,
-      next: 'fix one of those, or set "sandbox": {"use": "if-available"} in the policy file to start without one',
+      check: {
+        name,
+        status: "fail",
+        detail: `sandbox_unavailable: the server refuses to start: ${why}`,
+        next: 'fix one of those, or set "sandbox": {"use": "if-available"} in the policy file to start without one',
+      },
+      commands: "refused",
     };
   }
+  const whose = settings.use === undefined ? "developer mode's default" : "the policy file's";
   return {
-    name,
-    status: env.mode === "enforced" ? "warn" : "pass",
-    detail: `none works here, so the policy file's "if-available" starts without one: every command has MELRA's own rights, and every receipt says sandbox: none (${why})`,
-    next: "fix what the sandbox line above names, so commands run in a sandbox",
+    check: {
+      name,
+      status: env.mode === "enforced" ? "warn" : "pass",
+      detail: `none works here, so ${whose} "if-available" starts without one: every command has MELRA's own rights, and every receipt says sandbox: none (${why})`,
+      next: "fix what the sandbox line above names, so commands run in a sandbox",
+    },
+    commands: "none",
   };
+}
+
+/**
+ * The doctor line saying what guards an effect here: who may approve a
+ * change, what a command runs in (`commands`, from `sandboxCheck`; absent
+ * when that did not run), and, where the harness line could read Claude
+ * Code's settings, which of its own tools that change things are left to it
+ * (`harnessTools`). Never a `fail`. A `warn` under unsafe-local, and where
+ * enforced mode, the operator's word that MELRA is the only path, has a gap
+ * under it that MELRA can see.
+ */
+export function protectionCheck(
+  env: Pick<CliEnvironment, "mode" | "unhinged">,
+  commands: string | undefined,
+  harnessTools?: readonly string[],
+): DoctorCheck {
+  const name = "protection";
+  if (env.unhinged) {
+    return { name, status: "warn", detail: "unsafe-local: nothing is checked, approved or confined; receipts only record what ran" };
+  }
+  const approvals =
+    env.mode === "enforced"
+      ? "approvals: only an operator's, out of band"
+      : "approvals: the agent can approve its own changes from the plan response, so an approval is a record, not a boundary";
+  const own = ["none", "off", "refused"].includes(commands ?? "none");
+  const ran =
+    commands === undefined
+      ? "commands: not checked, as the lines above say"
+      : commands === "refused"
+        ? "commands: none, since the server refuses to start"
+        : commands === "none" || commands === "off"
+          ? `commands: with MELRA's own rights (${commands === "off" ? 'sandbox "use": "off"' : "no sandbox works here"})`
+          : commands === "uid"
+            ? "commands: as another account, which cannot read MELRA's files; where it writes and connects is the host's to limit"
+            : `commands: in ${commands}, writing only the workspace and temp, reading neither MELRA's files nor the logins MELRA lists under home (other files there stay readable), and off the network without the network trait` +
+              (commands === "bubblewrap"
+                ? " (Unix sockets on the filesystem stay reachable)"
+                : env.mode === "developer"
+                  ? " (the host's loopback stays reachable)"
+                  : "");
+  const harness =
+    harnessTools === undefined
+      ? "harness: not inspected (doctor reads only Claude Code's settings, once melra is set up there); a harness that keeps a shell or file tools of its own can go around MELRA"
+      : harnessTools.length === 0
+        ? "Claude Code: its settings remove its own shell, file and web tools"
+        : `Claude Code: its settings leave it ${harnessTools.join(", ")}, which go around MELRA (melra launch claude-code starts it without them)`;
+  const gap = env.mode === "enforced" && (own || (harnessTools?.length ?? 0) > 0);
+  return { name, status: gap ? "warn" : "pass", detail: [approvals, ran, harness].join("; ") };
 }

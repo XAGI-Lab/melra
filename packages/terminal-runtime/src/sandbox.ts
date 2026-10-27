@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { execFile, spawn, type ChildProcess } from "node:child_process";
-import { realpath, stat } from "node:fs/promises";
+import { rmSync } from "node:fs";
+import { mkdtemp, realpath, rm, stat } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { basename, delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import type { Writable } from "node:stream";
@@ -21,6 +22,13 @@ export interface SandboxAllowance {
    * seccomp filter cannot see a file's type, so it refuses only creating one.
    */
   symlinks: boolean;
+  /**
+   * Without `network`, still bind and reach the loopback, so a test suite's
+   * or dev server's port works: Seatbelt opens the host's (whatever listens
+   * there is reachable); bubblewrap gives every command a loopback of its own
+   * already, so it ignores this.
+   */
+  loopback?: boolean;
 }
 
 /**
@@ -79,7 +87,9 @@ export function seatbeltProfile(paths: SandboxPaths, allowance: SandboxAllowance
           '(allow network-outbound (remote ip) (literal "/private/var/run/mDNSResponder"))',
           "(allow network-inbound network-bind (local ip))",
         ]
-      : []),
+      : allowance.loopback === true
+        ? ['(allow network-bind network-inbound (local ip "localhost:*"))', '(allow network-outbound (remote ip "localhost:*"))']
+        : []),
     ...(paths.denied.length === 0 ? [] : [`(deny file-read* file-write* ${subpaths(paths.denied)})`]),
     ...(allowance.symlinks ? [] : ["(deny file-write-create (vnode-type SYMLINK))"]),
   ].join("\n");
@@ -173,6 +183,8 @@ export interface ConfinedSpawn {
   gid?: number;
   /** A seccomp program `bwrap` reads from descriptor 3. */
   seccomp?: Buffer;
+  /** Variables the command gets over its own. */
+  env?: Record<string, string>;
 }
 
 export interface CommandSandbox {
@@ -189,6 +201,8 @@ export interface CommandSandbox {
   ): Promise<ConfinedSpawn>;
   /** Signals a process group MELRA may not signal itself: one running as another account. */
   signal?(group: number, signal: NodeJS.Signals): void;
+  /** Removes what it made for its commands, once none of them is left running. */
+  close?(): Promise<void>;
 }
 
 export interface SandboxOptions {
@@ -268,6 +282,56 @@ async function probe(
   });
 }
 
+/**
+ * Where npm and pnpm keep what they download, for a sandbox in which home is
+ * not writable: a private folder of MELRA's own in temp, made at the first
+ * command and removed by `close`, or as the process exits without one, as a
+ * stdio `melra serve` does when its input ends. Never the caches under home,
+ * which every install outside the sandbox trusts (npx runs packages from
+ * npm's, pnpm links projects to files in its store), so a command that could
+ * write there could change what runs outside it. Only these two programs'
+ * own variables: `HOME` or `XDG_CACHE_HOME` would hide corepack's downloaded
+ * package managers, and an install could then not start offline. As a
+ * variable, npm's outranks a project `.npmrc` setting `cache`, and loses to
+ * `--cache`; MELRA opens no file of the command's to find out which applies.
+ */
+function packageCaches(temp: string | undefined): { environment(): Promise<Record<string, string>>; close(): Promise<void> } {
+  // ponytail: one cache per server process, so each start downloads again; a
+  // per-user one kept across restarts, checked as MELRA's own, if that matters.
+  let made: Promise<string | undefined> | undefined;
+  let atExit: (() => void) | undefined;
+  return {
+    async environment() {
+      made ??=
+        temp === undefined
+          ? Promise.resolve(undefined)
+          : mkdtemp(join(temp, "melra-caches-")).then(
+              (root) => {
+                // Synchronous, the only kind an exit listener runs; a folder
+                // left behind beats an exit that throws.
+                atExit = () => {
+                  try {
+                    rmSync(root, { recursive: true, force: true });
+                  } catch {}
+                };
+                process.once("exit", atExit);
+                return root;
+              },
+              () => undefined,
+            );
+      const root = await made;
+      return root === undefined ? {} : { npm_config_cache: join(root, "npm"), PNPM_HOME: join(root, "pnpm") };
+    },
+    async close() {
+      const root = await made;
+      made = undefined;
+      if (atExit !== undefined) process.off("exit", atExit);
+      atExit = undefined;
+      if (root !== undefined) await rm(root, { recursive: true, force: true });
+    },
+  };
+}
+
 const SANDBOX_EXEC = "/usr/bin/sandbox-exec";
 const NO_ALLOWANCE: SandboxAllowance = { network: false, symlinks: false };
 
@@ -283,12 +347,18 @@ async function seatbelt(paths: SandboxPaths, reach: typeof probe): Promise<Comma
           "start it outside that one, which the per-command profiles replace"
       : `seatbelt: ${SANDBOX_EXEC} exited ${tried.code}: ${tried.stderr}`;
   }
+  const caches = packageCaches(paths.temp[0]);
   return {
     backend: "seatbelt",
     async confine(command, allowance) {
       const file = await located(command.file, command.cwd, command.path);
-      return { file: SANDBOX_EXEC, args: ["-p", seatbeltProfile(paths, allowance), file, ...command.args] };
+      return {
+        file: SANDBOX_EXEC,
+        args: ["-p", seatbeltProfile(paths, allowance), file, ...command.args],
+        env: await caches.environment(),
+      };
     },
+    close: caches.close,
   };
 }
 
@@ -325,6 +395,8 @@ async function bubblewrap(paths: SandboxPaths, reach: typeof probe): Promise<Com
   if ("error" in tried || tried.code !== 0) {
     return `bubblewrap: ${"error" in tried ? tried.error : tried.stderr || `exited ${tried.code}`}; ${BWRAP_FIX}`;
   }
+  // In temp, which bwrapArgv binds writable at the same path.
+  const caches = packageCaches(paths.temp[0]);
   return {
     backend: "bubblewrap",
     async confine(command, allowance) {
@@ -333,8 +405,10 @@ async function bubblewrap(paths: SandboxPaths, reach: typeof probe): Promise<Com
         file: bwrap,
         args: bwrapArgv(await split(), allowance, command.cwd, [file, ...command.args]),
         ...(allowance.symlinks ? {} : { seccomp }),
+        env: await caches.environment(),
       };
     },
+    close: caches.close,
   };
 }
 
