@@ -1090,7 +1090,7 @@ export class SqliteStore {
   /**
    * One caller's tasks awaiting approval whose challenge has not expired, by
    * the caller `callerRef` names (#422). Read on every challenge planned, so
-   * the expired ones, which stay awaiting_approval and which nothing sweeps,
+   * the expired ones, which stay awaiting_approval until swept,
    * are left in SQL; `expiresAt` is an ISO string, compared as one.
    */
   listOpenChallenges(client: string, now: string): TaskRecord[] {
@@ -1102,6 +1102,27 @@ export class SqliteStore {
           AND json_extract(data, '$.approval.expiresAt') > ?
       `)
       .all(client, now) as unknown as JsonRow[];
+    return rows.map((row) => JSON.parse(row.data) as TaskRecord);
+  }
+
+  /**
+   * Standalone tasks awaiting approval whose challenge has expired without an
+   * operator decision (#462), oldest first. Workflow steps are left to the
+   * workflow controller, which re-asks or unwinds under its run's lease; tasks
+   * already decided are left for execute to take up or refuse.
+   */
+  listExpiredApprovalTasks(now: string): TaskRecord[] {
+    const rows = this.database
+      .prepare(`
+        SELECT data FROM tasks
+        WHERE json_extract(data, '$.status') = 'awaiting_approval'
+          AND json_extract(data, '$.workflowId') IS NULL
+          AND json_extract(data, '$.approval.expiresAt') <= ?
+          AND json_extract(data, '$.denial') IS NULL
+          AND json_extract(data, '$.approval.approvalId') NOT IN (SELECT approval_id FROM approval_decisions)
+        ORDER BY updated_at ASC
+      `)
+      .all(now) as unknown as JsonRow[];
     return rows.map((row) => JSON.parse(row.data) as TaskRecord);
   }
 

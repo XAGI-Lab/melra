@@ -975,7 +975,7 @@ export class TaskController {
     return this.running.get(taskId) ?? Promise.resolve();
   }
 
-  cancel(taskId: string): TaskRecord {
+  cancel(taskId: string, error?: string): TaskRecord {
     const task = this.status(taskId);
     const controller = this.active.get(taskId);
     if (controller !== undefined) {
@@ -984,6 +984,9 @@ export class TaskController {
     }
     if (UNSTARTED.includes(task.status)) {
       task.status = "cancelled";
+      if (error !== undefined) {
+        task.error = error;
+      }
       task.updatedAt = now();
       // Started meanwhile by another process: it runs, so the caller is told
       // what the task is now rather than that it was cancelled.
@@ -1347,8 +1350,28 @@ export class TaskController {
       }
     }
     this.expireJudgements(failures);
+    this.sweepExpiredApprovals(failures);
     if (failed === undefined && failures.size > 0) throw failures.values().next().value;
     return recovered;
+  }
+
+  /**
+   * Standalone tasks awaiting approval whose challenge has expired without an
+   * operator decision (#462) settle cancelled with error `approval_expired`.
+   * A task with a recorded decision, and a workflow step's task, are left alone.
+   */
+  private sweepExpiredApprovals(failures: Map<string, unknown>): void {
+    for (const listed of this.store.listExpiredApprovalTasks(now())) {
+      try {
+        if (listed.workflowId !== undefined) continue;
+        if (listed.approval === undefined) continue;
+        if (this.store.getApprovalDecision(listed.approval.approvalId) !== undefined) continue;
+        if (listed.denial !== undefined) continue;
+        this.cancel(listed.id, "approval_expired");
+      } catch (error) {
+        failures.set(listed.id, error);
+      }
+    }
   }
 
   /**

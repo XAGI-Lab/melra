@@ -664,3 +664,63 @@ describe("refused answers (#424)", () => {
     expect(store.listRefusals(5)).toEqual([]);
   });
 });
+
+describe("listExpiredApprovalTasks", () => {
+  it("returns expired standalone approval tasks without decisions", () => {
+    store = new SqliteStore(":memory:");
+    const request = TaskRequestSchema.parse({
+      goal: "Write file",
+      operation: { kind: "file", action: "write", path: "a.txt", content: "hi" },
+    });
+    const policyDecision = {
+      outcome: "confirm" as const,
+      effect: "mutate" as const,
+      risk: "high" as const,
+      reason: "needs_operator_approval",
+      policyVersion: "1",
+      traits: [],
+    };
+    const makeTask = (id: string, approvalId: string, expiresAt: string, extra: Record<string, unknown> = {}) => ({
+      id,
+      request,
+      status: "awaiting_approval" as const,
+      policyDecision,
+      approval: {
+        approvalId,
+        taskId: id,
+        actionDigest: "0".repeat(64),
+        expiresAt,
+        phrase: "APPROVE",
+      },
+      receiptIds: [],
+      createdAt: "2026-10-01T00:00:00.000Z",
+      updatedAt: "2026-10-01T00:00:00.000Z",
+      ...extra,
+    });
+
+    const expired = makeTask("11111111-1111-4111-8111-111111111111", "00000000-0000-4000-8000-000000000001", "2026-10-01T00:01:00.000Z");
+    const future = makeTask("22222222-2222-4222-8222-222222222222", "00000000-0000-4000-8000-000000000002", "2026-10-01T00:05:00.000Z");
+    const step = makeTask("33333333-3333-4333-8333-333333333333", "00000000-0000-4000-8000-000000000003", "2026-10-01T00:01:00.000Z", {
+      workflowId: "wf-1",
+    });
+    const decided = makeTask("44444444-4444-4444-8444-444444444444", "00000000-0000-4000-8000-000000000004", "2026-10-01T00:01:00.000Z");
+
+    store.saveTask(expired);
+    store.saveTask(future);
+    store.saveTask(step);
+    store.saveTask(decided);
+    store.recordApprovalDecision({
+      approvalId: "00000000-0000-4000-8000-000000000004",
+      taskId: decided.id,
+      renderDigest: "0".repeat(64),
+      channel: "out_of_band",
+      approver: "cli:alice",
+      decidedAt: "2026-10-01T00:00:30.000Z",
+    });
+
+    const now = "2026-10-01T00:02:00.000Z";
+    const result = store.listExpiredApprovalTasks(now);
+    expect(result.map((t) => t.id)).toEqual([expired.id]);
+  });
+});
+

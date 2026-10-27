@@ -851,3 +851,53 @@ describe("a plan-time policy deny", () => {
     expect(store.getTask(planned.id)?.certificateId).toBe(certificate?.certificateId);
   });
 });
+
+describe("sweeping expired approval challenges (#462)", () => {
+  it("cancels an expired challenge with approval_expired, leaving decided tasks and workflow steps alone", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const { tasks, store, cipher } = await setup({ approvalTtlMs: 1_000 });
+    const workflows = new WorkflowController(store, tasks, cipher);
+
+    // 1. Expired standalone task
+    const standalone = tasks.plan(put("standalone"));
+
+    // 2. Decided task (approved in time)
+    const decided = tasks.plan(put("decided"));
+    tasks.decide(decided.id, tasks.approvalView(decided.id).renderDigest, "cli:test");
+
+    // 3. Workflow step task
+    const workflowRun = workflows.plan(
+      WorkflowDefinitionSchema.parse({
+        schemaVersion: "1.0.0",
+        id: "88888888-8888-4888-8888-888888888888",
+        version: 1,
+        name: "StepRun",
+        nodes: [{ id: "step", type: "operation", request: put("step") }],
+      }),
+    );
+    await workflows.advance(workflowRun.id);
+    const stepTaskId = workflows.status(workflowRun.id).nodes.step?.taskIds?.[0];
+    expect(stepTaskId).toBeDefined();
+    expect(tasks.status(stepTaskId!).status).toBe("awaiting_approval");
+
+    // Advance time past expiry
+    vi.advanceTimersByTime(2_000);
+
+    // Run sweep
+    await tasks.recoverInterrupted();
+
+    // Verify 1: Standalone expired task is cancelled with reason approval_expired
+    const swept = tasks.status(standalone.id);
+    expect(swept.status).toBe("cancelled");
+    expect(swept.error).toBe("approval_expired");
+
+    // Verify 2: Decided task is left awaiting_approval (usable by execute)
+    expect(tasks.status(decided.id).status).toBe("awaiting_approval");
+    expect(tasks.status(decided.id).error).toBeUndefined();
+
+    // Verify 3: Workflow step task is left awaiting_approval
+    expect(tasks.status(stepTaskId!).status).toBe("awaiting_approval");
+    expect(tasks.status(stepTaskId!).error).toBeUndefined();
+  });
+});
+

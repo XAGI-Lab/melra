@@ -145,6 +145,10 @@ All notable changes are documented here. The format follows
   letters in the name of a file with another hard link, on a disk that ignores
   case, now passes once its directory no longer lists the old spelling; it
   failed, and the move ended `partial`.
+- Standalone tasks left `awaiting_approval` past their challenge's expiry are
+  swept on start and on the recovery interval, moving to `cancelled` with error
+  `approval_expired`. Tasks with a recorded decision, and workflow step tasks
+  the workflow controller still re-asks, are left alone. (#462)
 
 ### Security
 
