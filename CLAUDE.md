@@ -54,7 +54,7 @@ pnpm e2e                    # packages/server/test/e2e.test.ts against a live st
 pnpm pack:check              # npm pack --dry-run for the published CLI
 pnpm readme:check           # typecheck every ```ts block in every package README
 pnpm security:audit          # pnpm audit --prod + scripts/python-audit.mjs
-pnpm melra <cmd>            # run the CLI from source via tsx (setup | doctor | conformance | init | serve | launch | probe | run | approve | judge | console | inspect | export | tasks | watch | status | workflow | demo | clients | policy test | version)
+pnpm melra <cmd>            # run the CLI from source via tsx (setup | doctor | conformance | init | serve | launch | probe | run | approve | judge | console | inspect | export | tasks | watch | status | audit | workflow | demo | clients | policy test | version)
 ```
 
 Single test file (vitest args pass through the package script):
@@ -225,12 +225,15 @@ Invariants worth knowing before touching this code:
 - Events are append-only and ordered; projections and snapshots are derived. Read state through `status()`/`events()` rather than querying tables directly.
 - Exact workflow definitions and adapter results are sealed with AES-256-GCM (`payload-cipher.ts`) bound to record identity and purpose. Keys come from `MELRA_PAYLOAD_KEY` or a mode-`0600` file (`packages/server/src/payload-key.ts`); permissive key files fail closed.
 
-All of this lives in SQLite migrations 1–8 (`packages/storage-sqlite/src/index.ts`).
+All of this lives in SQLite migrations 1–9 (`packages/storage-sqlite/src/index.ts`).
 Migration 7's triggers make receipts, workflow events, approval decisions, grant draws,
 idempotency commits and `certificate_history` append-only and let a certificate change only
 in place on its own task (`record_append_only`), and migration 8 adds `approval_denials` and
 `refusals` under the same triggers, so a test that corrupts such a row must drop the trigger
-first.
+first. Migration 9 chains those records (`record_chain`, every table in `CHAINED`): each
+is sealed in the transaction that writes it by an HMAC link under `PayloadCipher.chainKey()`,
+what an older MELRA wrote is sealed at the next start (`sealRecords`, marked `swept`), and
+`melra audit verify` walks it; a new append-only record table belongs in `CHAINED` too.
 Schema changes need a new migration, not an edit to an existing one's statements. An older
 MELRA keeps writing a migrated home (`melra setup` pins each client to its version), so a
 migration must leave its writes correct: an expression index or a new table does, a column only

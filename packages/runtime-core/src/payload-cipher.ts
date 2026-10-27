@@ -40,6 +40,15 @@ export class PayloadCipher {
     return createHmac("sha256", this.digestKey).update(`${purpose}\0${canonicalJson(value)}`).digest("hex");
   }
 
+  /**
+   * The key the record chain's links are HMACs under (`SqliteStore.sealRecords`),
+   * derived under a label of its own, so a link is never a record digest and
+   * the store is never handed the payload key.
+   */
+  chainKey(): Buffer {
+    return Buffer.from(hkdfSync("sha256", this.key, Buffer.alloc(0), "melra:record-chain:v1", 32));
+  }
+
   seal(value: unknown, context: string): EncryptedPayload {
     const iv = randomBytes(12);
     const cipher = createCipheriv("aes-256-gcm", this.key, iv);

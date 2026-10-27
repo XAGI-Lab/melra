@@ -1583,6 +1583,83 @@ opening a TCP connection to `127.0.0.1:$MELRA_HTTP_PORT` (and to
 `MELRA_SOCKET`, if set) and closing it without sending anything — no token, no
 request.
 
+## Verify the records
+
+Every receipt, every version of a certificate, and every workflow event,
+approval decision and denial, refused answer, grant draw and idempotency
+commit is sealed into one chain in the transaction that writes it: each link
+is an HMAC-SHA256, under a key derived from the payload key, of the link
+before it, the record's digest and whether a later start sealed the record
+instead (below). Task rows and workflow runs, which change
+as a task or run moves, are not sealed. Two commands read the chain, opening
+the database read-only:
+
+```bash
+melra audit verify                    # every link and every sealed record
+melra audit head                      # the last link: sequence and link
+melra audit verify --head 41:3f9a…    # and the chain still passes through that head
+```
+
+`verify` loads the payload key as the server does (`MELRA_PAYLOAD_KEY`, else
+`<MELRA_HOME>/payload.key`), so run it with the server's `MELRA_HOME` and key;
+it never creates either, and refuses a key that cannot open what is sealed
+there (`payload_key_mismatch`). It exits 0 when the chain holds, and 1 naming
+the first break in `break.reason`, with the sequence, table and key where it
+found it:
+
+| Reason | Meaning |
+|---|---|
+| `record_changed` | a sealed record no longer matches the digest sealed for it |
+| `record_removed` | a sealed record is gone |
+| `sequence_gap` | links are missing from the chain |
+| `link_forged` | a link was not made with this home's key |
+| `head_mismatch` | the chain no longer passes through the head given with `--head` |
+| `head_truncated` | the chain ends before that head |
+| `unsealed_rows` | rows no link seals yet (`unsealed` counts them) |
+
+An older MELRA sharing the home writes its records without links. The next
+process of this version to start on the home seals them: `serve`, `run`,
+`approve`, `inspect` and every other command that starts the runtime. Until
+then `verify` reports them as `unsealed_rows`; check those before starting
+MELRA on the home, because a start seals them as they then are. Anything else
+inserted into the file meanwhile, and any record whose link was removed, is
+sealed with them, so the chain shows that a record has not changed since it
+was last sealed, not who wrote it.
+
+A write seals only a record holding exactly what it wrote: a row under the
+same key holding anything else, one planted there first or stored in place of
+MELRA's by a trigger added to the file, is left for the next start to seal.
+
+Each link records whether a start sealed it rather than the write. `verify`
+counts those in `swept`, and in `late` gives the first of them that follows a
+link sealed when written, with `count`, how many do. Neither fails `verify`:
+a home first sealed when it was migrated has swept links and none late, and
+an older MELRA writing beside this version leaves late ones at every start.
+Compare both with what an earlier `verify` printed.
+
+Three changes pass `verify` on its own. Anyone who can write `melra.sqlite`
+can, without the key, remove a record's link and every later one, change or
+remove the records from there, and leave the next start to seal what is left
+again; that shows only in `swept`, and in `late` when a link sealed when
+written comes before the removed ones. The newest
+records can be removed together with their links, which leaves no mark. And
+someone holding `payload.key`, who in a single-user deployment is anyone
+running as MELRA's user, can rebuild the chain with no mark. A head kept,
+after the record in question was sealed, where that user cannot change it
+shows all three, because the chain must still pass through it. Keep heads on
+another machine, in a system log or on write-once storage, and check against
+one from before the time in question, not only the newest. For example, as
+MELRA's user, with its `MELRA_HOME`:
+
+```cron
+*/15 * * * * melra audit head | tr -d ' \n' | logger -t melra-audit-head
+```
+
+which logs `{"sequence":41,"link":"3f9a…"}` every quarter hour; later,
+`melra audit verify --head 41:3f9a…` with a logged head. Run `audit head` as
+MELRA's own user: it needs no key, but a process of another user that opens
+the database can leave files beside it that MELRA cannot then write.
+
 ## Deployment modes
 
 MELRA governs the effects it is asked for. It cannot see whether the harness

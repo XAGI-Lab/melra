@@ -35,6 +35,21 @@ All notable changes are documented here. The format follows
   `melra_capabilities` reports the same in `policy.approvals` (`in_band`,
   `out_of_band`, or `none` under unsafe-local) and `policy.sandbox` (the
   sandbox, `none`, or `off`).
+- A record chain (migration 9): every receipt, every version of a
+  certificate, and every workflow event, approval decision and denial, refused
+  answer, grant draw and idempotency commit is sealed, in the transaction that
+  writes it, by a link that is an HMAC-SHA256 of the link before, the
+  record's digest and whether a later start sealed it instead, under a key
+  derived from the payload key. `melra audit verify` checks every link and
+  sealed record from the database opened read-only, and exits 1 naming the
+  first break, rows not sealed yet included; it also counts the links a start
+  sealed (`swept`) and names the first of them that follows a link sealed when
+  written (`late`). `melra audit head` prints the last link to keep outside
+  MELRA's reach, and `melra audit verify --head <sequence>:<link>` checks that
+  the chain still passes through it. What an older MELRA sharing the home
+  writes is sealed at the next start of this version. Task rows and workflow
+  runs, which change as a task or run moves, are not chained. See [verify the
+  records](https://github.com/XAGI-Lab/melra/blob/main/docs/INSTALLATION.md#verify-the-records).
 
 ### Changed
 
@@ -104,6 +119,20 @@ All notable changes are documented here. The format follows
 - The package-manager caches under home stay closed to commands: installs
   outside the sandbox trust them, so a command that could write there could
   change what later runs outside it.
+- Records an effect leaves are tamper-evident: changing or removing a sealed
+  one, even with the database triggers dropped, or adding a link without the
+  home's key, fails `melra audit verify`, unless the record's link and every
+  later one are removed too. Anyone who can write `melra.sqlite` can do that
+  without the key, and the next start of MELRA seals what is left again, as it
+  then is, so `verify` passes; it counts those links as `swept`, and names the
+  first that follows a link sealed when written as `late`, which an older
+  MELRA writing beside this one leaves as well. A row inserted without the key,
+  or stored in place of MELRA's by a trigger added to the file, is sealed the
+  same way at the next start: a write seals only a record holding exactly
+  what it wrote. Removing the newest records with
+  their links, or rebuilding the chain with `payload.key`, leaves no mark. A
+  head kept, after the record in question was sealed, where MELRA's user
+  cannot write shows each of these.
 
 ## [0.4.0-alpha.1] - 2026-10-27
 

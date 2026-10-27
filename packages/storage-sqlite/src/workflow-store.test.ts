@@ -1,6 +1,7 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: AGPL-3.0-only
 
+import { randomBytes } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -183,6 +184,26 @@ describe("durable workflow storage", () => {
     expect((await readFile(databasePath)).toString()).not.toContain(
       "one-time-secret",
     );
+  });
+
+  it("seals each event in the transaction that writes it", () => {
+    const store = new SqliteStore(":memory:");
+    stores.push(store);
+    const key = randomBytes(32);
+    store.sealRecords(key);
+    store.createWorkflow(definition("[REDACTED]"), envelope("workflow"), run(), [
+      event(1, "55555555-5555-4555-8555-555555555555"),
+    ]);
+    store.transitionWorkflow(workflowId, 1, run(2, "running"), [
+      event(2, "66666666-6666-4666-8666-666666666666", "workflow.started"),
+    ]);
+    // A stale transition rolls back with its events, and seals none.
+    expect(() =>
+      store.transitionWorkflow(workflowId, 1, run(2, "running"), [
+        event(2, "77777777-7777-4777-8777-777777777777", "workflow.started"),
+      ]),
+    ).toThrow("workflow_state_conflict");
+    expect(store.verifyChain(key)).toMatchObject({ ok: true, unsealed: 0, head: { sequence: 2 } });
   });
 
   it("appends events monotonically and rejects stale projections", () => {

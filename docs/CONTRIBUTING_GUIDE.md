@@ -103,7 +103,7 @@ validated.
 
 ### …change the database
 
-`packages/storage-sqlite/src/index.ts`, in migrations 1–8 today. A schema
+`packages/storage-sqlite/src/index.ts`, in migrations 1–9 today. A schema
 change needs a **new migration**, never an edit to an existing one's
 statements — someone out there has a database that already ran them.
 Migration 7's triggers refuse, with `record_append_only`, any update or
@@ -116,6 +116,9 @@ place on its own task, which keeps the row it replaces in
 [durable storage](ARCHITECTURE.md#durable-storage)). A change that has to
 remove or rewrite any of these must drop and recreate those triggers in the
 migration itself, and a test that corrupts such a row drops the trigger first.
+Migration 9 seals each of them into `record_chain` as it is written, so
+removing or rewriting one also breaks the chain `melra audit verify` checks,
+and a new append-only record table belongs in the store's `CHAINED` list.
 
 ### …touch anything that can carry a secret
 

@@ -345,6 +345,37 @@ export function confinedRoot(given: string, named: string): string {
   return inside !== "" && !inside.startsWith("..") && !isAbsolute(inside) ? resolve(named) : resolve(given);
 }
 
+/**
+ * The home's payload cipher. The one place a key is loaded, `serve`, `run`,
+ * `approve`, `audit` and the rest alike, so none of them mints one for a home
+ * sealed under another, or starts with one that cannot open what is sealed
+ * there: that process would seal under it too, splitting the home between
+ * two keys (#417). `mint: false`, for a command that only reads, never writes
+ * a key where there is none.
+ */
+export async function homeCipher(
+  store: SqliteStore,
+  dataDirectory: string,
+  environment: NodeJS.ProcessEnv,
+  { mint = true }: { mint?: boolean } = {},
+): Promise<PayloadCipher> {
+  const sample = store.sealedPayloadSample();
+  const cipher = new PayloadCipher(
+    await loadPayloadKey({ dataDirectory, environment, sealed: !mint || sample !== undefined }),
+  );
+  if (sample !== undefined) {
+    try {
+      cipher.open(sample.payload, sample.context);
+    } catch {
+      throw new Error(
+        `payload_key_mismatch: ${dataDirectory} holds payloads sealed under another key; ` +
+          "set MELRA_PAYLOAD_KEY to the key they were sealed under, or restore payload.key from its backup.",
+      );
+    }
+  }
+  return cipher;
+}
+
 export class RuntimeRouter implements OperationExecutor {
   constructor(
     private readonly files: FileRuntime,
@@ -467,24 +498,11 @@ export async function createMelraRuntime(
   const store = new SqliteStore(join(dataDirectory, "melra.sqlite"));
   let cipher: PayloadCipher;
   try {
-    // The one place a key is loaded, `serve`, `run`, `approve` and the rest
-    // alike, so none of them mints one for a home sealed under another, or
-    // starts with one that cannot open what is sealed there: that process
-    // would seal under it too, splitting the home between two keys (#417).
-    const sample = store.sealedPayloadSample();
-    cipher = new PayloadCipher(
-      await loadPayloadKey({ dataDirectory, environment, sealed: sample !== undefined }),
-    );
-    if (sample !== undefined) {
-      try {
-        cipher.open(sample.payload, sample.context);
-      } catch {
-        throw new Error(
-          `payload_key_mismatch: ${dataDirectory} holds payloads sealed under another key; ` +
-            "set MELRA_PAYLOAD_KEY to the key they were sealed under, or restore payload.key from its backup.",
-        );
-      }
-    }
+    cipher = await homeCipher(store, dataDirectory, environment);
+    // Before recovery writes anything: what an older MELRA sharing the home
+    // wrote since the last start is sealed now, and every record from here
+    // in the transaction that writes it.
+    store.sealRecords(cipher.chainKey());
   } catch (error) {
     store.close();
     throw error;
