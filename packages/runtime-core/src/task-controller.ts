@@ -365,6 +365,12 @@ export class TaskController {
       this.policy,
       this.capabilityUsage,
     );
+    // A step of a run that names no planner names none either, so it stays
+    // open to anyone, as its run does.
+    const client =
+      options.client === undefined && options.workflowId !== undefined ? undefined : (options.client ?? callerRef());
+    // Refused before anything is written, so a flood leaves no task behind.
+    if (policy.challenge !== undefined && client !== undefined) this.assertChallengeRoom(client);
     const timestamp = now();
     const sanitizedRequest = redactStructuredValue(parsedRequest)
       .value as TaskRequest;
@@ -384,11 +390,7 @@ export class TaskController {
       ...(options.attempt === undefined ? {} : { attempt: options.attempt }),
       ...(policy.challenge === undefined ? {} : { approval: this.keyedChallenge(policy.challenge) }),
       receiptIds: [],
-      // A step of a run that names no planner names none either, so it stays
-      // open to anyone, as its run does.
-      ...(options.client === undefined && options.workflowId !== undefined
-        ? {}
-        : { client: options.client ?? callerRef() }),
+      ...(client === undefined ? {} : { client }),
       ...(options.workflowId === undefined ? {} : { workflowId: options.workflowId }),
       createdAt: timestamp,
       updatedAt: timestamp,
@@ -1680,6 +1682,34 @@ export class TaskController {
       // The refusal stands whether or not it could be written down.
     }
     return new Error(code);
+  }
+
+  /**
+   * How many challenges a caller, as `callerRef` names it, has open: awaiting
+   * a decision and not expired (#422). One approved and not yet run, and one
+   * cancelled, denied or settled, asks nothing more of anyone and is not
+   * counted.
+   */
+  pendingApprovals(client: string): number {
+    return this.store
+      .listOpenChallenges(client, now())
+      .filter((task) => this.approvalDecision(task) === undefined).length;
+  }
+
+  /**
+   * Refuses (`too_many_pending_approvals`) while a caller has
+   * `maxPendingApprovals` challenges open, so it may be issued no more.
+   *
+   * ponytail: counted and written in one turn of this process; two servers
+   * over one database can each pass at the cap at once, one over apiece.
+   */
+  assertChallengeRoom(client: string): void {
+    const open = this.pendingApprovals(client);
+    if (open >= this.policy.maxPendingApprovals) {
+      throw new Error(
+        `too_many_pending_approvals: ${open} tasks this caller planned already await approval (maxPendingApprovals ${this.policy.maxPendingApprovals}); plan more once some are approved, denied or cancelled, or their challenges expire`,
+      );
+    }
   }
 
   /** The recorded decision for a pending task, while it can still be used. */

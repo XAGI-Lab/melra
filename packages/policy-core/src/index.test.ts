@@ -116,6 +116,11 @@ describe("policy file", () => {
       // A truthy string: read loosely, this one switched the guardrails off.
       [{ unhinged: "false" }, "unhinged"],
       [{ maxFileBytes: "10mb" }, "maxFileBytes"],
+      // A cap of zero would refuse every approval; a fraction counts nothing.
+      [{ maxPendingApprovals: 0 }, "maxPendingApprovals"],
+      [{ maxPendingApprovals: 2.5 }, "maxPendingApprovals"],
+      [{ maxCallsPerMinute: 0 }, "maxCallsPerMinute"],
+      [{ maxCallsPerMinute: "600" }, "maxCallsPerMinute"],
       [{ mutations: "Deny" }, "mutations"],
       [{ deniedTraits: ["packge-install"] }, "deniedTraits[0]"],
       [{ mode: 1 }, "mode"],
@@ -136,6 +141,11 @@ describe("policy file", () => {
     await expect(load({ mode: "enfroced" })).rejects.toThrow(
       `policy_invalid: ${file()}: mode: deployment_mode_unknown`,
     );
+  });
+
+  it("takes the flood limits from the file, and keeps the defaults for one it leaves out (#422)", async () => {
+    expect(await load({ maxPendingApprovals: 3 })).toMatchObject({ maxPendingApprovals: 3, maxCallsPerMinute: 1_200 });
+    expect(await load({ maxCallsPerMinute: 60 })).toMatchObject({ maxPendingApprovals: 64, maxCallsPerMinute: 60 });
   });
 
   it("lists a bad approval window with the file's other problems, naming the file", async () => {

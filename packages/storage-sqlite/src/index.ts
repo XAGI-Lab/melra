@@ -752,6 +752,24 @@ export class SqliteStore {
   }
 
   /**
+   * One caller's tasks awaiting approval whose challenge has not expired, by
+   * the caller `callerRef` names (#422). Read on every challenge planned, so
+   * the expired ones, which stay awaiting_approval and which nothing sweeps,
+   * are left in SQL; `expiresAt` is an ISO string, compared as one.
+   */
+  listOpenChallenges(client: string, now: string): TaskRecord[] {
+    const rows = this.database
+      .prepare(`
+        SELECT data FROM tasks
+        WHERE json_extract(data, '$.status') = 'awaiting_approval'
+          AND json_extract(data, '$.client') = ?
+          AND json_extract(data, '$.approval.expiresAt') > ?
+      `)
+      .all(client, now) as unknown as JsonRow[];
+    return rows.map((row) => JSON.parse(row.data) as TaskRecord);
+  }
+
+  /**
    * Parked tasks whose reconciliation missed inside its settle window (#418),
    * oldest first: no caller is bound to ask them again, so recovery does.
    */

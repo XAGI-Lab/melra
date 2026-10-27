@@ -550,6 +550,19 @@ async function approvalCase(
         phrase: "APPROVE 000000000000",
       });
       break;
+    case "flood": {
+      // `task` is the first of maxPendingApprovals challenges left open. One
+      // more must not be issued at all; one that is is approved and run.
+      for (let open = 1; open < Number(testCase.policy?.maxPendingApprovals); open += 1) planOrThrow(first, request);
+      try {
+        const extra = planOrThrow(first, request);
+        observed = await attempt(first, extra.id, challengeOf(extra));
+      } catch (error) {
+        if (!message(error).startsWith("too_many_pending_approvals")) throw error;
+        observed = `refused:${message(error)}`;
+      }
+      break;
+    }
     case "tightened_policy":
     case "planned_unhinged_executed_guarded": {
       const approval = task.approval === undefined ? undefined : challengeOf(task);
@@ -567,7 +580,6 @@ async function approvalCase(
   }
   const happened = await effectHappened();
   const refused = !/^(verified_success|partial)/.test(observed);
-  void testCase;
   return result(refused && !happened, `${observed}${happened ? " [effect_happened]" : ""}`);
 }
 

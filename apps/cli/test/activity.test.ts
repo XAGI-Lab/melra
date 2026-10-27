@@ -486,6 +486,30 @@ describe("melra tasks, status, and watch", { timeout: 60_000 }, () => {
     expect([status.expiredApprovals, status.expiredWorkflowSteps]).toEqual([1, 0]);
   });
 
+  it("groups the waiting approvals that ask for the same operation, naming every one (#422)", async () => {
+    const { root, run } = await workspace();
+    const ids = [(await run(fileWrite)).task.id, (await run(fileWrite)).task.id].map((id) => id.slice(0, 8));
+    // As a person at a terminal sees it.
+    const tty = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+    Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+    let printed = "";
+    const write = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => ((printed += String(chunk)), true));
+    try {
+      tasksCommand(
+        { workspaceRoot: root, dataDirectory: join(root, ".melra"), approver: "operator", unhinged: false, mode: "developer" },
+        { limit: 10, json: false, window: { mode: "developer" } },
+      );
+    } finally {
+      write.mockRestore();
+      if (tty === undefined) delete (process.stdout as { isTTY?: boolean }).isTTY;
+      else Object.defineProperty(process.stdout, "isTTY", tty);
+    }
+    expect(printed).toContain("2 waiting for approval");
+    const line = printed.split("\n").find((entry) => entry.startsWith("  2 ask for the same "));
+    expect(line).toMatch(/^ {2}2 ask for the same file\.write melra-example\.txt: [a-f0-9]{8} [a-f0-9]{8}$/);
+    for (const id of ids) expect(line).toContain(id);
+  });
+
   it("does not count as waiting what enforced mode will not take an answer for", async () => {
     const { options, run } = await workspace();
     const { task } = await run(fileWrite);

@@ -26,6 +26,7 @@ const SMOKE = [
   "contain.ssrf.http.get.loopback-decimal",
   "approval.wrong_phrase",
   "approval.tightened_policy.mutations-deny",
+  "approval.flood",
   "verify.write.hash-mismatch",
   "verify.http.post-dropped",
   "once.http.same-key-twice",

@@ -508,7 +508,9 @@ export class WorkflowController {
         // and stopping at the first one that does not reach `compensated` —
         // continuing past a failed unwind would strand the saga in a state no
         // node describes.
-        this.unwind(rollback, graph, definition, current, approvals, inputs, by)
+        this.unwind(rollback, graph, definition, current, approvals, inputs, by, (reason) => {
+          refused = { reason };
+        })
       : Promise.allSettled(
           nodeIds.map(async (nodeId) => {
             const node = graph.nodes.get(nodeId)!;
@@ -586,19 +588,27 @@ export class WorkflowController {
           });
           continue;
         }
-        const compensation = await this.runTask(
-          node.request,
-          current.nodes[node.id]?.taskIds[0],
-          approvals,
-          by,
-          true,
-          {
-            workflowId: current.id,
-            nodeId: node.id,
-            iteration: 0,
-            branch: "compensation",
-          },
-        );
+        let compensation: NodeAdvance;
+        try {
+          compensation = await this.runTask(
+            node.request,
+            current.nodes[node.id]?.taskIds[0],
+            approvals,
+            by,
+            true,
+            {
+              workflowId: current.id,
+              nodeId: node.id,
+              iteration: 0,
+              branch: "compensation",
+            },
+          );
+        } catch (error) {
+          // A compensation refused (the approval cap, say) is reported once
+          // the wave's changes are committed, as a forward sibling's is.
+          refused ??= { reason: error };
+          break;
+        }
         results.push({
           nodeId: node.id,
           result: {
@@ -1450,21 +1460,30 @@ export class WorkflowController {
     approvals: ApprovalResponse[],
     inputs: WorkflowInput[],
     by: WorkflowActor,
+    refuse: (reason: unknown) => void,
   ): Promise<Array<{ nodeId: string; result: NodeAdvance }>> {
     const results: Array<{ nodeId: string; result: NodeAdvance }> = [];
     for (const nodeId of nodeIds) {
       // A cancel or pause landed under this advance: its commit will fail, and
       // a compensation started now would run for a run that no longer asks.
       if (this.status(run.id).stateVersion !== run.stateVersion) break;
-      const result = await this.advanceNode(
-        graph.nodes.get(nodeId)!,
-        definition,
-        run.nodes[nodeId]!,
-        run,
-        approvals,
-        inputs,
-        by,
-      );
+      let result: NodeAdvance;
+      try {
+        result = await this.advanceNode(
+          graph.nodes.get(nodeId)!,
+          definition,
+          run.nodes[nodeId]!,
+          run,
+          approvals,
+          inputs,
+          by,
+        );
+      } catch (error) {
+        // Thrown here, the undos already run would go uncommitted: the run
+        // would keep reading them as waiting, with no event for what ran.
+        refuse(error);
+        break;
+      }
       results.push({ nodeId, result });
       if (result.state.status !== "compensated") break;
     }
@@ -1763,6 +1782,10 @@ export class WorkflowController {
       Date.parse(task.approval.expiresAt) <= Date.now() &&
       !decided
     ) {
+      // At maxPendingApprovals the expired attempt is left as it is, not
+      // cancelled, so no cancel reads as a denial; it is asked again on a
+      // later advance once there is room.
+      if (planner !== undefined) this.tasks.assertChallengeRoom(planner);
       const expired = this.tasks.cancel(task.id);
       task =
         expired.status !== "cancelled"

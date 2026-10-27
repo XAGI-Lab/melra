@@ -225,6 +225,40 @@ describe.skipIf(process.platform === "win32")("melra over a Unix socket", () => 
     }
   });
 
+  it("rate limits tool calls over the socket, a new session no fresh allowance (#422)", async () => {
+    writeFileSync(join(socketDirectory, "policy.json"), JSON.stringify({ maxCallsPerMinute: 2 }));
+    await runtime.close();
+    runtime = await createMelraRuntime({
+      workspaceRoot: workspace,
+      dataDirectory: home,
+      policyPath: join(socketDirectory, "policy.json"),
+      environment: {},
+    });
+    const endpoint = await serve();
+    const sessions: Client[] = [];
+    const session = async () => {
+      const client = new Client({ name: "socket-test", version: "0.0.0" });
+      await client.connect(
+        new StreamableHTTPClientTransport(new URL(endpoint.mcpUrl), {
+          fetch: socketFetch(socketPath),
+          requestInit: { headers: { authorization: "Bearer test-token" } },
+        }) as unknown as Transport,
+      );
+      sessions.push(client);
+      return async () =>
+        (await client.callTool({ name: "melra_capabilities", arguments: {} })) as { isError?: boolean; content: { text: string }[] };
+    };
+    try {
+      const call = await session();
+      expect((await call()).isError).toBeFalsy();
+      expect((await call()).isError).toBeFalsy();
+      expect((await call()).content[0]!.text).toMatch(/^rate_limited: .*; retry in \d+ ms$/);
+      expect((await (await session())()).content[0]!.text).toMatch(/^rate_limited: /);
+    } finally {
+      for (const client of sessions) await client.close();
+    }
+  });
+
   it("replaces a stale socket left by a crashed run", async () => {
     staleSocket(socketPath);
     expect(lstatSync(socketPath).isSocket()).toBe(true);

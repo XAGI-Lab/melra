@@ -903,6 +903,8 @@ export const PolicyFileSchema = z
       .number({ error: APPROVAL_TTL_INVALID })
       .refine((ttl) => Number.isInteger(ttl) && ttl >= 1 && ttl <= MAX_APPROVAL_TTL_MS, APPROVAL_TTL_INVALID)
       .exactOptional(),
+    maxPendingApprovals: z.number().int().min(1).max(10_000).exactOptional(),
+    maxCallsPerMinute: z.number().int().min(1).max(1_000_000).exactOptional(),
     maxFileBytes: z.number().exactOptional(),
     memoryRetention: z
       .object({ maxAgeDays: z.number().exactOptional(), maxPerScope: z.number().exactOptional() })

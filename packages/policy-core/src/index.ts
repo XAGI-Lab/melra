@@ -76,6 +76,22 @@ export interface LocalPolicy {
    * It also bounds how long a semantic judgement waits (#54).
    */
   approvalTtlMs?: number;
+  /**
+   * How many challenges one caller (as `callerRef` names it) may have open at
+   * once: awaiting a decision, not expired, not settled. Planning one more is
+   * refused (`too_many_pending_approvals`) before a task is written, so an
+   * agent that keeps planning cannot bury the operator in near-identical asks
+   * (#422).
+   */
+  maxPendingApprovals: number;
+  /**
+   * How many MCP tool calls one client may make in a minute: a token bucket
+   * that holds this many and refills at this rate, per caller as `callerRef`
+   * names it, shared by that caller's sessions on one server process. Past it
+   * a call is refused (`rate_limited`) with when to retry. The operator's CLI
+   * commands read the store directly and are never counted.
+   */
+  maxCallsPerMinute: number;
   maxFileBytes: number;
   /**
    * How long unreachable memory rows are kept before compaction reclaims them,
@@ -594,6 +610,10 @@ export function createDefaultPolicy(workspaceRoot: string, runtimes = true): Loc
     allowedDomains: ["*"],
     popups: "block",
     mutations: "confirm",
+    // Well past what an ordinary session leaves open at once, or calls in a
+    // minute: these stop a flood, not a busy agent.
+    maxPendingApprovals: 64,
+    maxCallsPerMinute: 1_200,
     maxFileBytes: 10 * 1024 * 1024,
     memoryRetention: { maxAgeDays: 30, maxPerScope: 0 },
     deniedTraits: [],

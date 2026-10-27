@@ -3,6 +3,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import {
   attributeTo,
   callerRef,
@@ -53,11 +54,49 @@ function toolResult(value: unknown) {
 }
 
 /**
+ * A token bucket holding `perMinute` tool calls and refilling at that rate;
+ * calling it spends one, or refuses with when one will be there (#422). On the
+ * monotonic clock, so a wall clock set back neither drains nor fills it.
+ */
+function tokenBucket(perMinute: number): () => void {
+  let tokens = perMinute;
+  let at = performance.now();
+  return () => {
+    const now = performance.now();
+    tokens = Math.min(perMinute, tokens + ((now - at) * perMinute) / 60_000);
+    at = now;
+    if (tokens < 1) {
+      const wait = Math.ceil(((1 - tokens) * 60_000) / perMinute);
+      throw new Error(
+        `rate_limited: more than ${perMinute} tool calls in a minute from this client (maxCallsPerMinute ${perMinute}); retry in ${wait} ms`,
+      );
+    }
+    tokens -= 1;
+  };
+}
+
+/**
+ * Each caller's bucket, as `callerRef` names it, shared by every session it
+ * opens on one runtime: a new session is no fresh allowance. Over stdio that
+ * is the one session the process serves.
+ */
+const callBuckets = new WeakMap<MelraRuntime, Map<string, () => void>>();
+
+function callBucket(runtime: MelraRuntime, caller: string): () => void {
+  let buckets = callBuckets.get(runtime);
+  if (buckets === undefined) callBuckets.set(runtime, (buckets = new Map()));
+  let take = buckets.get(caller);
+  if (take === undefined) buckets.set(caller, (take = tokenBucket(runtime.policy.maxCallsPerMinute)));
+  return take;
+}
+
+/**
  * The one description of what this server can do. The HTTP API serves the same
  * object, so a console and a model cannot be told different stories about the
- * posture they are operating under.
+ * posture they are operating under. `caller`, as `callerRef` names it, adds
+ * how many challenges it has open.
  */
-export function capabilitiesPayload(runtime: MelraRuntime): unknown {
+export function capabilitiesPayload(runtime: MelraRuntime, caller?: string): unknown {
   const harnessTools = harnessToolsEnabled(process.env);
   return {
         product: "MELRA",
@@ -139,6 +178,14 @@ export function capabilitiesPayload(runtime: MelraRuntime): unknown {
           // consecutive failures against one target, the next task touching it
           // is refused outright rather than run.
           circuitBreaker: runtime.policy.circuitBreaker,
+          // Worth knowing before planning a batch of changes: with this many
+          // challenges open, the next is refused until some are decided,
+          // cancelled or expire. `pendingApprovals` is how many are open now.
+          maxPendingApprovals: runtime.policy.maxPendingApprovals,
+          ...(caller === undefined ? {} : { pendingApprovals: runtime.controller.pendingApprovals(caller) }),
+          // And before a polling loop: past this, a call is refused with when
+          // to retry.
+          maxCallsPerMinute: runtime.policy.maxCallsPerMinute,
           allowedDomains: runtime.policy.allowedDomains,
           allowLocalhost: runtime.policy.allowLocalhost,
           // Names only, and worth publishing: a caller that knows the kernel
@@ -256,13 +303,35 @@ export function createMcpServer(
   const agent = { agent: client === undefined ? "agent" : principalRef(client) };
   const ownTask = (taskId: string) => runtime.controller.assertCaller(taskId, caller);
   const ownRun = (workflowId: string) => runtime.workflows.assertCaller(workflowId, caller);
+  // Every tools/call spends from the caller's bucket before anything else
+  // (#422), one naming an unknown tool or failing its input schema too (the
+  // SDK answers one naming no tool before any handler). Wrapped where
+  // the SDK installs its one tools/call handler, on the first registerTool, so
+  // the harness tools and any tool added later are counted; the operator's
+  // CLI never comes through here.
+  const take = callBucket(runtime, caller);
+  const handle = server.server.setRequestHandler.bind(server.server);
+  server.server.setRequestHandler = ((schema: never, handler: (...args: never[]) => unknown) =>
+    handle(
+      schema,
+      (schema !== CallToolRequestSchema
+        ? handler
+        : async (...args: never[]) => {
+            try {
+              take();
+            } catch (error) {
+              return { isError: true, content: [{ type: "text", text: (error as Error).message }] };
+            }
+            return await handler(...args);
+          }) as never,
+    )) as typeof server.server.setRequestHandler;
 
   server.registerTool(
     "melra_capabilities",
     {
       title: "MELRA capabilities",
       description:
-        "Report what this MELRA server can run and the policy in force. Call it once before melra_plan or melra_workflow_plan; it takes no input and changes nothing. Returns product, version and protocolVersion; tools; operations (the actions each operation kind supports); customEvidence (verifier names allowed in custom evidence); workflowNodes (node types for workflow definitions); and policy, including mode, workspaceRoot, unhinged, mutations, allowedCommands, deniedTraits, allowedDomains, circuitBreaker and credential names.",
+        "Report what this MELRA server can run and the policy in force. Call it once before melra_plan or melra_workflow_plan; it takes no input and changes nothing. Returns product, version and protocolVersion; tools; operations (the actions each operation kind supports); customEvidence (verifier names allowed in custom evidence); workflowNodes (node types for workflow definitions); and policy, including mode, workspaceRoot, unhinged, mutations, allowedCommands, deniedTraits, allowedDomains, circuitBreaker, credential names, maxPendingApprovals with pendingApprovals (the challenges you have open now) and maxCallsPerMinute (past it any call fails with rate_limited, saying when to retry).",
       inputSchema: MelraCapabilitiesInputSchema,
       annotations: {
         readOnlyHint: true,
@@ -271,7 +340,7 @@ export function createMcpServer(
         openWorldHint: false,
       },
     },
-    async () => toolResult(capabilitiesPayload(runtime)),
+    async () => toolResult(capabilitiesPayload(runtime, caller)),
   );
 
   server.registerTool(
@@ -279,7 +348,7 @@ export function createMcpServer(
     {
       title: "Plan a MELRA task",
       description:
-        "Plan one bounded operation without running it: MELRA evaluates policy and stores the task in its own records only, so nothing outside MELRA changes until it runs. Send a goal, one operation and requiredEvidence, and leave constraints empty. Returns the task with its effect contract and status planned, awaiting_approval (approval holds the challenge) or policy_blocked (a normal result; policyDecision.reason says why); an invalid request, such as one naming an unregistered verifier or a file evidence path outside the workspace, fails the call instead. Keep its id: it is the taskId for melra_execute, melra_task_status, melra_task_cancel and melra_receipt. For dependent steps use melra_workflow_plan.",
+        "Plan one bounded operation without running it: MELRA evaluates policy and stores the task in its own records only, so nothing outside MELRA changes until it runs. Send a goal, one operation and requiredEvidence, and leave constraints empty. Returns the task with its effect contract and status planned, awaiting_approval (approval holds the challenge) or policy_blocked (a normal result; policyDecision.reason says why); an invalid request, such as one naming an unregistered verifier or a file evidence path outside the workspace, fails the call instead, and so does one needing approval while maxPendingApprovals of your tasks already await it (too_many_pending_approvals: wait for decisions, cancel some with melra_task_cancel, or let them expire). Keep its id: it is the taskId for melra_execute, melra_task_status, melra_task_cancel and melra_receipt. For dependent steps use melra_workflow_plan.",
       inputSchema: MelraPlanInputSchema,
       annotations: {
         readOnlyHint: true,

@@ -718,7 +718,8 @@ for some mistakes, such as a trailing comma in a list, a comment or a bare
 word, Node gives none and the message says only `not valid JSON`.
 
 The keys are `version`, `workspaceRoot`, `allowedCommands`, `allowedDomains`,
-`allowLocalhost`, `popups`, `mutations`, `approvalTtlMs`, `maxFileBytes`,
+`allowLocalhost`, `popups`, `mutations`, `approvalTtlMs`, `maxPendingApprovals`
+and `maxCallsPerMinute` (see [flood limits](#flood-limits)), `maxFileBytes`,
 `memoryRetention`, `deniedTraits`, `capabilities`, `credentials`,
 `circuitBreaker`, `unhinged`, `sandbox` (see
 [per-command sandbox](#per-command-sandbox)) and `mode`; there is no comment
@@ -1132,6 +1133,60 @@ what unsafe-local mode does.
 
 The state is per process, so restarting the server starts every target closed.
 
+### Flood limits
+
+Two keys stop one caller from leaning on the kernel, or on you, harder than
+any ordinary session does. Their defaults are far above what one hits.
+
+`maxPendingApprovals` (default `64`, from `1` to `10000`) is how many approval
+challenges one caller may have open at once. A challenge is open while it
+awaits a decision and has not expired; one approved and not yet run, and one
+denied, cancelled or settled, is not counted. The caller is whom the transport
+names: each authenticated HTTP client on its own, and everything holding the
+operator's key (the HTTP token, stdio, `melra run`) as one. A request needing
+approval past the cap is refused before any task is written:
+
+```text
+too_many_pending_approvals: 64 tasks this caller planned already await approval (maxPendingApprovals 64); plan more once some are approved, denied or cancelled, or their challenges expire
+```
+
+Approve or deny some (`melra approve`, `melra console`), have the agent cancel
+some (`melra_task_cancel`), or wait for them to expire. A request that needs
+no approval, such as a read inside the workspace, is never refused; in enforced
+mode a read that leaves the workspace or goes to a host only `*` admits needs
+approval and counts. A workflow advance refused this way leaves its step as it
+was, and a later advance plans it once there is room. So it is for a
+compensation, so an unwind waits for room too, and for a step whose challenge
+expired, which is left uncancelled until then. The count is taken in one
+process, so two servers sharing a data directory can each go one over at the
+same moment.
+
+`maxCallsPerMinute` (default `1200`, from `1` to `1000000`) bounds MCP tool
+calls: a token bucket per caller in each server process that holds this many
+and refills at this rate, shared by every session the caller opens there, so a
+new session is no fresh allowance. Every call counts, the harness tools
+included, and so does one naming an unknown tool or failing its input schema;
+one too malformed to name a tool at all is refused by the MCP SDK before the
+limit, and costs nothing. A call past it fails without running:
+
+```text
+rate_limited: more than 1200 tool calls in a minute from this client (maxCallsPerMinute 1200); retry in 50 ms
+```
+
+It applies over stdio, loopback HTTP and the Unix socket, and in every mode,
+unsafe-local included, since it protects the host rather than judging an
+effect. The operator's own commands (`melra approve`, `melra console`, `melra
+judge`, `melra tasks`) read and write the store directly and are never
+counted.
+
+```json
+{ "maxPendingApprovals": 64, "maxCallsPerMinute": 1200 }
+```
+
+`melra_capabilities` publishes both under `policy`, with `pendingApprovals`,
+how many challenges the calling client has open now. `/api/capabilities` has
+the two limits but no count, since the operator calls it.
+
 ## Commands that ask a question
 
 A command that stops to prompt would otherwise sit there until its timeout, with
@@ -1356,8 +1411,8 @@ id, as before.
 | `/oauth/register` | `POST` | RFC 7591 registration, JSON only and never with an `Origin` header; grants nothing on its own |
 | `/oauth/authorize` | `GET`/`POST` | The consent page, and your decision |
 | `/oauth/token` | `POST` | Authorization code exchange, PKCE S256 |
-| `/api/capabilities` | `GET` | The same payload `melra_capabilities` returns |
-| `/api/tasks?limit=<n>` | `GET` | Recent tasks, newest first; `approvalPendingIds`, those of them awaiting approval with no usable decision; `attentionCount`, every task needing attention |
+| `/api/capabilities` | `GET` | The same payload `melra_capabilities` returns, less the caller's `pendingApprovals` |
+| `/api/tasks?limit=<n>` | `GET` | Recent tasks, newest first; `approvalPendingIds`, those of them awaiting approval with no usable decision; `approvalGroups`, the ids of every such task whose challenge has not expired asking for the same operation as another, in groups, newest first; `attentionCount`, every task needing attention |
 | `/api/tasks/:id` | `GET` | One task's status |
 | `/api/tasks/:id/approval-state` | `GET` | A pending task's usable decision, if any, whether its challenge is spent, and whether it is a workflow step, with its run, whether that run names this task, and whether it names it from a compensation |
 | `/api/tasks/:id/receipts` | `GET` | That task's receipts |
@@ -1414,6 +1469,20 @@ a1285e0f  verified_success   system.info   local-system       read/low         3
 
 1 waiting for approval — approve with `melra approve <task-id>`
 ```
+
+Pending approvals that ask for the same operation, as their stored copies say
+it, are grouped under the count, every one named, so a run of one request reads
+as one thing to decide:
+
+```
+3 waiting for approval — approve with `melra approve <task-id>`
+  2 ask for the same file.write melra-example.txt: 64199678 9b21c0d4
+```
+
+The console's task list puts such tasks together in the same way and says on
+each how many ask for it. Neither hides one, and each is approved on its own
+screen. Two requests that differ only in a value redaction masked group
+together.
 
 Piped, or with `--json`, `tasks` and `status` print JSON (the task records are
 the ones `/api/tasks` returns) and `watch` prints one JSON event per line.

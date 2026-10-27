@@ -495,6 +495,58 @@ describe("approval console", () => {
     expect(after.body.attentionCount).toBe(before.body.attentionCount);
   });
 
+  it("lists pending tasks asking for the same operation together, counted, hiding none (#422)", async () => {
+    const plan = (path: string) =>
+      runtime.controller.plan(
+        TaskRequestSchema.parse({
+          goal: `Write ${path}`,
+          operation: { kind: "file", action: "write", path, content: "x" },
+          requiredEvidence: [{ type: "file_exists", path }],
+        }),
+      );
+    const first = plan("alike.txt");
+    const between = plan("unlike.txt");
+    const second = plan("alike.txt");
+    const listed = await call(agent, "/api/tasks?limit=500", { token: "agent-token" });
+    const groups = listed.body.approvalGroups as string[][];
+    expect(groups.find((ids) => ids.includes(first.id))?.slice().sort()).toEqual([first.id, second.id].sort());
+    expect(groups.some((ids) => ids.includes(between.id))).toBe(false);
+    const executablePath = await detectBrowserExecutable();
+    if (executablePath === undefined) return;
+    const browser = await chromium.launch({ executablePath, headless: true });
+    try {
+      const page = await browser.newPage();
+      await page.goto(`http://127.0.0.1:${agent.port}/?token=agent-token#/tasks`);
+      await page.locator(`[data-key="${first.id}"]`).waitFor();
+      const keys = await page.locator("[aria-label=Tasks] [data-key]").evaluateAll((rows) => rows.map((row) => row.getAttribute("data-key")));
+      // Newest first, the one between them was listed between them.
+      expect(Math.abs(keys.indexOf(first.id) - keys.indexOf(second.id))).toBe(1);
+      expect(keys).toContain(between.id);
+      for (const id of [first.id, second.id]) {
+        expect(await page.locator(`[data-key="${id}"]`).textContent()).toContain("2 pending ask for this");
+      }
+      expect(await page.locator(`[data-key="${between.id}"]`).textContent()).not.toContain("pending ask for this");
+    } finally {
+      await browser.close();
+    }
+  }, 60_000);
+
+  it("groups only challenges still open, as melra tasks counts them (#422)", async () => {
+    const plan = () =>
+      runtime.controller.plan(
+        TaskRequestSchema.parse({
+          goal: "Write lapsed.txt",
+          operation: { kind: "file", action: "write", path: "lapsed.txt", content: "x" },
+          requiredEvidence: [{ type: "file_exists", path: "lapsed.txt" }],
+        }),
+      );
+    const lapsed = runtime.controller.status(plan().id);
+    const live = plan();
+    runtime.store.saveTask({ ...lapsed, approval: { ...lapsed.approval!, expiresAt: new Date(Date.now() - 1_000).toISOString() } });
+    const listed = await call(agent, "/api/tasks?limit=500", { token: "agent-token" });
+    expect((listed.body.approvalGroups as string[][]).some((ids) => ids.includes(lapsed.id) || ids.includes(live.id))).toBe(false);
+  });
+
   const write = (name: string) =>
     TaskRequestSchema.parse({
       goal: `Write ${name}`,

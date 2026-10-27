@@ -53,6 +53,24 @@ export function workflowStepJudge(
 }
 
 /**
+ * Pending tasks asking for the same operation, as their stored (redacted)
+ * copies say it, in groups of two or more, each in the order given (#422).
+ * `melra tasks` and the console show a group together with its count and list
+ * every task in it, so a run of one ask reads as one thing to decide. Not by
+ * the challenge's action digest, which binds each task's own id.
+ */
+export function alikeGroups(tasks: TaskRecord[]): TaskRecord[][] {
+  const groups = new Map<string, TaskRecord[]>();
+  for (const task of tasks) {
+    const key = JSON.stringify(task.request.operation);
+    const group = groups.get(key);
+    if (group === undefined) groups.set(key, [task]);
+    else group.push(task);
+  }
+  return [...groups.values()].filter((group) => group.length > 1);
+}
+
+/**
  * MCP sessions kept before the least recently used idle one is ended. A client
  * that leaves without ending its session (a crash, a dropped network, an MCP
  * client that never sends DELETE) otherwise holds an MCP server and its
@@ -930,14 +948,18 @@ export async function serveHttp(
         Number.isFinite(limit) ? Math.min(Math.max(limit, 1), 500) : 50,
       );
       const awaiting = runtime.store.listTasks(100_000, "awaiting_approval");
-      const approvalPendingIds = awaiting
-        .filter((task) => runtime.controller.approvalDecision(task) === undefined)
-        .map((task) => task.id);
+      const pending = awaiting.filter((task) => runtime.controller.approvalDecision(task) === undefined);
+      const approvalPendingIds = pending.map((task) => task.id);
       const pageIds = new Set(tasks.map((task) => task.id));
       const counts = runtime.store.taskStatusCounts();
       json(response, 200, {
         tasks,
         approvalPendingIds: approvalPendingIds.filter((id) => pageIds.has(id)),
+        // Over every pending task, not this page alone, so a count is whole,
+        // and only those still open, so it agrees with `melra tasks`.
+        approvalGroups: alikeGroups(
+          pending.filter((task) => task.approval !== undefined && Date.parse(task.approval.expiresAt) > Date.now()),
+        ).map((group) => group.map((task) => task.id)),
         attentionCount: (counts.waiting_user ?? 0) + (counts.recovery_required ?? 0) + (counts.partial ?? 0) + approvalPendingIds.length,
       });
       return;

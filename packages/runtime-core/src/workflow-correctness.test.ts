@@ -1812,3 +1812,93 @@ describe("a step's task looked up by its key", () => {
     expect(listed).not.toHaveBeenCalled();
   });
 });
+
+describe("a step past maxPendingApprovals (#422)", () => {
+  const lapse = (store: SqliteStore, taskId: string) => {
+    const task = store.getTask(taskId)!;
+    store.saveTask({ ...task, approval: { ...task.approval!, expiresAt: new Date(Date.now() - 1_000).toISOString() } });
+  };
+
+  it("stays pending, its advance refused, and is planned once there is room", async () => {
+    const { controller, tasks, done } = await setup({ policy: { maxPendingApprovals: 1 } });
+    const elsewhere = tasks.plan(put("elsewhere"));
+    const planned = controller.plan(workflow([{ id: "op", type: "operation", request: put("op") }]));
+    await expect(controller.advance(planned.id)).rejects.toThrow("too_many_pending_approvals");
+    expect(controller.status(planned.id).nodes.op).toMatchObject({ status: "pending", taskIds: [] });
+    tasks.cancel(elsewhere.id);
+    let run = (await controller.advance(planned.id)).run;
+    expect(run.nodes.op?.status).toBe("awaiting_approval");
+    run = (await controller.advance(planned.id, approvalsFor(run))).run;
+    expect(run.status).toBe("verified_complete");
+    expect(done).toEqual(["op"]);
+  });
+
+  it("is not asked again at the cap once its challenge expires: refused, the expired attempt left uncancelled, then asked once there is room", async () => {
+    const { controller, tasks, store, done } = await setup({ policy: { maxPendingApprovals: 1 } });
+    const planned = controller.plan(workflow([{ id: "op", type: "operation", request: put("op") }]));
+    let run = (await controller.advance(planned.id)).run;
+    const first = run.nodes.op!.taskIds[0]!;
+    lapse(store, first);
+    const elsewhere = tasks.plan(put("elsewhere"));
+    await expect(controller.advance(planned.id)).rejects.toThrow("too_many_pending_approvals");
+    expect(tasks.status(first).status).toBe("awaiting_approval");
+    expect(tasks.pendingApprovals("operator")).toBe(1);
+    tasks.cancel(elsewhere.id);
+    run = (await controller.advance(planned.id)).run;
+    expect(run.nodes.op?.status).toBe("awaiting_approval");
+    expect(run.nodes.op?.taskIds).not.toContain(first);
+    run = (await controller.advance(planned.id, approvalsFor(run))).run;
+    expect(run.status).toBe("verified_complete");
+    expect(done).toEqual(["op"]);
+  });
+
+  it("plans a compensation only once there is room, the unwind waiting at the cap", async () => {
+    const { controller, tasks, done } = await setup({ policy: { maxPendingApprovals: 1 } });
+    const planned = controller.plan(
+      workflow([
+        { id: "write", type: "operation", request: put("write") },
+        { id: "next", type: "operation", dependsOn: ["write"], request: put("next") },
+        { id: "undo", type: "compensation", forNodeId: "write", request: put("undo") },
+      ]),
+    );
+    let run = (await controller.advance(planned.id)).run;
+    for (let step = 0; step < 4 && run.nodes.next?.status !== "awaiting_approval"; step += 1) {
+      run = (await controller.advance(planned.id, approvalsFor(run))).run;
+    }
+    tasks.cancel(run.nodes.next!.taskIds[0]!);
+    const elsewhere = tasks.plan(put("elsewhere"));
+    await expect(controller.advance(planned.id)).rejects.toThrow("too_many_pending_approvals");
+    tasks.cancel(elsewhere.id);
+    run = (await controller.advance(planned.id)).run;
+    expect(run.nodes.undo?.status).toBe("awaiting_approval");
+    run = (await controller.advance(planned.id, approvalsFor(run))).run;
+    expect(run.nodes.undo?.status).toBe("compensated");
+    expect(done).toEqual(["write", "undo"]);
+  });
+
+  it("commits the undo that ran before an unwind is refused at the cap", async () => {
+    const { controller, tasks, done } = await setup({ policy: { maxPendingApprovals: 1 } });
+    const planned = controller.plan(
+      workflow([
+        { id: "w1", type: "operation", request: put("w1") },
+        { id: "w2", type: "operation", dependsOn: ["w1"], request: put("w2") },
+        { id: "next", type: "operation", dependsOn: ["w2"], request: put("next") },
+        { id: "undo1", type: "compensation", forNodeId: "w1", request: put("undo1") },
+        { id: "undo2", type: "compensation", forNodeId: "w2", request: put("undo2") },
+      ]),
+    );
+    let run = (await controller.advance(planned.id)).run;
+    for (let step = 0; step < 6 && run.nodes.next?.status !== "awaiting_approval"; step += 1) {
+      run = (await controller.advance(planned.id, approvalsFor(run))).run;
+    }
+    tasks.cancel(run.nodes.next!.taskIds[0]!);
+    run = (await controller.advance(planned.id)).run;
+    const undo2 = run.nodes.undo2!.taskIds[0]!;
+    expect(run.nodes.undo2?.status).toBe("awaiting_approval");
+    tasks.decide(undo2, tasks.approvalView(undo2).renderDigest, "cli:test");
+    tasks.plan(put("elsewhere"));
+    await expect(controller.advance(planned.id)).rejects.toThrow("too_many_pending_approvals");
+    expect(done).toEqual(["w1", "w2", "undo2"]);
+    expect(controller.status(planned.id).nodes.undo2?.status).toBe("compensated");
+  });
+});

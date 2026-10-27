@@ -1414,3 +1414,57 @@ describe("effect contract and principal", () => {
     });
   });
 });
+
+describe("challenges open per caller (#422)", () => {
+  const write = (path: string) =>
+    TaskRequestSchema.parse({
+      goal: `Write ${path}`,
+      operation: { kind: "file", action: "write", path, content: "x" },
+      requiredEvidence: [{ type: "file_exists", path }],
+    });
+
+  async function capped(maxPendingApprovals: number) {
+    const root = await mkdtemp(join(tmpdir(), "melra-controller-cap-"));
+    roots.push(root);
+    const store = new SqliteStore(":memory:");
+    stores.push(store);
+    const controller = new TaskController(
+      store,
+      { ...createDefaultPolicy(root), maxPendingApprovals },
+      { execute: async () => ({ success: true }) },
+      await Verifier.create(root),
+      new PayloadCipher(Buffer.alloc(32, 9)),
+    );
+    return { controller, store };
+  }
+
+  it("refuses a challenge past the cap before anything is written, naming the cap and how to make room", async () => {
+    const { controller, store } = await capped(2);
+    controller.plan(write("a.txt"));
+    controller.plan(write("b.txt"));
+    const before = store.listTasks(100);
+    expect(() => controller.plan(write("c.txt"))).toThrow(
+      /^too_many_pending_approvals: 2 tasks .*\(maxPendingApprovals 2\); plan more once some are approved, denied or cancelled, or their challenges expire$/,
+    );
+    expect(store.listTasks(100)).toEqual(before);
+    // A read asks nobody, and another caller has room of its own.
+    expect(controller.plan(TaskRequestSchema.parse({ goal: "Inspect", operation: { kind: "system", action: "info" } })).status).toBe(
+      "planned",
+    );
+    expect(controller.plan(write("c.txt"), { client: "harness:B" }).status).toBe("awaiting_approval");
+    expect([controller.pendingApprovals("operator"), controller.pendingApprovals("harness:B")]).toEqual([2, 1]);
+  });
+
+  it("counts only a challenge still open: not one cancelled, denied, approved or expired", async () => {
+    const { controller, store } = await capped(1);
+    controller.cancel(controller.plan(write("a.txt")).id);
+    controller.deny(controller.plan(write("b.txt")).id, "operator");
+    const approved = controller.plan(write("c.txt"));
+    controller.decide(approved.id, controller.approvalView(approved.id).renderDigest, "operator");
+    const lapsed = store.getTask(controller.plan(write("d.txt")).id)!;
+    store.saveTask({ ...lapsed, approval: { ...lapsed.approval!, expiresAt: new Date(Date.now() - 1_000).toISOString() } });
+    expect(controller.pendingApprovals("operator")).toBe(0);
+    controller.plan(write("e.txt"));
+    expect(() => controller.plan(write("f.txt"))).toThrow("too_many_pending_approvals");
+  });
+});
