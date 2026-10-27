@@ -692,7 +692,7 @@ export class TerminalRuntime {
       windowsVerbatimArguments: resolved.windowsVerbatimArguments,
       executable: resolved.executable,
       cwd,
-      environment: hardened === undefined ? environment : { ...environment, ...hardened.env },
+      environment: { ...environment, ...hardened?.env, ...confined?.env },
       timeoutMs: operation.timeoutMs,
       maxOutputChars: operation.maxOutputChars,
       interactive: operation.interactive,
@@ -1080,5 +1080,6 @@ export class TerminalRuntime {
       clearTimeout(escalation);
     });
     await Promise.all([...exits, ...runs]);
+    await this.sandbox?.close?.();
   }
 }

@@ -316,8 +316,8 @@ export function renderLaunch(summary: LaunchSummary): string {
         ? "nothing is asked; every change runs"
         : summary.mode === "enforced"
           ? "melra approve <task-id> or melra console, in another terminal, enforced, with this MELRA_HOME"
-          : "the agent can echo MELRA's phrase itself, and an approved command runs with your rights; " +
-            "launch with --mode enforced to approve each change yourself",
+          : "the agent can echo MELRA's phrase itself; an approved command runs in the per-command sandbox where one works, " +
+            "with your rights where none does or the policy file turns it off; launch with --mode enforced to approve each change yourself",
     ],
     ...(runtimes.length === 0
       ? []

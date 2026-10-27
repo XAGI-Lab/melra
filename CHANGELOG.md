@@ -24,6 +24,17 @@ All notable changes are documented here. The format follows
   `approvalGroups`, of challenges not yet expired.
 - A GovBench case, `approval.flood`, holds that a caller at
   `maxPendingApprovals` is issued no further challenge.
+- `melra doctor` ends with a `protection` line saying what guards an effect on
+  this machine: who may approve a change (in developer mode the agent, with
+  the phrase its own plan response carries, so an approval is a record, not a
+  boundary; in enforced mode only an operator, out of band), the sandbox
+  commands run in or that they have MELRA's own rights, and, where doctor can
+  read Claude Code's settings, which of its own shell, file and web tools they
+  leave it. It warns under unsafe-local, and in enforced mode where commands
+  run without a sandbox or Claude Code keeps one of those tools.
+  `melra_capabilities` reports the same in `policy.approvals` (`in_band`,
+  `out_of_band`, or `none` under unsafe-local) and `policy.sandbox` (the
+  sandbox, `none`, or `off`).
 
 ### Changed
 
@@ -48,6 +59,36 @@ All notable changes are documented here. The format follows
 - The single executable carries V8's compiled code for the CLI, so it starts
   in about half the time (`melra version` in about 120 ms rather than 220 ms
   on an Apple Silicon Mac). Two builds of one commit now differ in bytes.
+- **Breaking:** developer mode now runs every terminal command in the
+  per-command OS sandbox wherever one works (Seatbelt on macOS, bubblewrap on
+  Linux): a policy file without `sandbox.use` means `if-available` there, not
+  `off`. An approved command can then no longer write outside the workspace
+  and temp, read MELRA's files or the login files MELRA lists (see
+  INSTALLATION), or reach the network without the `network` trait. Under
+  Seatbelt that also stops a test suite or dev server that opens a loopback
+  port (`npm test` and `npm run` carry no trait), and in either sandbox `git
+  add` and `git commit` in a worktree whose git directory is outside the
+  workspace. Git may make symbolic links there, as if `sandbox.symlinks` named
+  it: without them a clone exits 0 with each link checked out as a plain file
+  and `core.symlinks=false` written into the repository. Where none works,
+  developer mode starts without one as before, and its receipts now say
+  `"sandbox": "none"`. `"sandbox": {"use": "off"}` in the policy file restores
+  the old behaviour. Enforced mode is unchanged. See [per-command
+  sandbox](https://github.com/XAGI-Lab/melra/blob/main/docs/INSTALLATION.md#per-command-sandbox).
+- **Breaking:** in the Seatbelt and bubblewrap sandboxes, in either mode, npm
+  takes its cache from the `npm_config_cache` MELRA sets (see Fixed), which
+  outranks a project `.npmrc` setting `cache`: an offline install from a
+  cache seeded there now fails with `ENOTCACHED`. `--cache <dir>` on the
+  command line still wins.
+
+### Fixed
+
+- In the Seatbelt and bubblewrap sandboxes `npm pack`, and npm installs from a
+  tarball or a registry, failed with `EPERM` on npm's cache under home, and
+  pnpm put its store in the workspace. Each command now gets
+  `npm_config_cache` and `PNPM_HOME` in a private folder MELRA makes in temp
+  at its first command and removes when its process exits, a hangup
+  included, though not after a `SIGKILL`.
 
 ### Security
 
@@ -57,6 +98,12 @@ All notable changes are documented here. The format follows
 - `examples/deploy/systemd/melra.service` caps the processes and memory MELRA
   and every command it runs use together (`TasksMax=512`, `MemoryMax=2G`), as
   the container pair already did, and its smoke runs under them.
+- In developer mode, where the agent can approve its own changes, what an
+  approved command reaches is now bounded by the per-command sandbox wherever
+  one works, instead of every right MELRA's OS user has.
+- The package-manager caches under home stay closed to commands: installs
+  outside the sandbox trust them, so a command that could write there could
+  change what later runs outside it.
 
 ## [0.4.0-alpha.1] - 2026-10-27
 

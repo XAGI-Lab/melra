@@ -6,7 +6,7 @@ import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { HOME_SECRETS, TerminalOperationSchema } from "@melra/protocol";
 import { TerminalRuntime, bwrapArgv, detectSandbox, seatbeltProfile, symlinkFilter, type CommandSandbox } from "./index.js";
@@ -324,6 +324,59 @@ describe.runIf(probed !== undefined)(`commands in the ${probed} sandbox`, () => 
     const allowed = await node(link("allowed-link"), await runtime({ network: false, symlinks: true }));
     expect(allowed.exitCode).toBe(0);
   }, 30_000);
+
+  // npm's and pnpm's caches are under home, which no command may write: a
+  // pack or an install from a tarball failed with EPERM there.
+  it.runIf(spawnSync("npm", ["--version"]).status === 0)(
+    "packs with npm, its cache in a folder of its own in temp that goes when the runtime closes",
+    async () => {
+      const own = await runtime({ network: false, symlinks: false });
+      await mkdir(join(workspace, "pack-me"));
+      await writeFile(join(workspace, "pack-me", "package.json"), JSON.stringify({ name: "pack-me", version: "1.0.0" }));
+      const where = await node("process.stdout.write(JSON.stringify([process.env.npm_config_cache, process.env.PNPM_HOME]))", own);
+      const [npm, pnpm] = JSON.parse(String(where.stdout)) as [string, string];
+      expect(dirname(npm)).toBe(dirname(pnpm));
+      expect(dirname(dirname(npm))).toBe(await realpath(temp));
+      const packed = await own.execute(
+        TerminalOperationSchema.parse({ kind: "terminal", action: "run", command: "npm", args: ["pack", "--no-update-notifier"], cwd: "pack-me", timeoutMs: 60_000 }),
+      );
+      expect(packed.exitCode, String(packed.stderr)).toBe(0);
+      expect(existsSync(join(workspace, "pack-me", "pack-me-1.0.0.tgz"))).toBe(true);
+      await own.close();
+      expect(existsSync(dirname(npm))).toBe(false);
+    },
+    90_000,
+  );
+
+  // A variable outranks a project .npmrc in npm's order, and the command line
+  // outranks both, as the docs say.
+  it.runIf(spawnSync("npm", ["--version"]).status === 0)(
+    "gives npm its own cache over a project .npmrc's, and --cache over both",
+    async () => {
+      await mkdir(join(workspace, "npmrc-project"));
+      await writeFile(join(workspace, "npmrc-project", "package.json"), JSON.stringify({ name: "npmrc-project", version: "1.0.0" }));
+      await writeFile(join(workspace, "npmrc-project", ".npmrc"), `cache=${join(workspace, "project-cache")}\n`);
+      const cache = async (...args: string[]) =>
+        await confined.execute(
+          TerminalOperationSchema.parse({
+            kind: "terminal",
+            action: "run",
+            command: "npm",
+            args: ["config", "get", "cache", "--no-update-notifier", ...args],
+            cwd: "npmrc-project",
+            timeoutMs: 60_000,
+          }),
+        );
+      const own = String((await node("process.stdout.write(String(process.env.npm_config_cache))")).stdout);
+      expect(dirname(dirname(own))).toBe(await realpath(temp));
+      const project = await cache();
+      expect(project.exitCode, String(project.stderr)).toBe(0);
+      expect(String(project.stdout).trim()).toBe(own);
+      const flag = join(workspace, "flag-cache");
+      expect(String((await cache("--cache", flag)).stdout).trim()).toBe(flag);
+    },
+    90_000,
+  );
 
   it("refuses a program that is not there as spawn would", async () => {
     await expect(

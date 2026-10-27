@@ -159,6 +159,13 @@ describe("renderLaunch", () => {
     expect(loud).toMatch(/Warning\s+the policy allows node, npm/);
   });
 
+  it("says a developer-mode approval is the agent's own, and its command sandboxed where a sandbox works", () => {
+    const text = renderLaunch({ mode: "developer", unhinged: false, workspace: "/w", allowedCommands: ["git"] });
+    expect(text).toMatch(
+      /Approve\s+the agent can echo MELRA's phrase itself; an approved command runs in the per-command sandbox where one works, with your rights where none does or the policy file turns it off;/,
+    );
+  });
+
   it("says what unsafe-local does: any program, nothing asked, no policy", () => {
     const text = renderLaunch({ mode: "developer", unhinged: true, workspace: "/w", allowedCommands: ["git", "node"] });
     expect(text).toMatch(/Mode\s+UNSAFE-LOCAL/);

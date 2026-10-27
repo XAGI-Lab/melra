@@ -190,20 +190,29 @@ Actions: `run`, `start`, `status`, `output`, `stop`, `send`.
   `allowedCommands`, since the agent there has no shell of its own; a policy
   file's own `allowedCommands` is kept as written. That narrows the list
   without making the rest harmless: any allowed command run as an approved
-  change has your rights, and in developer mode the agent approves its own
-  changes.
+  change has your rights, less what the per-command sandbox below takes away
+  where one works, and in developer mode the agent approves its own changes.
 - Command, arguments, working directory, environment, duration, and output are
   bounded.
-- In enforced mode, and in developer mode where the policy file asks, each
-  command runs in an OS sandbox of its own, where it cannot read MELRA's data,
-  the policy file, the secret files or the logins under home. Under Seatbelt
-  and bubblewrap it also writes only in the workspace and temp, reaches no
-  network without the `network` trait (Seatbelt: no socket; bubblewrap: an
-  empty network namespace, Unix sockets on the filesystem still reachable),
-  and makes no symbolic link unless it installs packages or the policy file
-  names it; under `uid` it only runs as an account that cannot read those
-  ([per-command sandbox](INSTALLATION.md#per-command-sandbox)). Where none
-  works, enforced mode does not start.
+- In enforced mode, and in developer mode unless the policy file sets
+  `"sandbox": {"use": "off"}`, each command runs in an OS sandbox of its own
+  wherever one works, where it cannot read MELRA's data, the policy file, the
+  secret files or the login files MELRA lists (the rest of home stays
+  readable). Under Seatbelt and bubblewrap it also
+  writes only in the workspace and temp (shared with your other processes),
+  reaches no network without the `network` trait (Seatbelt: no socket, a
+  loopback one included; bubblewrap: an empty network namespace, Unix sockets
+  on the filesystem still reachable), makes no symbolic link unless it
+  installs packages, the policy file names it or, in developer mode, it is
+  git, and gets npm and pnpm caches in a private folder in temp (npm's
+  outranking a project `.npmrc` setting `cache`); under `uid` it only runs as
+  an account that cannot read those
+  ([per-command sandbox](INSTALLATION.md#per-command-sandbox)).
+  Where none works, enforced mode does not start, and developer mode runs
+  each command with your rights, every receipt saying `sandbox: none`.
+  `melra_capabilities` reports which in `policy.sandbox`, and who may approve
+  a change in `policy.approvals`: `in_band`, the caller itself, in developer
+  mode, so there an approval records consent rather than bounding it.
 - Only a read runs without approval. A read is a read-only program (`cat`,
   `head`, `rg`, `git status`/`log`/`diff`, listing `git branch`/`tag`, ...)
   called with arguments that all keep it one: no option that runs a program,

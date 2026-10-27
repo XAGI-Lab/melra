@@ -2368,15 +2368,24 @@ describe("melra CLI", () => {
     roots.push(root);
     await mkdir(join(root, "ws"));
     const env = { ...process.env, MELRA_HOME: join(root, ".melra"), MELRA_WORKSPACE: join(root, "ws") };
-    const sandbox = async (extra: Record<string, string>) => {
+    const line = async (extra: Record<string, string>, name = "sandbox") => {
       const result = (await execute(process.execPath, [entry, "doctor", "--json"], {
         cwd: root,
         env: { ...env, ...extra },
       }).catch((error: unknown) => error)) as { stdout: string };
-      return JSON.parse(result.stdout).checks.find((check: { name: string }) => check.name === "sandbox");
+      return JSON.parse(result.stdout).checks.find((check: { name: string }) => check.name === name);
     };
-    // Off in developer mode, which still says whether one would work here.
-    expect(await sandbox({})).toMatchObject({ status: "pass", detail: expect.stringMatching(/works here|none would work here/) });
+    const sandbox = async (extra: Record<string, string>) => await line(extra);
+    // On in developer mode where one works, and started without one where none does.
+    expect(await sandbox({})).toMatchObject({
+      status: "pass",
+      detail: expect.stringMatching(/: every command runs in it$|developer mode's default "if-available" starts without one/),
+    });
+    // And what that adds up to, with whose approval.
+    expect(await line({}, "protection")).toMatchObject({
+      status: "pass",
+      detail: expect.stringMatching(/^approvals: the agent can approve its own changes .*; commands: (in|with MELRA's own rights)/),
+    });
     // Enforced mode runs no command bare, and a policy file cannot make it.
     const off = join(root, "off.json");
     await writeFile(off, JSON.stringify({ sandbox: { use: "off" } }));
@@ -2386,6 +2395,64 @@ describe("melra CLI", () => {
     });
     // The opt-out starts it on any host, with a warning where there is none.
     expect((await sandbox({ MELRA_MODE: "enforced", ...(await sandboxOptOut(root)) })).status).not.toBe("fail");
+  });
+
+  // A stdio client ends the server by closing its input, which runs no
+  // shutdown, or its terminal hangs up, with a SIGTERM close behind it: the
+  // npm and pnpm caches made in temp at the first sandboxed command must
+  // still go.
+  it.for(["closes its input", "hangs up", "hangs up and is terminated"])("leaves no package cache in temp when a stdio client %s", { timeout: 60_000 }, async (how, context) => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-cli-")));
+    roots.push(root);
+    const temp = join(root, "tmp");
+    await mkdir(join(root, "ws"));
+    await mkdir(temp);
+    const caches = async () => (await readdir(temp)).filter((name) => name.startsWith("melra-caches-"));
+    const server = spawn(process.execPath, [entry, "serve"], {
+      cwd: root,
+      env: { ...process.env, MELRA_HOME: join(root, ".melra"), MELRA_WORKSPACE: join(root, "ws"), TMPDIR: temp },
+      stdio: ["pipe", "pipe", "ignore"],
+    });
+    const exited = new Promise<number | null>((settle) => server.once("exit", settle));
+    const waiting = new Map<number, (reply: { result: { content: Array<{ text: string }> } }) => void>();
+    let buffered = "";
+    server.stdout.setEncoding("utf8").on("data", (chunk: string) => {
+      buffered += chunk;
+      for (let end = buffered.indexOf("\n"); end >= 0; end = buffered.indexOf("\n")) {
+        const reply = JSON.parse(buffered.slice(0, end));
+        buffered = buffered.slice(end + 1);
+        waiting.get(reply.id)?.(reply);
+      }
+    });
+    let id = 0;
+    const call = async (method: string, params: unknown) =>
+      await new Promise<{ result: { content: Array<{ text: string }> } }>((settle) => {
+        waiting.set(++id, settle);
+        server.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
+      });
+    const tool = async (name: string, args: unknown) =>
+      JSON.parse((await call("tools/call", { name, arguments: args })).result.content[0]!.text);
+    try {
+      await call("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "cli-test", version: "1" } });
+      server.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`);
+      const task = await tool("melra_plan", { goal: "list", operation: { kind: "terminal", action: "run", command: "ls" } });
+      const ran = await tool("melra_execute", { taskId: task.id });
+      // Only Seatbelt and bubblewrap make one.
+      if (!["seatbelt", "bubblewrap"].includes(ran.receipt?.sandbox)) context.skip();
+      expect(ran.task.status).toBe("verified_success");
+      expect(await caches()).toHaveLength(1);
+    } catch (error) {
+      server.kill("SIGTERM");
+      await exited;
+      throw error;
+    }
+    if (how === "closes its input") server.stdin.end();
+    else {
+      server.kill("SIGHUP");
+      if (how === "hangs up and is terminated") server.kill("SIGTERM");
+    }
+    expect(await exited).toBe(0);
+    expect(await caches()).toEqual([]);
   });
 
   it("refuses to start in enforced mode with the local bypass", async () => {

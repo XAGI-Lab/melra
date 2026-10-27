@@ -139,6 +139,13 @@ export function capabilitiesPayload(runtime: MelraRuntime, caller?: string): unk
           // it does not, and the flag a conformance run reads before deciding
           // which caveats it still has to print.
           mode: runtime.policy.mode,
+          // What guards an effect, as doctor's protection line says it: who
+          // may approve a change (`in_band`: the caller, from the plan
+          // response it is handed; `out_of_band`: only an operator), and the
+          // OS sandbox commands run in (`none` where none works, `off` where
+          // the policy file or unsafe-local turned it off).
+          approvals: runtime.policy.unhinged ? "none" : runtime.policy.mode === "enforced" ? "out_of_band" : "in_band",
+          sandbox: runtime.policy.sandbox.backend ?? "off",
           // An agent that reads capabilities should be able to tell that nothing
           // is going to stop it, and a human reading a transcript should see the
           // same. Reporting the usual read-only posture here while running
