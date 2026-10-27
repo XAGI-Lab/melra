@@ -1,6 +1,7 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: AGPL-3.0-only
 
+import { existsSync } from "node:fs";
 import { mkdir, realpath, stat } from "node:fs/promises";
 import {
   arch,
@@ -38,7 +39,7 @@ import {
   WorkflowController,
   type OperationExecutor,
 } from "@melra/runtime-core";
-import { SqliteStore } from "@melra/storage-sqlite";
+import { SqliteStore, type ChainHead, type ChainReport } from "@melra/storage-sqlite";
 import { detectSandbox, TerminalRuntime, type CommandSandbox } from "@melra/terminal-runtime";
 import { Verifier, type RegisteredVerifier } from "@melra/verifier-core";
 import { loadPayloadKey } from "./payload-key.js";
@@ -374,6 +375,64 @@ export async function homeCipher(
     }
   }
   return cipher;
+}
+
+export interface VerifyRecordsOptions {
+  dataDirectory: string;
+  environment?: NodeJS.ProcessEnv;
+  head?: ChainHead;
+}
+
+export interface VerifyRecordsResult {
+  ok: boolean;
+  problems?: string[];
+  report?: ChainReport;
+}
+
+/**
+ * Verify a home's record chain without starting a server. Opens the database
+ * read-only, loads the key with mint: false, and verifies the tamper-evident
+ * hash chain against an optional expected head.
+ */
+export async function verifyRecords(
+  options: VerifyRecordsOptions,
+): Promise<VerifyRecordsResult> {
+  const path = join(options.dataDirectory, "melra.sqlite");
+  if (!existsSync(path)) {
+    return { ok: false, problems: [`database_not_found: ${path}`] };
+  }
+  const store = new SqliteStore(path, { readOnly: true });
+  try {
+    let cipher: PayloadCipher;
+    try {
+      cipher = await homeCipher(store, options.dataDirectory, options.environment ?? process.env, { mint: false });
+    } catch (error) {
+      return {
+        ok: false,
+        problems: [error instanceof Error ? error.message : String(error)],
+      };
+    }
+    const report = store.verifyChain(cipher.chainKey(), options.head);
+    const problems: string[] = [];
+    if (report.break !== undefined) {
+      const at = [
+        ...(report.break.sequence === undefined ? [] : [`sequence ${report.break.sequence}`]),
+        ...(report.break.table === undefined ? [] : [`table ${report.break.table}`]),
+        ...(report.break.key === undefined ? [] : [`key ${report.break.key}`]),
+      ].join(", ");
+      problems.push(`${report.break.reason}${at === "" ? "" : ` (${at})`}`);
+    }
+    if (report.unsealed > 0 && report.break?.reason !== "unsealed_rows") {
+      problems.push(`unsealed_rows (${report.unsealed} unsealed)`);
+    }
+    return {
+      ok: report.ok,
+      ...(problems.length > 0 ? { problems } : {}),
+      report,
+    };
+  } finally {
+    store.close();
+  }
 }
 
 export class RuntimeRouter implements OperationExecutor {
