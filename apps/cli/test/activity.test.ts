@@ -131,14 +131,9 @@ describe("melra tasks, status, and watch", { timeout: 60_000 }, () => {
 
   it("counts an approval that expired apart from one still waiting", async () => {
     const { root, options, run } = await workspace();
-    await writeFile(join(root, "policy.json"), JSON.stringify({ approvalTtlMs: 300 }));
-    const short = { ...options, env: { ...options.env, MELRA_POLICY: join(root, "policy.json") } };
-    const first = await execute(process.execPath, [entry, "run", "--request", fileWrite], short).catch(
-      (error: { stdout: string }) => error,
-    );
-    expect((JSON.parse(first.stdout) as { task: { status: string } }).task.status).toBe("awaiting_approval");
+    const first = await run(fileWrite);
     await run(fileWrite);
-    await new Promise((resolve) => setTimeout(resolve, 600));
+    lapse(root, first.task.id);
     // The first can no longer be approved: counted as waiting, it was reported
     // forever and pointed at `melra approve`, which refused it.
     const status = JSON.parse((await execute(process.execPath, [entry, "status", "--json"], options)).stdout) as {
