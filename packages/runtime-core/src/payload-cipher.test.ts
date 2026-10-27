@@ -1,7 +1,7 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { createHmac } from "node:crypto";
+import { createHmac, hkdfSync } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import type { Operation } from "@melra/protocol";
 import { digestOperation } from "@melra/policy-core";
@@ -75,6 +75,15 @@ describe("PayloadCipher", () => {
     expect(cipher.digest(value, "input")).not.toBe(
       createHmac("sha256", Buffer.alloc(32, 7)).update(`input\0${canonicalJson(value)}`).digest("hex"),
     );
+  });
+
+  it("derives the record chain's key apart from the digest key (known answer)", () => {
+    // HKDF-SHA256(payload key, no salt, "melra:record-chain:v1"). Changing it
+    // leaves every link already stored unverifiable.
+    const key = new PayloadCipher(Buffer.alloc(32, 7)).chainKey();
+    expect(key.toString("hex")).toBe("1bee6981e3a8914b5042485ecabc8e24c3ff1ff3dcf2d10fdfd68eec7100a8e0");
+    expect(key.equals(Buffer.from(hkdfSync("sha256", Buffer.alloc(32, 7), Buffer.alloc(0), "melra:record-digest:v1", 32)))).toBe(false);
+    expect(new PayloadCipher(Buffer.alloc(32, 8)).chainKey().equals(key)).toBe(false);
   });
 
   it("leaves the plain action digest 0.3.0-alpha.17 and alpha.18 issued as it was (known answer)", () => {

@@ -1573,6 +1573,8 @@ Usage:
   melra tasks [--limit <n>] [--status <status>] [--json]
   melra watch [--json]
   melra status [--json]
+  melra audit verify [--head <sequence>:<link>] [--json]
+  melra audit head [--json]
   melra workflow plan --definition <workflow.json>
   melra workflow advance <workflow-id> [--approval <id>:<exact-phrase>]
                                        [--input <node-id>=<value>]
@@ -1616,6 +1618,18 @@ those connections. Only a refusal counts as confined; what it could not try
 is open, 'not tested'. It then checks that the MELRA running outside the box
 answers on --socket (or MELRA_SOCKET) or --url, asking without a token. It
 exits 0 only when every check is confined and MELRA answers.
+
+'melra audit verify' checks the chain sealing receipts, certificates and the
+other records an effect leaves: every link was made with this home's key and
+every sealed record is still there as it was. It reads the database
+read-only and the payload key as the server does, and exits 0 when the chain
+holds and 1 naming the first break, rows not sealed yet included. It also
+counts records a start sealed rather than the write, and names the first
+sealed late, after one sealed when written: an older MELRA beside this one
+leaves those, and so do links removed outside MELRA, the records sealed again
+as they then were. A removed tail shows only against a head kept from before:
+'melra audit head' prints the last link, to keep where MELRA cannot write,
+and '--head' checks that the chain still passes through it.
 
 'melra console', run by you in a terminal, opens an approval console in your
 browser, on a server of its own with no MCP endpoint, that approves or denies
@@ -1698,7 +1712,10 @@ Flags:
                    one it listens on, on 127.0.0.1).
   --level <1|2|3>  Conformance level being claimed (default: 3). The run exits
                    non-zero if the endpoint falls short of it.
-  --json           For tasks, watch, status, and probe: JSON (NDJSON for
+  --head <sequence>:<link>
+                   For 'audit verify': a head 'audit head' printed before,
+                   which the chain must still pass through.
+  --json           For tasks, watch, status, audit, and probe: JSON (NDJSON for
                    watch) even in a terminal. Output that is not a terminal is
                    JSON anyway.
   --limit <n>      How many recent tasks 'tasks' lists (default: 20, max 500).
@@ -2062,6 +2079,22 @@ async function main(): Promise<void> {
       process.exitCode = await statusCommand(env, {
         json: args.includes("--json"),
         ...(policyPath === undefined ? {} : { policyPath }),
+      });
+      return;
+    }
+    case "audit": {
+      rejectUnknownFlags(args, ["--head", "--json"]);
+      const action = positionals(args, ["--head"])[0];
+      if (action !== "verify" && action !== "head") throw new Error("audit supports 'verify' and 'head'");
+      const head = argument("--head", args);
+      if (args.includes("--head") && (action !== "verify" || head === undefined || head.startsWith("--"))) {
+        throw new Error("--head goes with 'audit verify' and takes <sequence>:<link>");
+      }
+      const { auditCommand, parseHead } = await import("./audit.js");
+      process.exitCode = await auditCommand(env, {
+        action,
+        args,
+        ...(head === undefined ? {} : { head: parseHead(head) }),
       });
       return;
     }

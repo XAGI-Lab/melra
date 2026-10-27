@@ -1,7 +1,7 @@
 // Copyright 2026 XAGI Labs Private Limited
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, rmSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -20,9 +20,10 @@ import {
   type WorkflowRun,
   type WorkflowSnapshot,
 } from "@melra/protocol";
-import type {
-  ActionReceipt,
-  ExecutionCertificate,
+import {
+  sha256,
+  type ActionReceipt,
+  type ExecutionCertificate,
 } from "@melra/receipt-schema";
 
 export interface MemoryRecord {
@@ -162,6 +163,116 @@ function keyedOnce(table: string, key: string, raise: string): string {
       BEGIN SELECT RAISE(${raise}); END;`;
 }
 
+/**
+ * The records the chain covers (migration 9): every one migrations 7 and 8
+ * made append-only, with the key it is found under and the columns its digest
+ * is taken over. A certificate's versions are found by id in `certificates`
+ * and `certificate_history` alike, so one a judgement or settle replaced is
+ * still the record it was. `certified_tasks` only says that a task has had a
+ * certificate, which its chained certificates show.
+ */
+const CHAINED = {
+  receipts: { key: ["id"], columns: ["id", "task_id", "data", "created_at"] },
+  certificates: { key: ["id"], columns: ["id", "task_id", "data", "created_at"] },
+  workflow_events: {
+    key: ["id"],
+    columns: ["id", "aggregate_id", "sequence", "trace_id", "type", "data", "occurred_at"],
+  },
+  approval_decisions: {
+    key: ["approval_id"],
+    columns: ["approval_id", "task_id", "render_digest", "channel", "approver", "decided_at"],
+  },
+  approval_denials: {
+    key: ["approval_id"],
+    columns: [
+      "approval_id", "task_id", "render_digest", "operation_digest", "channel", "approver", "reason", "note",
+      "decided_at",
+    ],
+  },
+  refusals: {
+    key: ["subject_id", "code"],
+    columns: ["subject_id", "code", "kind", "mode", "principal", "client", "refused_at"],
+  },
+  capability_usage: { key: ["grant_id", "task_id"], columns: ["grant_id", "task_id", "amount", "committed_at"] },
+  idempotency_commits: {
+    key: ["idempotency_key"],
+    columns: ["idempotency_key", "task_id", "attempt", "committed_at"],
+  },
+} as const;
+type ChainedTable = keyof typeof CHAINED;
+
+/** The link before the first. */
+const GENESIS = "0".repeat(64);
+
+/**
+ * Every record of `table`, with the key the chain names it by. SQLite spells
+ * that key in every path, sealing, sweeping and verifying, so they agree.
+ */
+function chainedRows(table: ChainedTable): string {
+  const { key, columns } = CHAINED[table];
+  const from = (source: string, column: (name: string) => string) =>
+    `SELECT json_array(${key.map(column).join(", ")}) AS record_key, ` +
+    `${columns.map((name) => `${column(name)} AS ${name}`).join(", ")} FROM ${source}`;
+  return table === "certificates"
+    ? `${from("certificate_history", (name) => (name === "id" ? "certificate_id" : name))} UNION ALL ${from("certificates", (name) => name)}`
+    : from(table, (name) => name);
+}
+
+/** A chained column's value as a write binds it, and as SQLite reads it back. */
+type Bound = string | number | null;
+
+function recordDigest(table: ChainedTable, record: Record<string, unknown>): string {
+  return sha256([table, record]);
+}
+
+/** `swept` (1 or 0) is whether a start sealed the record rather than the write that stored it. */
+function chainLink(key: Buffer, previous: string, digest: string, swept: number): string {
+  return createHmac("sha256", key).update(`${previous}\0${digest}\0${swept}`).digest("hex");
+}
+
+/** A link of the chain an operator keeps outside MELRA: `melra audit head`. */
+export interface ChainHead {
+  sequence: number;
+  link: string;
+}
+
+export type ChainBreak =
+  | "sequence_gap"
+  | "link_forged"
+  | "record_removed"
+  | "record_changed"
+  | "head_mismatch"
+  | "head_truncated"
+  | "unsealed_rows";
+
+export interface ChainReport {
+  ok: boolean;
+  /** The chain's last link as stored, trusted only when `ok`. */
+  head: ChainHead;
+  /** Rows of chained tables no link seals yet. */
+  unsealed: number;
+  /** Links a start made (`sealRecords`) rather than the write that stored the record. */
+  swept: number;
+  /**
+   * Swept links that come after one made at write time: how many, and the
+   * first. An older MELRA writing beside this one leaves them, and so does a
+   * link removed with every later one, the records changed and sealed again.
+   */
+  late?: { count: number; sequence: number; table: string; key: string };
+  /** The first thing found wrong, in chain order, then the kept head, then unsealed rows. */
+  break?: { reason: ChainBreak; sequence?: number; table?: string; key?: string };
+}
+
+interface ChainRow {
+  sequence: number;
+  recordTable: string;
+  recordKey: string;
+  recordDigest: string;
+  previousLink: string;
+  link: string;
+  swept: number;
+}
+
 export class SqliteStore {
   readonly path: string;
   readonly database: DatabaseSync;
@@ -174,6 +285,9 @@ export class SqliteStore {
    * is not in here was orphaned by a write that failed, and may be taken back.
    */
   readonly inFlight = new Set<string>();
+  /** Set by `sealRecords`; until then this store writes records unsealed, as an older MELRA does. */
+  private chainKey?: Buffer;
+  private inTransaction = false;
 
   /**
    * `readOnly` is for observers (`melra tasks`, `status`, `watch`) that sit
@@ -519,6 +633,34 @@ export class SqliteStore {
       ${keyedOnce("refusals", "subject_id = NEW.subject_id AND code = NEW.code", "IGNORE")}
     `,
     );
+    // Migration 9 chains the records migrations 7 and 8 keep (see CHAINED):
+    // each link is an HMAC, under a key derived from the payload key, of the
+    // link before it, its record's digest and whether a start swept it, so
+    // rewriting, removing or reordering a sealed record breaks the chain for
+    // anyone without the key, and a head kept outside MELRA shows a removed
+    // tail. Sealing happens in the transaction that writes the record, and for
+    // what an older MELRA writes, which knows no chain, at the next start of one
+    // that does (`sealRecords`), marked swept. Nothing here touches the chained
+    // tables, so an older MELRA writes them as before; the index finds a
+    // replaced certificate.
+    this.applyMigration(
+      9,
+      `
+      CREATE TABLE IF NOT EXISTS record_chain (
+        sequence INTEGER PRIMARY KEY,
+        record_table TEXT NOT NULL,
+        record_key TEXT NOT NULL,
+        record_digest TEXT NOT NULL,
+        previous_link TEXT NOT NULL,
+        link TEXT NOT NULL,
+        swept INTEGER NOT NULL,
+        UNIQUE(record_table, record_key)
+      );
+      CREATE INDEX IF NOT EXISTS certificate_history_certificate ON certificate_history(certificate_id);
+      ${appendOnly("record_chain")}
+      ${keyedOnce("record_chain", "record_table = NEW.record_table AND record_key = NEW.record_key", "ABORT, 'record_append_only'")}
+    `,
+    );
   }
 
   private applyMigration(version: number, statements: string): void {
@@ -544,6 +686,7 @@ export class SqliteStore {
    */
   transaction<T>(action: () => T): T {
     this.database.exec("BEGIN IMMEDIATE");
+    this.inTransaction = true;
     try {
       const result = action();
       this.database.exec("COMMIT");
@@ -555,7 +698,196 @@ export class SqliteStore {
         this.database.exec("ROLLBACK");
       } catch {}
       throw error;
+    } finally {
+      this.inTransaction = false;
     }
+  }
+
+  /**
+   * Seals, under `key`, every chained record no link seals yet, and from now
+   * on each one this store writes, in the transaction that writes it. What an
+   * older MELRA wrote is sealed here, by the next start that has the key, and
+   * so is anything else written to the file meanwhile, or left without its
+   * link: the chain shows what changed after it was last sealed, not who wrote
+   * it, and marks these links swept. Returns how many it found unsealed.
+   */
+  sealRecords(key: Buffer): number {
+    this.chainKey = Buffer.from(key);
+    const pending = (Object.keys(CHAINED) as ChainedTable[]).flatMap((table) =>
+      this.unsealedKeys(table).map((recordKey) => [table, recordKey] as const),
+    );
+    // In batches, so sealing a large home the first time never holds the
+    // write lock long enough for another process's busy timeout to run out.
+    for (let at = 0; at < pending.length; at += 500) {
+      this.transaction(() => {
+        for (const [table, recordKey] of pending.slice(at, at + 500)) {
+          this.seal(table, JSON.parse(recordKey) as unknown[], 1);
+        }
+      });
+    }
+    return pending.length;
+  }
+
+  /** The chain's last link, for an operator to keep where MELRA cannot write; sequence 0 before the first. */
+  chainHead(): ChainHead {
+    const row = this.hasTable("record_chain")
+      ? (this.database.prepare("SELECT sequence, link FROM record_chain ORDER BY sequence DESC LIMIT 1").get() as
+          | ChainHead
+          | undefined)
+      : undefined;
+    return row === undefined ? { sequence: 0, link: GENESIS } : { sequence: row.sequence, link: row.link };
+  }
+
+  /**
+   * Walks the chain under `key`: each link must follow the one before it, be
+   * the HMAC MELRA made, and seal a record still there as it was sealed; then
+   * no row of a chained table may be unsealed. Swept links pass, counted, and
+   * those after a link made at write time are reported as `late`. With
+   * `kept`, a head an operator kept from `chainHead`, the chain must still
+   * pass through it, the only way a removed tail shows. It only reads, so an observer's store can run it, in
+   * one read transaction, so a writer beside it is seen at one moment.
+   */
+  verifyChain(key: Buffer, kept?: ChainHead): ChainReport {
+    this.database.exec("BEGIN");
+    try {
+      const present = (Object.keys(CHAINED) as ChainedTable[]).filter((table) => this.hasTable(table));
+      let last: ChainHead = { sequence: 0, link: GENESIS };
+      let swept = 0;
+      let written = false;
+      let late: ChainReport["late"];
+      const passes = () => kept === undefined || kept.sequence !== last.sequence || kept.link === last.link;
+      let found: ChainReport["break"] = passes() ? undefined : { reason: "head_mismatch", sequence: 0 };
+      if (found === undefined && this.hasTable("record_chain")) {
+        const rows = this.database.prepare(`
+          SELECT sequence, record_table AS recordTable, record_key AS recordKey,
+            record_digest AS recordDigest, previous_link AS previousLink, link, swept
+          FROM record_chain ORDER BY sequence
+        `);
+        for (const row of rows.iterate() as Iterable<ChainRow>) {
+          found = this.linkBreak(key, last, row, present);
+          if (found !== undefined) break;
+          if (row.swept === 0) written = true;
+          else if (written) {
+            late ??= { count: 0, sequence: row.sequence, table: row.recordTable, key: row.recordKey };
+            late.count += 1;
+          }
+          swept += row.swept;
+          last = { sequence: row.sequence, link: row.link };
+          if (!passes()) {
+            found = { reason: "head_mismatch", sequence: row.sequence };
+            break;
+          }
+        }
+      }
+      if (found === undefined && kept !== undefined && kept.sequence > last.sequence) {
+        found = { reason: "head_truncated", sequence: kept.sequence };
+      }
+      let unsealed = 0;
+      for (const table of present) {
+        const keys = this.unsealedKeys(table);
+        unsealed += keys.length;
+        if (found === undefined && keys.length > 0) found = { reason: "unsealed_rows", table, key: keys[0]! };
+      }
+      return {
+        ok: found === undefined,
+        head: this.chainHead(),
+        unsealed,
+        swept,
+        ...(late === undefined ? {} : { late }),
+        ...(found === undefined ? {} : { break: found }),
+      };
+    } finally {
+      this.database.exec("ROLLBACK");
+    }
+  }
+
+  private linkBreak(
+    key: Buffer,
+    last: ChainHead,
+    row: ChainRow,
+    present: readonly ChainedTable[],
+  ): ChainReport["break"] {
+    if (row.sequence !== last.sequence + 1) return { reason: "sequence_gap", sequence: last.sequence + 1 };
+    const at = { sequence: row.sequence, table: row.recordTable, key: row.recordKey };
+    if (row.previousLink !== last.link || row.link !== chainLink(key, last.link, row.recordDigest, row.swept)) {
+      return { reason: "link_forged", ...at };
+    }
+    // Looked up only under a name this code knows, never one read from the row.
+    const table = present.find((name) => name === row.recordTable);
+    let records: Array<Record<string, unknown>> = [];
+    try {
+      if (table !== undefined) records = this.records(table, JSON.parse(row.recordKey) as unknown[]);
+    } catch {
+      // A key that is not one this store wrote names no record.
+    }
+    if (records.length === 0) return { reason: "record_removed", ...at };
+    // A certificate's id is its own version's, so every row under it is the one sealed.
+    return records.some(({ record_key: _, ...record }) => recordDigest(table!, record) !== row.recordDigest)
+      ? { reason: "record_changed", ...at }
+      : undefined;
+  }
+
+  /** The rows of `table` under `key`: one, or a certificate's every version under its id. */
+  private records(table: ChainedTable, key: readonly unknown[]): Array<Record<string, unknown>> {
+    return this.database
+      .prepare(`SELECT * FROM (${chainedRows(table)}) WHERE ${CHAINED[table].key.map((name) => `${name} IS ?`).join(" AND ")}`)
+      .all(...(key as Array<string | number | null>)) as Array<Record<string, unknown>>;
+  }
+
+  /** The keys of `table`'s records no link seals; every one where no chain exists yet. */
+  private unsealedKeys(table: ChainedTable): string[] {
+    const sealed = this.hasTable("record_chain")
+      ? `WHERE NOT EXISTS (SELECT 1 FROM record_chain WHERE record_table = '${table}' AND record_key = r.record_key)`
+      : "";
+    const rows = this.database
+      .prepare(`SELECT record_key AS recordKey FROM (${chainedRows(table)}) AS r ${sealed}`)
+      .all() as unknown as Array<{ recordKey: string }>;
+    return rows.map((row) => row.recordKey);
+  }
+
+  /**
+   * Appends a link sealing `table`'s record under `key`, unless one does
+   * already. With `expected`, only when every row under the key has that
+   * digest. Inside a write transaction.
+   */
+  private seal(table: ChainedTable, key: readonly unknown[], swept: 0 | 1, expected?: string): void {
+    const rows = this.records(table, key);
+    const [row] = rows;
+    if (row === undefined) return;
+    const { record_key: recordKey, ...record } = row;
+    const sealed = this.database
+      .prepare("SELECT 1 FROM record_chain WHERE record_table = ? AND record_key = ?")
+      .get(table, recordKey as string);
+    if (sealed !== undefined) return;
+    const digest = recordDigest(table, record);
+    if (expected !== undefined && rows.some(({ record_key: _, ...other }) => recordDigest(table, other) !== expected)) return;
+    const head = this.chainHead();
+    this.database
+      .prepare(`
+        INSERT INTO record_chain(sequence, record_table, record_key, record_digest, previous_link, link, swept)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `)
+      .run(head.sequence + 1, table, recordKey as string, digest, head.link, chainLink(this.chainKey!, head.link, digest, swept), swept);
+  }
+
+  /**
+   * `write` with `values`, the table's chained columns in order, and the
+   * record it wrote sealed, in one transaction (the caller's, when it is in
+   * one), so a record and its link commit together or not at all.
+   */
+  private sealing<T>(table: ChainedTable, values: readonly Bound[], write: (values: readonly Bound[]) => T): T {
+    if (this.chainKey === undefined) return write(values);
+    const { key, columns } = CHAINED[table];
+    const written = Object.fromEntries(columns.map((name, index) => [name, values[index]]));
+    const sealed = () => {
+      const result = write(values);
+      // Only what this write bound: a row under the key holding anything else
+      // (an ignored insert's, or one a trigger planted or changed) is not this
+      // write's, so the sweep seals it, marked as swept.
+      this.seal(table, key.map((name) => written[name]), 0, recordDigest(table, written));
+      return result;
+    };
+    return this.inTransaction ? sealed() : this.transaction(sealed);
   }
 
   private addColumnIfMissing(
@@ -1299,15 +1631,17 @@ export class SqliteStore {
     attempt: number,
     at: string,
   ): boolean {
-    const result = this.database
-      .prepare(`
-        INSERT OR IGNORE INTO idempotency_commits(
-          idempotency_key, task_id, attempt, committed_at
-        )
-        VALUES (?, ?, ?, ?)
-      `)
-      .run(key, taskId, attempt, at);
-    return Number(result.changes) === 1;
+    return this.sealing("idempotency_commits", [key, taskId, attempt, at], (values) => {
+      const result = this.database
+        .prepare(`
+          INSERT OR IGNORE INTO idempotency_commits(
+            idempotency_key, task_id, attempt, committed_at
+          )
+          VALUES (?, ?, ?, ?)
+        `)
+        .run(...values);
+      return Number(result.changes) === 1;
+    });
   }
 
   getIdempotencyCommit(
@@ -1324,22 +1658,25 @@ export class SqliteStore {
 
   /** False when a decision for this approval was already recorded. */
   recordApprovalDecision(decision: ApprovalDecision): boolean {
-    const result = this.database
-      .prepare(`
-        INSERT OR IGNORE INTO approval_decisions(
-          approval_id, task_id, render_digest, channel, approver, decided_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?)
-      `)
-      .run(
-        decision.approvalId,
-        decision.taskId,
-        decision.renderDigest,
-        decision.channel,
-        decision.approver,
-        decision.decidedAt,
-      );
-    return Number(result.changes) === 1;
+    const values = [
+      decision.approvalId,
+      decision.taskId,
+      decision.renderDigest,
+      decision.channel,
+      decision.approver,
+      decision.decidedAt,
+    ];
+    return this.sealing("approval_decisions", values, (bound) => {
+      const result = this.database
+        .prepare(`
+          INSERT OR IGNORE INTO approval_decisions(
+            approval_id, task_id, render_digest, channel, approver, decided_at
+          )
+          VALUES (?, ?, ?, ?, ?, ?)
+        `)
+        .run(...bound);
+      return Number(result.changes) === 1;
+    });
   }
 
   getApprovalDecision(approvalId: string): ApprovalDecision | undefined {
@@ -1355,46 +1692,52 @@ export class SqliteStore {
 
   /** False when this challenge already has a denial. */
   recordApprovalDenial(denial: ApprovalDenial): boolean {
-    const result = this.database
-      .prepare(`
-        INSERT OR IGNORE INTO approval_denials(
-          approval_id, task_id, render_digest, operation_digest, channel,
-          approver, reason, note, decided_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `)
-      .run(
-        denial.approvalId,
-        denial.taskId,
-        denial.renderDigest,
-        denial.operationDigest,
-        denial.channel,
-        denial.approver,
-        denial.reason,
-        denial.note ?? null,
-        denial.decidedAt,
-      );
-    return Number(result.changes) === 1;
+    const values = [
+      denial.approvalId,
+      denial.taskId,
+      denial.renderDigest,
+      denial.operationDigest,
+      denial.channel,
+      denial.approver,
+      denial.reason,
+      denial.note ?? null,
+      denial.decidedAt,
+    ];
+    return this.sealing("approval_denials", values, (bound) => {
+      const result = this.database
+        .prepare(`
+          INSERT OR IGNORE INTO approval_denials(
+            approval_id, task_id, render_digest, operation_digest, channel,
+            approver, reason, note, decided_at
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `)
+        .run(...bound);
+      return Number(result.changes) === 1;
+    });
   }
 
   /** Silent on a repeat: the first refusal of a code for a task or run is the one kept. */
   recordRefusal(refusal: Refusal): void {
-    this.database
-      .prepare(`
-        INSERT OR IGNORE INTO refusals(
-          subject_id, code, kind, mode, principal, client, refused_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `)
-      .run(
-        refusal.subjectId,
-        refusal.code,
-        refusal.kind,
-        refusal.mode,
-        refusal.principal ?? null,
-        refusal.client ?? null,
-        refusal.refusedAt,
-      );
+    const values = [
+      refusal.subjectId,
+      refusal.code,
+      refusal.kind,
+      refusal.mode,
+      refusal.principal ?? null,
+      refusal.client ?? null,
+      refusal.refusedAt,
+    ];
+    this.sealing("refusals", values, (bound) => {
+      this.database
+        .prepare(`
+          INSERT OR IGNORE INTO refusals(
+            subject_id, code, kind, mode, principal, client, refused_at
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `)
+        .run(...bound);
+    });
   }
 
   /** The newest `limit` refusals, of the tasks and runs in `subjectIds` if given. */
@@ -1420,10 +1763,11 @@ export class SqliteStore {
    * opened has no refusals table yet, and nothing refused recorded in it.
    */
   private recordsRefusals(): boolean {
-    return (
-      this.database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'refusals'").get() !==
-      undefined
-    );
+    return this.hasTable("refusals");
+  }
+
+  private hasTable(name: string): boolean {
+    return this.database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) !== undefined;
   }
 
   refusalCount(): number {
@@ -1448,14 +1792,16 @@ export class SqliteStore {
     amount: number,
     at: string,
   ): void {
-    this.database
-      .prepare(`
-        INSERT OR IGNORE INTO capability_usage(
-          grant_id, task_id, amount, committed_at
-        )
-        VALUES (?, ?, ?, ?)
-      `)
-      .run(grantId, taskId, amount, at);
+    this.sealing("capability_usage", [grantId, taskId, amount, at], (values) => {
+      this.database
+        .prepare(`
+          INSERT OR IGNORE INTO capability_usage(
+            grant_id, task_id, amount, committed_at
+          )
+          VALUES (?, ?, ?, ?)
+        `)
+        .run(...values);
+    });
   }
 
   /**
@@ -1524,36 +1870,37 @@ export class SqliteStore {
   }
 
   private insertWorkflowEvent(event: WorkflowEvent): void {
-    this.database
-      .prepare(`
-        INSERT INTO workflow_events(
-          id, aggregate_id, sequence, trace_id, type, data, occurred_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `)
-      .run(
-        event.id,
-        event.aggregateId,
-        event.sequence,
-        event.traceId,
-        event.type,
-        JSON.stringify(event),
-        event.occurredAt,
-      );
+    const values = [
+      event.id,
+      event.aggregateId,
+      event.sequence,
+      event.traceId,
+      event.type,
+      JSON.stringify(event),
+      event.occurredAt,
+    ];
+    this.sealing("workflow_events", values, (bound) => {
+      this.database
+        .prepare(`
+          INSERT INTO workflow_events(
+            id, aggregate_id, sequence, trace_id, type, data, occurred_at
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `)
+        .run(...bound);
+    });
   }
 
   saveReceipt(receipt: ActionReceipt): void {
-    this.database
-      .prepare(`
-        INSERT INTO receipts(id, task_id, data, created_at)
-        VALUES (?, ?, ?, ?)
-      `)
-      .run(
-        receipt.receiptId,
-        receipt.taskId,
-        JSON.stringify(receipt),
-        receipt.endedAt,
-      );
+    const values = [receipt.receiptId, receipt.taskId, JSON.stringify(receipt), receipt.endedAt];
+    this.sealing("receipts", values, (bound) => {
+      this.database
+        .prepare(`
+          INSERT INTO receipts(id, task_id, data, created_at)
+          VALUES (?, ?, ?, ?)
+        `)
+        .run(...bound);
+    });
   }
 
   getReceipt(id: string): ActionReceipt | undefined {
@@ -1579,22 +1926,21 @@ export class SqliteStore {
     certificate: ExecutionCertificate,
     { ifAbsent = false }: { ifAbsent?: boolean } = {},
   ): ExecutionCertificate {
-    this.database
-      .prepare(`
-        INSERT INTO certificates(id, task_id, data, created_at)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(task_id) DO ${ifAbsent ? "NOTHING" : `UPDATE SET
-          id = excluded.id,
-          data = excluded.data,
-          created_at = excluded.created_at`}
-      `)
-      .run(
-        certificate.certificateId,
-        certificate.taskId,
-        JSON.stringify(certificate),
-        certificate.createdAt,
-      );
-    return ifAbsent ? this.getCertificateForTask(certificate.taskId)! : certificate;
+    // The one it replaces was sealed under its own id, and stays so in certificate_history.
+    const values = [certificate.certificateId, certificate.taskId, JSON.stringify(certificate), certificate.createdAt];
+    return this.sealing("certificates", values, (bound) => {
+      this.database
+        .prepare(`
+          INSERT INTO certificates(id, task_id, data, created_at)
+          VALUES (?, ?, ?, ?)
+          ON CONFLICT(task_id) DO ${ifAbsent ? "NOTHING" : `UPDATE SET
+            id = excluded.id,
+            data = excluded.data,
+            created_at = excluded.created_at`}
+        `)
+        .run(...bound);
+      return ifAbsent ? this.getCertificateForTask(certificate.taskId)! : certificate;
+    });
   }
 
   getCertificateForTask(taskId: string): ExecutionCertificate | undefined {

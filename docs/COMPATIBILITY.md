@@ -207,6 +207,15 @@ A request or workflow definition whose `http_resource_matches` predicate sets
 process sharing the home together before setting it; left out, the 30 s
 default applies and the request stays readable.
 
+Releases after `0.4.0-alpha.1` add migration `9`, the
+[record chain](INSTALLATION.md#verify-the-records). An older MELRA sharing the
+home writes its records as before, without links; the next process of a
+newer release to start there seals them, and `melra audit verify` reports
+them as `unsealed_rows` until then, and afterwards counts them as `swept`,
+and as `late` once a newer process has sealed a record when it was written.
+Links are checked under a key derived from the payload key, so they are lost
+with it.
+
 ## Workflow compatibility and limits
 
 The implemented node types are operation, approval, condition, parallel,

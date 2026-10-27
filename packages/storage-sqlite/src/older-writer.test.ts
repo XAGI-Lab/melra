@@ -7,6 +7,7 @@
 // store makes must see what that one writes: a task it starts, finishes or
 // plans under a key.
 
+import { randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -273,6 +274,42 @@ describe("an older MELRA writing the same home", () => {
     expect(
       store.database.prepare("SELECT data FROM certificate_history WHERE task_id = ?").all(row.id),
     ).toEqual([{ data: JSON.stringify(first) }]);
+  });
+
+  it("keeps writing records beside a sealing store, and has them sealed by the next start with the key", () => {
+    const path = newHome();
+    const key = randomBytes(32);
+    const store = open(path);
+    store.sealRecords(key);
+    const older = olderMelra(path);
+    const id = (n: number) => `00000000-0000-4000-8000-0000000000b${n}`;
+    store.saveReceipt({ receiptId: id(1), taskId: task("verifying").id, endedAt: "at" } as ActionReceipt);
+    // It knows no chain, and nothing in the chain stops its writes.
+    older.saveReceipt({ receiptId: id(2), taskId: task("verifying").id, endedAt: "at" } as ActionReceipt);
+    expect(older.commitIdempotency(KEY, task("verifying").id, 1, "at")).toBe(true);
+    const issue = () =>
+      createCertificate({
+        taskId: task("verifying").id,
+        goal: "Inspect",
+        result: "PARTIAL",
+        policyVersion: "1",
+        receiptIds: [],
+        evidence: [],
+        createdAt: "at",
+      });
+    older.saveCertificate(issue());
+    older.saveCertificate(issue());
+    expect(store.verifyChain(key)).toMatchObject({ ok: false, unsealed: 4, break: { reason: "unsealed_rows" } });
+
+    open(path).sealRecords(key);
+    // Sealed by a start after the first link made at write time, so marked late, and whole.
+    expect(store.verifyChain(key)).toMatchObject({
+      ok: true,
+      unsealed: 0,
+      head: { sequence: 5 },
+      swept: 4,
+      late: { count: 4, sequence: 2, table: "receipts", key: JSON.stringify([id(2)]) },
+    });
   });
 
   it("leaves a task denied here denied, and its own deny reads as the plain cancel it is", () => {

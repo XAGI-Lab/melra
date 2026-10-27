@@ -213,6 +213,7 @@ MELRA uses `<MELRA_HOME>/melra.sqlite` in WAL mode. Schema migration version
 | `approval_denials` | Operator denials with their reason and note, one per challenge |
 | `refusals` | Answers refused for their channel or for not matching, one per task or run and code |
 | `capability_usage` | Capability grant draws, one per grant and task |
+| `record_chain` | One link per sealed record, in order: the record, its digest and the link |
 
 Migration `7` makes the records an effect leaves append-only, with triggers
 that refuse a write with `record_append_only`:
@@ -250,13 +251,56 @@ A refusal inside a transaction is recorded after that transaction rolls back.
 Only versions with migration `8` write either table, and read-only observers on
 a home no such version has opened read none.
 
-That is the whole claim. It catches bugs, stray scripts and naive edits. It
-does not stop a new row being added, or a certificate being updated in place,
-though the one replaced is kept. Anyone who can write `melra.sqlite` can drop
-a trigger and then change anything, so this is not tamper-evidence: nothing
-yet signs the records or chains them to one another. A certificate's `digest`
-covers its own fields, naming its receipts by id only, so it shows that a
-certificate is consistent with itself, not that MELRA wrote it.
+The triggers catch bugs, stray scripts and naive edits. They do not stop a
+new row being added, or a certificate being updated in place, though the one
+replaced is kept, and anyone who can write `melra.sqlite` can drop a trigger
+and then change anything. A certificate's `digest` covers its own fields,
+naming its receipts by id only, so it shows that a certificate is consistent
+with itself, not that MELRA wrote it.
+
+Migration `9` makes those records tamper-evident with `record_chain`. Every
+receipt, every version of a certificate (the current one in `certificates`,
+each one it replaced in `certificate_history`), and every workflow event,
+approval decision, approval denial, refusal, grant draw and idempotency commit
+gets one link: a sequence, the record's table and key, the SHA-256 of the
+columns it was written with as canonical JSON, the link before it, whether a
+later start sealed it rather than the write (`swept`), and the link itself,
+an HMAC-SHA256 of the link before, that digest and `swept` under a key
+derived from the payload key with a label of its own
+(`melra:record-chain:v1`). The link is written in the transaction that
+writes the record, under SQLite's write lock, and both the sequence and the
+record it names are unique, so processes sharing a home extend one chain.
+`record_chain` is append-only under the same triggers.
+
+`melra audit verify` walks the chain from the database opened read-only,
+with the payload key, and fails, naming the first, on a sealed record changed
+or removed, a link missing, moved or not made with the key, and a row of
+those tables no link seals. It also counts the swept links, and names the
+first that follows a link sealed when written (`late`), without failing,
+since an older MELRA writing beside this one leaves those at every start. A
+removed tail, the newest records taken out with their links, leaves a
+shorter chain that still verifies; `melra audit head` prints the last link
+for the operator to keep where MELRA cannot write, and `--head
+<sequence>:<link>` fails unless the chain still passes through it (see
+[verify the records](INSTALLATION.md#verify-the-records)).
+
+What it does not cover: task rows and workflow runs, rewritten as a task or
+run moves, are not chained, nor are snapshots, definitions, sealed payloads,
+memories or `certified_tasks`; the certificates and events those rows lead to
+are. Nor is `certificate_history.replaced_at`, the time a version was
+replaced, which the trigger adds after the version was sealed. Anyone who can
+write `melra.sqlite` can, without the key, remove a record's link and every
+later one, or the whole chain, and change or remove the records from there;
+the next start seals what is left again, as it then is, so the chain
+verifies, those links marked swept and, after one sealed when written, late.
+Whoever holds `payload.key`, in a single-user deployment anyone running as
+MELRA's user, can rebuild the whole chain with no mark. A head kept from
+after the record was sealed shows both. An older MELRA sharing the home
+writes its records without links, and the next process of this version to
+start on the home seals them (`sealRecords`), with any row anyone else
+inserted meanwhile, so the chain shows that a record has not changed since it
+was last sealed, not who wrote it. Until then `melra audit verify` reports
+them as `unsealed_rows`.
 
 Workflow creation persists the redacted definition, encrypted definition,
 initial projection, and first two events atomically. Later transitions use
