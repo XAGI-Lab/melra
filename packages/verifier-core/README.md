@@ -75,7 +75,9 @@ never name a built-in.
 `semantic` is built in and never passes here: it is a question about meaning
 for a judge outside MELRA, and the kernel runs no model. Its item fails as
 inconclusive (`semantic_judgement_unanswered`), and no verifier can be
-registered under that name.
+registered under that name. Nor under `directory_exists` or `file_present`,
+built in for the checks `kernelChecksFor(operation)` derives from what a file
+operation itself fixes; a request cannot declare them.
 
 Requires Node.js 22 or newer. Full documentation:
 [github.com/XAGI-Lab/melra](https://github.com/XAGI-Lab/melra)

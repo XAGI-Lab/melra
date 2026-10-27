@@ -216,6 +216,14 @@ and as `late` once a newer process has sealed a record when it was written.
 Links are checked under a key derived from the payload key, so they are lost
 with it.
 
+Releases after `0.4.0-alpha.1` make [kernel
+checks](ARCHITECTURE.md#kernel-checks) and record them in new optional fields:
+`kernelChecks` on the task, `kernelEvidence` on the receipt and the
+certificate. Nothing stored is rewritten, and older receipts and certificates
+verify unchanged. In a shared home an older process still runs a task a newer
+one planned, without making its checks, and a newer process makes them for a
+task an older one planned, from its sealed request.
+
 ## Workflow compatibility and limits
 
 The implemented node types are operation, approval, condition, parallel,

@@ -241,6 +241,11 @@ const STRONGER_THAN_EXECUTION: Record<string, EvidenceStrength> = {
   file_exists: "state",
   file_absent: "state",
   file_hash: "state",
+  // The kernel's own checks (`kernelChecksFor`): a re-read of the workspace,
+  // or of the memory store the memory adapter writes.
+  directory_exists: "state",
+  file_present: "state",
+  memory_absent: "state",
   // Not the adapter's word: the kernel read a durable commit that outlives the
   // process that wrote it.
   idempotency: "state",
@@ -367,7 +372,15 @@ export interface ActionReceipt {
   endedAt: string;
   success: boolean;
   observedEffect: Record<string, unknown>;
+  /** What the caller's `requiredEvidence` found, one item per predicate. */
   evidence: EvidenceItem[];
+  /**
+   * What the kernel's own checks found (the task's `kernelChecks`), kept
+   * apart from `evidence` so a reader can tell whose check each is. A
+   * `digest` here is always masked: it hashes what a write carried. Absent
+   * where the kernel derived none, and on receipts written before it existed.
+   */
+  kernelEvidence?: EvidenceItem[];
   redactions: string[];
   error?: string;
 }
@@ -383,6 +396,8 @@ export interface ExecutionCertificate {
   policyDigest?: string;
   receiptIds: string[];
   evidence: EvidenceItem[];
+  /** As on the task's receipts. Covered by `digest`, like every other field. */
+  kernelEvidence?: EvidenceItem[];
   createdAt: string;
   /** The deployment mode the task ran under, as on its receipts. */
   mode?: string;

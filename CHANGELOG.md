@@ -50,6 +50,22 @@ All notable changes are documented here. The format follows
   writes is sealed at the next start of this version. Task rows and workflow
   runs, which change as a task or run moves, are not chained. See [verify the
   records](https://github.com/XAGI-Lab/melra/blob/main/docs/INSTALLATION.md#verify-the-records).
+- Kernel checks: for an operation whose end state the request itself fixes,
+  MELRA derives checks of its own at planning and makes them after the effect,
+  whatever the caller declared. A file `write` must leave exactly the bytes it
+  sent (`file_hash`, in either encoding), a `mkdir` a directory
+  (`directory_exists`), a `delete` nothing at its path (`file_absent`), a
+  `move` nothing at its source and an entry at its destination (`file_absent`,
+  `file_present`), and a memory `delete` no record with that id in its scope
+  (`memory_absent`). Terminal, browser, HTTP and desktop effects, a memory
+  `put` and a memory `clear` get none, and a move's content is not checked. The
+  plan response and the task list them as `kernelChecks`, with a written file's
+  hash masked on the stored row; receipts and certificates record what they
+  found as `kernelEvidence`, apart from the caller's `evidence`, and the
+  certificate's digest covers it. `directory_exists`, `file_present` and
+  `memory_absent` are the kernel's alone: a request cannot declare them. The
+  console shows these checks apart from the agent's evidence. See [kernel
+  checks](https://github.com/XAGI-Lab/melra/blob/main/docs/ARCHITECTURE.md#kernel-checks).
 
 ### Changed
 
@@ -95,6 +111,27 @@ All notable changes are documented here. The format follows
   outranks a project `.npmrc` setting `cache`: an offline install from a
   cache seeded there now fails with `ENOTCACHED`. `--cache <dir>` on the
   command line still wins.
+- **Breaking:** a file write, mkdir, delete or move, or a memory delete, whose
+  end state is not the one requested now ends `partial` even when every
+  declared predicate held, where it used to end `verified_success`: a write
+  whose file holds other bytes by the time MELRA looks, say, or an adapter that
+  reports a change it did not make. A write to a file MELRA cannot read back,
+  such as one kept write-only, ends `partial` too, since a check it cannot make
+  does not pass, and so, on a disk that ignores case, does a move that only
+  changes the case of a non-ASCII letter in the name of a file with another
+  hard link, since MELRA cannot tell that the old spelling now reaches only
+  the renamed entry. Recovery that observes an interrupted change again leaves such
+  a task `recovery_required` instead of settling it as verified, and a
+  reconciliation whose predicates hold while a kernel check fails leaves it
+  there too (`reconciliation_kernel_check_failed`). Kernel checks do not count
+  as the evidence a mutation must declare, so what planning refuses is
+  unchanged.
+
+- **Breaking:** `directory_exists` and `file_present` are now built-in
+  verifier types (two of the kernel's own checks), so `createMelraRuntime`
+  refuses an `evidenceVerifiers` entry of either type
+  (`verifier_type_taken:<type>`) and the runtime does not start. Rename such a
+  verifier, and the `custom` predicates that name it.
 
 ### Fixed
 
@@ -104,6 +141,10 @@ All notable changes are documented here. The format follows
   `npm_config_cache` and `PNPM_HOME` in a private folder MELRA makes in temp
   at its first command and removes when its process exits, a hangup
   included, though not after a `SIGKILL`.
+- `file_absent` on the source of a move that changed only the case of ASCII
+  letters in the name of a file with another hard link, on a disk that ignores
+  case, now passes once its directory no longer lists the old spelling; it
+  failed, and the move ended `partial`.
 
 ### Security
 

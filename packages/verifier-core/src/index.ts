@@ -6,8 +6,8 @@ import type { BigIntStats } from "node:fs";
 import { lstat, readdir, realpath, stat, type FileHandle } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { openRegular } from "@melra/file-runtime";
-import type { EvidencePredicate } from "@melra/protocol";
+import { decodeContent, openRegular } from "@melra/file-runtime";
+import type { EvidencePredicate, KernelCheck, Operation } from "@melra/protocol";
 import { evidenceStrength, redactStructuredValue, wildcardMatch, type EvidenceItem } from "@melra/receipt-schema";
 
 /**
@@ -246,8 +246,9 @@ const fileExists: Built<"file_exists"> = {
  * only changed its case: a case-insensitive disk folds the old spelling onto
  * the renamed file, and a correct rename verified as partial. It is absent
  * only when `path` is that move's own source, what it reached is the move's
- * destination entry and that entry's only name (a hard link is a second one),
- * and the directory no longer lists the old spelling. Anywhere else a path
+ * destination entry (a hard link is a second name, so one with others must
+ * be in the same directory and spelled the same but for case), and the
+ * directory no longer lists the old spelling. Anywhere else a path
  * lstat reaches is there, however spelled: a guard asking whether settings.json
  * is absent beside Settings.json must not be told yes.
  */
@@ -261,17 +262,28 @@ async function renamedByCase(
   // As the runtime reported it, relative to the root: an absolute path that
   // spells the root in another case (Windows allows it) is the same source.
   if (context.relative(path) !== result.path) return false;
-  if (!found.isDirectory() && found.nlink !== 1n) return false;
   // The destination's own entry, not where a link there leads; gone, it is
   // not what the old spelling reached.
-  const destination = await context
-    .workspacePath(result.destination, { mayBeAbsent: true })
-    .then((resolved) => lstat(resolved, { bigint: true }))
-    .catch(() => undefined);
-  if (destination === undefined || destination.dev !== found.dev || destination.ino !== found.ino) return false;
+  const resolved = await context.workspacePath(result.destination, { mayBeAbsent: true }).catch(() => undefined);
+  const destination =
+    resolved === undefined ? undefined : await lstat(resolved, { bigint: true }).catch(() => undefined);
+  if (resolved === undefined || destination?.dev !== found.dev || destination.ino !== found.ino) return false;
   // Compared as the OS sees names: UTF-8 (a lone surrogate becomes U+FFFD),
   // and normalization aside, which such disks ignore too.
   const spelled = (name: string) => Buffer.from(name).toString("utf8").normalize("NFC");
+  if (!found.isDirectory() && found.nlink !== 1n) {
+    // One directory that folds case holds one entry per folded name, so there
+    // the old spelling reaches the destination's entry and no other link.
+    // ASCII letters only: every such disk folds those, and the rest differ.
+    const folded = (name: string) => spelled(name).replace(/[A-Z]/g, (letter) => letter.toLowerCase());
+    const [here, there] = await Promise.all([
+      lstat(dirname(path), { bigint: true }),
+      lstat(dirname(resolved), { bigint: true }),
+    ]);
+    if (here.dev !== there.dev || here.ino !== there.ino || folded(basename(path)) !== folded(basename(resolved))) {
+      return false;
+    }
+  }
   const name = spelled(basename(path));
   return !(await readdir(dirname(path))).some((listed) => spelled(listed) === name);
 }
@@ -329,6 +341,51 @@ const fileHash: Built<"file_hash"> = {
       source: context.relative(path),
       digest,
     };
+  },
+};
+
+/** The kernel's alone (`kernelChecksFor`): through links, as mkdir accepts one. */
+const directoryExists: PredicateVerifier<{ type: "directory_exists"; path: string }> = {
+  type: "directory_exists",
+  async check(predicate, _result, context) {
+    let path: string;
+    let passed: boolean;
+    try {
+      path = await context.workspacePath(predicate.path);
+      passed = (await stat(path)).isDirectory();
+    } catch (error) {
+      refuseTooLong(error);
+      if (!missing(error)) throw error;
+      return { passed: false, summary: "workspace path does not exist", source: predicate.path };
+    }
+    return {
+      passed,
+      summary: `workspace path ${passed ? "is" : "is not"} a directory`,
+      source: context.relative(path),
+    };
+  },
+};
+
+/**
+ * The kernel's alone: whatever entry is at the path, a link that leads nowhere
+ * or a FIFO included, as a move leaves whatever it moved. `file_exists` reads
+ * through a link and wants a file or a directory.
+ */
+const filePresent: PredicateVerifier<{ type: "file_present"; path: string }> = {
+  type: "file_present",
+  async check(predicate, _result, context) {
+    const path = await context.workspacePath(predicate.path, { mayBeAbsent: true }).catch((error: unknown) => {
+      refuseTooLong(error);
+      throw error;
+    });
+    try {
+      await lstat(path);
+    } catch (error) {
+      refuseTooLong(error);
+      if (!missing(error)) throw error;
+      return { passed: false, summary: "workspace path is absent", source: context.relative(path) };
+    }
+    return { passed: true, summary: "workspace path exists", source: context.relative(path) };
   },
 };
 
@@ -438,6 +495,8 @@ const BUILT_IN: ReadonlyArray<RegisteredVerifier> = [
   fileExists,
   fileAbsent,
   fileHash,
+  directoryExists,
+  filePresent,
   httpResourceMatches,
   semantic,
 ];
@@ -445,6 +504,54 @@ const BUILT_IN_TYPES: ReadonlySet<string> = new Set(BUILT_IN.map((verifier) => v
 /** The predicates whose `path` is a workspace file. */
 const FILE_TYPES: ReadonlySet<string> = new Set(["file_exists", "file_absent", "file_hash"]);
 
+
+/**
+ * What the kernel checks of an effect whatever the caller declared: the end
+ * state the request itself fixes, and nothing it cannot know exactly from it.
+ * A write replaces the file whole with the bytes it decodes, through a link as
+ * the adapter writes through one, so the file hashes to exactly those; content
+ * the adapter would refuse to decode is never written and gets none. A made
+ * directory is one; a deleted path and a moved source are gone; a moved
+ * destination is there, unhashed, since what was moved is not in the request.
+ * A memory delete removes the record by id and scope. A memory put gets none:
+ * the adapter stores a redacted copy, under an id it mints unless the request
+ * names one, compacts a past expiry at once and may evict under a per-scope
+ * ceiling. Terminal, browser, http and desktop effects get none either: what
+ * they should leave behind is not in the request.
+ */
+export function kernelChecksFor(operation: Operation): KernelCheck[] {
+  if (operation.kind === "memory") {
+    return operation.action === "delete" && operation.id !== undefined
+      ? [{ type: "memory_absent", id: operation.id, scope: operation.scope }]
+      : [];
+  }
+  if (operation.kind !== "file") return [];
+  switch (operation.action) {
+    case "write": {
+      if (operation.content === undefined) return [];
+      let bytes: Buffer;
+      try {
+        bytes = decodeContent(operation.content, operation.encoding);
+      } catch {
+        return [];
+      }
+      return [{ type: "file_hash", path: operation.path, sha256: createHash("sha256").update(bytes).digest("hex") }];
+    }
+    case "mkdir":
+      return [{ type: "directory_exists", path: operation.path }];
+    case "delete":
+      return [{ type: "file_absent", path: operation.path }];
+    case "move":
+      return operation.destination === undefined
+        ? []
+        : [
+            { type: "file_absent", path: operation.path },
+            { type: "file_present", path: operation.destination },
+          ];
+    default:
+      return [];
+  }
+}
 
 export interface VerifierOptions {
   /** Absent means `http_resource_matches` fails rather than passes. */

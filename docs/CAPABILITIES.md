@@ -583,6 +583,25 @@ A `file_*` path that can only land outside the workspace or on its root is
 refused at planning (`evidence_path_outside_workspace`), since the verifier
 would refuse it every time it was asked.
 
+Beside these, MELRA makes [checks of its
+own](ARCHITECTURE.md#kernel-checks) where the request fixes the end state,
+whatever was declared: after a file `write` the file must hash to exactly the
+bytes sent (`file_hash`), after a `mkdir` a directory must be there
+(`directory_exists`), after a `delete` the path must be gone (`file_absent`),
+after a `move` the source must be gone and something must be at the
+destination (`file_present`), and after a memory `delete` no record with that
+id may be left in its scope (`memory_absent`). The plan response and task list
+them as `kernelChecks`; the receipt and certificate record them as
+`kernelEvidence`, apart from `evidence`. One that fails makes the task `partial`
+even when every declared predicate held, and one MELRA cannot make fails: a
+write to a file it cannot read back, such as one kept write-only, ends
+`partial`. A reconciliation whose predicates hold while one fails leaves the
+task `recovery_required` (`reconciliation_kernel_check_failed`). A request
+cannot declare `directory_exists`, `file_present` or `memory_absent`, and the
+kernel's checks do not count as the evidence a mutation must declare.
+Terminal, browser, HTTP and desktop effects, a memory `put` and a memory
+`clear` get none, so for them the declared predicates are the whole check.
+
 `custom` is for effects no built-in can confirm, such as a database row or a
 ticket in some SaaS. The verifier is code passed to `createMelraRuntime` as
 `evidenceVerifiers`, never configuration; `melra_capabilities` lists the

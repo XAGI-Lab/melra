@@ -585,13 +585,17 @@ async function renderTaskDetail(id, into) {
     ["Traits", d.traits?.length ? chips(d.traits) : null], ["Policy version", d.policyVersion],
     ["Policy digest", d.policyDigest ? mono(d.policyDigest) : null],
   ])));
+  const items = (list) => el("ul", { class: "evidence" }, list.map((e) => el("li", {},
+    el("span", { class: e.passed ? "mark-ok" : "mark-bad", "aria-label": e.passed ? "passed" : "failed", text: e.passed ? "✓" : "✕" }),
+    el("span", {}, el("strong", { text: human(e.type) }), el("div", { class: "muted", text: e.summary ?? "" })),
+    e.strength ? el("span", { class: "chip", title: "How this evidence is known", text: e.strength }) : null)));
   const evidence = receipts?.certificate?.evidence ?? receipts?.receipts?.flatMap((r) => r.evidence ?? []) ?? [];
   parts.push(el("div", { class: "section" }, el("h2", { text: "Evidence" }), evidence.length === 0
     ? el("p", { class: "muted", text: "No evidence recorded yet." })
-    : el("ul", { class: "evidence" }, evidence.map((e) => el("li", {},
-      el("span", { class: e.passed ? "mark-ok" : "mark-bad", "aria-label": e.passed ? "passed" : "failed", text: e.passed ? "✓" : "✕" }),
-      el("span", {}, el("strong", { text: human(e.type) }), el("div", { class: "muted", text: e.summary ?? "" })),
-      e.strength ? el("span", { class: "chip", title: "How this evidence is known", text: e.strength }) : null)))));
+    : items(evidence)));
+  // The kernel's own checks, apart from what the agent declared.
+  const kernel = receipts?.certificate?.kernelEvidence ?? receipts?.receipts?.flatMap((r) => r.kernelEvidence ?? []) ?? [];
+  if (kernel.length > 0) parts.push(el("div", { class: "section" }, el("h2", { text: "Checked by MELRA itself" }), items(kernel)));
   if (receipts?.certificate) parts.push(el("div", { class: "section" }, el("h2", { text: "Certificate" }), kv([
     ["Result", badge(receipts.certificate.result.toLowerCase(), { verified_success: "ok", partial: "warn", failed: "bad" })],
     ["Certificate", mono(receipts.certificate.certificateId)],

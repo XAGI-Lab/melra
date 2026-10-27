@@ -121,7 +121,10 @@ cannot ride a since-tightened policy, validates the approval, runs the adapter u
 Verification is what decides success. `TaskController` (`packages/runtime-core/src/task-controller.ts`)
 marks a task `verified_success` only when the adapter succeeded *and* every
 `requiredEvidence` predicate passed; an adapter that succeeded with failing evidence is
-`partial`, never success. A metered capability grant is drawn down whenever the adapter
+`partial`, never success. For a file write, mkdir, delete or move and a memory
+delete the kernel also derives checks of its own from the request
+(`kernelChecksFor` in `@melra/verifier-core`, recorded as `kernelEvidence`), and a
+failed one makes the task `partial` too. A metered capability grant is drawn down whenever the adapter
 may have run (it returned, or threw an outcome-unknown error), whatever the verdict, so a
 `partial` or `recovery_required` task is charged too. Read-only ops with no declared
 evidence get a synthetic `operation_completed` item. Retries apply to `read` effects

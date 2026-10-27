@@ -65,6 +65,10 @@ describe("receipt and certificate primitives", () => {
     // looked at outranks the adapter saying the call returned.
     expect(evidenceStrength("file_hash")).toBe("state");
     expect(evidenceStrength("operation_completed")).toBe("execution");
+    // The kernel's own checks re-read the workspace or its own memory store.
+    for (const type of ["directory_exists", "file_present", "memory_absent"]) {
+      expect(evidenceStrength(type), type).toBe("state");
+    }
   });
 
   it("labels a judgement about meaning as such, and nothing else borrows the label", () => {

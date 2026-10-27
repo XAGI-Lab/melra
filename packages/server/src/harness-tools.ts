@@ -268,7 +268,7 @@ function summarize(
       : {
           note:
             status === "partial"
-              ? "The adapter reported success but declared evidence did not hold. Treat this as unproven, not done."
+              ? "The adapter reported success but declared evidence, or a check MELRA makes itself, did not hold. Treat this as unproven, not done."
               : "The task did not verify. Read melra_receipt for the evidence and the certificate.",
         }),
   };
