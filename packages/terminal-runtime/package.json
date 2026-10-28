@@ -1,6 +1,6 @@
 {
   "name": "@melra/terminal-runtime",
-  "version": "0.4.0-alpha.1",
+  "version": "0.4.0-alpha.2",
   "description": "Shell-free supervised terminal reference effect adapter for the MELRA kernel.",
   "license": "AGPL-3.0-only",
   "repository": {
