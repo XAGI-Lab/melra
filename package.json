@@ -55,7 +55,7 @@
     "benchmark:aarm": "pnpm build && node evals/dist/aarm/harness.js"
   },
   "devDependencies": {
-    "@modelcontextprotocol/sdk": "1.32.1",
+    "@modelcontextprotocol/sdk": "1.32.2",
     "@types/node": "22.20.5",
     "esbuild": "0.28.2",
     "playwright-core": "1.64.1",
