@@ -173,7 +173,8 @@ export async function sandboxCheck(
  * change, what a command runs in (`commands`, from `sandboxCheck`; absent
  * when that did not run), and, where the harness line could read Claude
  * Code's settings, which of its own tools that change things are left to it
- * (`harnessTools`). Never a `fail`. A `warn` under unsafe-local, and where
+ * (`harnessTools`), and the OpenClaw and Hermes configs that leave theirs, or
+ * could not be read (`natives`). Never a `fail`. A `warn` under unsafe-local, and where
  * enforced mode, the operator's word that MELRA is the only path, has a gap
  * under it that MELRA can see.
  */
@@ -181,6 +182,7 @@ export function protectionCheck(
   env: Pick<CliEnvironment, "mode" | "unhinged">,
   commands: string | undefined,
   harnessTools?: readonly string[],
+  natives: readonly string[] = [],
 ): DoctorCheck {
   const name = "protection";
   if (env.unhinged) {
@@ -204,10 +206,11 @@ export function protectionCheck(
               (commands === "bubblewrap" ? " (Unix sockets on the filesystem stay reachable)" : "");
   const harness =
     harnessTools === undefined
-      ? "harness: not inspected (doctor reads only Claude Code's settings, once melra is set up there); a harness that keeps a shell or file tools of its own can go around MELRA"
+      ? "harness: not inspected here (Claude Code's settings are read once melra is set up there; OpenClaw's and Hermes's get harness lines of their own); a harness that keeps a shell or file tools of its own can go around MELRA"
       : harnessTools.length === 0
         ? "Claude Code: its settings remove its own shell, file and web tools"
         : `Claude Code: its settings leave it ${harnessTools.join(", ")}, which go around MELRA (melra launch claude-code starts it without them)`;
-  const gap = env.mode === "enforced" && (own || (harnessTools?.length ?? 0) > 0);
-  return { name, status: gap ? "warn" : "pass", detail: [approvals, ran, harness].join("; ") };
+  const agents = natives.map((client) => `${client}: its config leaves it tools of its own, which go around MELRA (its harness line names them)`);
+  const gap = env.mode === "enforced" && (own || (harnessTools?.length ?? 0) > 0 || natives.length > 0);
+  return { name, status: gap ? "warn" : "pass", detail: [approvals, ran, harness, ...agents].join("; ") };
 }

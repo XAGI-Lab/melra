@@ -76,7 +76,8 @@ paths, every environment variable, and the hardened Docker invocation.
 `setup` adds MELRA beside a client's own tools, so the agent keeps its own
 shell and editor, and you have to ask it to use MELRA. For Claude Code there
 is a way to start it without them (and `setup --exclusive` takes them away in
-[its settings](#take-claude-codes-own-tools-away-in-its-settings)):
+[its settings](#take-claude-codes-own-tools-away-in-its-settings), as it does
+in [OpenClaw's and Hermes Agent's](#take-openclaws-and-hermes-agents-own-tools-away)):
 
 ```bash
 cd ~/project
@@ -154,6 +155,49 @@ has your OS user's rights, less what the per-command sandbox takes away where
 one works, and is not limited to MELRA's tools; desktop clients
 are not covered; and whether plugin hooks still load under `--restricted` has
 not been verified.
+
+### What launch keeps and drops
+
+`launch` starts a session in which no file outside its control can hand a tool
+back, and that costs you most of your own Claude Code setup. Each flag does one
+part of it:
+
+- `--tools Read,Glob,Grep` leaves Claude Code no built-in tool that changes
+  anything;
+- `--mcp-config` naming only melra, with `--strict-mcp-config`, loads no other
+  MCP server;
+- `--restricted`, as Claude Code's
+  [CLI reference](https://code.claude.com/docs/en/cli-reference) describes it,
+  removes the built-in tools that run commands or code and WebFetch unless
+  `--tools` names them, confines the file tools to the working directories,
+  loads only managed settings and `--settings`, refuses `bypassPermissions`,
+  and refuses to create cloud sessions.
+
+So the session keeps your Claude Code login, your managed settings (with any
+hooks and permission rules an administrator installed there), and what you
+pass after `--`: a prompt, `-p`/`--print`, `--model`, `--output-format`,
+`--verbose`, and a session to continue or resume (`-c`/`--continue`,
+`-r`/`--resume`). It drops your user settings (`~/.claude/settings.json`), the
+project's `.claude/settings.json` and `.claude/settings.local.json`, and
+everything in them: hooks, permission rules, environment variables and every
+other key; every MCP server but melra; and every built-in tool but Read, Glob
+and Grep. Any other claude flag, `--settings` and `--setting-sources` included,
+is not dropped but refused, with `launch_argument_refused`.
+
+Why all of a file rather than its hooks: those are files the agent's own OS
+user can write, the project's inside the workspace, and they are where a
+permission rule, a hook or an MCP server would come from. Claude Code
+documents no way to load a settings file's hooks without the rest of it, nor
+that no key in one can bring a tool back, so `launch` loads none of them.
+
+To keep your own settings, start `claude` yourself instead.
+[`melra setup --client claude-code --exclusive --write`](#take-claude-codes-own-tools-away-in-its-settings)
+adds the deny rules to the project's `.claude/settings.local.json` and leaves
+your settings, hooks, plugins and other MCP servers loading as before; the
+agent's OS user can edit that file. The [managed tier](#the-managed-tier)
+holds against every other settings file instead: your settings still load,
+but only managed hooks and permission rules apply and melra is the only MCP
+server.
 
 To try it and to test it locally:
 
@@ -332,6 +376,107 @@ with managed files installed, this user is in one of those groups; it never
 fails. It reads files, not the running session: it cannot tell which Claude
 Code started a server, of console policy it reads the copy Claude Code last
 cached, and of an MDM profile it sees only that it is there.
+
+## Take OpenClaw's and Hermes Agent's own tools away
+
+OpenClaw and Hermes Agent each have a shell and file tools of their own, and
+while those are on, MELRA is optional. Each documents a switch that takes its
+own tools away, in the same file `setup` adds melra to, and `--exclusive`
+writes it there beside the melra entry:
+
+```bash
+npx @melra/cli@alpha setup --client openclaw --exclusive --write
+npx @melra/cli@alpha setup --client hermes --exclusive --write
+```
+
+- **OpenClaw**: entries added to `tools.deny` in `openclaw.json`. OpenClaw's
+  tool policy removes a denied tool, or every tool in a denied `group:*`,
+  before the model sees it, for every agent, sub-agent and channel, and no
+  profile, allow list or per-agent setting grants it back:
+
+  ```text
+  group:runtime, write, edit, apply_patch, group:web, group:ui, group:nodes,
+  group:automation, group:messaging, sessions_create, sessions_spawn,
+  sessions_send, conversations_send, conversations_turn, github_publish
+  ```
+
+  That is, by OpenClaw's
+  [table of groups](https://github.com/openclaw/openclaw/blob/main/docs/gateway/config-tools/tool-policy.md#tool-groups),
+  its shell (`exec`, `process`, `code_execution`), the file editors, web
+  search and fetch (`web_search`, `x_search`, `web_fetch`), the UI tools
+  (`browser`, `screen`, `theme`, `dashboard`, `terminal`, `portal`, `canvas`,
+  `show_widget`), paired nodes (`nodes`, `computer`), automation
+  (`automations`, which `cron` also names, `gateway`, `plugins` and
+  `openclaw`), the `message` tool, the session tools that create, spawn or run
+  another session, which can start an outside coding harness, the two that
+  send to an outside conversation, one of them waiting for its reply, and
+  `github_publish`, which opens a draft pull request from the session's
+  worktree.
+  OpenClaw's `read` stays. Its own hardened baseline denies the runtime and
+  automation groups, `sessions_spawn` and `sessions_send` too.
+- **Hermes Agent**: toolsets added to `agent.disabled_toolsets` in
+  `config.yaml`, which Hermes applies on the CLI and every gateway platform
+  after each platform's own tool list, so a toolset named there is removed
+  even where a platform still lists it:
+
+  ```text
+  terminal, code_execution, file, browser, computer_use, web, x_search,
+  cronjob, delegation, connections, catalog
+  ```
+
+  Hermes has no toolset that only reads, so its `read_file` and `search_files`
+  go with `file`; MELRA's file reads take their place. `delegation` goes
+  because Hermes works out a child agent's toolsets in code of its own, which
+  can fall back to terminal, file and web. `connections` goes because its
+  `manage_connections` can install or enable an MCP server, at once where
+  there is no card to show, as on a messaging platform, and `catalog`, the
+  desktop app's plugin and skill installer, goes with it.
+
+Both lists are pinned to each agent's documentation and source as of October
+2026, linked in `apps/cli/src/harness.ts`, and cover the shell and code
+runners, file changes, the web, browser and UI tools, automation, messaging,
+the tools that start a session, and installers. Other tools both agents
+document stay on: those that write the agent's own memory, skills or
+instructions (OpenClaw's `group:memory`, `skill_workshop` and
+`personal_instructions`; Hermes's `memory` and `skills`), Hermes's `kanban`,
+and the toolsets that act on the platform Hermes is deployed on (`discord`,
+`discord_admin`, `yuanbao`, `feishu_drive`). So does a tool a later version
+adds, and an older version may not have every name on the lists. The names are added as a union: every name already in the
+list stays first, the rest of the file is edited as `--write` edits it
+(OpenClaw's comments kept; Hermes's list rewritten in place, every other line
+left alone), the previous file is saved as `.bak`, and a list that is not a
+plain list of names, or a file `--write` cannot edit, is refused. Run again,
+it changes nothing. The melra entry carries
+[`MELRA_HARNESS_TOOLS=1`](#ordinary-tool-names), as Claude Code's does.
+Without `--write`, `setup` prints both additions; `--dry-run` prints the file
+as it would be written. `--managed` is Claude Code's only: neither agent has a
+managed tier.
+
+Restart the agent afterwards. To see what it parsed, `openclaw config get
+tools.deny` prints OpenClaw's list, and `hermes tools list` shows the toolsets
+Hermes enabled.
+
+This is a default, not a boundary, as Claude Code's local file is: the agent's
+own OS user owns the file, and while MELRA's file writer refuses to change it
+([`path_harness_config`](CAPABILITIES.md#files)), a program MELRA's policy
+lets the agent run can still rewrite it. A person can turn a tool back on, in
+the file or, for Hermes, by enabling a toolset with `hermes tools`, which
+takes it off the list. The agents' other plugins and MCP servers still load.
+For a boundary, run the agent in [a box](#check-an-agents-box), in enforced
+mode.
+
+Wherever melra is configured for OpenClaw or Hermes, `melra doctor` adds a
+`harness` line for it, and its JSON a `nativeTools` entry: whether the
+agent's own shell (OpenClaw's `exec`, Hermes's `terminal`) is still enabled,
+each name on the list as removed or present, the file and key it read, and the
+file's SHA-256. A name counts as removed when the list names it; in OpenClaw,
+ignoring case and reading an alias (`bash`, `apply-patch`) as the tool it
+names, or, for a tool, when a `*` pattern matches it. As in OpenClaw, a
+pattern counts against tool names only, never a group name or an alias, so
+`group:*` removes nothing. A list that names a group's tools one by one, or a
+Hermes composite toolset that holds one, is not counted. It warns when a name
+is present or the list cannot be read, never fails, and reads the file, not
+the running agent.
 
 ## Check an agent's box
 
@@ -948,10 +1093,11 @@ line, last, says what guards an effect here: who approves a change (in
 developer mode the agent, from its plan response, so an approval is a record,
 not a boundary; in enforced mode only an operator), what a command runs in, or
 that it has MELRA's own rights, and, where doctor can read Claude Code's
-settings, which of Claude Code's own shell, file and web tools they leave it;
-for any other harness it says it did not look. It warns under unsafe-local,
-and in enforced mode where commands run without a sandbox or Claude Code keeps
-one of those tools. On Ubuntu 24.04,
+settings, which of Claude Code's own shell, file and web tools they leave it,
+and which OpenClaw or Hermes configs leave theirs; for any other harness it
+says it did not look. It warns under unsafe-local, and in enforced mode where
+commands run without a sandbox or Claude Code, OpenClaw or Hermes keeps tools
+of its own. On Ubuntu 24.04,
 bubblewrap needs `sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0`
 or an AppArmor profile that lets `/usr/bin/bwrap` make user namespaces; the
 [systemd unit](../examples/deploy/systemd/melra.service) allows the
@@ -2265,6 +2411,10 @@ Codex, OpenClaw, and Hermes have equivalent commands (`codex mcp add melra
 --env MELRA_WORKSPACE=… -- melra serve`, `openclaw mcp set melra '<json>'`, and
 the interactive `hermes mcp add`); `--write` produces the same entry without
 the client running.
+For Claude Code, OpenClaw and Hermes, `--exclusive` also takes the client's
+own tools away in its settings; see
+[Claude Code's settings](#take-claude-codes-own-tools-away-in-its-settings) and
+[OpenClaw's and Hermes Agent's](#take-openclaws-and-hermes-agents-own-tools-away).
 
 Each path and format above is taken from that client's own documentation or
 source; the entries added most recently link theirs beside them in

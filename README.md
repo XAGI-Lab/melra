@@ -231,40 +231,48 @@ client can use it. For these, `melra setup --client <name>` writes the config in
 client's own format and location, and `melra doctor` tells you whether each one is
 pointed at MELRA:
 
-| Agent | `--client` | Config it writes |
-|---|---|---|
-| <img src="https://cdn.simpleicons.org/claude" width="16" alt="" /> **Claude Code** | `claude-code` | `<project>/.mcp.json` |
-| <img src="https://cdn.simpleicons.org/claude" width="16" alt="" /> **Claude Desktop** | `claude-desktop` | `claude_desktop_config.json` |
-| <img src="https://cdn.simpleicons.org/openai/888888" width="16" alt="" /> **OpenAI Codex CLI** | `codex` | `~/.codex/config.toml` |
-| <img src="https://cdn.simpleicons.org/cursor/888888" width="16" alt="" /> **Cursor** | `cursor` | `~/.cursor/mcp.json` |
-| 🟦 **VS Code** (Copilot agent mode) | `vscode` | `<project>/.vscode/mcp.json` |
-| <img src="https://cdn.simpleicons.org/googlegemini" width="16" alt="" /> **Gemini CLI** | `gemini` | `~/.gemini/settings.json` |
-| <img src="https://cdn.simpleicons.org/windsurf/888888" width="16" alt="" /> **Windsurf** | `windsurf` | `~/.codeium/windsurf/mcp_config.json` |
-| <img src="https://cdn.simpleicons.org/zedindustries" width="16" alt="" /> **Zed** | `zed` | Zed `settings.json` (comments kept) |
-| 🧩 **Cline** | `cline` | Cline's `cline_mcp_settings.json` |
-| ⬛ **OpenCode** | `opencode` | `~/.config/opencode/opencode.json` |
-| 👻 **Kiro** | `kiro` | `~/.kiro/settings/mcp.json` |
-| 🪿 **Goose** | `goose` | `~/.config/goose/config.yaml` |
-| ▶️ **Continue** | `continue` | `<project>/.continue/mcpServers/melra.yaml` |
-| ⚡ **Amp** | `amp` | `~/.config/amp/settings.json` |
-| 🦞 **OpenClaw** | `openclaw` | `~/.openclaw/openclaw.json` (`mcp.servers`) |
-| ⚕️ **Hermes Agent** (Nous Research) | `hermes` | `~/.hermes/config.yaml` (`mcp_servers`) |
-| <img src="https://cdn.simpleicons.org/githubcopilot/888888" width="16" alt="" /> **GitHub Copilot CLI** | `copilot` | `~/.copilot/mcp-config.json` |
-| 🐉 **Qwen Code** | `qwen` | `~/.qwen/settings.json` |
-| 🅰️ **Auggie** (Augment) | `auggie` | `~/.augment/settings.json` |
-| <img src="https://cdn.simpleicons.org/warp/888888" width="16" alt="" /> **Warp** | `warp` | `~/.warp/.mcp.json` |
-| <img src="https://cdn.simpleicons.org/jetbrains/888888" width="16" alt="" /> **Junie** (JetBrains) | `junie` | `~/.junie/mcp/mcp.json` |
-| 🤖 **Factory Droid** | `droid` | `~/.factory/mcp.json` |
-| 🌙 **Kimi Code** | `kimi` | `~/.kimi-code/mcp.json` |
-| 🪁 **Kilo Code** | `kilo` | `~/.config/kilo/kilo.jsonc` (comments kept) |
-| 🧪 **LM Studio** | `lmstudio` | `~/.lmstudio/mcp.json` |
-| 🔌 **Anything else** | `generic` | prints the standard `mcpServers` block |
+| Agent | `--client` | Config it writes | Tested |
+|---|---|---|---|
+| <img src="https://cdn.simpleicons.org/claude" width="16" alt="" /> **Claude Code** | `claude-code` | `<project>/.mcp.json` | connected by hand |
+| <img src="https://cdn.simpleicons.org/claude" width="16" alt="" /> **Claude Desktop** | `claude-desktop` | `claude_desktop_config.json` | config checked against docs |
+| <img src="https://cdn.simpleicons.org/openai/888888" width="16" alt="" /> **OpenAI Codex CLI** | `codex` | `~/.codex/config.toml` | config checked against docs (its own CLI parsed it) |
+| <img src="https://cdn.simpleicons.org/cursor/888888" width="16" alt="" /> **Cursor** | `cursor` | `~/.cursor/mcp.json` | config checked against docs |
+| 🟦 **VS Code** (Copilot agent mode) | `vscode` | `<project>/.vscode/mcp.json` | config checked against docs |
+| <img src="https://cdn.simpleicons.org/googlegemini" width="16" alt="" /> **Gemini CLI** | `gemini` | `~/.gemini/settings.json` | config checked against docs |
+| <img src="https://cdn.simpleicons.org/windsurf/888888" width="16" alt="" /> **Windsurf** | `windsurf` | `~/.codeium/windsurf/mcp_config.json` | config checked against docs |
+| <img src="https://cdn.simpleicons.org/zedindustries" width="16" alt="" /> **Zed** | `zed` | Zed `settings.json` (comments kept) | config checked against docs |
+| 🧩 **Cline** | `cline` | Cline's `cline_mcp_settings.json` | config checked against docs |
+| ⬛ **OpenCode** | `opencode` | `~/.config/opencode/opencode.json` | connected by hand |
+| 👻 **Kiro** | `kiro` | `~/.kiro/settings/mcp.json` | config checked against docs |
+| 🪿 **Goose** | `goose` | `~/.config/goose/config.yaml` | config checked against docs |
+| ▶️ **Continue** | `continue` | `<project>/.continue/mcpServers/melra.yaml` | config checked against docs |
+| ⚡ **Amp** | `amp` | `~/.config/amp/settings.json` | config checked against docs |
+| 🦞 **OpenClaw** | `openclaw` | `~/.openclaw/openclaw.json` (`mcp.servers`) | config checked against docs |
+| ⚕️ **Hermes Agent** (Nous Research) | `hermes` | `~/.hermes/config.yaml` (`mcp_servers`) | connected by hand |
+| <img src="https://cdn.simpleicons.org/githubcopilot/888888" width="16" alt="" /> **GitHub Copilot CLI** | `copilot` | `~/.copilot/mcp-config.json` | config checked against docs |
+| 🐉 **Qwen Code** | `qwen` | `~/.qwen/settings.json` | config checked against docs |
+| 🅰️ **Auggie** (Augment) | `auggie` | `~/.augment/settings.json` | config checked against docs |
+| <img src="https://cdn.simpleicons.org/warp/888888" width="16" alt="" /> **Warp** | `warp` | `~/.warp/.mcp.json` | config checked against docs |
+| <img src="https://cdn.simpleicons.org/jetbrains/888888" width="16" alt="" /> **Junie** (JetBrains) | `junie` | `~/.junie/mcp/mcp.json` | config checked against docs |
+| 🤖 **Factory Droid** | `droid` | `~/.factory/mcp.json` | config checked against docs |
+| 🌙 **Kimi Code** | `kimi` | `~/.kimi-code/mcp.json` | config checked against docs |
+| 🪁 **Kilo Code** | `kilo` | `~/.config/kilo/kilo.jsonc` (comments kept) | config checked against docs |
+| 🧪 **LM Studio** | `lmstudio` | `~/.lmstudio/mcp.json` | config checked against docs |
+| 🔌 **Anything else** | `generic` | prints the standard `mcpServers` block | documented only |
+
+**Tested** says how far each one has been taken: *run in CI* (an automated suite
+drives it), *connected by hand* (its own CLI connected to a packed release over MCP,
+but no task was run from inside it; see
+[COMPATIBILITY.md](docs/COMPATIBILITY.md#mcp-and-sdk-compatibility)), *config checked
+against docs* (the file and format come from its documentation or source, and the
+CLI tests write and read them back), or *documented only*.
 
 Building your own agent? Use the [TypeScript SDK](packages/sdk-ts) or the
 [Python SDK](sdk-py). Both can spawn MELRA or connect to one that is already running
 over loopback HTTP or a private Unix socket. For agent frameworks, see the
-[framework examples](examples/frameworks/README.md): LangChain / LangGraph, the
-OpenAI Agents SDK, the Vercel AI SDK, and the official MCP SDKs.
+[framework examples](examples/frameworks/README.md): the official MCP SDKs' snippets
+run in CI with no model; the LangChain / LangGraph, OpenAI Agents SDK and Vercel AI
+SDK ones are documented only.
 
 > [!NOTE]
 > A named client is marked **verified** only after the *released package*, not a
@@ -422,7 +430,7 @@ What actually guards an effect depends on the mode:
 |---|---|---|
 | Approving a change | The agent can, with the phrase its own plan response carries: a record, not a boundary | Only an operator, out of band (`melra approve`, `melra console`, `melra run`'s prompt) |
 | An approved command | Runs in an [OS sandbox](docs/INSTALLATION.md#per-command-sandbox) where one works (Seatbelt on macOS, bubblewrap on Linux): it writes only the workspace and temp, cannot read MELRA's files or the login files MELRA lists (see [INSTALLATION](docs/INSTALLATION.md#per-command-sandbox); the rest of home stays readable), and has no network without the `network` trait (under bubblewrap, Unix sockets on the filesystem stay reachable). Where none works (Windows, Linux where bubblewrap cannot run) it has your rights, and every receipt says `sandbox: none` | The same sandbox (in the container pair, another account), and MELRA will not start without one unless the policy file records the opt-out |
-| The agent's own tools | Untouched: a native shell or editor goes around MELRA | Yours to remove; MELRA's server cannot see them, `melra doctor` reads Claude Code's settings, and [`melra probe`](docs/INSTALLATION.md#check-an-agents-box) checks from inside the agent's box |
+| The agent's own tools | Untouched: a native shell or editor goes around MELRA | Yours to remove; MELRA's server cannot see them, `melra doctor` reads Claude Code's settings and OpenClaw's and Hermes's configs, and [`melra probe`](docs/INSTALLATION.md#check-an-agents-box) checks from inside the agent's box |
 
 `melra doctor` says which of these hold on its `protection` line, and
 `melra_capabilities` reports `approvals` and `sandbox` beside `mode`.
@@ -476,6 +484,14 @@ allowlist, unless the policy file lists them, as one `melra setup` wrote does:
 remove the ones the agent does not need. A `claude` started any other way is
 unchanged. See
 [launching an agent](docs/INSTALLATION.md#launch-an-agent-with-melra-as-its-only-tool).
+
+For OpenClaw and Hermes Agent,
+`melra setup --client openclaw --exclusive --write` (or `--client hermes`)
+turns the agent's own shell, web and file-changing tools off (Hermes's file
+reads too) in its own config, through the switch each one documents, and
+`melra doctor` says whether its `exec` or `terminal` is still enabled. That is
+a default the agent's OS user can edit, not a boundary. See
+[OpenClaw's and Hermes Agent's tools](docs/INSTALLATION.md#take-openclaws-and-hermes-agents-own-tools-away).
 
 </details>
 

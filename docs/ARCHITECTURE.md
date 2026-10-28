@@ -1057,6 +1057,12 @@ writes the system folder. `melra doctor` reports what it reads there (the
 `harness` line): an observation of files, not evidence of which path a given
 session took. See [Claude Code's
 settings](INSTALLATION.md#take-claude-codes-own-tools-away-in-its-settings).
+For OpenClaw and Hermes Agent, `--exclusive` writes the same kind of removal
+into each agent's own documented switch, OpenClaw's `tools.deny` and Hermes's
+`agent.disabled_toolsets`, in the config file the melra entry is in; it is a
+default the agent's OS user can edit, there is no managed tier, and doctor
+reports whether each one's own shell is still enabled. See [OpenClaw's and
+Hermes Agent's tools](INSTALLATION.md#take-openclaws-and-hermes-agents-own-tools-away).
 
 One door MELRA does own, in every mode, is its own file writer: it never
 changes the settings files a coding agent's harness loads its permissions,

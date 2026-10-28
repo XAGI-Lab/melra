@@ -355,7 +355,7 @@ describe("conformance and setup output", () => {
       policyPath: "/p",
       configPath: "/w/.mcp.json",
       config: {},
-      settings: { path: "/w/.claude/settings.local.json", deny: ["Bash", "Edit"] },
+      settings: { path: "/w/.claude/settings.local.json", key: "permissions.deny", deny: ["Bash", "Edit"] },
       note: "",
     };
     expect(renderInit(result)).toContain("And this to /w/.claude/settings.local.json:");
@@ -364,6 +364,14 @@ describe("conformance and setup output", () => {
     expect(written).toMatch(/Settings\s+\/w\/\.claude\/settings\.local\.json$/m);
     expect(written).toContain("previous file saved as /w/.claude/settings.local.json.bak");
     expect(written).toContain("denies Bash, Edit");
+    // OpenClaw's and Hermes's switch, in the client's own file and format.
+    const openclaw = { ...result, client: "openclaw", configPath: "/h/openclaw.json", settings: { path: "/h/openclaw.json", key: "tools.deny", deny: ["group:runtime"] } };
+    expect(renderInit(openclaw)).toContain('"tools": {\n        "deny": [\n          "group:runtime"');
+    const once = renderInit({ ...openclaw, written: true });
+    expect(once.match(/\/h\/openclaw\.json/g)).toHaveLength(1);
+    expect(once).toContain("tools.deny turns off group:runtime");
+    const hermes = { ...result, client: "hermes", config: "mcp_servers:\n", configPath: "/h/config.yaml", settings: { path: "/h/config.yaml", key: "agent.disabled_toolsets", deny: ["terminal"] } };
+    expect(renderInit(hermes)).toContain("    agent:\n      disabled_toolsets:\n        - terminal");
     const dry = renderInit({ ...result, dryRun: true, files: [{ path: "/w/.mcp.json", text: "{}\n" }] });
     expect(dry).toContain("Would write /w/.mcp.json:");
     expect(dry.trimEnd().endsWith("Nothing was written.")).toBe(true);

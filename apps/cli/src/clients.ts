@@ -487,24 +487,31 @@ function withoutMelraTables(toml: string): string {
     .trimEnd();
 }
 
-// Put MELRA's entry under a top-level YAML map — Goose's `extensions:`,
-// Hermes's `mcp_servers:` — replacing any earlier one, with a line edit that
-// leaves every other byte of the file alone. `config` is the rendered block,
-// whose first line names the map. Both clients write block-style YAML with one
-// key per line, which a line edit handles; anything else — flow style, tabs,
-// odd indentation, a top level that is not a plain mapping — is refused rather
-// than guessed at.
-function withMelraYamlEntry(path: string, yaml: string, config: string): string {
-  const refuse = (why: string) =>
-    new Error(`${path}: ${why}; add the printed config to it by hand`);
-  const cr = yaml.includes("\r\n") ? "\r" : "";
-  const lines = yaml.split("\n").map((raw) => {
+const isKey = (text: string) => /^ *(?:[\w.$-]+|"[^"\\]*"|'[^']*') *:(?: |$)/.test(text);
+const named = (key: string, text: string) => new RegExp(`^ *(?:${key}|"${key}"|'${key}') *:`).test(text);
+// A sequence item at its key's own indent, as PyYAML dumps it (an older or
+// hand-edited Hermes config); Hermes's own ruamel writer puts items two deeper.
+const isItem = (text: string) => /^ *-(?: |$)/.test(text);
+
+const yamlLines = (yaml: string) =>
+  yaml.split("\n").map((raw) => {
     const text = raw.replace(/\r$/, "");
     return { raw, text, content: !/^\s*(#.*)?$/.test(text), indent: text.search(/\S/) };
   });
-  const isKey = (text: string) => /^ *(?:[\w.$-]+|"[^"\\]*"|'[^']*') *:(?: |$)/.test(text);
-  const named = (key: string, text: string) =>
-    new RegExp(`^ *(?:${key}|"${key}"|'${key}') *:`).test(text);
+
+// Put MELRA's entry under a top-level YAML map — Goose's `extensions:`,
+// Hermes's `mcp_servers:` — replacing any earlier one, with a line edit that
+// leaves every other byte of the file alone. `config` is the rendered block,
+// whose first line names the map, and `key` the entry's own key (Hermes's
+// `agent.disabled_toolsets` goes in the same way). Both clients write
+// block-style YAML with one key per line, which a line edit handles; anything
+// else — flow style, tabs, odd indentation, a top level that is not a plain
+// mapping — is refused rather than guessed at.
+function withMelraYamlEntry(path: string, yaml: string, config: string, key = "melra"): string {
+  const refuse = (why: string) =>
+    new Error(`${path}: ${why}; add the printed config to it by hand`);
+  const cr = yaml.includes("\r\n") ? "\r" : "";
+  const lines = yamlLines(yaml);
   for (const line of lines) {
     if (!line.content) continue;
     if (/^ *\t/.test(line.text)) throw refuse("it indents with tabs");
@@ -537,21 +544,22 @@ function withMelraYamlEntry(path: string, yaml: string, config: string): string 
     line.content ? [{ ...line, index: start + 1 + offset }] : [],
   );
   const indent = children[0]?.indent ?? 2;
-  for (const child of children) {
-    if (child.indent < indent || (child.indent === indent && !isKey(child.text))) {
+  for (const [position, child] of children.entries()) {
+    const sibling = child.indent === indent && (isKey(child.text) || (position > 0 && isItem(child.text)));
+    if (child.indent < indent || (child.indent === indent && !sibling)) {
       throw refuse(`\`${header}\` is not a block mapping with even indentation`);
     }
   }
-  // Drop every earlier `melra:` entry: its key through its last deeper line,
+  // Drop every earlier entry: its key through its last deeper line or item,
   // so blank or comment lines after it stay with whatever follows.
   const drop = new Set<number>();
   let first: number | undefined;
   for (const [position, child] of children.entries()) {
-    if (child.indent !== indent || !named("melra", child.text)) continue;
+    if (child.indent !== indent || !named(key, child.text)) continue;
     first ??= child.index;
     let last = child.index;
     for (const deeper of children.slice(position + 1)) {
-      if (deeper.indent === indent) break;
+      if (deeper.indent === indent && !isItem(deeper.text)) break;
       last = deeper.index;
     }
     for (let index = child.index; index <= last; index++) drop.add(index);
@@ -563,6 +571,61 @@ function withMelraYamlEntry(path: string, yaml: string, config: string): string 
   });
   if (at === lines.length) result.push(...out(entry, indent));
   return result.join("\n");
+}
+
+const yamlScalar = (text: string): string | undefined => {
+  const match = /^(?:([\w.-]+)|"([^"\\]*)"|'([^']*)')$/.exec(text.trim());
+  return match === null ? undefined : (match[1] ?? match[2] ?? match[3]);
+};
+
+/**
+ * The names listed at `<map>.<key>` of a block-style YAML file, as Hermes
+ * writes `agent.disabled_toolsets`: a one-line flow list or `- name` lines,
+ * each a plain or quoted scalar. Undefined when the key is not there; any
+ * other shape is refused.
+ */
+export function yamlList(path: string, yaml: string, map: string, key: string): string[] | undefined {
+  const refuse = (why: string) => new Error(`${path}: ${map}.${key} ${why}`);
+  const lines = yamlLines(yaml).filter((line) => line.content);
+  const starts = lines.flatMap((line, index) => (line.indent === 0 && named(map, line.text) ? [index] : []));
+  if (starts.length > 1) throw refuse(`is ambiguous: the file has more than one \`${map}:\``);
+  const start = starts[0];
+  if (start === undefined) return undefined;
+  const after = lines.findIndex((line, index) => index > start && line.indent === 0);
+  const block = lines.slice(start + 1, after === -1 ? lines.length : after);
+  const indent = block[0]?.indent;
+  const found = block.flatMap((line, index) => (line.indent === indent && named(key, line.text) ? [index] : []));
+  if (found.length > 1) throw refuse("appears more than once");
+  const at = found[0];
+  if (at === undefined) return undefined;
+  const value = (block[at]?.text ?? "").replace(/^[^:]*:/, "").replace(/\s+#.*$/, "").trim();
+  if (value !== "") {
+    const flow = /^\[(.*)\]$/.exec(value);
+    const items = flow?.[1]?.split(",").map((each) => each.trim()).filter((each) => each !== "").map(yamlScalar);
+    if (items === undefined || items.some((each) => each === undefined)) throw refuse("is not a list of names");
+    return items as string[];
+  }
+  const items: string[] = [];
+  for (const line of block.slice(at + 1)) {
+    if (line.indent < (indent ?? 0) || (line.indent === indent && !isItem(line.text))) break;
+    const item = yamlScalar(/^ *- +(.*?)(?:\s+#.*)?$/.exec(line.text)?.[1] ?? "");
+    if (item === undefined) throw refuse("is not a list of names");
+    items.push(item);
+  }
+  return items;
+}
+
+/**
+ * `yaml` with `names` added to the list at `<map>.<key>` as a union: every
+ * name already there stays first, in its order, the missing ones follow, and
+ * the rest of the file is edited no more than `withMelraYamlEntry` edits it.
+ */
+export function withYamlListUnion(path: string, yaml: string, map: string, key: string, names: readonly string[]): string {
+  const listed = yamlList(path, yaml, map, key) ?? [];
+  const missing = names.filter((name) => !listed.includes(name));
+  if (missing.length === 0) return yaml;
+  const block = [`${map}:`, `  ${key}:`, ...[...listed, ...missing].map((name) => `    - ${q(name)}`), ""].join("\n");
+  return withMelraYamlEntry(path, yaml, block, key);
 }
 
 // Every place a rendered config sets something: the `melra` entry itself,
@@ -696,14 +759,21 @@ export async function denyRulesText(
   } catch {
     throw refusal(path, "Claude Code reads its settings as strict JSON, and this file is not; it would not load the deny rules");
   }
-  const permissions = parsedObject(path, existing).permissions;
-  const deny = isObject(permissions) ? (permissions.deny ?? []) : [];
-  if (!Array.isArray(deny) || !deny.every((rule) => typeof rule === "string")) {
-    throw refusal(path, "permissions.deny is not a list of rules");
+  return { existing, next: withJsonListUnion(path, existing, ["permissions", "deny"], rules) };
+}
+
+/**
+ * `text`, a JSON or JSONC object, with `rules` added to the list of strings at
+ * `at` as a union: every rule already there stays where it is, the missing
+ * ones follow it, and only that list is edited, as `withJsonEdits` edits.
+ */
+export function withJsonListUnion(path: string, text: string, at: string[], rules: readonly string[]): string {
+  const listed = at.reduce<unknown>((inner, step) => (isObject(inner) ? inner[step] : undefined), parsedObject(path, text)) ?? [];
+  if (!Array.isArray(listed) || !listed.every((rule) => typeof rule === "string")) {
+    throw refusal(path, `${at.join(".")} is not a list of rules`);
   }
-  const missing = rules.filter((rule) => !deny.includes(rule));
-  if (missing.length === 0) return { existing, next: existing };
-  return { existing, next: withJsonEdits(path, existing, [[["permissions", "deny"], [...deny, ...missing], false]]) };
+  const missing = rules.filter((rule) => !listed.includes(rule));
+  return missing.length === 0 ? text : withJsonEdits(path, text, [[at, [...listed, ...missing], false]]);
 }
 
 /**

@@ -1,0 +1,10 @@
+{
+  "name": "melra-framework-examples",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "description": "The exact versions CI runs the framework examples with; not part of the pnpm workspace.",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.1"
+  }
+}
