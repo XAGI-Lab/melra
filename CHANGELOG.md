@@ -6,6 +6,8 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0-alpha.2] - 2026-10-28
+
 ### Added
 
 - Two policy file keys bound how hard one caller can lean on the kernel.
@@ -68,21 +70,20 @@ All notable changes are documented here. The format follows
   console shows these checks apart from the agent's evidence. See [kernel
   checks](https://github.com/XAGI-Lab/melra/blob/main/docs/ARCHITECTURE.md#kernel-checks).
 - `melra setup --client openclaw --exclusive` and `--client hermes --exclusive`
-  take the agent's own tools away through the switch each one documents, in
-  the config file the melra entry goes in: OpenClaw's `tools.deny` gets its
-  runtime group (exec, process, code_execution), `write`, `edit`,
-  `apply_patch`, its web, ui, nodes, automation (automations, gateway, plugins,
-  openclaw) and messaging groups, `sessions_create`, `sessions_spawn`,
-  `sessions_send`, `conversations_send`, `conversations_turn` and
-  `github_publish`; Hermes's
+  take the agent's own tools away through the switch each one documents, in the
+  config file the melra entry goes in: OpenClaw's `tools.deny` gets its runtime
+  group (exec, process, code_execution), `write`, `edit`, `apply_patch`, its
+  web, ui, nodes, automation (automations, gateway, plugins, openclaw) and
+  messaging groups, `sessions_create`, `sessions_spawn`, `sessions_send`,
+  `conversations_send`, `conversations_turn` and `github_publish`; Hermes's
   `agent.disabled_toolsets` gets the terminal, code_execution, file, browser,
   computer_use, web, x_search, cronjob, delegation, connections and catalog
   toolsets. Both lists are pinned to each agent's documentation and source,
   linked in `apps/cli/src/harness.ts`. With `--write` the names are added as a
-  union to what the list already holds, the rest of the file is kept as for
-  the melra entry, and the old file is saved as `.bak`; `--dry-run` prints it,
-  and the melra entry gets `MELRA_HARNESS_TOOLS=1`, as for Claude Code.
-  `--managed` stays Claude Code's only. See [OpenClaw's and Hermes Agent's
+  union to what the list already holds, the rest of the file is kept as for the
+  melra entry, and the old file is saved as `.bak`; `--dry-run` prints it, and
+  the melra entry gets `MELRA_HARNESS_TOOLS=1`, as for Claude Code. `--managed`
+  stays Claude Code's only. See [OpenClaw's and Hermes Agent's
   tools](https://github.com/XAGI-Lab/melra/blob/main/docs/INSTALLATION.md#take-openclaws-and-hermes-agents-own-tools-away).
 - `melra doctor` adds a `harness` line for OpenClaw and for Hermes wherever
   melra is configured for them, and its JSON a `nativeTools` entry: whether
@@ -120,30 +121,38 @@ All notable changes are documented here. The format follows
   loopback HTTP and the Unix socket alike. Every call counts, one naming an
   unknown tool or failing its input schema too. The operator's CLI commands,
   which read and write the store directly, are not counted.
-- A memory search stops reading candidates once their keys, values and tags
-  pass 4,000,000 characters together, newest first, as well as at 5,000
-  records, so a scope of large records no longer fills the heap on every
-  query. `candidateCount` says how many it ranked. An index on scope and
-  update time lets SQLite read them newest first, where it sorted the whole
-  scope before returning one; a home gains it when MELRA next opens it.
+- **Breaking:** a memory search stops reading candidates once their keys, values
+  and tags pass 4,000,000 characters together, newest first, as well as at 5,000
+  records, so a scope of large records no longer fills the heap on every query.
+  `candidateCount` says how many it ranked. A record past the budget is not
+  ranked, so in a scope of large records a search can miss an older match it
+  used to return. An index on scope and update time lets SQLite read them newest
+  first, where it sorted the whole scope before returning one; a home gains it
+  when MELRA next opens it.
+- **Breaking:** `examples/deploy/systemd/melra.service` now caps MELRA and the
+  commands it runs at `TasksMax=512` and `MemoryMax=2G` together; raise them in
+  the unit if your tasks need more.
 - The single executable carries V8's compiled code for the CLI, so it starts
   in about half the time (`melra version` in about 120 ms rather than 220 ms
   on an Apple Silicon Mac). Two builds of one commit now differ in bytes.
 - **Breaking:** developer mode now runs every terminal command in the
   per-command OS sandbox wherever one works (Seatbelt on macOS, bubblewrap on
-  Linux): a policy file without `sandbox.use` means `if-available` there, not
-  `off`. An approved command can then no longer write outside the workspace
-  and temp, read MELRA's files or the login files MELRA lists (see
-  INSTALLATION), or reach the network without the `network` trait. Under
-  Seatbelt that also stops a test suite or dev server that opens a loopback
-  port (`npm test` and `npm run` carry no trait), and in either sandbox `git
-  add` and `git commit` in a worktree whose git directory is outside the
-  workspace. Git may make symbolic links there, as if `sandbox.symlinks` named
-  it: without them a clone exits 0 with each link checked out as a plain file
-  and `core.symlinks=false` written into the repository. Where none works,
-  developer mode starts without one as before, and its receipts now say
-  `"sandbox": "none"`. `"sandbox": {"use": "off"}` in the policy file restores
-  the old behaviour. Enforced mode is unchanged. See [per-command
+  Linux, or the `uid` account where the policy file names `sandbox.user`): a
+  policy file without `sandbox.use` means `if-available` there, not `off`. Under
+  Seatbelt and bubblewrap an approved command can then no longer write outside
+  the workspace and temp, read MELRA's files or the login files MELRA lists (see
+  INSTALLATION), or reach the network without the `network` trait (under
+  bubblewrap, Unix sockets on the filesystem stay reachable); under `uid` it can
+  no longer read MELRA's files or those logins. Under Seatbelt that also stops a
+  test suite or dev server that opens a loopback port (`npm test` and `npm run`
+  carry no trait), and in either sandbox `git add` and `git commit` in a
+  worktree whose git directory is outside the workspace. Git may make symbolic
+  links there, as if `sandbox.symlinks` named it: without them a clone exits 0
+  with each link checked out as a plain file and `core.symlinks=false` written
+  into the repository. Where none works, developer mode starts without one as
+  before, and its receipts now say `"sandbox": "none"`. `"sandbox": {"use":
+  "off"}` in the policy file restores the old behaviour. Enforced mode is
+  unchanged. See [per-command
   sandbox](https://github.com/XAGI-Lab/melra/blob/main/docs/INSTALLATION.md#per-command-sandbox).
 - **Breaking:** in the Seatbelt and bubblewrap sandboxes, in either mode, npm
   takes its cache from the `npm_config_cache` MELRA sets (see Fixed), which
@@ -151,21 +160,19 @@ All notable changes are documented here. The format follows
   cache seeded there now fails with `ENOTCACHED`. `--cache <dir>` on the
   command line still wins.
 - **Breaking:** a file write, mkdir, delete or move, or a memory delete, whose
-  end state is not the one requested now ends `partial` even when every
-  declared predicate held, where it used to end `verified_success`: a write
-  whose file holds other bytes by the time MELRA looks, say, or an adapter that
-  reports a change it did not make. A write to a file MELRA cannot read back,
-  such as one kept write-only, ends `partial` too, since a check it cannot make
-  does not pass, and so, on a disk that ignores case, does a move that only
-  changes the case of a non-ASCII letter in the name of a file with another
-  hard link, since MELRA cannot tell that the old spelling now reaches only
-  the renamed entry. Recovery that observes an interrupted change again leaves such
-  a task `recovery_required` instead of settling it as verified, and a
-  reconciliation whose predicates hold while a kernel check fails leaves it
-  there too (`reconciliation_kernel_check_failed`). Kernel checks do not count
-  as the evidence a mutation must declare, so what planning refuses is
-  unchanged.
-
+  end state is not the one requested now ends `partial` even when every declared
+  predicate held, where it used to end `verified_success`: a write whose file
+  holds other bytes by the time MELRA looks, say, or an adapter that reports a
+  change it did not make. A write to a file MELRA cannot read back, such as one
+  kept write-only, ends `partial` too, since a check it cannot make does not
+  pass, and so, on a disk that ignores case, does a move that only changes the
+  case of a non-ASCII letter in the name of a file with another hard link, since
+  MELRA cannot tell that the old spelling now reaches only the renamed entry.
+  Recovery that observes an interrupted change again leaves such a task
+  `recovery_required` instead of settling it as verified, and a reconciliation
+  whose predicates hold while a kernel check fails leaves it there too
+  (`reconciliation_kernel_check_failed`). Kernel checks do not count as the
+  evidence a mutation must declare, so what planning refuses is unchanged.
 - **Breaking:** `directory_exists` and `file_present` are now built-in
   verifier types (two of the kernel's own checks), so `createMelraRuntime`
   refuses an `evidenceVerifiers` entry of either type
@@ -207,14 +214,13 @@ All notable changes are documented here. The format follows
   later one are removed too. Anyone who can write `melra.sqlite` can do that
   without the key, and the next start of MELRA seals what is left again, as it
   then is, so `verify` passes; it counts those links as `swept`, and names the
-  first that follows a link sealed when written as `late`, which an older
-  MELRA writing beside this one leaves as well. A row inserted without the key,
-  or stored in place of MELRA's by a trigger added to the file, is sealed the
-  same way at the next start: a write seals only a record holding exactly
-  what it wrote. Removing the newest records with
-  their links, or rebuilding the chain with `payload.key`, leaves no mark. A
-  head kept, after the record in question was sealed, where MELRA's user
-  cannot write shows each of these.
+  first that follows a link sealed when written as `late`, which an older MELRA
+  writing beside this one leaves as well. A row inserted without the key, or
+  stored in place of MELRA's by a trigger added to the file, is sealed the same
+  way at the next start: a write seals only a record holding exactly what it
+  wrote. Removing the newest records with their links, or rebuilding the chain
+  with `payload.key`, leaves no mark. A head kept, after the record in question
+  was sealed, where MELRA's user cannot write shows each of these.
 
 ## [0.4.0-alpha.1] - 2026-10-27
 
@@ -4454,7 +4460,8 @@ All notable changes are documented here. The format follows
 - Cross-scope memory overwrite and deletion protection.
 - Patched transitive HTTP adapter enforced through a package override.
 
-[Unreleased]: https://github.com/XAGI-Lab/melra/compare/v0.4.0-alpha.1...HEAD
+[Unreleased]: https://github.com/XAGI-Lab/melra/compare/v0.4.0-alpha.2...HEAD
+[0.4.0-alpha.2]: https://github.com/XAGI-Lab/melra/compare/v0.4.0-alpha.1...v0.4.0-alpha.2
 [0.4.0-alpha.1]: https://github.com/XAGI-Lab/melra/compare/v0.4.0-alpha.0...v0.4.0-alpha.1
 [0.4.0-alpha.0]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.22...v0.4.0-alpha.0
 [0.3.0-alpha.22]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.21...v0.3.0-alpha.22

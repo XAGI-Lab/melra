@@ -1,6 +1,6 @@
 # Capabilities and limits
 
-This document describes `0.4.0-alpha.1`.
+This document describes `0.4.0-alpha.2`.
 
 ## MCP tools
 
