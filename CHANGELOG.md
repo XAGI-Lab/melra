@@ -187,6 +187,8 @@ All notable changes are documented here. The format follows
 
 ### Security
 
+- The `qs` floor in the root `pnpm.overrides` rises to 6.16.1, for a moderate
+  denial-of-service advisory reaching MELRA through the MCP SDK's express.
 - An agent can no longer fill the operator's approval queue with near-identical
   challenges, which pushes a person towards approving without reading, and
   tool calls are rate limited per client, as the MCP specification asks.
