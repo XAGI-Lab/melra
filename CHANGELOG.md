@@ -6,6 +6,17 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** On a loopback listener, every route now refuses foreign `Host`
+  headers with `421 Misdirected Request` before routing, and `/mcp` and
+  `/api/*` refuse an `Origin` header that does not match the server's own `Host`
+  with `403 origin_not_allowed` (#423). A token client that reaches the loopback
+  listener as `host.docker.internal`, through an `/etc/hosts` alias, or behind a
+  proxy that keeps its own `Host` now receives 421, and a token request with a
+  foreign `Origin` receives 403. Clients that send no `Origin` header and
+  requests over the Unix domain socket are unaffected.
+
 ## [0.4.0-alpha.2] - 2026-10-28
 
 ### Added
@@ -303,14 +314,6 @@ All notable changes are documented here. The format follows
   bubblewrap needs, and no longer sets `ProtectKernelTunables`,
   `ProtectKernelLogs` or `ProtectHostname`, under which it cannot mount a
   `/proc` of its own.
-- **Breaking:** On a loopback listener, every route now refuses foreign `Host`
-  headers with `421 Misdirected Request` before routing, and `/mcp` and
-  `/api/*` refuse an `Origin` header that does not match the server's own `Host`
-  with `403 origin_not_allowed` (#423). A token client that reaches the loopback
-  listener as `host.docker.internal`, through an `/etc/hosts` alias, or behind a
-  proxy that keeps its own `Host` now receives 421, and a token request with a
-  foreign `Origin` receives 403. Clients that send no `Origin` header and
-  requests over the Unix domain socket are unaffected.
 
 ### Security
 
