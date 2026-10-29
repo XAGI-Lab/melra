@@ -966,6 +966,281 @@ describe("a condition step a lost advance left unknown (#270)", () => {
   });
 });
 
+describe("a partial step under an undecided condition (#331)", () => {
+  // Pay, then choose (whose step ends partial) beside a failing step x; refunding pays back.
+  const definition = (predicate: unknown = { type: "file_exists", path: "flag" }) =>
+    workflow([
+      { id: "pay", type: "operation", request: put("pay") },
+      {
+        id: "choose",
+        type: "condition",
+        dependsOn: ["pay"],
+        sourceNodeId: "pay",
+        predicate,
+        whenTrue: [
+          TaskRequestSchema.parse({
+            ...put("ship"),
+            requiredEvidence: [{ type: "result_equals", path: "stored", value: false }],
+          }),
+        ],
+        whenFalse: [put("other")],
+      },
+      {
+        id: "x",
+        type: "operation",
+        dependsOn: ["pay"],
+        request: TaskRequestSchema.parse({
+          ...put("x"),
+          requiredEvidence: [{ type: "result_equals", path: "stored", value: false }],
+        }),
+      },
+      { id: "refund", type: "compensation", forNodeId: "pay", request: put("refund") },
+    ]);
+
+  it.each([false, true])(
+    "decides the condition before unwinding when its step ended partial after a lost commit (restart first: %s)",
+    async (restartFirst) => {
+      const { controller, root, store, tasks, cipher, done, on } = await setup({ policy: { unhinged: true } });
+      await writeFile(join(root, "flag"), "on");
+      const planned = controller.plan(definition());
+      await controller.advance(planned.id);
+      on.put = (key) => {
+        if (key === "ship") lapseAndPause(controller, store, planned.id);
+      };
+      await expect(controller.advance(planned.id)).rejects.toThrow("workflow_lease_lost");
+      delete on.put;
+      const ship = store
+        .listTasks(10, "partial")
+        .find((task) => (task.request as { operation?: { key?: string } }).operation?.key === "ship");
+      expect(ship).toBeDefined();
+      controller.resume(planned.id);
+
+      let current = controller;
+      if (restartFirst) {
+        current = new WorkflowController(store, tasks, cipher);
+        await current.recoverInterrupted();
+      }
+
+      // The condition is undecided, but has an effect under its keys. It must block
+      // unwind, be offered for resolution, and record its partial step before refund runs.
+      const run = (await current.advance(planned.id)).run;
+      expect(run.status).toBe("failed");
+      expect(run.nodes.choose?.taskIds).toEqual([ship!.id]);
+      expect(run.nodes.choose?.status).toBe("failed");
+      expect(run.nodes.refund?.status).toBe("compensated");
+      expect([...done].sort()).toEqual(["pay", "refund", "ship", "x"]);
+    },
+  );
+
+  it("halts on branch conflict if the condition resolves to the other branch", async () => {
+    const { controller, root, store, tasks, cipher, on } = await setup({ policy: { unhinged: true } });
+    await writeFile(join(root, "flag"), "on");
+    const planned = controller.plan(definition());
+    await controller.advance(planned.id);
+    on.put = (key) => {
+      if (key === "ship") lapseAndPause(controller, store, planned.id);
+    };
+    await expect(controller.advance(planned.id)).rejects.toThrow("workflow_lease_lost");
+    delete on.put;
+    const ship = store
+      .listTasks(10, "partial")
+      .find((task) => (task.request as { operation?: { key?: string } }).operation?.key === "ship");
+    expect(ship).toBeDefined();
+    controller.resume(planned.id);
+
+    // Flag removed: condition now resolves to false branch, conflicting with ship's effect.
+    await unlink(join(root, "flag"));
+
+    const restarted = new WorkflowController(store, tasks, cipher);
+    await restarted.recoverInterrupted();
+
+    const run = (await restarted.advance(planned.id)).run;
+    expect(run.status).toBe("recovery_required");
+    expect(run.error).toBe("workflow_condition_branch_conflict:choose");
+    expect(run.nodes.choose?.taskIds).toEqual([ship!.id]);
+    expect(run.nodes.refund?.status).toBe("pending");
+  });
+
+  it.each(["inconclusive", "unresolvable"] as const)(
+    "keeps refund pending and choose pending when its step ended partial and condition's check is %s",
+    async (how) => {
+      let answer = { success: true, status: 200, content: JSON.stringify({ status: "applied" }) };
+      const { controller, root, store, done, on } = await setup({
+        policy: { unhinged: true },
+        probe: async () => answer,
+      });
+      await writeFile(join(root, "flag"), "on");
+      const planned = controller.plan(
+        definition(
+          how === "inconclusive"
+            ? {
+                type: "http_resource_matches",
+                url: "https://payments.example.test/charges/1",
+                method: "GET",
+                path: "json.status",
+                value: "applied",
+              }
+            : undefined,
+        ),
+      );
+      await controller.advance(planned.id);
+      on.put = (key) => {
+        if (key === "ship") lapseAndPause(controller, store, planned.id);
+      };
+      await expect(controller.advance(planned.id)).rejects.toThrow("workflow_lease_lost");
+      delete on.put;
+      const ship = store
+        .listTasks(10, "partial")
+        .find((task) => (task.request as { operation?: { key?: string } }).operation?.key === "ship");
+      expect(ship).toBeDefined();
+      controller.resume(planned.id);
+
+      if (how === "inconclusive") answer = { success: true, status: 503, content: "{}" };
+      else {
+        const outside = await mkdtemp(join(tmpdir(), "melra-workflow-correctness-"));
+        roots.push(outside);
+        await writeFile(join(outside, "flag"), "on");
+        await unlink(join(root, "flag"));
+        await symlink(join(outside, "flag"), join(root, "flag"));
+      }
+
+      await expect(controller.advance(planned.id)).rejects.toThrow(`workflow_check_${how}:choose`);
+      const status = controller.status(planned.id);
+      expect(status.nodes.choose).toMatchObject({ status: "pending", taskIds: [] });
+      expect(status.nodes.refund?.status).toBe("pending");
+      expect(status.status).toBe("running");
+      expect([...done].sort()).toEqual(["pay", "ship", "x"]);
+    },
+  );
+
+  it("decides the condition live and records its step before unwinding when its commit was lost to a lock", async () => {
+    let answer = { success: true, status: 200, content: JSON.stringify({ status: "applied" }) };
+    const { controller, root, store, done } = await setup({
+      policy: { unhinged: true },
+      probe: async () => answer,
+    });
+    await writeFile(join(root, "flag"), "on");
+    const planned = controller.plan(
+      definition({
+        type: "http_resource_matches",
+        url: "https://payments.example.test/charges/1",
+        method: "GET",
+        path: "json.status",
+        value: "applied",
+      }),
+    );
+    await controller.advance(planned.id);
+    vi.spyOn(store, "transitionWorkflow").mockImplementationOnce(() => {
+      throw new Error("database is locked");
+    });
+    await expect(controller.advance(planned.id)).rejects.toThrow("database is locked");
+    const ship = store
+      .listTasks(10, "partial")
+      .find((task) => (task.request as { operation?: { key?: string } }).operation?.key === "ship");
+    expect(ship).toBeDefined();
+
+    answer = { success: true, status: 503, content: "{}" };
+    await expect(controller.advance(planned.id)).rejects.toThrow("workflow_check_inconclusive:choose");
+    expect(controller.status(planned.id).nodes.refund?.status).toBe("pending");
+    expect(controller.status(planned.id).nodes.choose).toMatchObject({ status: "pending", taskIds: [] });
+
+    answer = { success: true, status: 200, content: JSON.stringify({ status: "applied" }) };
+    const run = (await controller.advance(planned.id)).run;
+    expect(run.status).toBe("failed");
+    expect(run.nodes.choose?.taskIds).toEqual([ship!.id]);
+    expect(run.nodes.choose?.status).toBe("failed");
+    expect(run.nodes.refund?.status).toBe("compensated");
+    expect([...done].sort()).toEqual(["pay", "refund", "ship", "x"]);
+  });
+
+  it("does not run a downstream forward step before the undecided condition is decided", async () => {
+    const { controller, root, store, done, on } = await setup({ policy: { unhinged: true } });
+    await writeFile(join(root, "flag"), "on");
+    const planned = controller.plan(
+      workflow([
+        { id: "pay", type: "operation", request: put("pay") },
+        {
+          id: "choose",
+          type: "condition",
+          dependsOn: ["pay"],
+          sourceNodeId: "pay",
+          predicate: { type: "file_exists", path: "flag" },
+          whenTrue: [
+            TaskRequestSchema.parse({
+              ...put("ship"),
+              requiredEvidence: [{ type: "result_equals", path: "stored", value: false }],
+            }),
+          ],
+          whenFalse: [put("other")],
+        },
+        {
+          id: "x",
+          type: "operation",
+          dependsOn: ["pay"],
+          request: TaskRequestSchema.parse({
+            ...put("x"),
+            requiredEvidence: [{ type: "result_equals", path: "stored", value: false }],
+          }),
+        },
+        { id: "y", type: "operation", dependsOn: ["pay"], request: put("y") },
+        { id: "z", type: "operation", dependsOn: ["y"], request: put("z") },
+        { id: "refund", type: "compensation", forNodeId: "pay", request: put("refund") },
+      ]),
+    );
+    await controller.advance(planned.id);
+    on.put = (key) => {
+      if (key === "ship") lapseAndPause(controller, store, planned.id);
+    };
+    await expect(controller.advance(planned.id)).rejects.toThrow("workflow_lease_lost");
+    delete on.put;
+    const ship = store
+      .listTasks(10, "partial")
+      .find((task) => (task.request as { operation?: { key?: string } }).operation?.key === "ship");
+    expect(ship).toBeDefined();
+    controller.resume(planned.id);
+
+    const run = (await controller.advance(planned.id)).run;
+    expect(run.status).toBe("failed");
+    expect(run.nodes.choose?.taskIds).toEqual([ship!.id]);
+    expect(run.nodes.z?.status).toBe("pending");
+    expect(done).not.toContain("z");
+    expect([...done].sort()).toEqual(["pay", "refund", "ship", "x", "y"]);
+  });
+
+  it("decides an undecided condition before unwinding even when the run was already stored as failed", async () => {
+    const { controller, root, store, done, on } = await setup({ policy: { unhinged: true } });
+    await writeFile(join(root, "flag"), "on");
+    const planned = controller.plan(definition());
+    await controller.advance(planned.id);
+    on.put = (key) => {
+      if (key === "ship") lapseAndPause(controller, store, planned.id);
+    };
+    await expect(controller.advance(planned.id)).rejects.toThrow("workflow_lease_lost");
+    delete on.put;
+    const ship = store
+      .listTasks(10, "partial")
+      .find((task) => (task.request as { operation?: { key?: string } }).operation?.key === "ship");
+    expect(ship).toBeDefined();
+    controller.resume(planned.id);
+
+    type Emit = (type: string, data: Record<string, unknown>) => void;
+    const legacy = controller as unknown as {
+      transition(run: WorkflowRun, change: (draft: WorkflowRun, emit: Emit) => void): WorkflowRun;
+    };
+    legacy.transition(controller.status(planned.id), (draft, emit) => {
+      emit("workflow.status_changed", { from: draft.status, to: "failed" });
+      draft.status = "failed";
+    });
+    expect(controller.status(planned.id).status).toBe("failed");
+
+    const run = (await controller.advance(planned.id)).run;
+    expect(run.nodes.choose?.taskIds).toEqual([ship!.id]);
+    expect(run.nodes.choose?.status).toBe("failed");
+    expect(run.nodes.refund?.status).toBe("compensated");
+    expect([...done].sort()).toEqual(["pay", "refund", "ship", "x"]);
+  });
+});
+
 describe("a step an operator denies", () => {
   // Pay, then two branches that each wait for approval; refunding pays back.
   const fanOut = () =>

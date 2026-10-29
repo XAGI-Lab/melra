@@ -436,6 +436,10 @@ what earlier steps did is undone by hand too where it should not stand. A
 restart before the condition is decided reads a step such an advance ran
 whose outcome is unknown as the condition's own, so it halts the run there,
 as any other step's does, rather than let a failed sibling unwind past it.
+When a step under an undecided condition took effect (partial, verified, in flight
+or unknown) after a lost commit, the run stays `running` with compensations parked
+until the condition is decided, and a conflicting answer halts with
+`workflow_condition_branch_conflict` (#331).
 Anything else such an advance left waits for the next advance to decide, so
 the run halts or moves on the same with or without a restart. `workflow
 cancel` cancels whatever a lost advance left planned or
@@ -977,7 +981,10 @@ unwind carries on; settled as not applied, the unwind stays stalled.
 
 A step denied before it runs starts the same unwind as a failed one. Neither
 starts while another step's outcome is unknown or unsettled (an effect that may
-have happened, or a task still running): the run is `recovery_required` and
+have happened, or a task still running), nor while an undecided condition has an
+effect under its keys (#331): the run stays `running` with compensations parked
+until the condition is decided, and halts with `workflow_condition_branch_conflict`
+if the condition resolves to the other branch. The run is `recovery_required` and
 waits, starting no further step, rather than undo what that effect may depend
 on. That step is settled by its `reconciliation`: `melra_execute` on its task,
 or recovery when a process starts, asks the provider whether the effect

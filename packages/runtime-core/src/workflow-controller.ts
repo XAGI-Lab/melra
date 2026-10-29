@@ -415,7 +415,7 @@ export class WorkflowController {
     // process instead of at the next restart.
     const current = this.resettleParked(stored, definition);
     const rollback =
-      current.status === "failed"
+      current.status === "failed" && !this.hasUndecidedConditionWithEffect(definition, current)
         ? definition.nodes
             .filter(
               (node) =>
@@ -451,7 +451,17 @@ export class WorkflowController {
     // A run with a failed or denied step unwinds once nothing is unknown. Until
     // then it is halted, and offers no forward step: not one newly ready, nor
     // one parked for approval, whose effect would only be undone.
-    if (this.hasFailure(definition, current.nodes) && rollback.length === 0) {
+    // An undecided condition with an effect under its keys is offered for
+    // deciding even on a run with a failure (#331).
+    const undecidedWithEffect = this.undecidedConditionsWithEffect(definition, current);
+    const readyConditions = undecidedWithEffect.filter((node) =>
+      readyNodeIds(graph, current.nodes).includes(node.id),
+    );
+    if (
+      this.hasFailure(definition, current.nodes) &&
+      rollback.length === 0 &&
+      readyConditions.length === 0
+    ) {
       return { run: current, tasks: [], events: this.events(workflowId, since) };
     }
     // A node parked for a human — approval or supplied input — is no
@@ -484,9 +494,11 @@ export class WorkflowController {
     const nodeIds =
       rollback.length > 0
         ? rollback
-        : parkedSettled
-          ? awaiting
-          : [...awaiting, ...readyNodeIds(graph, current.nodes)];
+        : this.hasFailure(definition, current.nodes)
+          ? readyConditions.map((node) => node.id)
+          : parkedSettled
+            ? awaiting
+            : [...awaiting, ...readyNodeIds(graph, current.nodes)];
     if (nodeIds.length === 0) {
       // Nothing to run, but a step's certificate the last advance could not
       // write may be written now, and a run with nothing left is complete.
@@ -553,11 +565,21 @@ export class WorkflowController {
     const statusAfter = (nodeId: string) =>
       results.find((entry) => entry.nodeId === nodeId)?.result.state.status ??
       current.nodes[nodeId]?.status;
+    const nodesAfter: WorkflowRun["nodes"] = { ...current.nodes };
+    for (const { nodeId, result } of results) {
+      nodesAfter[nodeId] = result.state;
+    }
+    const hasUndecidedAfter = this.hasUndecidedConditionWithEffect(definition, {
+      ...current,
+      nodes: nodesAfter,
+    });
     // Not past a step whose outcome is unknown or still unsettled: the run
     // halts for an operator, as deriveStatus says, rather than undo what that
-    // effect may depend on.
+    // effect may depend on. An undecided condition with an effect under its
+    // keys blocks unwind too (#331).
     if (
       !hasUnknownOutcome(definition, statusAfter) &&
+      !hasUndecidedAfter &&
       results.some(
         ({ nodeId, result }) =>
           ["failed", "cancelled"].includes(result.state.status) &&
@@ -879,6 +901,53 @@ export class WorkflowController {
         (task): task is TaskRecord =>
           task !== undefined && ["recovery_required", "running", "verifying"].includes(task.status),
       );
+  }
+
+  /**
+   * Conditions that are undecided but have an effect under their keys (#331).
+   * An advance that lost its commit ran a step under one that took effect
+   * (partial, verified, in flight or unknown). Unwinding past it would leave
+   * the effect off the run's record, so compensations stay parked until the
+   * condition is decided.
+   */
+  private undecidedConditionsWithEffect(
+    definition: WorkflowDefinition,
+    run: WorkflowRun,
+  ): Array<Extract<WorkflowNode, { type: "condition" }>> {
+    return definition.nodes.filter((node): node is Extract<WorkflowNode, { type: "condition" }> => {
+      if (node.type !== "condition") return false;
+      const state = run.nodes[node.id];
+      if (state === undefined) return false;
+      if (
+        state.taskIds.length > 0 ||
+        state.status === "verified_complete" ||
+        state.status === "failed" ||
+        state.status === "recovery_required"
+      ) {
+        return false;
+      }
+      const keys = expectedTaskKeys(run.id, node, definition);
+      const trueKeys = keys.slice(0, node.whenTrue.length);
+      const falseKeys = keys.slice(node.whenTrue.length);
+      const committed = (branch: string[]) =>
+        branch.some((key) => this.store.getIdempotencyCommit(key) !== undefined);
+      if (committed(trueKeys) || committed(falseKeys)) return false;
+      return keys.some((key) => {
+        const task = preferredTask(this.store.listTasksByKey(key), key);
+        return (
+          task !== undefined &&
+          !hadNoEffect(task) &&
+          !["planned", "awaiting_approval", "waiting_user"].includes(task.status)
+        );
+      });
+    });
+  }
+
+  private hasUndecidedConditionWithEffect(
+    definition: WorkflowDefinition,
+    run: WorkflowRun,
+  ): boolean {
+    return this.undecidedConditionsWithEffect(definition, run).length > 0;
   }
 
   /**
@@ -1582,8 +1651,11 @@ export class WorkflowController {
                   // (#270), rather than wait or fail naming nothing while a
                   // failed sibling unwinds past it (#318).
                   const unknown = this.unsettledUnder(keys);
-                  if (!(error instanceof NodeRefused) || unknown.length === 0) throw error;
-                  throw new NodeRefused(error.reason, { state: recoveredNodeState(node, unknown, state), tasks: [] });
+                  if (!(error instanceof NodeRefused)) throw error;
+                  if (unknown.length > 0) throw new NodeRefused(error.reason, { state: recoveredNodeState(node, unknown, state), tasks: [] });
+                  if (this.undecidedConditionsWithEffect(definition, run).some((c) => c.id === node.id))
+                    throw new NodeRefused(error.reason, { state: { ...state, status: "pending", taskIds: [] }, tasks: [] });
+                  throw error;
                 });
         // The other branch is settled by the advance that decides, or one that
         // finds the run naming it: only then can an advance that lost its
@@ -2157,6 +2229,11 @@ export class WorkflowController {
     // run halts until that step is settled, and only then fails and unwinds.
     if (hasUnknownOutcome(definition, (id) => run.nodes[id]?.status)) {
       return "recovery_required";
+    }
+    // An undecided condition with an effect under its keys blocks unwind, and
+    // is offered for deciding even on a run with a failure (#331).
+    if (this.hasUndecidedConditionWithEffect(definition, run)) {
+      return "running";
     }
     if (required.some((node) => run.nodes[node.id]?.status === "failed")) {
       return "failed";
