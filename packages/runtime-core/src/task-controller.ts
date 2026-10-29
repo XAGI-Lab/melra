@@ -766,6 +766,7 @@ export class TaskController {
       const verification = await this.verifier.verify(
         request.requiredEvidence,
         result,
+        { signal: controller.signal },
       );
       const kernelEvidence = await this.kernelEvidence(request.operation, result);
       const kernelHeld = kernelEvidence.every((item) => item.passed);

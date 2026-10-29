@@ -235,4 +235,110 @@ describe("verification through a channel that did not act", () => {
     const { evidence } = await verifier.verify([predicate()], created);
     expect(evidence[0]?.inconclusive).toBeUndefined();
   });
+
+  it("marks verification inconclusive when cancelled by signal", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const verifier = await Verifier.create(root, {
+      probe: probeReturning({ state: "succeeded" }),
+    });
+    const { verified, evidence } = await verifier.verify([predicate()], created, { signal: controller.signal });
+    expect(verified).toBe(false);
+    expect(evidence[0]).toMatchObject({
+      passed: false,
+      inconclusive: true,
+    });
+    expect(evidence[0]?.unanswerable).toBeUndefined();
+    expect(evidence[0]?.summary).toContain("independent read unavailable");
+  });
+
+  it("marks verification inconclusive when budget is exhausted", async () => {
+    const controller = new AbortController();
+    controller.abort(new Error("task_budget_exhausted"));
+    const verifier = await Verifier.create(root, {
+      probe: probeReturning({ state: "succeeded" }),
+    });
+    const { verified, evidence } = await verifier.verify([predicate()], created, { signal: controller.signal });
+    expect(verified).toBe(false);
+    expect(evidence[0]).toMatchObject({
+      passed: false,
+      inconclusive: true,
+      summary: "independent read unavailable: task_budget_exhausted",
+    });
+    expect(evidence[0]?.unanswerable).toBeUndefined();
+  });
+
+  it("forwards signal to probe and handles abort in flight", async () => {
+    const controller = new AbortController();
+    let receivedSignal: AbortSignal | undefined;
+    const verifier = await Verifier.create(root, {
+      probe: async (request) => {
+        receivedSignal = request.signal;
+        controller.abort(new Error("task_budget_exhausted"));
+        throw new Error("aborted");
+      },
+    });
+    const { verified, evidence } = await verifier.verify([predicate()], created, { signal: controller.signal });
+    expect(verified).toBe(false);
+    expect(receivedSignal).toBe(controller.signal);
+    expect(evidence[0]).toMatchObject({
+      passed: false,
+      inconclusive: true,
+      summary: "independent read unavailable: task_budget_exhausted",
+    });
+    expect(evidence[0]?.unanswerable).toBeUndefined();
+  });
+
+  it("enforces signal on custom registered verifiers using context.probe", async () => {
+    const controller = new AbortController();
+    controller.abort(new Error("task_budget_exhausted"));
+    let probeCalled = false;
+    const verifier = await Verifier.create(root, {
+      probe: async () => {
+        probeCalled = true;
+        return { success: true };
+      },
+      verifiers: [
+        {
+          type: "custom_check",
+          async check(_input, _result, context) {
+            await context.probe!({ url: "https://example.com", method: "GET", timeoutMs: 1000 });
+            return { passed: true, summary: "probe passed" };
+          },
+        },
+      ],
+    });
+    const { verified, evidence } = await verifier.verify([{ type: "custom_check" }], created, { signal: controller.signal });
+    expect(verified).toBe(false);
+    expect(probeCalled).toBe(false);
+    expect(evidence[0]).toMatchObject({
+      passed: false,
+      inconclusive: true,
+      summary: "task_budget_exhausted",
+    });
+  });
+
+  it("keeps the task's signal when a verifier passes its own", async () => {
+    const task = new AbortController();
+    const own = new AbortController();
+    let seen: AbortSignal | undefined;
+    const verifier = await Verifier.create(root, {
+      probe: async (request) => {
+        seen = request.signal;
+        task.abort(new Error("task_budget_exhausted"));
+        throw new Error("aborted");
+      },
+      verifiers: [{
+        type: "own_signal",
+        async check(_input, _result, context) {
+          await context.probe!({ url: "https://example.com", method: "GET", timeoutMs: 1000, signal: own.signal });
+          return { passed: true, summary: "read" };
+        },
+      }],
+    });
+    const { evidence } = await verifier.verify([{ type: "own_signal" }], created, { signal: task.signal });
+    expect(seen?.aborted).toBe(true);
+    expect(own.signal.aborted).toBe(false);
+    expect(evidence[0]).toMatchObject({ inconclusive: true, summary: "task_budget_exhausted" });
+  });
 });

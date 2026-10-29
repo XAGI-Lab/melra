@@ -45,8 +45,10 @@ interface ClientIdentity {
 }
 
 /**
- * `budget.maxDurationMs`'s cap, then 20 evidence predicates at the 60 s probe
- * cap (verification is not timed by the budget), with a minute to answer in.
+ * A task's 15-minute budget cap, which also times the reads that verify its
+ * effect, then up to 20 evidence reads of a minute each that no budget times:
+ * a workflow delegation node's evidence, reconciliation, and workflow
+ * condition and loop reads, with a minute to answer in.
  */
 const RUN_TIMEOUT_MS = 900_000 + 20 * 60_000 + 60_000;
 

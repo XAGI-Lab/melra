@@ -673,6 +673,104 @@ describe("TaskController", () => {
     expect(result.certificate?.result).toBe("BUDGET_EXHAUSTED");
   });
 
+  it("threads budget signal to verification probe and settles on budget exhaustion", async () => {
+    let probeSignal: AbortSignal | undefined;
+    const probe: EvidenceProbe = async (req) => {
+      probeSignal = req.signal;
+      return new Promise((_resolve, reject) => {
+        req.signal?.addEventListener("abort", () => {
+          reject(new Error("aborted"));
+        });
+      });
+    };
+    const { controller } = await setup(
+      {
+        async execute() {
+          return { success: true };
+        },
+      },
+      probe,
+    );
+    const task = controller.plan(
+      TaskRequestSchema.parse({
+        goal: "Abort verification on budget exhaustion",
+        operation: { kind: "system", action: "info" },
+        budget: { maxRetries: 0, maxSteps: 1, maxDurationMs: 100 },
+        requiredEvidence: [
+          {
+            type: "http_resource_matches",
+            url: "https://example.com/check",
+            path: "status",
+            value: 200,
+            timeoutMs: 10_000,
+          },
+        ],
+      }),
+    );
+    const result = await controller.execute(task.id);
+    expect(probeSignal).toBeDefined();
+    expect(probeSignal?.aborted).toBe(true);
+    expect(result.task.status).toBe("partial");
+    expect(result.receipt?.evidence[0]).toMatchObject({
+      type: "http_resource_matches",
+      passed: false,
+      inconclusive: true,
+      summary: "independent read unavailable: task_budget_exhausted",
+    });
+    expect(result.receipt?.evidence[0]?.unanswerable).toBeUndefined();
+  });
+
+  it("threads cancel signal to verification probe when task is cancelled", async () => {
+    let probeSignal: AbortSignal | undefined;
+    const probe: EvidenceProbe = async (req) => {
+      probeSignal = req.signal;
+      return new Promise((_resolve, reject) => {
+        req.signal?.addEventListener("abort", () => {
+          reject(new Error("aborted"));
+        });
+      });
+    };
+    const { controller } = await setup(
+      {
+        async execute() {
+          return { success: true };
+        },
+      },
+      probe,
+    );
+    const task = controller.plan(
+      TaskRequestSchema.parse({
+        goal: "Cancel task during verification probe",
+        operation: { kind: "system", action: "info" },
+        budget: { maxRetries: 0, maxSteps: 1, maxDurationMs: 10_000 },
+        requiredEvidence: [
+          {
+            type: "http_resource_matches",
+            url: "https://example.com/check",
+            path: "status",
+            value: 200,
+            timeoutMs: 10_000,
+          },
+        ],
+      }),
+    );
+    const executing = controller.execute(task.id);
+    await vi.waitFor(() => {
+      expect(controller.status(task.id).status).toBe("verifying");
+    });
+    controller.cancel(task.id);
+    const result = await executing;
+    expect(probeSignal).toBeDefined();
+    expect(probeSignal?.aborted).toBe(true);
+    expect(result.receipt?.evidence[0]).toMatchObject({
+      type: "http_resource_matches",
+      passed: false,
+      inconclusive: true,
+      summary: "independent read unavailable: task_cancelled",
+    });
+    expect(result.receipt?.evidence[0]?.unanswerable).toBeUndefined();
+  });
+
   it("redacts executor secrets before task or receipt persistence", async () => {
     const { controller, store } = await setup({
       async execute() {

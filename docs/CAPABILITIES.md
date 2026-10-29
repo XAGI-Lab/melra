@@ -828,10 +828,10 @@ the label rather than the content.
 Every request has:
 
 - `maxSteps`: reserved for bounded composition and currently limited by schema;
-- `maxDurationMs`: authoritative wall-clock execution budget;
+- `maxDurationMs`: authoritative wall-clock execution budget, which also bounds the independent reads its verification makes (`http_resource_matches` and a registered verifier's `context.probe`);
 - `maxRetries`: retry count for read-only operations.
 
-Mutations and destructive operations have one execution attempt.
+Mutations and destructive operations have one execution attempt. A task reconciliation read, and a workflow `condition`, `bounded_loop` `until` or `delegation` read, is still bounded only by the predicate's `timeoutMs`.
 
 ## Transport and deployment
 
