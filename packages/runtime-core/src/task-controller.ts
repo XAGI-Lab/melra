@@ -557,6 +557,12 @@ export class TaskController {
       return await this.reconcile(taskId);
     }
     if (!UNSTARTED.includes(task.status)) {
+      // Swept at expiry (#462): the stored status is cancelled, but the caller
+      // must still see the documented "plan the task again" signal — the same
+      // answer this method gave before the sweep existed.
+      if (task.status === "cancelled" && task.error === "approval_expired") {
+        throw new Error("approval_expired");
+      }
       throw new Error(`task_not_executable:${task.status}`);
     }
     // A halt stops the run, not only its advance: a step's task, in any mode,
@@ -1651,6 +1657,11 @@ export class TaskController {
   /** A pending challenge as an operator surface shows it. */
   approvalView(taskId: string) {
     const task = this.status(taskId);
+    // Swept at expiry (#462): report the expiry, not the swept status, so an
+    // operator surface and the caller both see the re-plan signal.
+    if (task.status === "cancelled" && task.error === "approval_expired") {
+      throw new Error("approval_expired");
+    }
     if (task.status !== "awaiting_approval" || task.approval === undefined) {
       throw new Error(`task_not_awaiting_approval:${task.status}`);
     }

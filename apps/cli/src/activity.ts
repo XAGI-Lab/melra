@@ -169,8 +169,9 @@ interface ApprovalCounts {
 
 /**
  * Tasks waiting for an operator's approval, and those whose challenge expired
- * unanswered, workflow steps apart. An expired one stays
- * awaiting_approval, and counted as waiting it was reported forever and
+ * unanswered, workflow steps apart. An expired one stays awaiting_approval
+ * until the recovery pass (startup and the 30 s sweep) cancels it with error
+ * approval_expired (#462), and counted as waiting it was reported forever and
  * pointed at `melra approve`, which then refused it. An answer given in time
  * is honoured for a TTL after it, as `TaskController` honours it, so that task
  * waits for its agent and counts as neither. In enforced mode an in-band
