@@ -891,13 +891,20 @@ describe("sweeping expired approval challenges (#462)", () => {
     expect(swept.status).toBe("cancelled");
     expect(swept.error).toBe("approval_expired");
 
-    // Verify 2: Decided task is left awaiting_approval (usable by execute)
+    // Verify 2: Decided in time: left alone, though its decision is no longer usable
+    // (it is past decidedAt + approvalTtl, so execute would refuse it — #462 only
+    // changes the stored status, not what execute accepts).
     expect(tasks.status(decided.id).status).toBe("awaiting_approval");
     expect(tasks.status(decided.id).error).toBeUndefined();
 
     // Verify 3: Workflow step task is left awaiting_approval
     expect(tasks.status(stepTaskId!).status).toBe("awaiting_approval");
     expect(tasks.status(stepTaskId!).error).toBeUndefined();
+
+    // Verify 4: execute() and approvalView() still answer the documented
+    // re-plan signal after the sweep, not the swept status (#462).
+    await expect(tasks.execute(standalone.id)).rejects.toThrow("approval_expired");
+    expect(() => tasks.approvalView(standalone.id)).toThrow("approval_expired");
   });
 });
 

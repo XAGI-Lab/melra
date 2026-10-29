@@ -599,7 +599,9 @@ however the process ends. Recovery claims a task only when its owner's lock is
 free, with a compare-and-set so two recoverers cannot both take it, and touches
 a workflow run only under that run's lease and only once none of its tasks is
 still running. A running runtime sweeps every 30 seconds for work left by a
-process that died after it started. An advance that finds an expired lease
+process that died after it started; the same passes also cancel standalone
+approval challenges that expired unanswered, with error `approval_expired`, so
+the agent re-plans (`#462`). An advance that finds an expired lease
 recovers the run before taking it over, so it never plans again a task the dead
 advance already started. A process also retakes its own task when nothing in it
 is still working on that task, for example after the task's last write failed.
