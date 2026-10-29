@@ -6,6 +6,14 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- A step that took effect under an undecided condition but failed its evidence
+  (partial) is no longer left off the workflow run's record when its advance
+  lost its commit and a sibling step failed. Compensations remain parked while
+  the condition is undecided, and the condition is offered for resolution so
+  its branch is decided and its effect recorded before unwinding (#331).
+
 ## [0.4.0-alpha.2] - 2026-10-28
 
 ### Added
@@ -328,13 +336,6 @@ All notable changes are documented here. The format follows
   the workspace and temp, from IP networks unless their traits need it, and from
   making symbolic links unless they install packages or the policy file names
   them.
-### Fixed
-
-- A step that took effect under an undecided condition but failed its evidence
-  (partial) is no longer left off the workflow run's record when its advance
-  lost its commit and a sibling step failed. Compensations remain parked while
-  the condition is undecided, and the condition is offered for resolution so
-  its branch is decided and its effect recorded before unwinding (#331).
 
 ## [0.4.0-alpha.0] - 2026-10-26
 
