@@ -587,24 +587,25 @@ describe("per-command sandbox", () => {
   });
 });
 
-// Whether this host's Seatbelt applies a profile, as the server finds it:
-// sandbox-exec is there inside another sandbox too, and applies none.
-const seatbelt = await (async () => {
-  if (process.platform !== "darwin") return false;
-  const directory = await mkdtemp(join(tmpdir(), "melra-seatbelt-probe-"));
+// The sandbox this host's server finds, where it is Seatbelt or bubblewrap:
+// sandbox-exec is there inside another sandbox too, and applies none, and
+// bwrap is installed where user namespaces are refused.
+const backend = await (async () => {
+  if (process.platform !== "darwin" && process.platform !== "linux") return undefined;
+  const directory = await mkdtemp(join(tmpdir(), "melra-sandbox-probe-"));
   try {
     const found = await detectSandbox({ workspace: directory, denied: [], dataDirectory: join(directory, "data") });
-    return "sandbox" in found && found.sandbox.backend === "seatbelt";
+    return "sandbox" in found && ["seatbelt", "bubblewrap"].includes(found.sandbox.backend) ? found.sandbox.backend : undefined;
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
 })();
 
-// The outside tester's case, on this host's own Seatbelt: developer mode with
-// no policy file, whose agent approves its own `node -e` from the plan
-// response. It may write the workspace; under home, which is neither the
-// workspace nor temp, it is refused.
-describe.runIf(seatbelt)("developer mode's default sandbox", () => {
+// The outside tester's case, on this host's own Seatbelt or bubblewrap:
+// developer mode with no policy file, whose agent approves its own `node -e`
+// from the plan response. It may write the workspace; under home, which is
+// neither the workspace nor temp, it is refused.
+describe.runIf(backend !== undefined)(`developer mode's default sandbox (${backend})`, () => {
   let base: string;
   let runtime: MelraRuntime | undefined;
   const outside = join(homedir(), `.melra-sandbox-test-${randomUUID()}`);
@@ -641,27 +642,45 @@ describe.runIf(seatbelt)("developer mode's default sandbox", () => {
       });
     const inside = await write(join(workspace, "inside.txt"));
     expect(inside.task.status).toBe("verified_success");
-    expect(inside.receipt?.sandbox).toBe("seatbelt");
+    expect(inside.receipt?.sandbox).toBe(backend);
     expect(existsSync(join(workspace, "inside.txt"))).toBe(true);
     const escaped = await write(outside);
-    // Node exits with EPERM, so the adapter reports the command failed.
+    // Node exits with EPERM (EROFS under bubblewrap), so the adapter reports the command failed.
     expect(escaped.task.status).toBe("failed");
     expect(existsSync(outside)).toBe(false);
   }, 30_000);
 
   // Seatbelt's only loopback filter, `localhost`, matches every address of the
   // Mac, so a listener it allowed would serve the network: none is allowed.
-  it("refuses a command without the network trait a listening socket", async () => {
+  // Bubblewrap gives the command an empty network namespace, loopback its own,
+  // where a listener serves nobody: it may bind even a port the host holds.
+  it("gives a command without the network trait no listening socket on the host", async () => {
     const workspace = join(base, "workspace");
-    runtime = await createRuntime({ workspaceRoot: workspace, dataDirectory: join(base, "data"), environment: {} });
-    const listened = await approved({
-      kind: "terminal",
-      action: "run",
-      command: "node",
-      args: ["-e", `require("net").createServer().listen(0, "0.0.0.0", () => process.exit(0)).on("error", () => process.exit(1))`],
-    });
-    expect(listened.receipt?.sandbox).toBe("seatbelt");
-    expect(listened.task.status).toBe("failed");
+    const host = createServer();
+    await new Promise<void>((listening) => host.listen(0, "0.0.0.0", listening));
+    const { port } = host.address() as AddressInfo;
+    try {
+      runtime = await createRuntime({ workspaceRoot: workspace, dataDirectory: join(base, "data"), environment: {} });
+      const listened = await approved({
+        kind: "terminal",
+        action: "run",
+        command: "node",
+        args: [
+          "-e",
+          `require("net").createServer().listen(${port}, "0.0.0.0", () => process.exit(0))` +
+            `.on("error", (e) => { process.stdout.write(e.code); process.exit(1); })`,
+        ],
+      });
+      expect(listened.receipt?.sandbox).toBe(backend);
+      if (backend === "seatbelt") {
+        expect(listened.task.status).toBe("failed");
+        expect((listened.output as { stdout?: string } | undefined)?.stdout).toBe("EPERM");
+      } else {
+        expect(listened.task.status).toBe("verified_success");
+      }
+    } finally {
+      host.close();
+    }
   }, 30_000);
 
   // Refused a link, git still exits 0: each link a plain file, and
@@ -684,7 +703,7 @@ describe.runIf(seatbelt)("developer mode's default sandbox", () => {
     runtime = await createRuntime({ workspaceRoot: workspace, dataDirectory: join(base, "data"), environment: {} });
     const cloned = await approved({ kind: "terminal", action: "run", command: "git", args: ["clone", "-q", "source", "clone"] });
     expect(cloned.task.status).toBe("verified_success");
-    expect(cloned.receipt?.sandbox).toBe("seatbelt");
+    expect(cloned.receipt?.sandbox).toBe(backend);
     expect((await lstat(join(workspace, "clone", "link"))).isSymbolicLink()).toBe(true);
     // Unset: `git config` exits 1.
     expect(git(join(workspace, "clone"), "config", "--local", "core.symlinks").status).toBe(1);
