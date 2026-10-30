@@ -4,6 +4,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   TaskRequestSchema,
@@ -429,6 +430,112 @@ describe("reconciling one task in two processes", () => {
       receipts: settled.receiptIds.map((receiptId) => ({ receiptId })),
       certificate: { result: "VERIFIED_SUCCESS" },
     });
+  });
+});
+
+describe("a task's writes while another process holds the lock", () => {
+  // `melra approve` beside a running server, or two servers on one home: a
+  // write that met the lock used to wait in SQLite's busy timeout with the
+  // event loop stopped, so the other side's release could not land in time
+  // when it was this process's own timer, and the write failed (#461).
+
+  /** The write lock, held on a connection of its own as another process would. */
+  function lock(path: string) {
+    const other = new DatabaseSync(path);
+    other.exec("BEGIN IMMEDIATE");
+    return () => {
+      other.exec("COMMIT");
+      other.close();
+    };
+  }
+
+  it.each(["its result is saved", "its outcome commits"])(
+    "waits out the lock after the adapter ran while %s, and verifies",
+    async (moment) => {
+      const at = await home();
+      let released: Promise<void> | undefined;
+      // Let go on a timer in this process, which only fires if the write awaits.
+      const holdFor = (ms: number) => {
+        const unlock = lock(at.path);
+        released = new Promise((resolve) => setTimeout(() => resolve(unlock()), ms));
+      };
+      const a = await side(at, async () => {
+        if (moment === "its result is saved") holdFor(200);
+        return { success: true, stored: true };
+      });
+      if (moment === "its outcome commits") {
+        const verify = a.verifier.verify.bind(a.verifier);
+        vi.spyOn(a.verifier, "verify").mockImplementationOnce(async (...args) => {
+          holdFor(200);
+          return await verify(...args);
+        });
+      }
+      const task = a.tasks.plan(put("ledger"));
+
+      // Parked otherwise: the effect ran, and its write said "database is locked".
+      expect((await a.tasks.execute(task.id, approve(task))).task.status).toBe("verified_success");
+      expect(released).toBeDefined();
+      await released;
+      expect(a.adapter).toHaveBeenCalledTimes(1);
+      expect(a.tasks.receipts({ taskId: task.id }).certificate?.result).toBe("VERIFIED_SUCCESS");
+    },
+  );
+
+  it("lets one of two passes here claim an abandoned task", async () => {
+    const at = await home();
+    const adapter = held();
+    const a = await side(at, adapter.execute);
+    const b = await side(at);
+    const task = a.tasks.plan(put("ledger"));
+    void a.tasks.execute(task.id, approve(task)).catch(() => undefined);
+    await adapter.entered.opened;
+    a.store.close();
+
+    // The second lists the task after the first's claim committed, and
+    // before the first is back from awaiting it.
+    const passes = await Promise.all([b.tasks.recoverInterrupted(), b.tasks.recoverInterrupted()]);
+    expect(passes.flat()).toEqual([expect.objectContaining({ id: task.id, status: "recovery_required" })]);
+    expect(b.tasks.receipts({ taskId: task.id }).receipts).toHaveLength(0);
+  });
+
+  it("refuses a second execute of a task whose start waits on the lock, and runs it once", async () => {
+    const at = await home();
+    const a = await side(at);
+    const task = a.tasks.plan(put("ledger"));
+    const unlock = lock(at.path);
+    const first = a.tasks.execute(task.id, approve(task));
+    first.catch(() => undefined);
+    // Arrives while the first's start write waits, as a retrying client would.
+    const second = a.tasks.execute(task.id, approve(task));
+    second.catch(() => undefined);
+    setTimeout(unlock, 50);
+
+    await expect(second).rejects.toThrow("task_not_executable:running");
+    expect((await first).task.status).toBe("verified_success");
+    expect(a.adapter).toHaveBeenCalledTimes(1);
+  });
+
+  it("still stops a task whose start waits on the lock when it is cancelled", async () => {
+    const at = await home();
+    const a = await side(at);
+    const task = a.tasks.plan(put("ledger"));
+    const unlock = lock(at.path);
+    const executing = a.tasks.execute(task.id, approve(task));
+    executing.catch(() => undefined);
+    // Let go and cancelled in one turn, before the start's next try.
+    const cancelled = await new Promise<TaskRecord>((resolve) =>
+      setTimeout(() => {
+        unlock();
+        resolve(a.tasks.cancel(task.id));
+      }, 50),
+    );
+
+    expect(cancelled.status).toBe("cancelled");
+    await expect(executing).rejects.toThrow("task_not_executable:cancelled");
+    expect(a.adapter).not.toHaveBeenCalled();
+    expect(a.store.getTask(task.id)?.status).toBe("cancelled");
+    expect(a.store.inFlight.has(task.id)).toBe(false);
+    await a.tasks.settled(task.id);
   });
 });
 
