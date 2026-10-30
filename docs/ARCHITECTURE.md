@@ -298,10 +298,10 @@ Whoever holds `payload.key`, in a single-user deployment anyone running as
 MELRA's user, can rebuild the whole chain with no mark. A head kept from
 after the record was sealed shows both. An older MELRA sharing the home
 writes its records without links, and the next process of this version to
-start on the home seals them (`sealRecords`), with any row anyone else
-inserted meanwhile, so the chain shows that a record has not changed since it
-was last sealed, not who wrote it. Until then `melra audit verify` reports
-them as `unsealed_rows`.
+start on the home — or its periodic recovery sweep while running — seals them
+(`sealRecords`), with any row anyone else inserted meanwhile, so the chain
+shows that a record has not changed since it was last sealed, not who wrote it.
+Until then `melra audit verify` reports them as `unsealed_rows`.
 
 Workflow creation persists the redacted definition, encrypted definition,
 initial projection, and first two events atomically. Later transitions use
