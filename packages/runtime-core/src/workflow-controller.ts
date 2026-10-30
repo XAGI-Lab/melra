@@ -481,6 +481,19 @@ export class WorkflowController {
           ),
       ),
     );
+    // Every parked step is read from its tasks before any is run (#330). One
+    // denied, failed or cancelled out of band fails the run, so an approval
+    // delivered beside it, in this advance, runs nothing: not another parked
+    // step, nor a parallel node's other branch. The steps are recorded as
+    // they read, and the wave unwinds as it would for any failure.
+    const parked =
+      rollback.length === 0 && parkedSettled
+        ? awaiting.map((nodeId) => ({
+            nodeId,
+            ...this.recoveredNode(current.id, graph.nodes.get(nodeId)!, definition, current.nodes[nodeId]!),
+          }))
+        : [];
+    const failing = parked.some(({ state }) => ["failed", "cancelled"].includes(state.status));
     const nodeIds =
       rollback.length > 0
         ? rollback
@@ -499,8 +512,12 @@ export class WorkflowController {
     // wave would otherwise keep pointing at the task it cancelled, and stay
     // cancelled for good.
     let refused: { reason: unknown } | undefined;
-    const results: Array<{ nodeId: string; result: NodeAdvance }> = await (rollback.length >
-    0
+    const results: Array<{ nodeId: string; result: NodeAdvance }> = failing
+      ? parked.map(({ nodeId, state, found }) => ({
+          nodeId,
+          result: { state, tasks: found.filter((task): task is TaskRecord => task !== undefined) },
+        }))
+      : await (rollback.length > 0
       ? // Compensations undo each other's preconditions, so the order they run
         // in *is* the semantics: cancel the shipment before refunding the
         // charge that paid for it. `Promise.all` computed a reverse list and
@@ -2363,8 +2380,10 @@ function aggregateNodeState(
   states: WorkflowNodeState[],
 ): WorkflowNodeState {
   const taskIds = states.flatMap((state) => state.taskIds);
-  // A failed or denied branch ends the node before another branch's approval
-  // can run a step on a run that is already failing. An unknown outcome ranks
+  // A failed or denied branch fails the node over a sibling still waiting, so
+  // the run unwinds and that sibling's challenge is not offered again. One
+  // denied before an advance is read there before any branch runs, so an
+  // approval sent with it runs nothing (#330). An unknown outcome ranks
   // above both: the run halts for an operator rather than unwind past an
   // effect that may have happened.
   for (const status of [
