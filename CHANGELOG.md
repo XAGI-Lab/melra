@@ -14,6 +14,12 @@ All notable changes are documented here. The format follows
   (writes outside the workspace, listeners, git's links, the deny list, the
   package caches in temp) run under bubblewrap as well as Seatbelt (#470).
 
+- `SqliteStore.write(action)` runs `action` as one transaction, like
+  `transaction`, but waits for another process's write lock by awaiting a
+  timer rather than blocking the event loop, for up to the same 5 seconds.
+  Only the `BEGIN` is tried again, never `action`; a nested write or an async
+  `action` rolls back. Nothing calls it yet (#461).
+
 ### Changed
 
 - CI's `framework-examples` job now also runs the LangChain, OpenAI Agents SDK
