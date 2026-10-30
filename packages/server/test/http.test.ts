@@ -128,7 +128,7 @@ describe("melra http server", () => {
     }
   });
 
-  it("answers sign-in only to loopback names, so a rebound page gets nothing", async () => {
+  it("answers only to loopback names, so a rebound page gets nothing", async () => {
     // What a page at attacker.example sends once its name resolves to 127.0.0.1.
     const status = (host: string, path = "/.well-known/oauth-authorization-server") =>
       new Promise<number>((resolve, reject) => {
@@ -150,12 +150,94 @@ describe("melra http server", () => {
       const host = name.includes(":") && !name.startsWith("[") ? name : `${name}:${http.port}`;
       expect(await status(host), host).not.toBe(421);
     }
-    // A route that needs the token answers under any name: a container reaching
-    // the host as host.docker.internal still gets in with it, and a rebound
-    // page without it still gets a 401.
-    expect(await status("host.docker.internal:7457", "/api/capabilities?token=test-token")).toBe(200);
-    expect(await status("attacker.example", "/api/capabilities")).toBe(401);
+    // A route that needs the token also requires a loopback host: a foreign host
+    // gets 421 even with the token.
+    expect(await status("attacker.example", "/api/capabilities?token=test-token")).toBe(421);
+    expect(await status("attacker.example", "/api/capabilities")).toBe(421);
     expect(await status("attacker.example", "/open?code=x")).toBe(421);
+    const mcpRebound = await new Promise<{ status: number; body: Record<string, unknown> }>((resolve, reject) => {
+      const call = httpRequest(
+        { host: http.host, port: http.port, path: "/mcp?token=test-token", headers: { host: "attacker.example" } },
+        (response) => {
+          const chunks: Buffer[] = [];
+          response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+          response.on("end", () => {
+            try {
+              resolve({ status: response.statusCode ?? 0, body: JSON.parse(Buffer.concat(chunks).toString("utf-8")) });
+            } catch {
+              resolve({ status: response.statusCode ?? 0, body: {} });
+            }
+          });
+        },
+      );
+      call.on("error", reject);
+      call.end();
+    });
+    expect(mcpRebound.status).toBe(421);
+    expect(mcpRebound.body.error).toBe("host_not_allowed");
+  });
+
+  it("checks Origin on /mcp and /api and refuses foreign origins", async () => {
+    const callWithHeaders = (headers: Record<string, string>, path = "/api/capabilities") =>
+      new Promise<{ status: number; body: Record<string, unknown> }>((resolve, reject) => {
+        const call = httpRequest(
+          { host: http.host, port: http.port, path, headers },
+          (response) => {
+            const chunks: Buffer[] = [];
+            response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+            response.on("end", () => {
+              try {
+                resolve({ status: response.statusCode ?? 0, body: JSON.parse(Buffer.concat(chunks).toString("utf-8")) });
+              } catch {
+                resolve({ status: response.statusCode ?? 0, body: {} });
+              }
+            });
+          },
+        );
+        call.on("error", reject);
+        call.end();
+      });
+
+    // Valid token with foreign Origin gets 403
+    const foreignApi = await callWithHeaders({
+      host: `127.0.0.1:${http.port}`,
+      authorization: "Bearer test-token",
+      origin: "http://attacker.example",
+    }, "/api/capabilities");
+    expect(foreignApi.status).toBe(403);
+    expect(foreignApi.body.error).toBe("origin_not_allowed");
+
+    const foreignMcp = await callWithHeaders({
+      host: `127.0.0.1:${http.port}`,
+      authorization: "Bearer test-token",
+      origin: "http://attacker.example",
+    }, "/mcp");
+    expect(foreignMcp.status).toBe(403);
+    expect(foreignMcp.body.error).toBe("origin_not_allowed");
+
+    // Valid token with another local port gets 403
+    const otherPort = await callWithHeaders({
+      host: `127.0.0.1:${http.port}`,
+      authorization: "Bearer test-token",
+      origin: "http://localhost:3000",
+    }, "/api/capabilities");
+    expect(otherPort.status).toBe(403);
+    expect(otherPort.body.error).toBe("origin_not_allowed");
+
+    // Valid token with own loopback origin gets 200 on /api
+    const ownApi = await callWithHeaders({
+      host: `127.0.0.1:${http.port}`,
+      authorization: "Bearer test-token",
+      origin: `http://127.0.0.1:${http.port}`,
+    }, "/api/capabilities");
+    expect(ownApi.status).toBe(200);
+
+    // Non-browser client (no Origin header) gets 200
+    const noOrigin = await callWithHeaders({
+      host: `127.0.0.1:${http.port}`,
+      authorization: "Bearer test-token",
+    }, "/api/capabilities");
+    expect(noOrigin.status).toBe(200);
   });
 
   it("opens the console once from a link that carries no token", async () => {

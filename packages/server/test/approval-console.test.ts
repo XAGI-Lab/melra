@@ -232,6 +232,13 @@ describe("approval console", () => {
     expect(preflight.status).toBe(401);
     expect(Object.keys(preflight.headers).filter((name) => name.startsWith("access-control-"))).toEqual([]);
     expect(decisionFor(task.id)).toBeUndefined();
+
+    // The approval read endpoint refuses a foreign Origin and answers the console's own.
+    const foreignRead = await call(server, `/api/tasks/${task.id}/approval`, { token, origin: "http://attacker.example" });
+    expect(foreignRead.status).toBe(403);
+    expect(foreignRead.body).toEqual({ error: "origin_not_allowed" });
+    const ownRead = await call(server, `/api/tasks/${task.id}/approval`, { token, origin });
+    expect(ownRead.status).toBe(200);
   });
 
   it("will not serve approvals on a socket or off loopback, with one answer everywhere", async () => {

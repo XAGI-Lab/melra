@@ -1564,8 +1564,12 @@ header (`403 origin_not_allowed`), which a browser puts on every POST a page
 makes and an MCP client registering from its own process does not, and a
 `Content-Type` other than `application/json` (`415 json_required`), so no web
 page you have open can register clients either. `/open` (what `--open` opens) likewise
-answers only to loopback names and needs no token. Every other route needs the
-token, whatever the name.
+answers only to loopback names and needs no token. On a loopback listener,
+every route answers only to loopback names (any port); foreign `Host` headers
+are refused with `421 Misdirected Request` before routing, and `/mcp` and
+`/api/*` refuse an `Origin` header that does not match the server's own `Host`
+(`403 origin_not_allowed`). Requests over the Unix domain socket and clients
+that send no `Origin` are unaffected. Every other route needs the token.
 
 After that the client is a principal. It becomes `harness:<name>#<id prefix>` —
 the name it registered under, plus part of the id MELRA minted, so two clients
@@ -1619,24 +1623,25 @@ id, as before.
 |---|---|---|
 | `/` | `GET` | The console |
 | `/open?code=<code>` | `GET` | What `--open` opens: a redirect to the console, once, within a minute of startup; unauthenticated, loopback names only |
-| `/mcp` | `POST`/`GET`/`DELETE` | MCP over Streamable HTTP — all twelve tools |
+| `/mcp` | `POST`/`GET`/`DELETE` | MCP over Streamable HTTP — all twelve tools (on loopback, refuses foreign Origin: 403 origin_not_allowed) |
 | `/.well-known/oauth-protected-resource` | `GET` | RFC 9728 metadata, unauthenticated |
 | `/.well-known/oauth-authorization-server` | `GET` | RFC 8414 metadata, unauthenticated |
 | `/oauth/register` | `POST` | RFC 7591 registration, JSON only and never with an `Origin` header; grants nothing on its own |
 | `/oauth/authorize` | `GET`/`POST` | The consent page, and your decision |
 | `/oauth/token` | `POST` | Authorization code exchange, PKCE S256 |
-| `/api/capabilities` | `GET` | The same payload `melra_capabilities` returns, less the caller's `pendingApprovals` |
-| `/api/tasks?limit=<n>` | `GET` | Recent tasks, newest first; `approvalPendingIds`, those of them awaiting approval with no usable decision; `approvalGroups`, the ids of every such task whose challenge has not expired asking for the same operation as another, in groups, newest first; `attentionCount`, every task needing attention |
-| `/api/tasks/:id` | `GET` | One task's status |
-| `/api/tasks/:id/approval-state` | `GET` | A pending task's usable decision, if any, whether its challenge is spent, and whether it is a workflow step, with its run, whether that run names this task, and whether it names it from a compensation |
-| `/api/tasks/:id/receipts` | `GET` | That task's receipts |
-| `/api/workflows` | `GET` | Every workflow run |
-| `/api/workflows/:id` | `GET` | One run's projection, node by node |
-| `/api/workflows/:id/events?after=<sequence>` | `GET` | Append-only events after a cursor |
-| `/api/workflows/:id/stream?after=<sequence>` | `GET` | The same events as SSE, replayed from the cursor and then followed live |
+| `/api/capabilities` | `GET` | The same payload `melra_capabilities` returns, less the caller's `pendingApprovals` (on loopback, refuses foreign Origin: 403 origin_not_allowed) |
+| `/api/tasks?limit=<n>` | `GET` | Recent tasks, newest first; `approvalPendingIds`, those of them awaiting approval with no usable decision; `approvalGroups`, the ids of every such task whose challenge has not expired asking for the same operation as another, in groups, newest first; `attentionCount`, every task needing attention (on loopback, refuses foreign Origin: 403 origin_not_allowed) |
+| `/api/tasks/:id` | `GET` | One task's status (on loopback, refuses foreign Origin: 403 origin_not_allowed) |
+| `/api/tasks/:id/approval-state` | `GET` | A pending task's usable decision, if any, whether its challenge is spent, and whether it is a workflow step, with its run, whether that run names this task, and whether it names it from a compensation (on loopback, refuses foreign Origin: 403 origin_not_allowed) |
+| `/api/tasks/:id/receipts` | `GET` | That task's receipts (on loopback, refuses foreign Origin: 403 origin_not_allowed) |
+| `/api/workflows` | `GET` | Every workflow run (on loopback, refuses foreign Origin: 403 origin_not_allowed) |
+| `/api/workflows/:id` | `GET` | One run's projection, node by node (on loopback, refuses foreign Origin: 403 origin_not_allowed) |
+| `/api/workflows/:id/events?after=<sequence>` | `GET` | Append-only events after a cursor (on loopback, refuses foreign Origin: 403 origin_not_allowed) |
+| `/api/workflows/:id/stream?after=<sequence>` | `GET` | The same events as SSE, replayed from the cursor and then followed live (on loopback, refuses foreign Origin: 403 origin_not_allowed) |
 
-The JSON API is read-only, answers `405` to anything but `GET`, and answers only
-the operator's token. Planning and advancing stay on the MCP and CLI paths, so
+The JSON API is read-only, answers `405` to anything but `GET`, answers only
+the operator's token, and on a loopback listener refuses foreign Origin headers
+(`403 origin_not_allowed`). Planning and advancing stay on the MCP and CLI paths, so
 nothing reachable from a browser tab can start work policy has not seen. Each
 SSE frame carries the event's `sequence`, so a client that reconnects with
 `after=<last sequence>` resumes without gaps.
