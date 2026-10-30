@@ -226,14 +226,21 @@ test("the container pair's smoke runs the recipe as written, its dry run needs n
   before(container, "pnpm build", "pnpm compose:smoke");
 });
 
-test("the framework examples job fails unless each MCP SDK snippet gets MELRA's capabilities back", () => {
+test("the framework examples job fails unless each snippet gets MELRA's capabilities back", () => {
   // A snippet prints an error result and exits 0, so the step checks what it printed.
   const examples = job(read(".github/workflows/ci.yml"), "framework-examples");
-  for (const [snippet, out] of [["mcp_sdk.ts", "ts.out"], ["mcp_sdk.py", "py.out"]]) {
-    before(examples, `examples/frameworks/${snippet}" | tee "$RUNNER_TEMP/${out}"`, `grep -q '"product": "MELRA"' "$RUNNER_TEMP/${out}"`);
+  const snippets = [
+    ["mcp_sdk.ts\"", "ts.out"],
+    ["mcp_sdk.py\"", "py.out"],
+    ["vercel_ai_sdk.ts\" --no-model", "vercel.out"],
+    ["langchain_agent.py\" --no-model", "langchain.out"],
+    ["openai_agents.py\" --no-model", "openai-agents.out"],
+  ];
+  for (const [snippet, out] of snippets) {
+    before(examples, `examples/frameworks/${snippet} | tee "$RUNNER_TEMP/${out}"`, `grep -q '"product": "MELRA"' "$RUNNER_TEMP/${out}"`);
   }
   // Pipefail, which only an explicit bash shell has, so a snippet that fails fails the step.
-  assert.equal(examples.match(/^ {8}shell: bash$/gm)?.length, 2);
+  assert.equal(examples.match(/^ {8}shell: bash$/gm)?.length, snippets.length);
 });
 
 test("docs:check fails a row the code no longer reads, and a help line with no row", () => {

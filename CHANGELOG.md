@@ -8,6 +8,14 @@ All notable changes are documented here. The format follows
 
 ### Changed
 
+- CI's `framework-examples` job now also runs the LangChain, OpenAI Agents SDK
+  and Vercel AI SDK snippets in `examples/frameworks` with `--no-model`, and
+  fails unless each gets MELRA's capabilities back (#469). The Vercel AI SDK
+  packages are pinned in that folder's `package.json` and lockfile; LangChain
+  and the OpenAI Agents SDK come from a new hashed
+  `requirements-frameworks.txt`, compiled from `requirements-frameworks.in`.
+  Dependabot keeps the folder's npm pins current.
+
 - **Breaking:** On a loopback listener, every route now refuses foreign `Host`
   headers with `421 Misdirected Request` before routing, and `/mcp` and
   `/api/*` refuse an `Origin` header that does not match the server's own `Host`

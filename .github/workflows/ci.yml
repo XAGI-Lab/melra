@@ -137,6 +137,8 @@ jobs:
       - run: |
           uv venv "$RUNNER_TEMP/venv"
           uv pip install --python "$RUNNER_TEMP/venv/bin/python" --require-hashes -r examples/frameworks/requirements.txt
+          uv venv "$RUNNER_TEMP/venv-frameworks"
+          uv pip install --python "$RUNNER_TEMP/venv-frameworks/bin/python" --require-hashes -r examples/frameworks/requirements-frameworks.txt
       - run: |
           mkdir -p "$RUNNER_TEMP/bin" "$RUNNER_TEMP/workspace"
           printf '#!/bin/sh\nexec node "%s/apps/cli/dist/bin.js" "$@"\n' "$GITHUB_WORKSPACE" > "$RUNNER_TEMP/bin/melra"
@@ -153,3 +155,21 @@ jobs:
         run: |
           PATH="$RUNNER_TEMP/bin:$PATH" "$RUNNER_TEMP/venv/bin/python" "$GITHUB_WORKSPACE/examples/frameworks/mcp_sdk.py" | tee "$RUNNER_TEMP/py.out"
           grep -q '"product": "MELRA"' "$RUNNER_TEMP/py.out"
+      - name: Vercel AI SDK
+        working-directory: ${{ runner.temp }}/workspace
+        shell: bash
+        run: |
+          PATH="$RUNNER_TEMP/bin:$PATH" node "$GITHUB_WORKSPACE/examples/frameworks/vercel_ai_sdk.ts" --no-model | tee "$RUNNER_TEMP/vercel.out"
+          grep -q '"product": "MELRA"' "$RUNNER_TEMP/vercel.out"
+      - name: LangChain
+        working-directory: ${{ runner.temp }}/workspace
+        shell: bash
+        run: |
+          PATH="$RUNNER_TEMP/bin:$PATH" "$RUNNER_TEMP/venv-frameworks/bin/python" "$GITHUB_WORKSPACE/examples/frameworks/langchain_agent.py" --no-model | tee "$RUNNER_TEMP/langchain.out"
+          grep -q '"product": "MELRA"' "$RUNNER_TEMP/langchain.out"
+      - name: OpenAI Agents SDK
+        working-directory: ${{ runner.temp }}/workspace
+        shell: bash
+        run: |
+          PATH="$RUNNER_TEMP/bin:$PATH" "$RUNNER_TEMP/venv-frameworks/bin/python" "$GITHUB_WORKSPACE/examples/frameworks/openai_agents.py" --no-model | tee "$RUNNER_TEMP/openai-agents.out"
+          grep -q '"product": "MELRA"' "$RUNNER_TEMP/openai-agents.out"
