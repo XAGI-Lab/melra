@@ -5,9 +5,9 @@
   "type": "module",
   "description": "The exact versions CI runs the framework examples with; not part of the pnpm workspace.",
   "dependencies": {
-    "@ai-sdk/mcp": "2.0.83",
-    "@ai-sdk/openai": "4.0.101",
-    "@modelcontextprotocol/sdk": "1.32.1",
-    "ai": "7.0.152"
+    "@ai-sdk/mcp": "2.0.85",
+    "@ai-sdk/openai": "4.0.103",
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "ai": "7.0.154"
   }
 }
