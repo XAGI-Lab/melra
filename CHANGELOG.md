@@ -6,6 +6,14 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- CI's `bubblewrap` job installs bubblewrap on Linux, lets it make user
+  namespaces as the systemd recipe's smoke does, and runs the terminal-runtime,
+  server and CLI suites against it, so developer mode's real-sandbox tests
+  (writes outside the workspace, listeners, git's links, the deny list, the
+  package caches in temp) run under bubblewrap as well as Seatbelt (#470).
+
 ### Changed
 
 - CI's `framework-examples` job now also runs the LangChain, OpenAI Agents SDK
