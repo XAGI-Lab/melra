@@ -292,6 +292,10 @@ const BROWSER_LIST_ACTIONS = [
 
 export class TaskController {
   private readonly active = new Map<string, AbortController>();
+  // Tasks whose start write is waiting for another process's lock: a second
+  // execute of one here would otherwise re-check its grant against this
+  // one's reservation and block it.
+  private readonly starting = new Set<string>();
   /** Each task running here, settled once it has ended (see `settled`). */
   private readonly running = new Map<string, Promise<void>>();
 
@@ -559,6 +563,7 @@ export class TaskController {
     if (!UNSTARTED.includes(task.status)) {
       throw new Error(`task_not_executable:${task.status}`);
     }
+    if (this.starting.has(taskId)) throw new Error("task_not_executable:running");
     // A halt stops the run, not only its advance: a step's task, in any mode,
     // runs only once its run is resumed, however its id was come by.
     const halted = task.workflowId === undefined ? undefined : this.store.getWorkflowRun(task.workflowId)?.status;
@@ -570,8 +575,8 @@ export class TaskController {
       task.status = "cancelled";
       task.error = "duplicate_attempt_prevented";
       task.updatedAt = now();
-      this.leaveUnstarted(task);
-      return this.finishWithoutReceipt(task, [
+      await this.store.write(() => this.leaveUnstarted(task));
+      return await this.finishWithoutReceipt(task, [
         {
           type: "idempotency",
           passed: false,
@@ -592,8 +597,8 @@ export class TaskController {
       task.status = "policy_blocked";
       task.policyDecision = rechecked.decision;
       task.updatedAt = now();
-      this.leaveUnstarted(task);
-      return this.finishWithoutReceipt(task, []);
+      await this.store.write(() => this.leaveUnstarted(task));
+      return await this.finishWithoutReceipt(task, []);
     }
 
     if (rechecked.decision.outcome === "confirm") {
@@ -602,10 +607,10 @@ export class TaskController {
       // operation; it stays executable until it expires.
       const fresh = rechecked.challenge?.actionDigest;
       // An operator's is a command to rerun, not an answer from the agent's side.
-      const refused = (code: string): Error =>
+      const refused = async (code: string): Promise<Error> =>
         by !== undefined && "operator" in by
           ? new Error(code)
-          : this.refuse(code, {
+          : await this.refuseAwaited(code, {
               kind: "task",
               subjectId: task.id,
               ...(by === undefined ? {} : { client: by.agent }),
@@ -618,13 +623,13 @@ export class TaskController {
         // A task planned without a challenge was sent nothing to refuse.
         throw task.approval === undefined
           ? new Error("approval_action_digest_mismatch")
-          : refused("approval_action_digest_mismatch");
+          : await refused("approval_action_digest_mismatch");
       }
       // Enforced mode asserts the agent holds no credential, so anything it
       // sends is refused rather than ignored, and only an operator's
       // out-of-band decision lets the effect run.
       if (this.policy.mode === "enforced" && approval !== undefined) {
-        throw refused("approval_in_band_refused");
+        throw await refused("approval_in_band_refused");
       }
       // A decision an operator recorded wins over anything the caller sent.
       const { contract, renderDigest: render } = this.approvalRender(task, request);
@@ -644,7 +649,7 @@ export class TaskController {
         // holds the plain digest of the same contract.
         if (decision.renderDigest !== render && decision.renderDigest !== sha256(contract)) {
           // Sent by whoever recorded the decision, not by this caller.
-          throw this.refuse("approval_render_mismatch", {
+          throw await this.refuseAwaited("approval_render_mismatch", {
             kind: "task",
             subjectId: task.id,
             principal: decision.approver,
@@ -668,7 +673,7 @@ export class TaskController {
         if (!approvalResult.ok) {
           // Only an answer that was sent and did not match is an attempt.
           throw ["approval_id_mismatch", "approval_phrase_mismatch"].includes(approvalResult.reason)
-            ? refused(approvalResult.reason)
+            ? await refused(approvalResult.reason)
             : new Error(approvalResult.reason);
         }
         // The phrase is readable by anyone who can read the task, so an echo
@@ -689,15 +694,54 @@ export class TaskController {
     task.mode = this.policy.mode;
     if (this.policy.sandbox.backend !== undefined) task.sandbox = this.policy.sandbox.backend;
     task.updatedAt = now();
-    // Status and owner land in one write, so no running row is ever unowned.
-    this.leaveUnstarted(task, this.store.ownerId());
+    const classified = classifyOperation(request.operation);
+    // Held from the turn that re-checked the grant, before the write below
+    // can wait for another process's lock: an execute here re-checking the
+    // same grant meanwhile must count this draw. Nothing on the way here
+    // awaits but a refusal, which never starts the task.
+    if (rechecked.grantId !== undefined) {
+      const held = this.reserved.get(rechecked.grantId) ?? new Map<string, number>();
+      held.set(task.id, classified.spend?.amount ?? 0);
+      this.reserved.set(rechecked.grantId, held);
+    }
+    // Only once the draw is committed, or the effect is known not to have run.
+    const release = (): void => {
+      if (rechecked.grantId !== undefined) this.reserved.get(rechecked.grantId)?.delete(task.id);
+    };
     const controller = new AbortController();
     let ended!: () => void;
-    this.running.set(task.id, new Promise<void>((resolve) => (ended = resolve)));
-    this.active.set(task.id, controller);
-    this.store.inFlight.add(task.id);
+    const done = new Promise<void>((resolve) => (ended = resolve));
+    // Made outside the write, never in it: it opens a file and locks it.
+    const owner = this.store.ownerId();
+    // In the same turn as the checks above: nothing between them awaits.
+    this.starting.add(task.id);
+    try {
+      // Status and owner land in one write, so no running row is ever unowned.
+      // Tracked in that write too: a cancel or a recovery pass here that ran
+      // between its commit and this await would meet a running row nothing
+      // here holds, and drop the cancel or take the task.
+      await this.store.write(() => {
+        this.leaveUnstarted(task, owner);
+        this.running.set(task.id, done);
+        this.active.set(task.id, controller);
+        this.store.inFlight.add(task.id);
+      });
+    } catch (error) {
+      // Its COMMIT failed after the callback ran: the task never started.
+      if (this.active.get(task.id) === controller) {
+        this.active.delete(task.id);
+        this.store.inFlight.delete(task.id);
+        this.running.delete(task.id);
+        ended();
+      }
+      // Unless a second execute of it here got there first: the reservation
+      // under its id is then that one's.
+      if (!this.active.has(task.id)) release();
+      throw error;
+    } finally {
+      this.starting.delete(task.id);
+    }
     const startedAt = now();
-    const classified = classifyOperation(request.operation);
     let timeout: NodeJS.Timeout | undefined;
     let budgetExhausted = false;
     let shortCircuited = false;
@@ -706,11 +750,6 @@ export class TaskController {
     // writes are undone together if any fails, and the catch puts back what
     // was true before them.
     let unwritten: { checksHeld: boolean; receiptIds: string[] } | undefined;
-    if (rechecked.grantId !== undefined) {
-      const held = this.reserved.get(rechecked.grantId) ?? new Map<string, number>();
-      held.set(task.id, classified.spend?.amount ?? 0);
-      this.reserved.set(rechecked.grantId, held);
-    }
     // Charged whenever the adapter may have done the work, whatever the
     // evidence says of it: `verified_success` is the evidence verdict only.
     // Read off what the adapter gave back. It returned, whatever its `success`
@@ -722,10 +761,6 @@ export class TaskController {
     const draw = (): void => {
       if (rechecked.grantId === undefined) return;
       this.store.recordCapabilityUse(rechecked.grantId, task.id, classified.spend?.amount ?? 0, now());
-    };
-    // Only once the draw is committed, or the effect is known not to have run.
-    const release = (): void => {
-      if (rechecked.grantId !== undefined) this.reserved.get(rechecked.grantId)?.delete(task.id);
     };
     try {
       const opened = this.breaker.check(classified.target);
@@ -758,10 +793,8 @@ export class TaskController {
       // a `verifying` change it can look at again against this result
       // (`recoverTask`), and no transaction is held across the verifier,
       // which may wait on an HTTP probe.
-      this.store.saveTaskExecutionResult(
-        task,
-        this.payloadCipher.seal(result, `task:${task.id}:result`),
-      );
+      const sealedResult = this.payloadCipher.seal(result, `task:${task.id}:result`);
+      await this.store.write(() => this.store.saveTaskExecutionResult(task, sealedResult));
 
       const verification = await this.verifier.verify(
         request.requiredEvidence,
@@ -819,8 +852,10 @@ export class TaskController {
       // Everything that records the outcome commits at once: the key, the
       // draw, the receipt, the task and its certificate. A crash before the
       // commit leaves the task `verifying`, as a crash during verification
-      // does, and never a part of the outcome.
-      const certificate = this.store.transaction(() => {
+      // does, and never a part of the outcome. Awaited, so a lock another
+      // process holds is waited out with the event loop turning, not met
+      // at the edge of a blocking busy timeout and parked (#461).
+      const certificate = await this.store.write(() => {
         if (
           checksHeld &&
           task.idempotencyKey !== undefined &&
@@ -883,8 +918,9 @@ export class TaskController {
       // parked task settles on that commit (`settleCommitted`).
       if (unwritten !== undefined) {
         task.receiptIds = unwritten.receiptIds;
-        if (unwritten.checksHeld && task.idempotencyKey !== undefined) {
-          this.store.commitIdempotency(task.idempotencyKey, task.id, task.attempt ?? 1, now());
+        const key = task.idempotencyKey;
+        if (unwritten.checksHeld && key !== undefined) {
+          await this.store.write(() => this.store.commitIdempotency(key, task.id, task.attempt ?? 1, now()));
         }
       }
       const rawMessage = error instanceof Error ? error.message : String(error);
@@ -904,7 +940,7 @@ export class TaskController {
       // that fails to write leaves the reservation held, and the task running
       // for recovery to charge.
       const ran = effectReturned || isOutcomeUnknown(rawMessage);
-      if (ran) draw();
+      if (ran) await this.store.write(draw);
       release();
       // Ahead of every other outcome, because it is the strongest thing known:
       // the effect may already have happened, either because the adapter says
@@ -952,10 +988,10 @@ export class TaskController {
         evidence,
         task.error,
       );
-      this.store.saveReceipt(receipt);
+      await this.store.write(() => this.store.saveReceipt(receipt));
       task.receiptIds.push(receipt.receiptId);
-      this.store.saveTask(task);
-      const certificate = this.createAndSaveCertificate(task, evidence, true);
+      await this.store.write(() => this.store.saveTask(task));
+      const certificate = await this.store.write(() => this.createAndSaveCertificate(task, evidence, true));
       return { task, receipt, certificate };
     } finally {
       if (timeout !== undefined) clearTimeout(timeout);
@@ -1055,7 +1091,7 @@ export class TaskController {
     // A task an earlier version parked has no `parkedAt`; its window runs from
     // its last write, pinned at the first park here so it does not restart.
     const parkedAt = task.parkedAt ?? task.updatedAt;
-    const park = (reason: string): ExecutionResult =>
+    const park = (reason: string): Promise<ExecutionResult> =>
       this.settleParked(taskId, () => {
         task.error = reason;
         task.parkedAt = parkedAt;
@@ -1065,7 +1101,7 @@ export class TaskController {
       });
     // Its own commit already answers: every kernel check held, and only a
     // write after it failed. Parked for good otherwise, with nothing declared.
-    const committed = this.settleParked(taskId, () => this.settleCommitted(task, request, classified));
+    const committed = await this.settleParked(taskId, () => this.settleCommitted(task, request, classified));
     if (committed !== undefined) return committed;
     // A provider can say whether an effect happened, never whether it is
     // right: a task that declared a semantic predicate stays parked with its
@@ -1160,8 +1196,8 @@ export class TaskController {
    * and dropped its receipt. Now the first stands, and the other writes
    * nothing, not even a receipt, and returns the task as it now stands.
    */
-  private settleParked<T>(taskId: string, write: () => T): T | ExecutionResult {
-    return this.store.transaction(() =>
+  private settleParked<T>(taskId: string, write: () => T): Promise<T | ExecutionResult> {
+    return this.store.write(() =>
       this.store.getTask(taskId)?.status === "recovery_required" ? write() : { task: this.status(taskId) },
     );
   }
@@ -1327,9 +1363,26 @@ export class TaskController {
       // nothing here has them in flight, so a task whose final write failed,
       // or whose recovery threw after the claim, is retried by the next pass
       // instead of waiting for a restart.
-      const task = this.store.claimInterruptedTask(listed.id);
+      // Made outside the write, never in it: it opens a file and locks it.
+      this.store.ownerId();
+      // In flight from the claim's own write, so another pass here cannot
+      // take the task back as orphaned between that commit and this await.
+      let marked = false;
+      const task = await this.store
+        .write(() => {
+          const claimed = this.store.claimInterruptedTask(listed.id);
+          if (claimed !== undefined) {
+            this.store.inFlight.add(claimed.id);
+            marked = true;
+          }
+          return claimed;
+        })
+        .catch((error: unknown) => {
+          // Its COMMIT failed after the claim: the task is not ours.
+          if (marked) this.store.inFlight.delete(listed.id);
+          throw error;
+        });
       if (task === undefined) continue;
-      this.store.inFlight.add(task.id);
       try {
         recovered.push(await this.recoverTask(task));
       } catch (error) {
@@ -1340,7 +1393,7 @@ export class TaskController {
         // could take it, so an advance elsewhere could never learn why its
         // run is stuck. Whoever claims it next meets the same failure.
         try {
-          this.store.releaseTaskClaim(task.id);
+          await this.store.write(() => this.store.releaseTaskClaim(task.id));
         } catch {
           // Still ours, then; this process retakes it on its next pass.
         }
@@ -1348,7 +1401,7 @@ export class TaskController {
         this.store.inFlight.delete(task.id);
       }
     }
-    this.expireJudgements(failures);
+    await this.expireJudgements(failures);
     if (failed === undefined && failures.size > 0) throw failures.values().next().value;
     return recovered;
   }
@@ -1364,10 +1417,10 @@ export class TaskController {
    * writes nothing, so nothing is answered in that gap; every runtime runs
    * this pass before it serves, `melra judge` included.
    */
-  private expireJudgements(failures: Map<string, unknown>): void {
+  private async expireJudgements(failures: Map<string, unknown>): Promise<void> {
     for (const listed of this.store.listExpiredJudgements(now())) {
       try {
-        this.store.transaction(() => {
+        await this.store.write(() => {
           const task = this.store.getTask(listed.id);
           if (task?.status === "waiting_user") this.settleUnanswered(task);
         });
@@ -1554,13 +1607,15 @@ export class TaskController {
         verification.evidence.every((item) => item.passed || item.type === "semantic") &&
         kernelEvidence.every((item) => item.passed)
       ) {
-        this.resolveAsVerified(
-          task,
-          request,
-          classified,
-          verification.evidence,
-          { recovery: "independent_reobservation" },
-          kernelEvidence,
+        await this.store.write(() =>
+          this.resolveAsVerified(
+            task,
+            request,
+            classified,
+            verification.evidence,
+            { recovery: "independent_reobservation" },
+            kernelEvidence,
+          ),
         );
         return task;
       }
@@ -1570,7 +1625,7 @@ export class TaskController {
     // and a workflow reads a cancelled step as a denial. A task with a
     // semantic question that committed settles closed, change or read.
     if (classified.effect === "read" || asksSemantic(request)) {
-      const committed = this.settleCommitted(task, request, classified);
+      const committed = await this.store.write(() => this.settleCommitted(task, request, classified));
       if (committed !== undefined) return committed.task;
     }
     const effect = classified.effect;
@@ -1584,8 +1639,8 @@ export class TaskController {
     // Cut off mid-flight, read or change, it may have run, so it is paid for
     // before it is parked, as `execute` pays for one. A read run again is the
     // same task, so it draws nothing more, but its re-check counts this draw.
-    this.drawGrant(task, request, classified);
-    this.store.saveTask(task);
+    await this.store.write(() => this.drawGrant(task, request, classified));
+    await this.store.write(() => this.store.saveTask(task));
     // A crash mid-flight is the same unknown a dropped reply is, so a task
     // that declared how to settle one gets asked here rather than waiting for
     // someone to notice it. Still parked if the provider cannot answer.
@@ -1707,23 +1762,40 @@ export class TaskController {
    * authenticate, names no client and is left out.
    */
   refuse(code: string, sender: Pick<Refusal, "kind" | "subjectId" | "principal" | "client">): Error {
-    const { principal } = sender;
-    const client = sender.client === "agent" ? undefined : sender.client;
     try {
-      this.store.recordRefusal({
-        kind: sender.kind,
-        subjectId: sender.subjectId,
-        code,
-        mode: this.policy.mode,
-        // Declared by the sender, so stored as other claims are.
-        ...(principal === undefined ? {} : { principal: redactSecrets(principal).value }),
-        ...(client === undefined ? {} : { client: redactSecrets(client).value }),
-        refusedAt: now(),
-      });
+      this.recordRefusal(code, sender);
     } catch {
       // The refusal stands whether or not it could be written down.
     }
     return new Error(code);
+  }
+
+  /** `refuse`, its record awaited as one write, so a lock another process holds does not block. */
+  private async refuseAwaited(
+    code: string,
+    sender: Pick<Refusal, "kind" | "subjectId" | "principal" | "client">,
+  ): Promise<Error> {
+    try {
+      await this.store.write(() => this.recordRefusal(code, sender));
+    } catch {
+      // The refusal stands whether or not it could be written down.
+    }
+    return new Error(code);
+  }
+
+  private recordRefusal(code: string, sender: Pick<Refusal, "kind" | "subjectId" | "principal" | "client">): void {
+    const { principal } = sender;
+    const client = sender.client === "agent" ? undefined : sender.client;
+    this.store.recordRefusal({
+      kind: sender.kind,
+      subjectId: sender.subjectId,
+      code,
+      mode: this.policy.mode,
+      // Declared by the sender, so stored as other claims are.
+      ...(principal === undefined ? {} : { principal: redactSecrets(principal).value }),
+      ...(client === undefined ? {} : { client: redactSecrets(client).value }),
+      refusedAt: now(),
+    });
   }
 
   /**
@@ -1974,10 +2046,17 @@ export class TaskController {
       : 1;
     let lastError: unknown;
     for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
-      if (signal.aborted) throw signal.reason ?? new Error("task_cancelled");
       task.attempts = attempt;
       task.updatedAt = now();
-      this.store.saveTask(task);
+      await this.store.write(() => this.store.saveTask(task));
+      // After the write, which may have waited on another process's lock
+      // while a cancel or the budget's timer fired.
+      // A read an earlier attempt may have sent is still charged as one.
+      if (signal.aborted) {
+        throw lastError instanceof Error && isOutcomeUnknown(lastError.message)
+          ? lastError
+          : (signal.reason ?? new Error("task_cancelled"));
+      }
       try {
         const result = await this.executor.execute(request.operation, signal);
         return {
@@ -2045,11 +2124,11 @@ export class TaskController {
     return stored;
   }
 
-  private finishWithoutReceipt(
+  private async finishWithoutReceipt(
     task: TaskRecord,
     evidence: EvidenceItem[],
-  ): ExecutionResult {
-    const certificate = this.createAndSaveCertificate(task, evidence);
+  ): Promise<ExecutionResult> {
+    const certificate = await this.store.write(() => this.createAndSaveCertificate(task, evidence));
     return { task, certificate };
   }
 }

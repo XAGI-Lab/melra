@@ -18,11 +18,18 @@ All notable changes are documented here. The format follows
   `transaction`, but waits for another process's write lock by awaiting a
   timer rather than blocking the event loop, for up to the same 5 seconds.
   Only the `BEGIN` is tried again, never `action`; a nested write or an async
-  `action` rolls back. Memory's writes use it; tasks and workflows do not
-  yet (#461).
+  `action` rolls back. Memory's writes and a task's executing, recovering
+  and settling writes use it; the other task and workflow writes do not yet
+  (#461).
 
 ### Changed
 
+- A task's writes, from its start to the commit after its adapter ran, and
+  recovery's, now wait for another process's write lock by awaiting
+  `SqliteStore.write` instead of blocking the event loop in SQLite's busy
+  timeout. Other sessions keep running meanwhile, and a commit after an
+  adapter ran no longer fails at the busy timeout's edge and parks a task
+  that ran as `recovery_required` (#461).
 - CI's `framework-examples` job now also runs the LangChain, OpenAI Agents SDK
   and Vercel AI SDK snippets in `examples/frameworks` with `--no-model`, and
   fails unless each gets MELRA's capabilities back (#469). The Vercel AI SDK

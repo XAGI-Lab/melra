@@ -292,8 +292,8 @@ describe("semantic evidence (#54)", () => {
     expect(parked.task.status).toBe("recovery_required");
     // A peer's reconcile settles it between this one's read and its transaction.
     let peer: ReturnType<TaskController["execute"]> | undefined;
-    const transaction = store.transaction.bind(store);
-    vi.spyOn(store, "transaction").mockImplementationOnce((action) => {
+    const transaction = store.write.bind(store);
+    vi.spyOn(store, "write").mockImplementationOnce((action) => {
       peer = controller.execute(parked.task.id);
       return transaction(action);
     });
@@ -793,6 +793,9 @@ describe("semantic verdicts (#54)", () => {
     between(() => rival.judge(on(shared.task, "yes"), as("agent:first")));
     expect(() => controller.judge(on(shared.task, "yes"), as("agent:second"))).toThrow("judgement_already_answered");
     expect(controller.status(shared.task.id).judgements?.[0]?.judgedBy?.judge).toBe("agent:first");
+    // Settled, so the sweep below meets one waiting task: it yields between
+    // the writes of two, and a verdict may land there.
+    controller.judge(on(shared.task, "yes", 1), as("agent:first"));
 
     // Two that would each settle it.
     const single = await run(controller, write([{ type: "file_exists", path: "out.txt" }, SEMANTIC]));
