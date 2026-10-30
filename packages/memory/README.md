@@ -13,7 +13,7 @@ import { MemoryOperationSchema } from "@melra/protocol";
 import { LocalMemory, rankMemories } from "@melra/memory";
 
 const memory = new LocalMemory(store);
-memory.execute(
+await memory.execute(
   MemoryOperationSchema.parse({
     kind: "memory",
     action: "put",

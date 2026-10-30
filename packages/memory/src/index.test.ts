@@ -53,11 +53,11 @@ describe("LocalMemory", () => {
     expect(redactMemoryValue("BEGIN the PRIVATE meeting at 10").value).toBe("BEGIN the PRIVATE meeting at 10");
   });
 
-  it("redacts speaker and episode metadata before persistence", () => {
+  it("redacts speaker and episode metadata before persistence", async () => {
     store = new SqliteStore(":memory:");
     const memory = new LocalMemory(store);
     const fakeGithubToken = ["ghp", "123456789012345678901234"].join("_");
-    const result = memory.execute(
+    const result = await memory.execute(
       MemoryOperationSchema.parse({
         kind: "memory",
         action: "put",
@@ -79,11 +79,11 @@ describe("LocalMemory", () => {
     expect(result.redactions.length).toBeGreaterThanOrEqual(2);
   });
 
-  it("redacts the key, source and tags too", () => {
+  it("redacts the key, source and tags too", async () => {
     store = new SqliteStore(":memory:");
     const memory = new LocalMemory(store);
     const token = ["ghp", "123456789012345678901234"].join("_");
-    memory.execute(
+    await memory.execute(
       MemoryOperationSchema.parse({
         kind: "memory",
         action: "put",
@@ -100,13 +100,13 @@ describe("LocalMemory", () => {
     expect(persisted?.tags).toContain("ops");
   });
 
-  it("stores no value of a credential bound with `=>` or `:=`", () => {
+  it("stores no value of a credential bound with `=>` or `:=`", async () => {
     store = new SqliteStore(":memory:");
     const memory = new LocalMemory(store);
     // Synthetic, and assembled at run time so no literal reads as a credential.
     const password = `S3cr3t${"Passw0rd"}`;
     const token = "A1b2C3d4E5f6G7h8".repeat(2);
-    const result = memory.execute(
+    const result = await memory.execute(
       MemoryOperationSchema.parse({
         kind: "memory",
         action: "put",
@@ -122,10 +122,10 @@ describe("LocalMemory", () => {
     expect(result.redactions.length).toBeGreaterThan(0);
   });
 
-  it("keeps memory isolated by scope", () => {
+  it("keeps memory isolated by scope", async () => {
     store = new SqliteStore(":memory:");
     const memory = new LocalMemory(store);
-    memory.execute(
+    await memory.execute(
       MemoryOperationSchema.parse({
         kind: "memory",
         action: "put",
@@ -134,7 +134,7 @@ describe("LocalMemory", () => {
         value: "MELRA",
       }),
     );
-    const workspace = memory.execute(
+    const workspace = await memory.execute(
       MemoryOperationSchema.parse({
         kind: "memory",
         action: "search",
@@ -142,7 +142,7 @@ describe("LocalMemory", () => {
         query: "melra",
       }),
     ) as { memories: unknown[] };
-    const user = memory.execute(
+    const user = await memory.execute(
       MemoryOperationSchema.parse({
         kind: "memory",
         action: "search",
@@ -154,10 +154,10 @@ describe("LocalMemory", () => {
     expect(user.memories).toHaveLength(0);
   });
 
-  it("uses persisted episode and speaker metadata during search", () => {
+  it("uses persisted episode and speaker metadata during search", async () => {
     store = new SqliteStore(":memory:");
     const memory = new LocalMemory(store);
-    memory.execute(
+    await memory.execute(
       MemoryOperationSchema.parse({
         kind: "memory",
         action: "put",
@@ -170,7 +170,7 @@ describe("LocalMemory", () => {
         sequence: 10,
       }),
     );
-    memory.execute(
+    await memory.execute(
       MemoryOperationSchema.parse({
         kind: "memory",
         action: "put",
@@ -184,7 +184,7 @@ describe("LocalMemory", () => {
       }),
     );
 
-    const result = memory.execute(
+    const result = await memory.execute(
       MemoryOperationSchema.parse({
         kind: "memory",
         action: "search",
@@ -439,56 +439,56 @@ describe("LocalMemory", () => {
     expect(lookups).toBeLessThan(5 * (1_000 * 11 + 2_001));
   });
 
-  it("searches the newest records only as far as a fixed amount of text", () => {
+  it("searches the newest records only as far as a fixed amount of text", async () => {
     store = new SqliteStore(":memory:");
     const memory = new LocalMemory(store);
     // Thirty values at the schema's limit, six million characters in all.
     const value = "orbit ".repeat(33_333);
     for (let index = 0; index < 30; index += 1) {
-      memory.execute(MemoryOperationSchema.parse({ kind: "memory", action: "put", key: `note ${index}`, value }));
+      await memory.execute(MemoryOperationSchema.parse({ kind: "memory", action: "put", key: `note ${index}`, value }));
     }
-    const result = memory.execute(MemoryOperationSchema.parse({ kind: "memory", action: "search", query: "orbit" })) as {
+    const result = await memory.execute(MemoryOperationSchema.parse({ kind: "memory", action: "search", query: "orbit" })) as {
       candidateCount: number;
     };
     expect(result.candidateCount).toBeGreaterThan(0);
     expect(result.candidateCount).toBeLessThan(30);
   }, 30_000);
 
-  it("edits a superseding record without losing it or the one it replaced", () => {
+  it("edits a superseding record without losing it or the one it replaced", async () => {
     store = new SqliteStore(":memory:");
     const memory = new LocalMemory(store);
-    const put = (fields: Record<string, unknown>) =>
-      memory.execute(
+    const put = async (fields: Record<string, unknown>) =>
+      (await memory.execute(
         MemoryOperationSchema.parse({ kind: "memory", action: "put", scope: "workspace", key: "runtime", ...fields }),
-      ) as { id: string };
-    const first = put({ value: "Use version one" });
-    const second = put({ value: "Use version two", supersedesId: first.id });
+      )) as { id: string };
+    const first = await put({ value: "Use version one" });
+    const second = await put({ value: "Use version two", supersedesId: first.id });
     // The obvious edit: send the record's own fields back, supersedesId included.
-    put({ id: second.id, value: "Use version two (fixed)", supersedesId: first.id });
+    await put({ id: second.id, value: "Use version two (fixed)", supersedesId: first.id });
     expect(store.getMemory(second.id)?.value).toBe("Use version two (fixed)");
     expect(store.getMemory(first.id)?.supersededBy).toBe(second.id);
     // A third record cannot supersede what is already superseded, and trying
     // leaves the current one alone.
-    expect(() => put({ value: "Use version three", supersedesId: first.id })).toThrow(
+    await expect(put({ value: "Use version three", supersedesId: first.id })).rejects.toThrow(
       "memory_supersedes_target_invalid",
     );
     expect(store.getMemory(second.id)?.value).toBe("Use version two (fixed)");
   });
 
-  it("puts as one transaction another process cannot cut into", () => {
+  it("puts as one transaction another process cannot cut into", async () => {
     const root = mkdtempSync(join(tmpdir(), "melra-memory-"));
     const path = join(root, "melra.sqlite");
     store = new SqliteStore(path);
     const other = new SqliteStore(path);
     try {
       const memory = new LocalMemory(store);
-      const put = (fields: Record<string, unknown>) =>
-        memory.execute(
+      const put = async (fields: Record<string, unknown>) =>
+        (await memory.execute(
           MemoryOperationSchema.parse({ kind: "memory", action: "put", scope: "workspace", key: "runtime", ...fields }),
-        ) as { id: string };
-      const first = put({ value: "Use version one" });
-      const second = put({ value: "Use version two", supersedesId: first.id });
-      const third = put({ value: "Use version three", supersedesId: second.id });
+        )) as { id: string };
+      const first = await put({ value: "Use version one" });
+      const second = await put({ value: "Use version two", supersedesId: first.id });
+      const third = await put({ value: "Use version three", supersedesId: second.id });
       // Another process deletes the middle record while this edit of the third
       // runs. Let in, its splice pointed the first at the third just as the
       // edit dropped what the third replaced: the first stayed hidden, with
@@ -504,7 +504,7 @@ describe("LocalMemory", () => {
         }
         write(record);
       };
-      put({ id: third.id, value: "Use version three, alone" });
+      await put({ id: third.id, value: "Use version three, alone" });
       expect(String(cutIn)).toMatch(/locked|busy/i);
       expect(store.getMemory(second.id)?.supersededBy).toBeUndefined();
     } finally {
@@ -515,29 +515,59 @@ describe("LocalMemory", () => {
     }
   });
 
-  it("brings back what a deleted or edited-away correction replaced", () => {
+  it("waits for another process's write lock without stopping this one's timers (#461)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "melra-memory-"));
+    const path = join(root, "melra.sqlite");
+    store = new SqliteStore(path);
+    const other = new SqliteStore(path);
+    let release: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const memory = new LocalMemory(store);
+      other.database.exec("BEGIN IMMEDIATE");
+      // A put that blocked in SQLite's busy handler held the event loop until
+      // it gave up, so this timer never got to release the lock.
+      let released = false;
+      release = setTimeout(() => {
+        other.database.exec("COMMIT");
+        released = true;
+      }, 50);
+      const { id } = (await memory.execute(
+        MemoryOperationSchema.parse({ kind: "memory", action: "put", scope: "workspace", key: "runtime", value: "Use version one" }),
+      )) as { id: string };
+      expect(released).toBe(true);
+      expect(other.getMemory(id)?.value).toBe("Use version one");
+    } finally {
+      clearTimeout(release);
+      other.close();
+      store.close();
+      store = undefined;
+      rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+
+  it("brings back what a deleted or edited-away correction replaced", async () => {
     store = new SqliteStore(":memory:");
     const memory = new LocalMemory(store);
     const run = (fields: Record<string, unknown>) =>
       memory.execute(MemoryOperationSchema.parse({ kind: "memory", scope: "workspace", ...fields }));
-    const put = (fields: Record<string, unknown>) =>
-      run({ action: "put", key: "runtime", ...fields }) as { id: string };
-    const listed = () =>
-      (run({ action: "list" }) as { memories: { id: string }[] }).memories.map(({ id }) => id).sort();
+    const put = async (fields: Record<string, unknown>) =>
+      (await run({ action: "put", key: "runtime", ...fields })) as { id: string };
+    const listed = async () =>
+      ((await run({ action: "list" })) as { memories: { id: string }[] }).memories.map(({ id }) => id).sort();
 
-    const first = put({ value: "Use version one" });
-    const second = put({ value: "Use version two", supersedesId: first.id });
-    expect(listed()).toEqual([second.id]);
+    const first = await put({ value: "Use version one" });
+    const second = await put({ value: "Use version two", supersedesId: first.id });
+    expect(await listed()).toEqual([second.id]);
     // Undoing a mistaken correction used to leave the original hidden for
     // good: unreadable, immutable, impossible to supersede, then compacted.
-    run({ action: "delete", id: second.id });
-    expect(listed()).toEqual([first.id]);
-    put({ id: first.id, value: "Use version one, still" });
-    const third = put({ value: "Use version three", supersedesId: first.id });
-    expect(listed()).toEqual([third.id]);
+    await run({ action: "delete", id: second.id });
+    expect(await listed()).toEqual([first.id]);
+    await put({ id: first.id, value: "Use version one, still" });
+    const third = await put({ value: "Use version three", supersedesId: first.id });
+    expect(await listed()).toEqual([third.id]);
     // An edit that stops superseding it hands it back the same way.
-    put({ id: third.id, value: "Use version three, on its own" });
-    expect(listed()).toEqual([first.id, third.id].sort());
+    await put({ id: third.id, value: "Use version three, on its own" });
+    expect(await listed()).toEqual([first.id, third.id].sort());
   });
 
   it("links a chain around a deleted middle record, and keeps an expired correction's original retired", async () => {
@@ -545,57 +575,57 @@ describe("LocalMemory", () => {
     const memory = new LocalMemory(store);
     const run = (fields: Record<string, unknown>) =>
       memory.execute(MemoryOperationSchema.parse({ kind: "memory", scope: "workspace", ...fields }));
-    const put = (fields: Record<string, unknown>) =>
-      run({ action: "put", key: "runtime", ...fields }) as { id: string };
-    const listed = () =>
-      (run({ action: "list" }) as { memories: { value: string }[] }).memories.map(({ value }) => value).sort();
+    const put = async (fields: Record<string, unknown>) =>
+      (await run({ action: "put", key: "runtime", ...fields })) as { id: string };
+    const listed = async () =>
+      ((await run({ action: "list" })) as { memories: { value: string }[] }).memories.map(({ value }) => value).sort();
 
-    const a = put({ value: "v1" });
-    const b = put({ value: "v2", supersedesId: a.id });
-    const c = put({ value: "v3", supersedesId: b.id });
+    const a = await put({ value: "v1" });
+    const b = await put({ value: "v2", supersedesId: a.id });
+    const c = await put({ value: "v3", supersedesId: b.id });
     // Deleting the middle one revived v1 beside v3, its current replacement.
-    run({ action: "delete", id: b.id });
-    expect(listed()).toEqual(["v3"]);
+    await run({ action: "delete", id: b.id });
+    expect(await listed()).toEqual(["v3"]);
     expect(store.getMemory(c.id)?.supersedesId).toBe(a.id);
     // The chain is whole again: undoing v3 brings back v1.
-    run({ action: "delete", id: c.id });
-    expect(listed()).toEqual(["v1"]);
+    await run({ action: "delete", id: c.id });
+    expect(await listed()).toEqual(["v1"]);
 
     // A correction that expired after its put, deleted before any later put
     // compacts it away: the same as after, its original stays retired.
-    const d = put({ key: "other", value: "w1" });
-    const e = put({ key: "other", value: "w2", supersedesId: d.id, expiresAt: new Date(Date.now() + 200).toISOString() });
+    const d = await put({ key: "other", value: "w1" });
+    const e = await put({ key: "other", value: "w2", supersedesId: d.id, expiresAt: new Date(Date.now() + 200).toISOString() });
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(store.getMemory(e.id)).toBeDefined();
-    run({ action: "delete", id: e.id });
-    expect(listed()).toEqual(["v1"]);
+    await run({ action: "delete", id: e.id });
+    expect(await listed()).toEqual(["v1"]);
 
     // The same for one in the middle of a chain: deleting it before
     // compaction spliced the chain, and deleting its successor then revived
     // the original, which compaction removing it first never did.
-    const f = put({ key: "third", value: "x1" });
-    const g = put({ key: "third", value: "x2", supersedesId: f.id, expiresAt: new Date(Date.now() + 200).toISOString() });
-    const h = put({ key: "third", value: "x3", supersedesId: g.id });
+    const f = await put({ key: "third", value: "x1" });
+    const g = await put({ key: "third", value: "x2", supersedesId: f.id, expiresAt: new Date(Date.now() + 200).toISOString() });
+    const h = await put({ key: "third", value: "x3", supersedesId: g.id });
     await new Promise((resolve) => setTimeout(resolve, 300));
-    run({ action: "delete", id: g.id });
-    run({ action: "delete", id: h.id });
-    expect(listed()).toEqual(["v1"]);
+    await run({ action: "delete", id: g.id });
+    await run({ action: "delete", id: h.id });
+    expect(await listed()).toEqual(["v1"]);
 
     // And for an edit of an expired correction that drops what it superseded.
-    const k = put({ key: "fourth", value: "y1" });
-    const m = put({ key: "fourth", value: "y2", supersedesId: k.id, expiresAt: new Date(Date.now() + 200).toISOString() });
+    const k = await put({ key: "fourth", value: "y1" });
+    const m = await put({ key: "fourth", value: "y2", supersedesId: k.id, expiresAt: new Date(Date.now() + 200).toISOString() });
     await new Promise((resolve) => setTimeout(resolve, 300));
-    put({ id: m.id, key: "fourth", value: "y3" });
-    expect(listed()).toEqual(["v1", "y3"]);
+    await put({ id: m.id, key: "fourth", value: "y3" });
+    expect(await listed()).toEqual(["v1", "y3"]);
   });
 
-  it("leaves what an expired correction replaced retired", () => {
+  it("leaves what an expired correction replaced retired", async () => {
     store = new SqliteStore(":memory:");
     const memory = new LocalMemory(store);
     const run = (fields: Record<string, unknown>) =>
       memory.execute(MemoryOperationSchema.parse({ kind: "memory", scope: "workspace", ...fields }));
-    const first = run({ action: "put", key: "runtime", value: "Use version one" }) as { id: string };
-    run({
+    const first = await run({ action: "put", key: "runtime", value: "Use version one" }) as { id: string };
+    await run({
       action: "put",
       key: "runtime",
       value: "Use version two until the migration",
@@ -603,18 +633,18 @@ describe("LocalMemory", () => {
       expiresAt: "2020-01-01T00:00:00.000Z",
     });
     // The lapse of a correction is not evidence the old fact is true again.
-    run({ action: "put", key: "other", value: "Any write compacts the scope" });
-    const { memories } = run({ action: "list", includeSuperseded: true }) as {
+    await run({ action: "put", key: "other", value: "Any write compacts the scope" });
+    const { memories } = await run({ action: "list", includeSuperseded: true }) as {
       memories: { id: string; key: string }[];
     };
     expect(memories.filter(({ key }) => key === "runtime").map(({ id }) => id)).toEqual([first.id]);
     expect(store.getMemory(first.id)?.supersededBy).toBeDefined();
   });
 
-  it("supports expiry and scoped supersession", () => {
+  it("supports expiry and scoped supersession", async () => {
     store = new SqliteStore(":memory:");
     const memory = new LocalMemory(store);
-    const first = memory.execute(
+    const first = await memory.execute(
       MemoryOperationSchema.parse({
         kind: "memory",
         action: "put",
@@ -623,7 +653,7 @@ describe("LocalMemory", () => {
         value: "Use version one",
       }),
     ) as { id: string };
-    memory.execute(
+    await memory.execute(
       MemoryOperationSchema.parse({
         kind: "memory",
         action: "put",
@@ -633,7 +663,7 @@ describe("LocalMemory", () => {
         supersedesId: first.id,
       }),
     );
-    memory.execute(
+    await memory.execute(
       MemoryOperationSchema.parse({
         kind: "memory",
         action: "put",
@@ -643,7 +673,7 @@ describe("LocalMemory", () => {
         expiresAt: "2020-01-01T00:00:00.000Z",
       }),
     );
-    const current = memory.execute(
+    const current = await memory.execute(
       MemoryOperationSchema.parse({
         kind: "memory",
         action: "search",
@@ -655,7 +685,7 @@ describe("LocalMemory", () => {
     expect(JSON.stringify(current)).toContain("version two");
     expect(JSON.stringify(current)).not.toContain("version one");
     expect(JSON.stringify(current)).not.toContain("Do not retrieve");
-    expect(() =>
+    await expect(
       memory.execute(
         MemoryOperationSchema.parse({
           kind: "memory",
@@ -666,13 +696,13 @@ describe("LocalMemory", () => {
           value: "Try to revive version one",
         }),
       ),
-    ).toThrow("memory_superseded_record_immutable");
+    ).rejects.toThrow("memory_superseded_record_immutable");
   });
 
-  it("cannot delete or overwrite a record through a different scope", () => {
+  it("cannot delete or overwrite a record through a different scope", async () => {
     store = new SqliteStore(":memory:");
     const memory = new LocalMemory(store);
-    const inserted = memory.execute(
+    const inserted = await memory.execute(
       MemoryOperationSchema.parse({
         kind: "memory",
         action: "put",
@@ -681,7 +711,7 @@ describe("LocalMemory", () => {
         value: "workspace only",
       }),
     ) as { id: string };
-    const wrongScopeDelete = memory.execute(
+    const wrongScopeDelete = await memory.execute(
       MemoryOperationSchema.parse({
         kind: "memory",
         action: "delete",
@@ -691,7 +721,7 @@ describe("LocalMemory", () => {
     );
     expect(wrongScopeDelete.deleted).toBe(false);
     expect(store.getMemory(inserted.id)?.value).toBe("workspace only");
-    expect(() =>
+    await expect(
       memory.execute(
         MemoryOperationSchema.parse({
           kind: "memory",
@@ -702,10 +732,10 @@ describe("LocalMemory", () => {
           value: "cross-scope overwrite",
         }),
       ),
-    ).toThrow("memory_scope_mismatch");
+    ).rejects.toThrow("memory_scope_mismatch");
   });
 
-  it("reclaims unreachable records on the next write", () => {
+  it("reclaims unreachable records on the next write", async () => {
     store = new SqliteStore(":memory:");
     const memory = new LocalMemory(store, { maxAgeDays: 0, maxPerScope: 0 });
     store.putMemory({
@@ -726,7 +756,7 @@ describe("LocalMemory", () => {
       store.getMemory("00000000-0000-4000-8000-0000000000e1"),
     ).toBeDefined();
 
-    const result = memory.execute(
+    const result = await memory.execute(
       MemoryOperationSchema.parse({
         kind: "memory",
         action: "put",
