@@ -930,7 +930,7 @@ export class WorkflowController {
    * Every task under these keys, read again, with each challenge among them
    * cancelled and the cancel read back, so nobody approves it later.
    */
-  private cancelChallenges(keys: string[]): TaskRecord[] {
+  private cancelChallenges(keys: string[], reason?: string): TaskRecord[] {
     // Each key once: an approval node's is its operation's.
     return [...new Set(keys)]
       .flatMap((key) => this.store.listTasksByKey(key))
@@ -938,7 +938,7 @@ export class WorkflowController {
         // Read again: the listing can predate an approver starting it.
         const task = this.tasks.status(listed.id);
         if (task.status !== "planned" && task.status !== "awaiting_approval") return task;
-        this.tasks.cancel(task.id);
+        this.tasks.cancel(task.id, reason);
         return this.tasks.status(task.id);
       });
   }
@@ -1422,6 +1422,20 @@ export class WorkflowController {
           })
         : undefined,
     );
+    // A failed run never offers a forward step again, only its compensations
+    // (#487). The forward steps' challenges still open (a step parked beside
+    // the one denied, one a lost advance left) are cancelled once the failure
+    // is recorded, as a cancelled run's are, so none runs directly on a run
+    // that will not advance. Not on recovery_required, which may resume.
+    if (rebuilt.status === "failed" && current.status !== "failed") {
+      const definition = this.loadDefinition(rebuilt);
+      this.cancelChallenges(
+        definition.nodes
+          .filter((node) => node.type !== "compensation")
+          .flatMap((node) => expectedTaskKeys(rebuilt.id, node, definition)),
+        `workflow_failed:${rebuilt.id}`,
+      );
+    }
     return rebuilt;
   }
 

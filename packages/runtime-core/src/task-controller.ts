@@ -975,7 +975,8 @@ export class TaskController {
     return this.running.get(taskId) ?? Promise.resolve();
   }
 
-  cancel(taskId: string): TaskRecord {
+  /** `reason`, when given, is recorded as the error of a task it cancels before it started. */
+  cancel(taskId: string, reason?: string): TaskRecord {
     const task = this.status(taskId);
     const controller = this.active.get(taskId);
     if (controller !== undefined) {
@@ -984,6 +985,7 @@ export class TaskController {
     }
     if (UNSTARTED.includes(task.status)) {
       task.status = "cancelled";
+      if (reason !== undefined) task.error = reason;
       task.updatedAt = now();
       // Started meanwhile by another process: it runs, so the caller is told
       // what the task is now rather than that it was cancelled.

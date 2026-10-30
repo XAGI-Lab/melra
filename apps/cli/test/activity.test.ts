@@ -305,7 +305,7 @@ describe("melra tasks, status, and watch", { timeout: 60_000 }, () => {
     expect(printed).not.toContain("next advance asks again");
   });
 
-  it("counts an expired step of a run that is not over as a step, a failed one included", async () => {
+  it("counts no expired step on a failed run, whose waiting steps it cancelled (#487)", async () => {
     const { root, options } = await workspace();
     const write = (path: string) => ({
       goal: `Write ${path}`,
@@ -332,11 +332,11 @@ describe("melra tasks, status, and watch", { timeout: 60_000 }, () => {
     const { run } = JSON.parse(await cli("workflow", "advance", id)) as { run: WorkflowRun };
     await cli("approve", run.nodes.a!.taskIds[0]!, "--deny");
     expect((JSON.parse(await cli("workflow", "advance", id)) as { run: WorkflowRun }).run.status).toBe("failed");
-    // Whether its advance asks again depends on the run, failed here, so the
-    // step is pointed at the run rather than told to plan again or deny.
+    // The failure cancelled b's challenge, so its lapsing leaves nothing to
+    // count: no step an advance would ask again, nor an approval to deny.
     lapse(root, run.nodes.b!.taskIds[0]!);
     const status = await statusOf(options);
-    expect([status.expiredApprovals, status.expiredWorkflowSteps]).toEqual([0, 1]);
+    expect([status.expiredApprovals, status.expiredWorkflowSteps]).toEqual([0, 0]);
   });
 
   it("counts a step's attempt asked again as a step, though its advance lost the commit naming it", async () => {

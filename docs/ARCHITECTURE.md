@@ -978,9 +978,15 @@ unwind carries on; settled as not applied, the unwind stays stalled.
 A step denied before it runs starts the same unwind as a failed one. The
 advance that reads the denial reads every waiting step first, so an approval
 sent with it runs nothing: not another waiting step, nor another branch of a
-`parallel` node. Neither unwind starts while another step's outcome is
-unknown or unsettled (an effect that may have happened, or a task still
-running): the run is `recovery_required` and waits, starting no further step,
+`parallel` node. Once the run is recorded `failed`, the tasks of its forward
+steps still planned or waiting for approval, under every forward step's keys,
+are cancelled with the error `workflow_failed:<run>`, as a cancelled run's
+are, so a step's phrase or an operator's decision cannot run it directly on a
+run that will never advance it (`task_not_executable:cancelled`). Its
+compensations are left open, since the unwind runs them on the failed run. A
+`recovery_required` run keeps them, as it may still resume. Neither unwind
+starts while another step's outcome is unknown or unsettled (an effect that
+may have happened, or a task still running): the run is `recovery_required` and waits, starting no further step,
 rather than undo what that effect may depend on. That step is settled by its
 `reconciliation`: `melra_execute` on its task, or recovery when a process
 starts, asks the provider whether the effect happened. Once settled, the next
