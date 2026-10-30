@@ -1,0 +1,8 @@
+# The libraries langchain_agent.py and openai_agents.py import, at the exact
+# versions CI runs them with. Compile requirements-frameworks.txt from this with
+#    uv pip compile --generate-hashes --universal --python-version 3.12 --exclude-newer <a date a week back> requirements-frameworks.in -o requirements-frameworks.txt
+# so nothing in the lock is younger than a week when it is made.
+langchain==1.4.7
+langchain-mcp-adapters==0.3.2
+langchain-openai==1.7.2
+openai-agents==0.24.0

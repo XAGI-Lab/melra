@@ -270,9 +270,9 @@ CLI tests write and read them back), or *documented only*.
 Building your own agent? Use the [TypeScript SDK](packages/sdk-ts) or the
 [Python SDK](sdk-py). Both can spawn MELRA or connect to one that is already running
 over loopback HTTP or a private Unix socket. For agent frameworks, see the
-[framework examples](examples/frameworks/README.md): the official MCP SDKs' snippets
-run in CI with no model; the LangChain / LangGraph, OpenAI Agents SDK and Vercel AI
-SDK ones are documented only.
+[framework examples](examples/frameworks/README.md): the official MCP SDKs',
+LangChain / LangGraph, OpenAI Agents SDK and Vercel AI SDK snippets all run in CI
+with no model, as far as listing MELRA's tools and calling `melra_capabilities`.
 
 > [!NOTE]
 > A named client is marked **verified** only after the *released package*, not a
