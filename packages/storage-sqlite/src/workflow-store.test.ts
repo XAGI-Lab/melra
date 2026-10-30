@@ -206,6 +206,24 @@ describe("durable workflow storage", () => {
     expect(store.verifyChain(key)).toMatchObject({ ok: true, unsealed: 0, head: { sequence: 2 } });
   });
 
+  it("transitions inside a write, in its transaction", async () => {
+    const store = new SqliteStore(":memory:");
+    stores.push(store);
+    store.createWorkflow(definition("[REDACTED]"), envelope("workflow"), run(), [
+      event(1, "55555555-5555-4555-8555-555555555555"),
+    ]);
+    const started = event(2, "66666666-6666-4666-8666-666666666666", "workflow.started");
+    await expect(
+      store.write(() => {
+        store.transitionWorkflow(workflowId, 1, run(2, "running"), [started]);
+        throw new Error("undone");
+      }),
+    ).rejects.toThrow("undone");
+    expect(store.getWorkflowRun(workflowId)?.stateVersion).toBe(1);
+    await store.write(() => store.transitionWorkflow(workflowId, 1, run(2, "running"), [started]));
+    expect(store.listWorkflowEvents(workflowId).map((item) => item.sequence)).toEqual([1, 2]);
+  });
+
   it("appends events monotonically and rejects stale projections", () => {
     const store = new SqliteStore(":memory:");
     stores.push(store);

@@ -273,6 +273,17 @@ interface ChainRow {
   swept: number;
 }
 
+/** How long a write waits for another process's lock before failing with "database is locked". */
+const BUSY_TIMEOUT_MS = 5000;
+/** How long `write` lets SQLite itself wait, so the event loop is never held longer. */
+const BEGIN_BUSY_TIMEOUT_MS = 10;
+const SQLITE_BUSY = 5;
+
+const isThenable = (value: unknown): boolean =>
+  (typeof value === "object" || typeof value === "function") &&
+  value !== null &&
+  typeof (value as { then?: unknown }).then === "function";
+
 export class SqliteStore {
   readonly path: string;
   readonly database: DatabaseSync;
@@ -300,7 +311,7 @@ export class SqliteStore {
     this.path = path;
     if (options.readOnly === true) {
       this.database = new DatabaseSync(path, { readOnly: true });
-      this.database.exec("PRAGMA busy_timeout = 5000");
+      this.database.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
       return;
     }
     if (path !== ":memory:") {
@@ -316,7 +327,7 @@ export class SqliteStore {
     }
     this.database = new DatabaseSync(path);
     if (path !== ":memory:") keepPrivate(path);
-    this.database.exec("PRAGMA busy_timeout = 5000");
+    this.database.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
     this.database.exec("PRAGMA journal_mode = WAL");
     this.database.exec("PRAGMA foreign_keys = ON");
     this.migrate();
@@ -681,11 +692,82 @@ export class SqliteStore {
   /**
    * Runs `action` as one write transaction: another process sharing the
    * database waits, so nothing it read changes before it writes, and a throw
-   * undoes every write it made. `action` must not call a method that opens a
-   * transaction of its own.
+   * undoes every write it made. A method that writes in a transaction of its
+   * own joins this one instead.
    */
   transaction<T>(action: () => T): T {
     this.database.exec("BEGIN IMMEDIATE");
+    return this.begun(action);
+  }
+
+  /**
+   * `transaction`, waiting for a lock another process holds by awaiting a
+   * timer instead of in SQLite's busy handler, so this process's event loop
+   * keeps turning meanwhile (#461). Only `BEGIN IMMEDIATE` is tried again,
+   * never `action`: it has not run then, and it may not be safe to run twice.
+   * Once begun, nothing else can take the lock (WAL), so `action` and the
+   * COMMIT never wait. When the lock is free nothing is awaited before
+   * `action`, which runs in the caller's tick as `transaction`'s does.
+   * `action` must be synchronous, and must not open a write of its own.
+   */
+  write<T>(action: () => T): Promise<T> {
+    // Thrown, not rejected, so the callback that nested it fails and its
+    // write rolls back, rather than committing with the inner one dropped.
+    if (this.inTransaction) throw new Error("write_nested");
+    const deadline = Date.now() + BUSY_TIMEOUT_MS;
+    const run = () =>
+      this.begun(() => {
+        const result = action();
+        // Whatever it awaits would land after the COMMIT, outside the transaction.
+        if (isThenable(result)) {
+          // Its own outcome is moot once the write is refused.
+          (result as PromiseLike<unknown>).then(undefined, () => {});
+          throw new Error("write_callback_async");
+        }
+        return result;
+      });
+    try {
+      const busy = this.tryBegin();
+      return busy === undefined ? Promise.resolve(run()) : this.awaitBegin(busy, deadline, run);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  }
+
+  /**
+   * `BEGIN IMMEDIATE`, waiting only briefly in SQLite: undefined once begun,
+   * or the error when another process holds the lock. Any other error throws.
+   */
+  private tryBegin(): Error | undefined {
+    this.database.exec(`PRAGMA busy_timeout = ${BEGIN_BUSY_TIMEOUT_MS}`);
+    try {
+      this.database.exec("BEGIN IMMEDIATE");
+      return undefined;
+    } catch (error) {
+      // node:sqlite names the code in errcode; older 22.x releases only in the message.
+      const code = (error as { errcode?: number }).errcode;
+      if (code === undefined ? /database is locked/.test(String((error as Error).message)) : (code & 0xff) === SQLITE_BUSY) {
+        return error as Error;
+      }
+      throw error;
+    } finally {
+      this.database.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
+    }
+  }
+
+  private async awaitBegin<T>(busy: Error, deadline: number, run: () => T): Promise<T> {
+    for (let delay = 10; Date.now() < deadline; delay = Math.min(delay * 2, 100)) {
+      await new Promise((resolve) => setTimeout(resolve, Math.min(delay, deadline - Date.now())));
+      // Begun and run with no await between, so nothing else this process
+      // does on the connection can land inside the transaction.
+      if (this.tryBegin() === undefined) return run();
+    }
+    // The same "database is locked" a busy timeout gives up with.
+    throw busy;
+  }
+
+  /** `action` in the transaction just begun, committed, or rolled back if it throws. */
+  private begun<T>(action: () => T): T {
     this.inTransaction = true;
     try {
       const result = action();
@@ -887,7 +969,12 @@ export class SqliteStore {
       this.seal(table, key.map((name) => written[name]), 0, recordDigest(table, written));
       return result;
     };
-    return this.inTransaction ? sealed() : this.transaction(sealed);
+    return this.joined(sealed);
+  }
+
+  /** `body` in the caller's transaction when it is in one, else in one of its own. */
+  private joined<T>(body: () => T): T {
+    return this.inTransaction ? body() : this.transaction(body);
   }
 
   private addColumnIfMissing(
@@ -1196,7 +1283,7 @@ export class SqliteStore {
     payload: EncryptedPayload,
   ): void {
     const parsed = EncryptedPayloadSchema.parse(payload);
-    this.transaction(() => {
+    this.joined(() => {
       this.saveTask(task);
       const result = this.database
         .prepare(`
@@ -1294,7 +1381,7 @@ export class SqliteStore {
       parsedEvents,
     );
 
-    this.transaction(() => {
+    this.joined(() => {
       if (sealed !== undefined) {
         this.database
           .prepare(`
@@ -1475,7 +1562,7 @@ export class SqliteStore {
     );
     if (projection.id !== id) throw new Error("workflow_projection_id_mismatch");
 
-    this.transaction(() => {
+    this.joined(() => {
       const current = this.database
         .prepare(
           `SELECT state_version AS stateVersion, data
@@ -1543,7 +1630,7 @@ export class SqliteStore {
     now: string,
     expiresAt: string,
   ): "refused" | "created" | "replaced" {
-    return this.transaction(() => {
+    return this.joined(() => {
       const existing = this.database
         .prepare(
           `SELECT owner, expires_at AS expiresAt
@@ -2121,7 +2208,7 @@ export class SqliteStore {
    * what it replaced retired, as it does once compaction has removed it.
    */
   deleteMemory(id: string, scope: MemoryScope): boolean {
-    return this.transaction(() => {
+    return this.joined(() => {
       const row = this.database
         .prepare(`
           SELECT supersedes_id AS supersedesId, superseded_by AS supersededBy, expires_at AS expiresAt
@@ -2184,7 +2271,7 @@ export class SqliteStore {
     const cutoff = new Date(
       now.getTime() - retention.maxAgeDays * 86_400_000,
     ).toISOString();
-    return this.transaction(() => {
+    return this.joined(() => {
       const expired = Number(
         this.database
           .prepare(
