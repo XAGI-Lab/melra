@@ -22,6 +22,9 @@ updates:
     directory: /examples/frameworks
     schedule:
       interval: weekly
+    # CI installs and runs these, so a version waits a week after release.
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 2
     groups:
       framework-examples:
