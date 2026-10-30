@@ -875,6 +875,8 @@ export const SandboxPolicySchema = z
     use: z.enum(["on", "off", "if-available"]).exactOptional(),
     // Programs, by name as in allowedCommands, that may create symbolic links.
     symlinks: z.array(z.string().min(1).max(256)).max(64).exactOptional(),
+    // Programs, by name as in allowedCommands, that may bind and listen on localhost under Seatbelt.
+    listen: z.array(z.string().min(1).max(256)).max(64).exactOptional(),
     readable: z.array(z.enum(HOME_SECRETS)).exactOptional(),
     // The account a command runs as where MELRA itself can switch to one.
     user: z

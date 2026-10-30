@@ -22,6 +22,14 @@ export interface SandboxAllowance {
    * seccomp filter cannot see a file's type, so it refuses only creating one.
    */
   symlinks: boolean;
+  /**
+   * Bind and listen on localhost under Seatbelt (macOS). Under Seatbelt, the
+   * `localhost` filter allows binding and inbound/outbound on localhost, but
+   * on macOS Seatbelt's localhost filter matches every address of the host,
+   * so a listener is reachable on every address of the Mac. Under bubblewrap,
+   * this changes nothing because each command already has a loopback of its own.
+   */
+  listen?: boolean;
 }
 
 /**
@@ -80,7 +88,12 @@ export function seatbeltProfile(paths: SandboxPaths, allowance: SandboxAllowance
           '(allow network-outbound (remote ip) (literal "/private/var/run/mDNSResponder"))',
           "(allow network-inbound network-bind (local ip))",
         ]
-      : []),
+      : allowance.listen
+        ? [
+            '(allow network-outbound (remote ip "localhost:*"))',
+            '(allow network-inbound network-bind (local ip "localhost:*"))',
+          ]
+        : []),
     ...(paths.denied.length === 0 ? [] : [`(deny file-read* file-write* ${subpaths(paths.denied)})`]),
     ...(allowance.symlinks ? [] : ["(deny file-write-create (vnode-type SYMLINK))"]),
   ].join("\n");
@@ -326,7 +339,7 @@ function packageCaches(temp: string | undefined): { environment(): Promise<Recor
 }
 
 const SANDBOX_EXEC = "/usr/bin/sandbox-exec";
-const NO_ALLOWANCE: SandboxAllowance = { network: false, symlinks: false };
+const NO_ALLOWANCE: SandboxAllowance = { network: false, symlinks: false, listen: false };
 
 async function seatbelt(paths: SandboxPaths, reach: typeof probe): Promise<CommandSandbox | string> {
   const tried = await reach(SANDBOX_EXEC, ["-p", seatbeltProfile(paths, NO_ALLOWANCE), "/usr/bin/true"], {

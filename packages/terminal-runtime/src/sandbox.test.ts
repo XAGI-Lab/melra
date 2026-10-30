@@ -39,6 +39,13 @@ describe("sandbox generators", () => {
       "(allow network-inbound network-bind (local ip))",
     ];
     expect(seatbeltProfile(paths, { network: true, symlinks: true })).toBe([...head, ...network, denied].join("\n"));
+    const listen = [
+      '(allow network-outbound (remote ip "localhost:*"))',
+      '(allow network-inbound network-bind (local ip "localhost:*"))',
+    ];
+    expect(seatbeltProfile(paths, { network: false, symlinks: false, listen: true })).toBe(
+      [...head, ...listen, denied, "(deny file-write-create (vnode-type SYMLINK))"].join("\n"),
+    );
   });
 
   it("writes a bubblewrap argv that hides MELRA's files and the network", () => {
@@ -211,7 +218,7 @@ const probed = await (async () => {
 describe.runIf(probed !== undefined)(`commands in the ${probed} sandbox`, () => {
   let base: string;
   let [workspace, temp, outside, data, home] = ["", "", "", "", ""];
-  let runtime: (allowance: { network: boolean; symlinks: boolean }) => Promise<TerminalRuntime>;
+  let runtime: (allowance: { network: boolean; symlinks: boolean; listen?: boolean }) => Promise<TerminalRuntime>;
   let confined: TerminalRuntime;
   const node = async (script: string, within = confined) =>
     await within.execute(
@@ -312,6 +319,21 @@ describe.runIf(probed !== undefined)(`commands in the ${probed} sandbox`, () => 
       );
       expect(result.stderr).toBe("");
       expect(result.stdout).toBe("locked\n");
+    },
+    30_000,
+  );
+
+  it.runIf(probed === "seatbelt")(
+    "lets a program with listen bind on 0.0.0.0 and localhost under Seatbelt",
+    async () => {
+      const listenScript =
+        'const net = require("net"); const s = net.createServer().listen(0, "0.0.0.0", () => { ' +
+        'process.stdout.write("listening " + s.address().port); s.close(); });';
+      const refused = await node(listenScript, await runtime({ network: false, symlinks: false, listen: false }));
+      expect(refused.exitCode).not.toBe(0);
+
+      const allowed = await node(listenScript, await runtime({ network: false, symlinks: false, listen: true }));
+      expect(allowed.stdout).toContain("listening");
     },
     30_000,
   );

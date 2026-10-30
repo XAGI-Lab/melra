@@ -18,7 +18,7 @@ Host exercised locally: macOS arm64, Node.js 24.10.0, Python 3.11.14
 |---|---|
 | Package-version consistency | all 16 workspace manifests, protocol constant, and Python distribution match |
 | TypeScript build and strict typecheck | passed across 15 packages/apps |
-| JavaScript/Vitest cases | 1,134 passed, 8 platform-skipped (current `main`, ubuntu / Node 24 CI) |
+| JavaScript/Vitest cases | 1,138 passed, 8 platform-skipped (current `main`, ubuntu / Node 24 CI) |
 | Python lint and SDK tests | ruff passed; 2 tests passed |
 | Safety/execution evaluation | 55 of 55 passed |
 | Durable Core evaluation | 8 valid, 0 invalid |
@@ -104,7 +104,7 @@ Host exercised locally: macOS arm64 (Darwin 25.5.0), Node.js 24, Python 3.11.14
 | Gate | Result |
 |---|---|
 | `pnpm check` | passed (versions, strict typecheck, tests, Python) |
-| TypeScript/Vitest cases | 1,134 passed, 8 platform-skipped (current `main`, ubuntu / Node 24 CI) |
+| TypeScript/Vitest cases | 1,138 passed, 8 platform-skipped (current `main`, ubuntu / Node 24 CI) |
 | `pnpm evals` | 55 of 55 scenarios passed, 0 failed |
 | `pnpm e2e` | 16 end-to-end cases passed over real stdio |
 | `pnpm pack:check` | passed |

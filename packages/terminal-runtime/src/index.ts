@@ -491,7 +491,7 @@ export class TerminalRuntime {
     this.holdsReserved = options.holdsReserved ?? (async () => false);
     this.confineArguments = options.confineArguments ?? false;
     this.sandbox = options.sandbox;
-    this.allowance = options.allowance ?? (() => ({ network: false, symlinks: false }));
+    this.allowance = options.allowance ?? (() => ({ network: false, symlinks: false, listen: false }));
   }
 
   static async create(options: TerminalRuntimeOptions): Promise<TerminalRuntime> {
