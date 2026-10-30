@@ -44,6 +44,15 @@ All notable changes are documented here. The format follows
   same `parallel` node. The run fails and unwinds as for any denial. Such an
   approval used to run its step on the failing run, which then had to be
   undone (#330).
+- **Breaking:** when a durable workflow run fails, its other forward steps
+  still planned or waiting for approval are cancelled, with the error
+  `workflow_failed:<workflow-id>`. Executing one directly, with its phrase or
+  with an operator's decision in enforced mode, is now refused with
+  `task_not_executable:cancelled`; it used to run its step on a run that would
+  never advance again. The run's compensations stay open and the unwind is
+  unchanged. A run that is `recovery_required` keeps its waiting steps until it
+  fails. A run that failed before this version keeps them: cancel it with
+  `melra workflow cancel` to close them (#487).
 
 ## [0.4.0-alpha.2] - 2026-10-28
 

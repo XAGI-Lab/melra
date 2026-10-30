@@ -2062,9 +2062,13 @@ and exits 1 with the task as it stands.
 Denying a step of a durable workflow fails its run, as a failed step does: the
 next `melra workflow advance` offers the compensations declared for the steps
 already done, newest first, each for its own approval. An approval sent with
-that advance for another step of the run runs nothing. If another step's
+that advance for another step of the run runs nothing. Once the run is
+`failed`, its other steps still waiting for approval are cancelled, with the
+error `workflow_failed:<workflow-id>`, so approving one later is refused
+(`task_not_executable:cancelled`); its compensations stay open. If another step's
 outcome is unknown, the run is `recovery_required` instead and nothing is
-undone until an operator settles it. Deny a compensation to stop there (the
+undone until an operator settles it; its waiting steps are cancelled only once
+the run fails. Deny a compensation to stop there (the
 run then reports `recovery_required` and names it), or end the run without
 unwinding with `melra workflow cancel`.
 

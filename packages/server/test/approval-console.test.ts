@@ -692,6 +692,12 @@ describe("approval console", () => {
     expect(runtime.workflows.status(run.id).status).toBe("failed");
     const undo = named("undo-first");
     const third = named("third");
+    // The failure cancelled the forward step parked beside it (#487). A run
+    // that failed before that left it waiting, as here.
+    const parked = runtime.controller.status(third);
+    expect(parked).toMatchObject({ status: "cancelled", error: `workflow_failed:${run.id}` });
+    const { error: _error, ...waiting } = parked;
+    runtime.store.saveTask({ ...waiting, status: "awaiting_approval" });
     expire(undo);
     expire(third);
     const undoState = await call(agent, `/api/tasks/${undo}/approval-state`, { token: "agent-token" });

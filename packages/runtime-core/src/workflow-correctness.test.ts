@@ -1026,7 +1026,7 @@ describe("a step an operator denies", () => {
       expect(done).toEqual([]);
       expect(run.status).toBe("failed");
       expect(run.nodes.gate1?.status).toBe("cancelled");
-      expect(tasks.status(gate2).status).toBe("awaiting_approval");
+      expect(tasks.status(gate2).status).toBe("cancelled");
       // Nor on a later advance: the run is failed and offers no forward step.
       await controller.advance(planned.id, [{ approvalId, phrase: phrase! }]);
       expect(done).toEqual([]);
@@ -1043,7 +1043,7 @@ describe("a step an operator denies", () => {
       expect(done).toEqual([]);
       expect(run.status).toBe("failed");
       expect(run.nodes.gate1?.status).toBe("cancelled");
-      expect(tasks.status(gate2).status).toBe("awaiting_approval");
+      expect(tasks.status(gate2).status).toBe("cancelled");
       await controller.advance(planned.id);
       expect(done).toEqual([]);
     });
@@ -1060,7 +1060,81 @@ describe("a step an operator denies", () => {
       expect(done).toEqual(["pay"]);
       expect(run.nodes.fan?.status).toBe("cancelled");
       expect(run.status).toBe("failed");
-      expect(tasks.status(b).status).toBe("awaiting_approval");
+      expect(tasks.status(b).status).toBe("cancelled");
+    });
+  });
+
+  describe("cancels a failed or cancelled run's parked forward steps (#487)", () => {
+    const gates = () =>
+      workflow([
+        { id: "gate1", type: "operation", request: put("gate1") },
+        { id: "gate2", type: "operation", request: put("gate2") },
+      ]);
+    const bothWaiting = async (controller: WorkflowController, id: string) => {
+      const run = (await controller.advance(id)).run;
+      expect([run.nodes.gate1?.status, run.nodes.gate2?.status]).toEqual(["awaiting_approval", "awaiting_approval"]);
+      return [run.nodes.gate1!.taskIds[0]!, run.nodes.gate2!.taskIds[0]!] as const;
+    };
+
+    it("refuses the other step's phrase once the run has failed", async () => {
+      const { controller, tasks, done } = await setup();
+      const planned = controller.plan(gates());
+      const [gate1, gate2] = await bothWaiting(controller, planned.id);
+      tasks.deny(gate1, "cli:alice");
+      expect((await controller.advance(planned.id)).run.status).toBe("failed");
+
+      // Left awaiting_approval, its phrase ran gate2 on a run that never advances.
+      const { approvalId, phrase } = tasks.status(gate2).approval!;
+      await expect(tasks.execute(gate2, { approvalId, phrase: phrase! })).rejects.toThrow(
+        "task_not_executable:cancelled",
+      );
+      expect(tasks.status(gate2).error).toBe(`workflow_failed:${planned.id}`);
+      expect(done).toEqual([]);
+    });
+
+    it("refuses an operator's decision on the other step in enforced mode", async () => {
+      const { controller, tasks, done } = await setup({ policy: { mode: "enforced" } });
+      const planned = controller.plan(gates());
+      const [gate1, gate2] = await bothWaiting(controller, planned.id);
+      tasks.deny(gate1, "cli:alice");
+      tasks.decide(gate2, tasks.approvalView(gate2).renderDigest, "cli:alice");
+      expect((await controller.advance(planned.id)).run.status).toBe("failed");
+
+      await expect(tasks.execute(gate2)).rejects.toThrow("task_not_executable:cancelled");
+      expect(done).toEqual([]);
+    });
+
+    it("keeps the failed run's compensation executable and unwinds as before", async () => {
+      const { controller, tasks, done } = await setup();
+      const planned = controller.plan(fanOut());
+      const [a, b] = await waitingOnBoth(controller, planned.id);
+      tasks.deny(a, "cli:alice");
+      let run = (await controller.advance(planned.id)).run;
+      expect(run.status).toBe("failed");
+      expect(run.nodes.refund?.status).toBe("awaiting_approval");
+      const refund = tasks.status(run.nodes.refund!.taskIds[0]!);
+      expect(refund.status).toBe("awaiting_approval");
+
+      const other = tasks.status(b).approval!;
+      await expect(tasks.execute(b, { approvalId: other.approvalId, phrase: other.phrase! })).rejects.toThrow(
+        "task_not_executable:cancelled",
+      );
+      run = (await controller.advance(planned.id, approvalsFor(run))).run;
+      expect(run.nodes.refund?.status).toBe("compensated");
+      expect(done).toEqual(["pay", "refund"]);
+    });
+
+    it("refuses a cancelled run's parked step", async () => {
+      const { controller, tasks, done } = await setup();
+      const planned = controller.plan(gates());
+      const [, gate2] = await bothWaiting(controller, planned.id);
+      const { approvalId, phrase } = tasks.status(gate2).approval!;
+      expect(controller.cancel(planned.id).status).toBe("cancelled");
+
+      await expect(tasks.execute(gate2, { approvalId, phrase: phrase! })).rejects.toThrow(
+        "task_not_executable:cancelled",
+      );
+      expect(done).toEqual([]);
     });
   });
 

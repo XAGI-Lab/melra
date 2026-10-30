@@ -1270,11 +1270,11 @@ describe("WorkflowController execution", () => {
     const failed = (await controller.advance(planned.id)).run;
     expect(failed.status).toBe("failed");
     const [first, third, undo] = ["first", "third", "undo-first"].map((id) => failed.nodes[id]!.taskIds[0]!);
-    for (const taskId of [third!, undo!]) {
-      const task = tasks.status(taskId);
-      expect(task.status).toBe("awaiting_approval");
-      store.saveTask({ ...task, approval: { ...task.approval!, expiresAt: new Date(Date.now() - 1_000).toISOString() } });
-    }
+    // The forward step parked beside the failure was cancelled with it (#487).
+    expect(tasks.status(third!)).toMatchObject({ status: "cancelled", error: `workflow_failed:${planned.id}` });
+    const task = tasks.status(undo!);
+    expect(task.status).toBe("awaiting_approval");
+    store.saveTask({ ...task, approval: { ...task.approval!, expiresAt: new Date(Date.now() - 1_000).toISOString() } });
     expect(controller.isCompensation(planned.id, undo!)).toBe(true);
     expect(controller.isCompensation(planned.id, third!)).toBe(false);
     expect(controller.isCompensation(planned.id, first!)).toBe(false);
@@ -1288,7 +1288,7 @@ describe("WorkflowController execution", () => {
     expect(Date.parse(tasks.status(again).approval!.expiresAt)).toBeGreaterThan(Date.now());
     expect(controller.isCompensation(planned.id, again)).toBe(true);
     expect(asked.nodes.third!.taskIds).toEqual([third]);
-    expect(tasks.status(third!).status).toBe("awaiting_approval");
+    expect(tasks.status(third!).status).toBe("cancelled");
   });
 
   const PAYMENTS = "https://payments.example.test";
