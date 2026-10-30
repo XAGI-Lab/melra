@@ -1003,6 +1003,67 @@ describe("a step an operator denies", () => {
     expect(done).toEqual(["pay", "refund"]);
   });
 
+  describe("runs no approval sent with the advance that reads the denial (#330)", () => {
+    const gates = () =>
+      workflow([
+        { id: "gate1", type: "operation", request: put("gate1") },
+        { id: "gate2", type: "operation", request: put("gate2") },
+      ]);
+    const bothWaiting = async (controller: WorkflowController, id: string) => {
+      const run = (await controller.advance(id)).run;
+      expect([run.nodes.gate1?.status, run.nodes.gate2?.status]).toEqual(["awaiting_approval", "awaiting_approval"]);
+      return [run.nodes.gate1!.taskIds[0]!, run.nodes.gate2!.taskIds[0]!] as const;
+    };
+
+    it("beside another parked step, approved by its phrase", async () => {
+      const { controller, tasks, done } = await setup();
+      const planned = controller.plan(gates());
+      const [gate1, gate2] = await bothWaiting(controller, planned.id);
+      tasks.deny(gate1, "cli:alice");
+      const { approvalId, phrase } = tasks.status(gate2).approval!;
+
+      const run = (await controller.advance(planned.id, [{ approvalId, phrase: phrase! }])).run;
+      expect(done).toEqual([]);
+      expect(run.status).toBe("failed");
+      expect(run.nodes.gate1?.status).toBe("cancelled");
+      expect(tasks.status(gate2).status).toBe("awaiting_approval");
+      // Nor on a later advance: the run is failed and offers no forward step.
+      await controller.advance(planned.id, [{ approvalId, phrase: phrase! }]);
+      expect(done).toEqual([]);
+    });
+
+    it("beside another parked step, approved by an operator's decision in enforced mode", async () => {
+      const { controller, tasks, done } = await setup({ policy: { mode: "enforced" } });
+      const planned = controller.plan(gates());
+      const [gate1, gate2] = await bothWaiting(controller, planned.id);
+      tasks.deny(gate1, "cli:alice");
+      tasks.decide(gate2, tasks.approvalView(gate2).renderDigest, "cli:alice");
+
+      const run = (await controller.advance(planned.id)).run;
+      expect(done).toEqual([]);
+      expect(run.status).toBe("failed");
+      expect(run.nodes.gate1?.status).toBe("cancelled");
+      expect(tasks.status(gate2).status).toBe("awaiting_approval");
+      await controller.advance(planned.id);
+      expect(done).toEqual([]);
+    });
+
+    it("on a parallel node's other branch", async () => {
+      const { controller, tasks, done } = await setup();
+      const planned = controller.plan(fanOut());
+      const [a, b] = await waitingOnBoth(controller, planned.id);
+      tasks.cancel(a);
+      const other = tasks.status(b).approval!;
+
+      const run = (await controller.advance(planned.id, [{ approvalId: other.approvalId, phrase: other.phrase! }])).run;
+      // The branches ran side by side, b before the node read a as cancelled.
+      expect(done).toEqual(["pay"]);
+      expect(run.nodes.fan?.status).toBe("cancelled");
+      expect(run.status).toBe("failed");
+      expect(tasks.status(b).status).toBe("awaiting_approval");
+    });
+  });
+
   it("does not read a challenge asked again as a denial when its advance did not commit", async () => {
     const { controller, tasks, done } = await setup();
     const planned = controller.plan(

@@ -1333,6 +1333,12 @@ describe("WorkflowController execution", () => {
     throw new Error("workflow_did_not_settle");
   }
 
+  /** The approval of one node the run stops on, and no other. */
+  function approveOne(run: WorkflowRun, nodeId: string) {
+    const approval = run.nodes[nodeId]!.approval!;
+    return [{ approvalId: approval.approvalId, phrase: approval.phrase! }];
+  }
+
   /** `host/path`, so an assertion reads as "which provider, which endpoint". */
   function saga(
     failing: string,
@@ -1546,8 +1552,19 @@ describe("WorkflowController execution", () => {
       }),
     );
 
+    let run = (await controller.advance(planned.id)).run;
+    run = (await controller.advance(planned.id, approveOne(run, "charge"))).run;
+    for (let step = 0; step < 3 && run.nodes.notify?.status !== "awaiting_approval"; step += 1) {
+      run = (await controller.advance(planned.id)).run;
+    }
     // The approval node runs the shipment; `ship` would only read it next wave.
-    const result = await settle(controller, planned.id, { tasks, nodeIds: ["notify"] });
+    run = (await controller.advance(planned.id, approveOne(run, "approve-ship"))).run;
+    expect(run.nodes.ship?.status).toBe("pending");
+    // Denied before that wave, so the run fails with `ship` still pending. An
+    // approval sent with the denial runs nothing (#330), so the step ran in
+    // the advance before.
+    tasks.cancel(run.nodes.notify!.taskIds[0]!);
+    const result = await settle(controller, planned.id);
 
     // Read as not done, its cancellation was skipped and the charge refunded
     // while the goods were on their way.
@@ -1903,8 +1920,18 @@ describe("WorkflowController execution", () => {
       return { success: true };
     });
     const planned = controller.plan(fanOutSaga());
+    let run = (await controller.advance(planned.id)).run;
+    run = (await controller.advance(planned.id, approveOne(run, "charge"))).run;
+    for (let step = 0; step < 3 && run.nodes.notify?.status !== "awaiting_approval"; step += 1) {
+      run = (await controller.advance(planned.id)).run;
+    }
+    // The shipment runs while the notice still waits; an approval sent with
+    // the denial would run nothing (#330).
+    run = (await controller.advance(planned.id, approveOne(run, "ship"))).run;
+    expect(run.nodes.ship?.status).toBe("recovery_required");
+    tasks.cancel(run.nodes.notify!.taskIds[0]!);
 
-    const result = await settle(controller, planned.id, { tasks, nodeIds: ["notify"] });
+    const result = await settle(controller, planned.id);
 
     expect(calls).not.toContain("payments.example.test/refunds");
     expect(result.run.status).toBe("recovery_required");

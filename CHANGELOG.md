@@ -32,6 +32,12 @@ All notable changes are documented here. The format follows
   proxy that keeps its own `Host` now receives 421, and a token request with a
   foreign `Origin` receives 403. Clients that send no `Origin` header and
   requests over the Unix domain socket are unaffected.
+- **Breaking:** a durable workflow advance that reads a waiting step as denied,
+  failed or cancelled out of band now runs no approval delivered with it: not
+  another waiting step's phrase or operator decision, nor another branch of the
+  same `parallel` node. The run fails and unwinds as for any denial. Such an
+  approval used to run its step on the failing run, which then had to be
+  undone (#330).
 
 ## [0.4.0-alpha.2] - 2026-10-28
 
