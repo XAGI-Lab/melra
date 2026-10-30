@@ -35,6 +35,7 @@ Host exercised locally: macOS arm64, Node.js 24.10.0, Python 3.11.14
 | Registered browser selection | 30 tasks and 30 unique templates reproduced from pinned upstream data |
 | Durable manifest digest | `b2f8e2a6819be1c18ffe799df9ce80a44301b1bc79835ea2f7c6facdf8275c38` |
 | DCO branch audit | every non-bot commit signed off |
+| AARM self-check (record chain) | with `verifyRecords` exported from `@melra/server` (#465), `r2t2.chain` and `r5t3.sqlite.{principal,policy-digest,decision}` run and pass (R5-T3 reports partial); `r5t3.export` stays `not_implemented` (signed receipts) |
 
 The real-process workflow test:
 
