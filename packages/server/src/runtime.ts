@@ -399,7 +399,7 @@ export class RuntimeRouter implements OperationExecutor {
       case "browser":
         return await this.browser.execute(operation, signal);
       case "memory":
-        return this.memory.execute(operation);
+        return await this.memory.execute(operation);
       case "computer":
         return await this.computer.execute(operation, signal);
       case "http":

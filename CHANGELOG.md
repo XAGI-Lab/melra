@@ -18,7 +18,8 @@ All notable changes are documented here. The format follows
   `transaction`, but waits for another process's write lock by awaiting a
   timer rather than blocking the event loop, for up to the same 5 seconds.
   Only the `BEGIN` is tried again, never `action`; a nested write or an async
-  `action` rolls back. Nothing calls it yet (#461).
+  `action` rolls back. Memory's writes use it; tasks and workflows do not
+  yet (#461).
 
 ### Changed
 
@@ -44,6 +45,12 @@ All notable changes are documented here. The format follows
   same `parallel` node. The run fails and unwinds as for any denial. Such an
   approval used to run its step on the failing run, which then had to be
   undone (#330).
+- **Breaking:** a memory put, delete or clear now waits for another process's
+  write lock without blocking the event loop, so the server keeps answering
+  meanwhile (#461). `LocalMemory.execute` is now async and returns a promise:
+  code that imports `@melra/memory` directly must await it. Each write commits
+  where it did before: a put and what it supersedes together, then the scope's
+  compaction.
 - **Breaking:** when a durable workflow run fails, its other forward steps
   still planned or waiting for approval are cancelled, with the error
   `workflow_failed:<workflow-id>`. Executing one directly, with its phrase or

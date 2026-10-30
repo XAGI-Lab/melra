@@ -340,7 +340,11 @@ export class LocalMemory {
     private readonly retention: MemoryRetention = DEFAULT_MEMORY_RETENTION,
   ) {}
 
-  execute(operation: MemoryOperation): Record<string, unknown> {
+  /**
+   * Async because each write waits for a lock another process holds without
+   * blocking this one's event loop (#461). Nothing inside a write awaits.
+   */
+  async execute(operation: MemoryOperation): Promise<Record<string, unknown>> {
     switch (operation.action) {
       case "put": {
         if (operation.key === undefined || operation.value === undefined) {
@@ -360,7 +364,7 @@ export class LocalMemory {
         // Read, checked and written as one transaction: another process
         // editing or deleting the same chain in between left a record hidden
         // with nothing pointing at it, or two live records for one fact.
-        const memory = this.store.transaction(() => {
+        const memory = await this.store.write(() => {
           const existing =
             operation.id === undefined
               ? undefined
@@ -448,9 +452,8 @@ export class LocalMemory {
         // when something is put into it, so this is the one moment reclaiming
         // is worth doing, and a local store is small enough that the cost is a
         // few deletes against an indexed column.
-        const compacted = this.store.compactMemories(
-          memory.scope,
-          this.retention,
+        const compacted = await this.store.write(() =>
+          this.store.compactMemories(memory.scope, this.retention),
         );
         return {
           stored: true,
@@ -505,15 +508,20 @@ export class LocalMemory {
         if (operation.id === undefined) {
           throw new Error("memory_delete_requires_id");
         }
+        const id = operation.id;
         return {
-          deleted: this.store.deleteMemory(operation.id, operation.scope),
+          deleted: await this.store.write(() =>
+            this.store.deleteMemory(id, operation.scope),
+          ),
           id: operation.id,
           scope: operation.scope,
         };
       }
       case "clear":
         return {
-          cleared: this.store.clearMemories(operation.scope),
+          cleared: await this.store.write(() =>
+            this.store.clearMemories(operation.scope),
+          ),
           scope: operation.scope,
         };
     }
