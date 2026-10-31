@@ -356,10 +356,39 @@ export class TaskController {
    */
   private readonly reserved = new Map<string, Map<string, number>>();
 
-  plan(
+  /**
+   * Plans a task in one write, which waits for a lock another process holds
+   * without blocking the event loop (#461).
+   */
+  async plan(
+    request: TaskRequest,
+    options: TaskPlanOptions = {},
+  ): Promise<TaskRecord & { contract: EffectContract }> {
+    return await this.store.write(this.planning(request, options));
+  }
+
+  /**
+   * `plan`, waiting for another process's lock in SQLite's busy timeout. Only
+   * for WorkflowController, whose callers stay synchronous until #461's next
+   * step; everything else awaits `plan`.
+   */
+  planSync(
     request: TaskRequest,
     options: TaskPlanOptions = {},
   ): TaskRecord & { contract: EffectContract } {
+    return this.store.transaction(this.planning(request, options));
+  }
+
+  /**
+   * Checks the request now, and returns the write that plans it. Everything
+   * that reads what is stored is in that write, so a caller's open
+   * challenges are counted in the transaction that adds one: two plans here
+   * waiting on the same lock cannot both pass at the cap.
+   */
+  private planning(
+    request: TaskRequest,
+    options: TaskPlanOptions,
+  ): () => TaskRecord & { contract: EffectContract } {
     const parsedRequest = withDefaultEvidence(TaskRequestSchema.parse(request));
     if (
       options.idempotencyKey !== undefined &&
@@ -374,65 +403,65 @@ export class TaskController {
       throw new Error("idempotency_attempt_invalid");
     }
     this.preflight(parsedRequest, options);
-    const id = randomUUID();
-    const policy = evaluatePolicy(
-      id,
-      parsedRequest,
-      this.policy,
-      this.capabilityUsage,
-    );
-    // A step of a run that names no planner names none either, so it stays
-    // open to anyone, as its run does.
-    const client =
-      options.client === undefined && options.workflowId !== undefined ? undefined : (options.client ?? callerRef());
-    // Refused before anything is written, so a flood leaves no task behind.
-    if (policy.challenge !== undefined && client !== undefined) this.assertChallengeRoom(client);
-    const timestamp = now();
-    const sanitizedRequest = redactStructuredValue(parsedRequest)
-      .value as TaskRequest;
-    const kernelChecks = kernelChecksFor(parsedRequest.operation);
-    const task: TaskRecord = {
-      id,
-      request: sanitizedRequest,
-      status:
-        policy.decision.outcome === "deny"
-          ? "policy_blocked"
-          : policy.decision.outcome === "confirm"
-            ? "awaiting_approval"
-            : "planned",
-      policyDecision: policy.decision,
-      ...(options.idempotencyKey === undefined
-        ? {}
-        : { idempotencyKey: options.idempotencyKey }),
-      ...(options.attempt === undefined ? {} : { attempt: options.attempt }),
-      ...(policy.challenge === undefined ? {} : { approval: this.keyedChallenge(policy.challenge) }),
-      receiptIds: [],
-      ...(client === undefined ? {} : { client }),
-      ...(options.workflowId === undefined ? {} : { workflowId: options.workflowId }),
-      ...(kernelChecks.length === 0 ? {} : { kernelChecks: storedKernelChecks(kernelChecks) }),
-      createdAt: timestamp,
-      updatedAt: timestamp,
-    };
-    const sealed =
-      task.status === "policy_blocked"
-        ? undefined
-        : this.payloadCipher.seal(parsedRequest, `task:${id}:request`);
-    // The row lands with its request or not at all: written apart, a failed
-    // second write left a task that could never run, and a workflow step that
-    // took it up again on every advance (#416).
-    this.store.transaction(() => {
+    return () => {
+      const id = randomUUID();
+      const policy = evaluatePolicy(
+        id,
+        parsedRequest,
+        this.policy,
+        this.capabilityUsage,
+      );
+      // A step of a run that names no planner names none either, so it stays
+      // open to anyone, as its run does.
+      const client =
+        options.client === undefined && options.workflowId !== undefined ? undefined : (options.client ?? callerRef());
+      // Refused before anything is written, so a flood leaves no task behind.
+      if (policy.challenge !== undefined && client !== undefined) this.assertChallengeRoom(client);
+      const timestamp = now();
+      const sanitizedRequest = redactStructuredValue(parsedRequest)
+        .value as TaskRequest;
+      const kernelChecks = kernelChecksFor(parsedRequest.operation);
+      const task: TaskRecord = {
+        id,
+        request: sanitizedRequest,
+        status:
+          policy.decision.outcome === "deny"
+            ? "policy_blocked"
+            : policy.decision.outcome === "confirm"
+              ? "awaiting_approval"
+              : "planned",
+        policyDecision: policy.decision,
+        ...(options.idempotencyKey === undefined
+          ? {}
+          : { idempotencyKey: options.idempotencyKey }),
+        ...(options.attempt === undefined ? {} : { attempt: options.attempt }),
+        ...(policy.challenge === undefined ? {} : { approval: this.keyedChallenge(policy.challenge) }),
+        receiptIds: [],
+        ...(client === undefined ? {} : { client }),
+        ...(options.workflowId === undefined ? {} : { workflowId: options.workflowId }),
+        ...(kernelChecks.length === 0 ? {} : { kernelChecks: storedKernelChecks(kernelChecks) }),
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      };
+      const sealed =
+        task.status === "policy_blocked"
+          ? undefined
+          : this.payloadCipher.seal(parsedRequest, `task:${id}:request`);
+      // The row lands with its request or not at all: written apart, a failed
+      // second write left a task that could never run, and a workflow step that
+      // took it up again on every advance (#416).
       this.store.saveTask(task);
       if (sealed !== undefined) this.store.saveTaskPayload(id, sealed, timestamp);
       // A deny is an outcome like any other, so it is certified as execute's is.
       else this.createAndSaveCertificate(task, []);
-    });
-    // The plaintext request goes back to the caller with the contract derived
-    // from it, so what a caller reads before approving is the same object the
-    // execution path will load.
-    const planned = { ...task, request: parsedRequest, ...(kernelChecks.length === 0 ? {} : { kernelChecks }) };
-    return {
-      ...planned,
-      contract: effectContract(planned, classifyOperation(parsedRequest.operation)),
+      // The plaintext request goes back to the caller with the contract derived
+      // from it, so what a caller reads before approving is the same object the
+      // execution path will load.
+      const planned = { ...task, request: parsedRequest, ...(kernelChecks.length === 0 ? {} : { kernelChecks }) };
+      return {
+        ...planned,
+        contract: effectContract(planned, classifyOperation(parsedRequest.operation)),
+      };
     };
   }
 
@@ -610,7 +639,7 @@ export class TaskController {
       const refused = async (code: string): Promise<Error> =>
         by !== undefined && "operator" in by
           ? new Error(code)
-          : await this.refuseAwaited(code, {
+          : await this.refuse(code, {
               kind: "task",
               subjectId: task.id,
               ...(by === undefined ? {} : { client: by.agent }),
@@ -649,7 +678,7 @@ export class TaskController {
         // holds the plain digest of the same contract.
         if (decision.renderDigest !== render && decision.renderDigest !== sha256(contract)) {
           // Sent by whoever recorded the decision, not by this caller.
-          throw await this.refuseAwaited("approval_render_mismatch", {
+          throw await this.refuse("approval_render_mismatch", {
             kind: "task",
             subjectId: task.id,
             principal: decision.approver,
@@ -1011,23 +1040,42 @@ export class TaskController {
     return this.running.get(taskId) ?? Promise.resolve();
   }
 
-  /** `reason`, when given, is recorded as the error of a task it cancels before it started. */
-  cancel(taskId: string, reason?: string): TaskRecord {
+  /**
+   * `reason`, when given, is recorded as the error of a task it cancels before
+   * it started. The check and the cancel are one write: an execute here whose
+   * start lands first has the task running by then, and is stopped instead.
+   */
+  async cancel(taskId: string, reason?: string): Promise<TaskRecord> {
+    const { task, running } = await this.store.write(() => this.cancelling(taskId, reason));
+    // Outside the write: whatever listens to the signal may write too.
+    running?.abort(new Error("task_cancelled"));
+    return task;
+  }
+
+  /**
+   * `cancel`, in a transaction its caller holds or none. Only for
+   * WorkflowController, whose callers stay synchronous until #461's next
+   * step; everything else awaits `cancel`.
+   */
+  cancelSync(taskId: string, reason?: string): TaskRecord {
+    const { task, running } = this.cancelling(taskId, reason);
+    running?.abort(new Error("task_cancelled"));
+    return task;
+  }
+
+  private cancelling(taskId: string, reason?: string): { task: TaskRecord; running?: AbortController } {
     const task = this.status(taskId);
-    const controller = this.active.get(taskId);
-    if (controller !== undefined) {
-      controller.abort(new Error("task_cancelled"));
-      return task;
-    }
+    const running = this.active.get(taskId);
+    if (running !== undefined) return { task, running };
     if (UNSTARTED.includes(task.status)) {
       task.status = "cancelled";
       if (reason !== undefined) task.error = reason;
       task.updatedAt = now();
       // Started meanwhile by another process: it runs, so the caller is told
       // what the task is now rather than that it was cancelled.
-      if (!this.store.saveTaskIf(task, UNSTARTED)) return this.status(taskId);
+      if (!this.store.saveTaskIf(task, UNSTARTED)) return { task: this.status(taskId) };
     }
-    return task;
+    return { task };
   }
 
   /**
@@ -1488,13 +1536,13 @@ export class TaskController {
    * out of band, and an in-band verdict counts for nothing where approvals
    * come only from an operator.
    */
-  judge(
+  async judge(
     input: Omit<MelraTaskJudgeInput, "identity">,
     by: { identity: Identity; client?: Principal } | { operator: string },
-  ): ExecutionResult {
+  ): Promise<ExecutionResult> {
     const parsed = MelraTaskJudgeInputSchema.omit({ identity: true }).parse(input);
     try {
-      return this.judgeOnce(parsed, by);
+      return await this.judgeOnce(parsed, by);
     } catch (error) {
       // Recorded once the transaction is rolled back, which would take it too.
       // An operator's, refused for the mode its process runs in, is a command
@@ -1502,7 +1550,7 @@ export class TaskController {
       if (!(error instanceof Error) || error.message !== "judgement_in_band_refused" || !("identity" in by)) {
         throw error;
       }
-      throw this.refuse("judgement_in_band_refused", {
+      throw await this.refuse("judgement_in_band_refused", {
         kind: "task",
         subjectId: parsed.taskId,
         principal: delegationChain(by.identity),
@@ -1514,9 +1562,9 @@ export class TaskController {
   private judgeOnce(
     parsed: Omit<MelraTaskJudgeInput, "identity">,
     by: { identity: Identity; client?: Principal } | { operator: string },
-  ): ExecutionResult {
+  ): Promise<ExecutionResult> {
     const operator = "operator" in by && this.enforced;
-    return this.store.transaction(() => {
+    return this.store.write(() => {
       const task = this.status(parsed.taskId);
       // The task and its question before the channel: told to change it, a
       // caller would only meet a settled task or a wrong id there (#384).
@@ -1695,28 +1743,33 @@ export class TaskController {
    * Records an approver's yes to exactly the render they were shown. Never
    * executes, and never touches the task row: the decision lives in its own
    * insert-once table, and `execute` reads it. `out_of_band` only in enforced
-   * mode, where nothing the agent saw could have produced it.
+   * mode, where nothing the agent saw could have produced it. The checks and
+   * the record are one write; a mismatch is recorded as refused after it.
    */
-  decide(taskId: string, renderDigest: string, approver: string): ApprovalDecision {
-    const { task, renderDigest: current } = this.approvalView(taskId);
-    // No phrase means an enforced kernel planned it, and would refuse this
-    // in-band decision while the insert-once row kept anyone from correcting it.
-    if (this.policy.mode !== "enforced" && task.approval!.phrase === undefined) {
-      throw new Error("approval_needs_enforced_mode");
+  async decide(taskId: string, renderDigest: string, approver: string): Promise<ApprovalDecision> {
+    const decision = await this.store.write(() => {
+      const { task, renderDigest: current } = this.approvalView(taskId);
+      // No phrase means an enforced kernel planned it, and would refuse this
+      // in-band decision while the insert-once row kept anyone from correcting it.
+      if (this.policy.mode !== "enforced" && task.approval!.phrase === undefined) {
+        throw new Error("approval_needs_enforced_mode");
+      }
+      if (Date.parse(task.approval!.expiresAt) <= Date.now()) throw new Error("approval_expired");
+      if (renderDigest !== current) return undefined;
+      const decision: ApprovalDecision = {
+        approvalId: task.approval!.approvalId,
+        taskId,
+        renderDigest,
+        channel: this.policy.mode === "enforced" ? "out_of_band" : "in_band",
+        approver,
+        decidedAt: now(),
+      };
+      if (!this.store.recordApprovalDecision(decision)) throw new Error("approval_already_decided");
+      return decision;
+    });
+    if (decision === undefined) {
+      throw await this.refuse("approval_render_mismatch", { kind: "task", subjectId: taskId, principal: approver });
     }
-    if (Date.parse(task.approval!.expiresAt) <= Date.now()) throw new Error("approval_expired");
-    if (renderDigest !== current) {
-      throw this.refuse("approval_render_mismatch", { kind: "task", subjectId: taskId, principal: approver });
-    }
-    const decision: ApprovalDecision = {
-      approvalId: task.approval!.approvalId,
-      taskId,
-      renderDigest,
-      channel: this.policy.mode === "enforced" ? "out_of_band" : "in_band",
-      approver,
-      decidedAt: now(),
-    };
-    if (!this.store.recordApprovalDecision(decision)) throw new Error("approval_already_decided");
     return decision;
   }
 
@@ -1728,26 +1781,28 @@ export class TaskController {
    * is stored redacted and never read here. `melra_task_cancel`, the agent
    * withdrawing its own task, leaves no denial.
    */
-  deny(taskId: string, approver: string, input: DenialInput = {}): TaskRecord {
+  async deny(taskId: string, approver: string, input: DenialInput = {}): Promise<TaskRecord> {
     const { reason, note } = DenialInputSchema.parse(input);
-    const { task, renderDigest } = this.approvalView(taskId);
-    const shown: NonNullable<TaskRecord["denial"]> = {
-      reason,
-      // Capped after redaction, which can lengthen it.
-      ...(note === undefined ? {} : { note: redactSecrets(note).value.slice(0, 1_000) }),
-      channel: this.enforced ? "out_of_band" : "in_band",
-      approver,
-      decidedAt: now(),
-    };
-    const denied: TaskRecord = { ...task, status: "cancelled", denial: shown, updatedAt: shown.decidedAt };
-    const denial: ApprovalDenial = {
-      ...shown,
-      approvalId: task.approval!.approvalId,
-      taskId,
-      renderDigest,
-      operationDigest: this.payloadCipher.digest(this.loadRequest(taskId).operation, "operation"),
-    };
-    return this.store.transaction(() => {
+    // Capped after redaction, which can lengthen it.
+    const redacted = note === undefined ? undefined : redactSecrets(note).value.slice(0, 1_000);
+    return await this.store.write(() => {
+      // Read in the write that cancels it, as every check here is.
+      const { task, renderDigest } = this.approvalView(taskId);
+      const shown: NonNullable<TaskRecord["denial"]> = {
+        reason,
+        ...(redacted === undefined ? {} : { note: redacted }),
+        channel: this.enforced ? "out_of_band" : "in_band",
+        approver,
+        decidedAt: now(),
+      };
+      const denied: TaskRecord = { ...task, status: "cancelled", denial: shown, updatedAt: shown.decidedAt };
+      const denial: ApprovalDenial = {
+        ...shown,
+        approvalId: task.approval!.approvalId,
+        taskId,
+        renderDigest,
+        operationDigest: this.payloadCipher.digest(this.loadRequest(taskId).operation, "operation"),
+      };
       if (!this.store.saveTaskIf(denied, UNSTARTED)) return this.status(taskId);
       this.store.recordApprovalDenial(denial);
       return denied;
@@ -1759,22 +1814,10 @@ export class TaskController {
    * code, who sent it and when are kept, once per task or run and code. A
    * record that cannot be written changes nothing about the refusal. A
    * `client` of `agent`, a transport's name for a sender it did not
-   * authenticate, names no client and is left out.
+   * authenticate, names no client and is left out. Awaited as one write, so a
+   * lock another process holds does not block; callers `throw await` it.
    */
-  refuse(code: string, sender: Pick<Refusal, "kind" | "subjectId" | "principal" | "client">): Error {
-    try {
-      this.recordRefusal(code, sender);
-    } catch {
-      // The refusal stands whether or not it could be written down.
-    }
-    return new Error(code);
-  }
-
-  /** `refuse`, its record awaited as one write, so a lock another process holds does not block. */
-  private async refuseAwaited(
-    code: string,
-    sender: Pick<Refusal, "kind" | "subjectId" | "principal" | "client">,
-  ): Promise<Error> {
+  async refuse(code: string, sender: Pick<Refusal, "kind" | "subjectId" | "principal" | "client">): Promise<Error> {
     try {
       await this.store.write(() => this.recordRefusal(code, sender));
     } catch {
@@ -1882,9 +1925,22 @@ export class TaskController {
    * read. Only that status, because every other path to it writes the
    * certificate before the task, and `execute`, which does not, writes it
    * only if none is stored: whoever writes first, both hand out the same one.
-   * A write that fails again is left for the next writer.
+   * A write that fails again, or waits out the busy timeout, is left for the
+   * next writer.
    */
-  certify(taskId: string): ExecutionCertificate | undefined {
+  async certify(taskId: string): Promise<ExecutionCertificate | undefined> {
+    // Read first, so only a missing certificate takes the write lock.
+    const stored = this.store.getCertificateForTask(taskId);
+    if (stored !== undefined) return stored;
+    return await this.store.write(() => this.certifySync(taskId)).catch(() => undefined);
+  }
+
+  /**
+   * `certify` in a transaction its caller holds or none. Only for
+   * WorkflowController, whose callers stay synchronous until #461's next
+   * step; everything else awaits `certify`.
+   */
+  certifySync(taskId: string): ExecutionCertificate | undefined {
     const certificate = this.store.getCertificateForTask(taskId);
     if (certificate !== undefined) return certificate;
     const task = this.store.getTask(taskId);

@@ -64,7 +64,7 @@ function write(requiredEvidence: TaskRequestInput["requiredEvidence"], extra: Pa
 
 /** Plans and, past the approval it needs, runs a mutation. */
 async function run(controller: TaskController, request: ReturnType<typeof write>, options = {}) {
-  const planned = controller.plan(request, options);
+  const planned = await controller.plan(request, options);
   if (planned.status !== "awaiting_approval") return await controller.execute(planned.id);
   return await controller.execute(planned.id, {
     approvalId: planned.approval!.approvalId,
@@ -97,7 +97,7 @@ describe("semantic evidence (#54)", () => {
     });
     // Nothing runs it again or ends the wait early.
     await expect(controller.execute(task.id)).rejects.toThrow("task_not_executable:waiting_user");
-    expect(controller.cancel(task.id).status).toBe("waiting_user");
+    expect((await controller.cancel(task.id)).status).toBe("waiting_user");
     await controller.recoverInterrupted();
     expect(controller.status(task.id).status).toBe("waiting_user");
     expect(executor.execute).toHaveBeenCalledTimes(1);
@@ -128,13 +128,13 @@ describe("semantic evidence (#54)", () => {
   it("ends a read partial at expiry, and a task whose other evidence failed partial at once", async () => {
     const { controller, executor } = await setup();
     const read = await controller.execute(
-      controller.plan(
+      (await controller.plan(
         TaskRequestSchema.parse({
           goal: "Read a summary someone has to judge",
           operation: { kind: "file", action: "read", path: "out.txt", encoding: "utf8" },
           requiredEvidence: [SEMANTIC],
         }),
-      ).id,
+      )).id,
     );
     expect(read.task.status).toBe("waiting_user");
     vi.useFakeTimers({ toFake: ["Date"] });
@@ -169,7 +169,7 @@ describe("semantic evidence (#54)", () => {
   it("does not recover a wait cut off after its commit as verified", async () => {
     const { controller, store, executor } = await setup();
     const key = "b".repeat(64);
-    const planned = controller.plan(
+    const planned = await controller.plan(
       TaskRequestSchema.parse({
         goal: "Read a summary someone has to judge",
         operation: { kind: "file", action: "read", path: "out.txt", encoding: "utf8" },
@@ -192,7 +192,7 @@ describe("semantic evidence (#54)", () => {
   it("draws the grant of a change cut off after its commit, and settles it closed", async () => {
     const { controller, store, executor } = await setup(once);
     const key = "c".repeat(64);
-    const planned = controller.plan(write([{ type: "file_exists", path: "out.txt" }, SEMANTIC]), {
+    const planned = await controller.plan(write([{ type: "file_exists", path: "out.txt" }, SEMANTIC]), {
       idempotencyKey: key,
       attempt: 1,
     });
@@ -206,13 +206,13 @@ describe("semantic evidence (#54)", () => {
       error: "semantic_judgement_expired",
     });
     expect(controller.receipts({ taskId: planned.id }).certificate?.result).toBe("RECOVERY_REQUIRED");
-    expect(controller.plan(write([{ type: "file_exists", path: "out.txt" }, SEMANTIC])).status).toBe("policy_blocked");
+    expect((await controller.plan(write([{ type: "file_exists", path: "out.txt" }, SEMANTIC]))).status).toBe("policy_blocked");
     expect(executor.execute).not.toHaveBeenCalled();
   });
 
   it("re-observes a change with no key cut off before its draw, and settles it closed", async () => {
     const { controller, store, executor } = await setup(once);
-    const planned = controller.plan(write([{ type: "file_exists", path: "out.txt" }, SEMANTIC]));
+    const planned = await controller.plan(write([{ type: "file_exists", path: "out.txt" }, SEMANTIC]));
     // Killed after the adapter returned, as any task planned over MCP or the CLI.
     store.saveTask({ ...planned, status: "verifying" }, store.ownerId());
     await controller.recoverInterrupted();
@@ -228,7 +228,7 @@ describe("semantic evidence (#54)", () => {
       { type: "semantic", passed: false, inconclusive: true, summary: "semantic_judgement_expired" },
     ]);
     expect(store.capabilityUsage("once", new Date(0).toISOString()).operations).toBe(1);
-    expect(controller.plan(write([{ type: "file_exists", path: "out.txt" }, SEMANTIC])).status).toBe("policy_blocked");
+    expect((await controller.plan(write([{ type: "file_exists", path: "out.txt" }, SEMANTIC]))).status).toBe("policy_blocked");
     expect(executor.execute).not.toHaveBeenCalled();
   });
 
@@ -249,7 +249,7 @@ describe("semantic evidence (#54)", () => {
     for (const { task } of settled) {
       expect(task).toMatchObject({ status: "recovery_required", error: "semantic_judgement_expired" });
     }
-    expect(controller.plan(write([{ type: "file_exists", path: "out.txt" }, SEMANTIC])).status).toBe("policy_blocked");
+    expect((await controller.plan(write([{ type: "file_exists", path: "out.txt" }, SEMANTIC]))).status).toBe("policy_blocked");
     expect(executor.execute).toHaveBeenCalledTimes(1);
   });
 
@@ -332,7 +332,7 @@ describe("semantic evidence (#54)", () => {
     const first = await run(controller, write([{ type: "file_exists", path: "out.txt" }, SEMANTIC]));
     expect(first.task.status).toBe("waiting_user");
     expect(store.capabilityUsage("once", new Date(0).toISOString()).operations).toBe(1);
-    const another = controller.plan(write([{ type: "file_exists", path: "out.txt" }, SEMANTIC]));
+    const another = await controller.plan(write([{ type: "file_exists", path: "out.txt" }, SEMANTIC]));
     expect(another.status).toBe("policy_blocked");
     expect(another.policyDecision.reason).toContain("capability");
     expect(executor.execute).toHaveBeenCalledTimes(1);
@@ -377,12 +377,12 @@ describe("semantic evidence (#54)", () => {
       }),
       write([{ type: "file_exists", path: "out.txt" }], { reconciliation: [SEMANTIC] }),
     ]) {
-      const planned = controller.plan(request);
+      const planned = await controller.plan(request);
       expect(planned.status).toBe("policy_blocked");
       expect(planned.policyDecision.reason).toBe("semantic_evidence_not_reconcilable");
     }
     // As the deciding vote on a delete.
-    const deletion = controller.plan(
+    const deletion = await controller.plan(
       TaskRequestSchema.parse({
         goal: "Delete a file judged only by a question",
         operation: { kind: "file", action: "delete", path: "out.txt", encoding: "utf8", recursive: false },
@@ -437,7 +437,7 @@ describe("semantic verdicts (#54)", () => {
       write([{ type: "file_exists", path: "out.txt" }, SEMANTIC], { identity: as("human:alice", "agent:a").identity }),
     );
     expect(ran.task.status).toBe("waiting_user");
-    const judged = controller.judge(
+    const judged = await controller.judge(
       { ...on(ran.task, "yes"), rationale: "It reads as the summary asked for." },
       as("harness:C", "agent:grader"),
     );
@@ -479,7 +479,7 @@ describe("semantic verdicts (#54)", () => {
     for (const [effect, verdict, status] of cases) {
       const evidence = [{ type: "file_exists" as const, path: "out.txt" }, SEMANTIC];
       const ran = effect === "change" ? await run(controller, write(evidence)) : await run(controller, read(evidence));
-      const judged = controller.judge(on(ran.task, verdict), GRADER);
+      const judged = await controller.judge(on(ran.task, verdict), GRADER);
       expect(judged.task, `${effect} ${verdict}`).toMatchObject({ status, error: `semantic_judgement_${verdict}` });
       expect(judged.certificate?.result).toBe(status.toUpperCase());
       expect(judged.certificate?.evidence[1]).toEqual({
@@ -500,14 +500,14 @@ describe("semantic verdicts (#54)", () => {
     const evidence = [{ type: "file_exists" as const, path: "out.txt" }, SEMANTIC, SECOND];
 
     const both = await run(controller, write(evidence));
-    const waiting = controller.judge(on(both.task, "yes"), GRADER);
+    const waiting = await controller.judge(on(both.task, "yes"), GRADER);
     // Recorded, and nothing else: the certificate is the wait's.
     expect(waiting.task.status).toBe("waiting_user");
     expect(waiting.certificate).toBeUndefined();
     expect(controller.receipts({ taskId: both.task.id }).certificate?.certificateId).toBe(
       both.certificate?.certificateId,
     );
-    const verified = controller.judge(on(both.task, "yes", 1), as("human:alice"));
+    const verified = await controller.judge(on(both.task, "yes", 1), as("human:alice"));
     expect(verified.task.status).toBe("verified_success");
     expect(verified.certificate?.evidence.map((item) => [item.passed, item.summary])).toEqual([
       [true, expect.any(String)],
@@ -516,8 +516,8 @@ describe("semantic verdicts (#54)", () => {
     ]);
 
     const split = await run(controller, write(evidence));
-    controller.judge(on(split.task, "yes"), GRADER);
-    const no = controller.judge(on(split.task, "no", 1), GRADER);
+    await controller.judge(on(split.task, "yes"), GRADER);
+    const no = await controller.judge(on(split.task, "no", 1), GRADER);
     expect(no.task).toMatchObject({ status: "partial", error: "semantic_judgement_no" });
     expect(no.certificate?.evidence.slice(1).map((item) => item.summary)).toEqual([
       "semantic_judgement_yes",
@@ -526,7 +526,7 @@ describe("semantic verdicts (#54)", () => {
 
     // A no settles it with the other question still open, which stays unanswered.
     const early = await run(controller, write(evidence));
-    const first = controller.judge(on(early.task, "no", 1), GRADER);
+    const first = await controller.judge(on(early.task, "no", 1), GRADER);
     expect(first.certificate?.evidence[1]).toMatchObject({
       passed: false,
       inconclusive: true,
@@ -536,7 +536,7 @@ describe("semantic verdicts (#54)", () => {
 
     // Expiry settles it closed, and the yes already given stays on the record.
     const lapsed = await run(controller, write(evidence));
-    controller.judge(on(lapsed.task, "yes"), GRADER);
+    await controller.judge(on(lapsed.task, "yes"), GRADER);
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(Date.parse(lapsed.task.judgements![0]!.expiresAt));
     await controller.recoverInterrupted();
@@ -580,7 +580,7 @@ describe("semantic verdicts (#54)", () => {
       expect(ran.task.status).toBe("waiting_user");
       for (const spy of recorded) spy.mockClear();
       const before = { drawn: usage(), commit: store.getIdempotencyCommit(key), receipts: ran.task.receiptIds };
-      const judged = controller.judge(on(ran.task, verdict), GRADER);
+      const judged = await controller.judge(on(ran.task, verdict), GRADER);
       expect(judged.task.error).toBe(`semantic_judgement_${verdict}`);
       for (const spy of recorded) expect(spy).not.toHaveBeenCalled();
       expect({
@@ -608,14 +608,14 @@ describe("semantic verdicts (#54)", () => {
       idempotencyKey: "7".repeat(64),
       attempt: 1,
     });
-    expect(controller.judge(on(doubted.task, "cannot_tell"), GRADER).task.status).toBe("recovery_required");
+    expect((await controller.judge(on(doubted.task, "cannot_tell"), GRADER)).task.status).toBe("recovery_required");
     await unchanged(doubted.task.id);
 
     const lapsed = await run(controller, write([{ type: "file_exists", path: "out.txt" }, SEMANTIC, SECOND]), {
       idempotencyKey: "8".repeat(64),
       attempt: 1,
     });
-    controller.judge(on(lapsed.task, "yes"), GRADER);
+    await controller.judge(on(lapsed.task, "yes"), GRADER);
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(Date.parse(lapsed.task.judgements![0]!.expiresAt) + 1);
     await controller.recoverInterrupted();
@@ -628,22 +628,22 @@ describe("semantic verdicts (#54)", () => {
     const { controller, store } = await setup();
     const ran = await run(controller, write([{ type: "file_exists", path: "out.txt" }, SEMANTIC, SECOND]));
     const other = await run(controller, read([SEMANTIC]));
-    const refused = (input: Parameters<TaskController["judge"]>[0], error: string) => {
+    const refused = async (input: Parameters<TaskController["judge"]>[0], error: string) => {
       const before = snapshot(controller, store, input.taskId);
-      expect(() => controller.judge(input, GRADER)).toThrow(error);
+      await expect(controller.judge(input, GRADER)).rejects.toThrow(error);
       expect(snapshot(controller, store, input.taskId)).toBe(before);
     };
-    refused({ ...on(ran.task, "yes"), taskId: "00000000-0000-4000-8000-000000000000" }, "task_not_found");
-    refused({ ...on(ran.task, "yes"), judgementId: "00000000-0000-4000-8000-000000000000" }, "judgement_not_found");
+    await refused({ ...on(ran.task, "yes"), taskId: "00000000-0000-4000-8000-000000000000" }, "task_not_found");
+    await refused({ ...on(ran.task, "yes"), judgementId: "00000000-0000-4000-8000-000000000000" }, "judgement_not_found");
     // Another task's question, however real, is not this one's.
-    refused({ ...on(other.task, "yes"), taskId: ran.task.id }, "judgement_not_found");
-    controller.judge(on(ran.task, "yes"), GRADER);
-    refused(on(ran.task, "no"), "judgement_already_answered");
-    controller.judge(on(ran.task, "no", 1), GRADER);
-    refused(on(ran.task, "yes", 1), "task_not_awaiting_judgement:partial");
+    await refused({ ...on(other.task, "yes"), taskId: ran.task.id }, "judgement_not_found");
+    await controller.judge(on(ran.task, "yes"), GRADER);
+    await refused(on(ran.task, "no"), "judgement_already_answered");
+    await controller.judge(on(ran.task, "no", 1), GRADER);
+    await refused(on(ran.task, "yes", 1), "task_not_awaiting_judgement:partial");
     // Bounded, typed and closed like every other input.
-    expect(() => controller.judge({ ...on(other.task, "yes"), verdict: "maybe" as "yes" }, GRADER)).toThrow();
-    expect(() => controller.judge({ ...on(other.task, "yes"), rationale: "x".repeat(1_001) }, GRADER)).toThrow();
+    await expect(controller.judge({ ...on(other.task, "yes"), verdict: "maybe" as "yes" }, GRADER)).rejects.toThrow();
+    await expect(controller.judge({ ...on(other.task, "yes"), rationale: "x".repeat(1_001) }, GRADER)).rejects.toThrow();
     expect(controller.status(other.task.id).status).toBe("waiting_user");
   });
 
@@ -653,7 +653,7 @@ describe("semantic verdicts (#54)", () => {
     const before = snapshot(controller, store, ran.task.id);
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(Date.parse(ran.task.judgements![0]!.expiresAt));
-    expect(() => controller.judge(on(ran.task, "yes"), GRADER)).toThrow("judgement_expired");
+    await expect(controller.judge(on(ran.task, "yes"), GRADER)).rejects.toThrow("judgement_expired");
     expect(snapshot(controller, store, ran.task.id)).toBe(before);
     await controller.recoverInterrupted();
     expect(controller.status(ran.task.id)).toMatchObject({
@@ -698,12 +698,12 @@ describe("semantic verdicts (#54)", () => {
         const label = `${actor?.join("/") ?? "(none)"} judged by ${judge.join("/")}`;
         if (isActor) {
           const before = snapshot(controller, store, ran.task.id);
-          expect(() => controller.judge(on(ran.task, "yes"), as(...judge)), label).toThrow("semantic_judge_is_actor");
+          await expect(controller.judge(on(ran.task, "yes"), as(...judge)), label).rejects.toThrow("semantic_judge_is_actor");
           expect(snapshot(controller, store, ran.task.id), label).toBe(before);
           // Still answerable by someone else.
-          expect(controller.judge(on(ran.task, "yes"), as("agent:other")).task.status, label).toBe("verified_success");
+          expect((await controller.judge(on(ran.task, "yes"), as("agent:other"))).task.status, label).toBe("verified_success");
         } else {
-          expect(controller.judge(on(ran.task, "yes"), as(...judge)).task.status, label).toBe("verified_success");
+          expect((await controller.judge(on(ran.task, "yes"), as(...judge))).task.status, label).toBe("verified_success");
         }
       }
     });
@@ -715,21 +715,19 @@ describe("semantic verdicts (#54)", () => {
     // An OAuth client that planned declaring nothing is the actor, and heads
     // every chain it sends, so a judge it sends names it without declaring it.
     const itself = await run(controller, read([SEMANTIC], { identity: as("harness:C").identity }));
-    expect(controller.judge(on(itself.task, "yes"), { ...as("harness:C", "agent:grader"), client }).task.status).toBe(
+    expect((await controller.judge(on(itself.task, "yes"), { ...as("harness:C", "agent:grader"), client })).task.status).toBe(
       "verified_success",
     );
     // What the judge declares beneath it still counts.
     const planned = await run(controller, read([SEMANTIC], { identity: as("harness:C", "agent:a").identity }));
-    expect(() =>
-      controller.judge(on(planned.task, "yes"), { ...as("harness:C", "agent:a", "agent:grader"), client }),
-    ).toThrow("semantic_judge_is_actor");
+    await expect(controller.judge(on(planned.task, "yes"), { ...as("harness:C", "agent:a", "agent:grader"), client }),
+    ).rejects.toThrow("semantic_judge_is_actor");
     const declared = await run(controller, read([SEMANTIC], { identity: as("harness:C").identity }));
-    expect(() =>
-      controller.judge(on(declared.task, "yes"), { ...as("harness:C", "harness:C", "agent:grader"), client }),
-    ).toThrow("semantic_judge_is_actor");
+    await expect(controller.judge(on(declared.task, "yes"), { ...as("harness:C", "harness:C", "agent:grader"), client }),
+    ).rejects.toThrow("semantic_judge_is_actor");
     // And an operator is not compared at all.
     const operated = await run(controller, read([SEMANTIC], { identity: as("human:alice").identity }));
-    expect(controller.judge(on(operated.task, "yes"), { operator: "cli:alice" }).task.status).toBe("verified_success");
+    expect((await controller.judge(on(operated.task, "yes"), { operator: "cli:alice" })).task.status).toBe("verified_success");
   });
 
   it("refuses an in-band verdict where only an operator's counts", async () => {
@@ -739,34 +737,34 @@ describe("semantic verdicts (#54)", () => {
     expect(ran.task.status).toBe("waiting_user");
     const before = snapshot(controller, store, ran.task.id);
     // The agent's, through any door of an enforced kernel.
-    expect(() => controller.judge(on(ran.task, "yes"), GRADER)).toThrow("judgement_in_band_refused");
+    await expect(controller.judge(on(ran.task, "yes"), GRADER)).rejects.toThrow("judgement_in_band_refused");
     // A developer process sharing the home: an agent or its operator alike.
-    expect(() => developer.judge(on(ran.task, "yes"), GRADER)).toThrow("judgement_in_band_refused");
-    expect(() => developer.judge(on(ran.task, "yes"), { operator: "cli:alice" })).toThrow(
+    await expect(developer.judge(on(ran.task, "yes"), GRADER)).rejects.toThrow("judgement_in_band_refused");
+    await expect(developer.judge(on(ran.task, "yes"), { operator: "cli:alice" })).rejects.toThrow(
       "judgement_in_band_refused",
     );
     // The task and its question come first, through every door (#384).
     const unknown = { ...on(ran.task, "yes"), judgementId: "00000000-0000-4000-8000-000000000000" };
-    expect(() => controller.judge(unknown, GRADER)).toThrow("judgement_not_found");
-    expect(() => developer.judge(unknown, GRADER)).toThrow("judgement_not_found");
+    await expect(controller.judge(unknown, GRADER)).rejects.toThrow("judgement_not_found");
+    await expect(developer.judge(unknown, GRADER)).rejects.toThrow("judgement_not_found");
     expect(snapshot(controller, store, ran.task.id)).toBe(before);
     // An operator of an enforced process, whoever the task was planned as.
     const asOperator = await run(controller, read([SEMANTIC], { identity: as("human:alice").identity }));
     for (const task of [ran.task, asOperator.task]) {
-      const judged = controller.judge(on(task, "yes"), { operator: "cli:alice" });
+      const judged = await controller.judge(on(task, "yes"), { operator: "cli:alice" });
       expect(judged.task.status).toBe("verified_success");
       expect(judged.task.judgements?.[0]?.judgedBy).toMatchObject({ judge: "cli:alice", channel: "out_of_band" });
     }
-    expect(() => controller.judge(on(ran.task, "no"), GRADER)).toThrow("task_not_awaiting_judgement:verified_success");
+    await expect(controller.judge(on(ran.task, "no"), GRADER)).rejects.toThrow("task_not_awaiting_judgement:verified_success");
     // In developer mode the operator's verdict is in band, and stands.
     const local = await run(developer, read([SEMANTIC]));
-    expect(developer.judge(on(local.task, "no"), { operator: "cli:alice" }).task.judgements?.[0]?.judgedBy).toMatchObject(
+    expect((await developer.judge(on(local.task, "no"), { operator: "cli:alice" })).task.judgements?.[0]?.judgedBy).toMatchObject(
       { judge: "cli:alice", channel: "in_band" },
     );
     // So is an enforced operator's on a developer run, which the agent's own
     // shell could have sent, as execute downgrades such an approval.
     const lent = await run(developer, read([SEMANTIC]));
-    const judged = controller.judge(on(lent.task, "yes"), { operator: "cli:alice" });
+    const judged = await controller.judge(on(lent.task, "yes"), { operator: "cli:alice" });
     expect(judged.task.judgements?.[0]?.judgedBy).toMatchObject({ judge: "cli:alice", channel: "in_band" });
     expect(judged.certificate?.mode).toBe("developer");
     expect(judged.certificate?.evidence.find((item) => item.type === "semantic")?.judgedBy?.channel).toBe("in_band");
@@ -779,29 +777,29 @@ describe("semantic verdicts (#54)", () => {
     const other = new SqliteStore(join(dir, "melra.db"));
     stores.push(other);
     const rival = peer(createDefaultPolicy, other);
-    /** Runs `peer` once this controller is about to open its transaction. */
+    /** Runs `peer` once this controller is about to open its write. */
     const between = (peerWrite: () => unknown) => {
-      const transaction = store.transaction.bind(store);
-      vi.spyOn(store, "transaction").mockImplementationOnce((action) => {
+      const write = store.write.bind(store);
+      vi.spyOn(store, "write").mockImplementationOnce((action) => {
         peerWrite();
-        return transaction(action);
+        return write(action);
       });
     };
 
     // Two verdicts on one question: the second is refused, the first stands.
     const shared = await run(controller, write([{ type: "file_exists", path: "out.txt" }, SEMANTIC, SECOND]));
     between(() => rival.judge(on(shared.task, "yes"), as("agent:first")));
-    expect(() => controller.judge(on(shared.task, "yes"), as("agent:second"))).toThrow("judgement_already_answered");
+    await expect(controller.judge(on(shared.task, "yes"), as("agent:second"))).rejects.toThrow("judgement_already_answered");
     expect(controller.status(shared.task.id).judgements?.[0]?.judgedBy?.judge).toBe("agent:first");
     // Settled, so the sweep below meets one waiting task: it yields between
     // the writes of two, and a verdict may land there.
-    controller.judge(on(shared.task, "yes", 1), as("agent:first"));
+    await controller.judge(on(shared.task, "yes", 1), as("agent:first"));
 
     // Two that would each settle it.
     const single = await run(controller, write([{ type: "file_exists", path: "out.txt" }, SEMANTIC]));
-    let settled: ReturnType<TaskController["judge"]> | undefined;
-    between(() => (settled = rival.judge(on(single.task, "no"), as("agent:first"))));
-    expect(() => controller.judge(on(single.task, "yes"), as("agent:second"))).toThrow(
+    let settled: Awaited<ReturnType<TaskController["judge"]>> | undefined;
+    between(async () => (settled = await rival.judge(on(single.task, "no"), as("agent:first"))));
+    await expect(controller.judge(on(single.task, "yes"), as("agent:second"))).rejects.toThrow(
       "task_not_awaiting_judgement:partial",
     );
     expect(controller.receipts({ taskId: single.task.id }).certificate?.certificateId).toBe(
@@ -814,7 +812,7 @@ describe("semantic verdicts (#54)", () => {
     vi.setSystemTime(Date.parse(swept.task.judgements![0]!.expiresAt) + 1);
     let sweep: Promise<unknown> | undefined;
     between(() => (sweep = rival.recoverInterrupted()));
-    expect(() => controller.judge(on(swept.task, "yes"), GRADER)).toThrow(
+    await expect(controller.judge(on(swept.task, "yes"), GRADER)).rejects.toThrow(
       "task_not_awaiting_judgement:recovery_required",
     );
     await sweep;
@@ -823,7 +821,7 @@ describe("semantic verdicts (#54)", () => {
 
     // The verdict first: the sweep leaves what it settled alone.
     const judged = await run(controller, write([{ type: "file_exists", path: "out.txt" }, SEMANTIC]));
-    const verified = controller.judge(on(judged.task, "yes"), GRADER);
+    const verified = await controller.judge(on(judged.task, "yes"), GRADER);
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(Date.parse(judged.task.judgements![0]!.expiresAt) + 1);
     await rival.recoverInterrupted();
@@ -840,7 +838,7 @@ describe("semantic verdicts (#54)", () => {
       controller,
       write([{ type: "file_exists", path: "out.txt" }, SEMANTIC], { identity: as(`harness:${token}`).identity }),
     );
-    const judged = controller.judge(
+    const judged = await controller.judge(
       { ...on(ran.task, "no"), rationale: `The summary pastes ${token} into the file.` },
       as(`agent:${token}`),
     );

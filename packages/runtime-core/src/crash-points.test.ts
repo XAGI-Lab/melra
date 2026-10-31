@@ -99,7 +99,7 @@ async function crashPoints(input: TaskRequestInput, execute: (root: string) => P
       return write(...args);
     }) as never);
   }
-  const planned = controller.plan(TaskRequestSchema.parse(input), { idempotencyKey: KEY, attempt: 1 });
+  const planned = await controller.plan(TaskRequestSchema.parse(input), { idempotencyKey: KEY, attempt: 1 });
   await controller.execute(
     planned.id,
     planned.approval === undefined

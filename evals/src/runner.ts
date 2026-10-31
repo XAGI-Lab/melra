@@ -71,7 +71,7 @@ async function runScenario(scenario: EvaluationScenario): Promise<EvaluationResu
       await mkdir(dirname(path), { recursive: true });
       await writeFile(path, fixture.content);
     }
-    const task = runtime.controller.plan(TaskRequestSchema.parse(scenario.request));
+    const task = await runtime.controller.plan(TaskRequestSchema.parse(scenario.request));
     if (task.status !== scenario.expectedPlan) {
       throw new Error(
         `plan_status:${task.status}; expected:${scenario.expectedPlan}`,
@@ -88,7 +88,7 @@ async function runScenario(scenario: EvaluationScenario): Promise<EvaluationResu
     let observedFinal: string | undefined;
     let evidenceStrengths: string[] | undefined;
     if (scenario.cancel === true) {
-      observedFinal = runtime.controller.cancel(task.id).status;
+      observedFinal = (await runtime.controller.cancel(task.id)).status;
     } else if (scenario.expectedFinal !== undefined) {
       const approval =
         scenario.approve === true && task.approval !== undefined
@@ -105,7 +105,7 @@ async function runScenario(scenario: EvaluationScenario): Promise<EvaluationResu
       if (scenario.judge !== undefined) {
         let refused: string | undefined;
         try {
-          runtime.controller.judge(
+          await runtime.controller.judge(
             {
               taskId: task.id,
               judgementId: execution.task.judgements?.[0]?.judgementId ?? "",

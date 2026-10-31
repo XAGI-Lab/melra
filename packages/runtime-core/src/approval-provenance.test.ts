@@ -65,9 +65,9 @@ describe("operator approval decisions", () => {
   for (const mode of ["developer", "enforced"] as const) {
     it(`runs a mutation on an operator's decision and receipts who decided (${mode})`, async () => {
       const { tasks, store } = await setup({ mode });
-      const planned = tasks.plan(put("ledger"));
+      const planned = await tasks.plan(put("ledger"));
       const view = tasks.approvalView(planned.id);
-      const decision = tasks.decide(planned.id, view.renderDigest, "cli:test");
+      const decision = await tasks.decide(planned.id, view.renderDigest, "cli:test");
       const done = await tasks.execute(planned.id);
 
       expect(done.task.status).toBe("verified_success");
@@ -86,33 +86,33 @@ describe("operator approval decisions", () => {
 
   it("refuses a decision that does not match what is pending", async () => {
     const { tasks, store } = await setup();
-    const planned = tasks.plan(put("ledger"));
-    expect(() => tasks.decide(planned.id, "0".repeat(64), "cli:test")).toThrow("approval_render_mismatch");
+    const planned = await tasks.plan(put("ledger"));
+    await expect(tasks.decide(planned.id, "0".repeat(64), "cli:test")).rejects.toThrow("approval_render_mismatch");
     const view = tasks.approvalView(planned.id);
-    tasks.decide(planned.id, view.renderDigest, "cli:first");
-    expect(() => tasks.decide(planned.id, view.renderDigest, "cli:second")).toThrow("approval_already_decided");
+    await tasks.decide(planned.id, view.renderDigest, "cli:first");
+    await expect(tasks.decide(planned.id, view.renderDigest, "cli:second")).rejects.toThrow("approval_already_decided");
     expect(store.getApprovalDecision(planned.approval!.approvalId)?.approver).toBe("cli:first");
-    const read = tasks.plan(TaskRequestSchema.parse({ goal: "Inspect", operation: { kind: "system", action: "info" } }));
-    expect(() => tasks.decide(read.id, view.renderDigest, "cli:test")).toThrow("task_not_awaiting_approval:planned");
+    const read = await tasks.plan(TaskRequestSchema.parse({ goal: "Inspect", operation: { kind: "system", action: "info" } }));
+    await expect(tasks.decide(read.id, view.renderDigest, "cli:test")).rejects.toThrow("task_not_awaiting_approval:planned");
     expect(store.getTask(planned.id)?.status).toBe("awaiting_approval");
   });
 
   it("refuses a decision once the challenge has expired", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const { tasks } = await setup({ approvalTtlMs: 1_000 });
-    const planned = tasks.plan(put("ledger"));
+    const planned = await tasks.plan(put("ledger"));
     const view = tasks.approvalView(planned.id);
     vi.advanceTimersByTime(2_000);
-    expect(() => tasks.decide(planned.id, view.renderDigest, "cli:test")).toThrow("approval_expired");
+    await expect(tasks.decide(planned.id, view.renderDigest, "cli:test")).rejects.toThrow("approval_expired");
   });
 
   it("honours a decision made in time for a TTL after it was made", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const { tasks, store } = await setup({ approvalTtlMs: 60_000 });
-    const [early, late, tardy] = [tasks.plan(put("early")), tasks.plan(put("late")), tasks.plan(put("tardy"))];
+    const [early, late, tardy] = [await tasks.plan(put("early")), await tasks.plan(put("late")), await tasks.plan(put("tardy"))];
     vi.advanceTimersByTime(59_000);
-    tasks.decide(early.id, tasks.approvalView(early.id).renderDigest, "cli:test");
-    tasks.decide(late.id, tasks.approvalView(late.id).renderDigest, "cli:test");
+    await tasks.decide(early.id, tasks.approvalView(early.id).renderDigest, "cli:test");
+    await tasks.decide(late.id, tasks.approvalView(late.id).renderDigest, "cli:test");
     // Past the challenge's expiry, within the decision's TTL.
     vi.advanceTimersByTime(31_000);
     expect((await tasks.execute(early.id)).task.status).toBe("verified_success");
@@ -134,7 +134,7 @@ describe("operator approval decisions", () => {
 
   it("does not run a decision on anything but what was shown", async () => {
     const { tasks, store } = await setup();
-    const planned = tasks.plan(put("ledger"));
+    const planned = await tasks.plan(put("ledger"));
     store.recordApprovalDecision({
       approvalId: planned.approval!.approvalId,
       taskId: planned.id,
@@ -160,8 +160,8 @@ describe("operator approval decisions", () => {
       await Verifier.create(developer.root),
       developer.cipher,
     );
-    const planned = developer.tasks.plan(put("ledger"));
-    enforced.decide(planned.id, enforced.approvalView(planned.id).renderDigest, "cli:test");
+    const planned = await developer.tasks.plan(put("ledger"));
+    await enforced.decide(planned.id, enforced.approvalView(planned.id).renderDigest, "cli:test");
     const done = await developer.tasks.execute(planned.id);
     expect(done.receipt?.policyDecision.approval?.channel).toBe("in_band");
     expect(done.certificate).toMatchObject({ mode: "developer", approvalChannel: "in_band" });
@@ -179,7 +179,7 @@ describe("operator approval decisions", () => {
       await Verifier.create(developer.root, { probe }),
       developer.cipher,
     );
-    const planned = developer.tasks.plan(charge());
+    const planned = await developer.tasks.plan(charge());
     await developer.tasks.execute(planned.id, {
       approvalId: planned.approval!.approvalId,
       phrase: planned.approval!.phrase!,
@@ -207,7 +207,7 @@ describe("operator approval decisions", () => {
       await Verifier.create(developer.root, { probe }),
       developer.cipher,
     );
-    const planned = developer.tasks.plan(charge());
+    const planned = await developer.tasks.plan(charge());
     await developer.tasks.execute(planned.id, {
       approvalId: planned.approval!.approvalId,
       phrase: planned.approval!.phrase!,
@@ -220,7 +220,7 @@ describe("operator approval decisions", () => {
 
   it("names how every task was authorised", async () => {
     const { tasks } = await setup();
-    const echoed = tasks.plan(put("echoed"));
+    const echoed = await tasks.plan(put("echoed"));
     const done = await tasks.execute(echoed.id, {
       approvalId: echoed.approval!.approvalId,
       phrase: echoed.approval!.phrase!,
@@ -228,11 +228,11 @@ describe("operator approval decisions", () => {
     expect(done.receipt?.policyDecision.approval).toMatchObject({ channel: "in_band", approver: "phrase" });
     expect(done.certificate?.approvalChannel).toBe("in_band");
 
-    const read = tasks.plan(TaskRequestSchema.parse({ goal: "Inspect", operation: { kind: "system", action: "info" } }));
+    const read = await tasks.plan(TaskRequestSchema.parse({ goal: "Inspect", operation: { kind: "system", action: "info" } }));
     expect((await tasks.execute(read.id)).certificate?.approvalChannel).toBe("not_required");
 
     const unhinged = await setup({ unhinged: true });
-    const bypassed = unhinged.tasks.plan(put("bypassed"));
+    const bypassed = await unhinged.tasks.plan(put("bypassed"));
     expect((await unhinged.tasks.execute(bypassed.id)).certificate?.approvalChannel).toBe("bypassed");
   });
 });
@@ -245,13 +245,13 @@ describe("enforced mode refuses in-band approval", () => {
 
   it("refuses anything the agent sends, and runs only on an operator's decision", async () => {
     const { tasks, store } = await setup({ mode: "enforced" });
-    const planned = tasks.plan(put("ledger"));
+    const planned = await tasks.plan(put("ledger"));
     expect(planned.approval).not.toHaveProperty("phrase");
     expect(planned.contract.authorization).not.toHaveProperty("phrase");
     await expect(tasks.execute(planned.id, forge(planned))).rejects.toThrow("approval_in_band_refused");
     await expect(tasks.execute(planned.id)).rejects.toThrow("approval_awaiting_operator");
     expect(store.getTask(planned.id)?.status).toBe("awaiting_approval");
-    tasks.decide(planned.id, tasks.approvalView(planned.id).renderDigest, "cli:test");
+    await tasks.decide(planned.id, tasks.approvalView(planned.id).renderDigest, "cli:test");
     // Still refused alongside a decision: the agent sending one is the signal.
     await expect(tasks.execute(planned.id, forge(planned))).rejects.toThrow("approval_in_band_refused");
     const done = await tasks.execute(planned.id);
@@ -269,30 +269,30 @@ describe("enforced mode refuses in-band approval", () => {
       developer.cipher,
     );
     // Planned in developer mode, so its stored challenge still has a phrase.
-    const old = developer.tasks.plan(put("old"));
+    const old = await developer.tasks.plan(put("old"));
     await expect(
       enforced.execute(old.id, { approvalId: old.approval!.approvalId, phrase: old.approval!.phrase! }),
     ).rejects.toThrow("approval_in_band_refused");
     // A developer-mode process deciding on the same data directory is in band.
-    developer.tasks.decide(old.id, developer.tasks.approvalView(old.id).renderDigest, "cli:dev");
+    await developer.tasks.decide(old.id, developer.tasks.approvalView(old.id).renderDigest, "cli:dev");
     await expect(enforced.execute(old.id)).rejects.toThrow("approval_awaiting_operator");
     expect(enforced.approvalDecision(enforced.status(old.id))).toBeUndefined();
     expect(developer.store.getTask(old.id)?.status).toBe("awaiting_approval");
     // The other way round, a developer-mode yes would burn the one decision an
     // enforced kernel's task can have, so it is refused before it is recorded.
-    const fresh = enforced.plan(put("fresh"));
-    expect(() => developer.tasks.decide(fresh.id, developer.tasks.approvalView(fresh.id).renderDigest, "cli:dev")).toThrow(
+    const fresh = await enforced.plan(put("fresh"));
+    await expect(developer.tasks.decide(fresh.id, developer.tasks.approvalView(fresh.id).renderDigest, "cli:dev")).rejects.toThrow(
       "approval_needs_enforced_mode",
     );
     expect(developer.store.getApprovalDecision(fresh.approval!.approvalId)).toBeUndefined();
-    enforced.decide(fresh.id, enforced.approvalView(fresh.id).renderDigest, "cli:ops");
+    await enforced.decide(fresh.id, enforced.approvalView(fresh.id).renderDigest, "cli:ops");
     expect((await enforced.execute(fresh.id)).task.status).toBe("verified_success");
   });
 
   it("stops asking the agent to wait once no operator can answer", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const { tasks } = await setup({ mode: "enforced", approvalTtlMs: 1_000 });
-    const planned = tasks.plan(put("ledger"));
+    const planned = await tasks.plan(put("ledger"));
     await expect(tasks.execute(planned.id)).rejects.toThrow("approval_awaiting_operator");
     // `decide` refuses an expired challenge, so waiting longer would never end.
     vi.advanceTimersByTime(2_000);
@@ -324,7 +324,7 @@ describe("enforced mode refuses in-band approval", () => {
     );
     expect(store.getTask(taskId!)?.status).toBe("awaiting_approval");
     expect((await workflows.advance(planned.id)).run.status).toBe("awaiting_approval");
-    tasks.decide(taskId!, tasks.approvalView(taskId!).renderDigest, "cli:test");
+    await tasks.decide(taskId!, tasks.approvalView(taskId!).renderDigest, "cli:test");
     let run = (await workflows.advance(planned.id)).run;
     if (run.status !== "verified_complete") run = (await workflows.advance(planned.id)).run;
     expect(run.status).toBe("verified_complete");
@@ -353,7 +353,7 @@ describe("enforced mode refuses in-band approval", () => {
     // An operator approves `b`; then `a`'s challenge lapses, so the next wave
     // would cancel and plan `a` again before reaching `b`.
     vi.advanceTimersByTime(900);
-    tasks.decide(b!, tasks.approvalView(b!).renderDigest, "cli:ops");
+    await tasks.decide(b!, tasks.approvalView(b!).renderDigest, "cli:ops");
     vi.advanceTimersByTime(200);
     await expect(workflows.advance(planned.id, [forge(store.getTask(b!)!)])).rejects.toThrow(
       "approval_in_band_refused",
@@ -403,7 +403,7 @@ describe("approval on receipts written without a caller", () => {
       },
       probe,
     );
-    const task = context.tasks.plan(charge());
+    const task = await context.tasks.plan(charge());
     await context.tasks.execute(task.id, { approvalId: task.approval!.approvalId, phrase: task.approval!.phrase! });
     return { ...context, task };
   }
@@ -492,7 +492,7 @@ describe("workflow approvals decided by an operator", () => {
     const waiting = (await workflows.advance(planned.id)).run;
     const [taskId] = waiting.nodes.write!.taskIds;
     vi.advanceTimersByTime(59_000);
-    tasks.decide(taskId!, tasks.approvalView(taskId!).renderDigest, "cli:test");
+    await tasks.decide(taskId!, tasks.approvalView(taskId!).renderDigest, "cli:test");
     vi.advanceTimersByTime(31_000);
     // Past the challenge's expiry: before, the node was planned again under a
     // new attempt and the person asked a second time.
@@ -507,9 +507,9 @@ describe("an operator's denial", () => {
   for (const mode of ["developer", "enforced"] as const) {
     it(`cancels the task with why it was denied, apart from the agent's own cancel (${mode})`, async () => {
       const { tasks, store, cipher } = await setup({ mode });
-      const planned = tasks.plan(put("ledger"));
+      const planned = await tasks.plan(put("ledger"));
       const token = "ghp_0123456789abcdefghijklmnopqrstuvwxyz";
-      const denied = tasks.deny(planned.id, "cli:alice", { reason: "wrong_target", note: `Not this ledger, ${token}` });
+      const denied = await tasks.deny(planned.id, "cli:alice", { reason: "wrong_target", note: `Not this ledger, ${token}` });
       const channel = mode === "enforced" ? "out_of_band" : "in_band";
       const denial = {
         reason: "wrong_target",
@@ -535,12 +535,12 @@ describe("an operator's denial", () => {
       await expect(tasks.execute(planned.id)).rejects.toThrow("task_not_executable:cancelled");
 
       // The agent withdrawing its own task leaves no denial.
-      const withdrawn = tasks.plan(put("ledger"));
-      expect(tasks.cancel(withdrawn.id)).not.toHaveProperty("denial");
+      const withdrawn = await tasks.plan(put("ledger"));
+      expect(await tasks.cancel(withdrawn.id)).not.toHaveProperty("denial");
       expect(store.getTask(withdrawn.id)).not.toHaveProperty("denial");
       // A bare deny is reason other, with no note.
-      const bare = tasks.plan(put("other"));
-      expect(tasks.deny(bare.id, "cli:alice").denial).toEqual({
+      const bare = await tasks.plan(put("other"));
+      expect((await tasks.deny(bare.id, "cli:alice")).denial).toEqual({
         reason: "other",
         channel,
         approver: "cli:alice",
@@ -551,22 +551,22 @@ describe("an operator's denial", () => {
 
   it("bounds the note, and records nothing for a task another process started first", async () => {
     const { tasks, store } = await setup();
-    const planned = tasks.plan(put("ledger"));
-    expect(() => tasks.deny(planned.id, "cli:alice", { note: "x".repeat(1_001) })).toThrow();
-    expect(() => tasks.deny(planned.id, "cli:alice", { reason: "because" as "other" })).toThrow();
+    const planned = await tasks.plan(put("ledger"));
+    await expect(tasks.deny(planned.id, "cli:alice", { note: "x".repeat(1_001) })).rejects.toThrow();
+    await expect(tasks.deny(planned.id, "cli:alice", { reason: "because" as "other" })).rejects.toThrow();
     // Started by a peer between the operator's read and the deny.
     const started = { ...store.getTask(planned.id)!, status: "running" as const };
     const view = tasks.approvalView(planned.id);
     store.saveTask(started);
     vi.spyOn(tasks, "approvalView").mockReturnValueOnce(view);
-    expect(tasks.deny(planned.id, "cli:alice").status).toBe("running");
+    expect((await tasks.deny(planned.id, "cli:alice")).status).toBe("running");
     expect(store.getTask(planned.id)).not.toHaveProperty("denial");
     expect(store.database.prepare("SELECT count(*) AS n FROM approval_denials").get()).toEqual({ n: 0 });
     // Redaction lengthens this one, and the cap still holds after it.
-    const long = tasks.plan(put("long"));
+    const long = await tasks.plan(put("long"));
     const note = `${"x".repeat(984)} Bearer abcdefgh`;
     expect(note).toHaveLength(1_000);
-    expect(tasks.deny(long.id, "cli:alice", { note }).denial?.note).toHaveLength(1_000);
+    expect((await tasks.deny(long.id, "cli:alice", { note })).denial?.note).toHaveLength(1_000);
     const row = store.database.prepare("SELECT note FROM approval_denials WHERE task_id = ?").get(long.id) as {
       note: string;
     };
@@ -582,7 +582,7 @@ describe("refused answers (#424)", () => {
   });
 
   const waiting = async (tasks: TaskController) => {
-    const planned = tasks.plan(
+    const planned = await tasks.plan(
       TaskRequestSchema.parse({
         goal: "Inspect",
         operation: { kind: "system", action: "info" },
@@ -597,7 +597,7 @@ describe("refused answers (#424)", () => {
   it("records an in-band approval once per task and code, however often it is sent, and nothing it carried", async () => {
     const { tasks, store } = await setup({ mode: "enforced" });
     const identity = { principal: { kind: "agent" as const, id: "a" }, onBehalfOf: [] };
-    const planned = tasks.plan({ ...put("ledger"), identity }, { client: "harness:A" });
+    const planned = await tasks.plan({ ...put("ledger"), identity }, { client: "harness:A" });
     for (let attempt = 0; attempt < 50; attempt += 1) {
       await expect(tasks.execute(planned.id, forge(planned), { agent: "harness:A" })).rejects.toThrow(
         "approval_in_band_refused",
@@ -624,7 +624,7 @@ describe("refused answers (#424)", () => {
   it("names the sender its transport authenticated, never the task's planner", async () => {
     const { tasks, store, cipher } = await setup({ mode: "enforced" });
     const identity = { principal: { kind: "agent" as const, id: "a" }, onBehalfOf: [] };
-    const planned = tasks.plan({ ...put("ledger"), identity }, { client: "harness:A" });
+    const planned = await tasks.plan({ ...put("ledger"), identity }, { client: "harness:A" });
     // A session whose transport authenticated nobody, which calls its sender
     // `agent`, can reach any task, so what it sends names nobody, not the
     // client that planned the task.
@@ -645,7 +645,7 @@ describe("refused answers (#424)", () => {
     // Nor does an agent's verdict sent over such a transport name the operator.
     const asked = await waiting(tasks);
     const grader = { identity: { principal: { kind: "agent" as const, id: "grader" }, onBehalfOf: [] } };
-    expect(() => tasks.judge({ ...asked, verdict: "yes" }, grader)).toThrow("judgement_in_band_refused");
+    await expect(tasks.judge({ ...asked, verdict: "yes" }, grader)).rejects.toThrow("judgement_in_band_refused");
     expect(store.listRefusals(5)).toEqual(
       expect.arrayContaining([
         {
@@ -686,7 +686,7 @@ describe("refused answers (#424)", () => {
     );
     // `melra judge` run without enforced mode on a task that ran enforced.
     const asked = await waiting(tasks);
-    expect(() => developer.judge({ ...asked, verdict: "yes" }, { operator: "cli:alice" })).toThrow(
+    await expect(developer.judge({ ...asked, verdict: "yes" }, { operator: "cli:alice" })).rejects.toThrow(
       "judgement_in_band_refused",
     );
     // `melra workflow advance --approval` in enforced mode.
@@ -720,16 +720,16 @@ describe("refused answers (#424)", () => {
 
   it("records a phrase, id or decision that does not match, in developer mode too", async () => {
     const { root, tasks, store, cipher } = await setup();
-    const planned = tasks.plan(put("ledger"));
+    const planned = await tasks.plan(put("ledger"));
     await expect(tasks.execute(planned.id, { approvalId: planned.approval!.approvalId, phrase: "APPROVE 000000000000" }))
       .rejects.toThrow("approval_phrase_mismatch");
     await expect(tasks.execute(planned.id, { approvalId: "00000000-0000-4000-8000-000000000000", phrase: "APPROVE x" }))
       .rejects.toThrow("approval_id_mismatch");
-    expect(() => tasks.decide(planned.id, "0".repeat(64), "cli:alice")).toThrow("approval_render_mismatch");
+    await expect(tasks.decide(planned.id, "0".repeat(64), "cli:alice")).rejects.toThrow("approval_render_mismatch");
     // Asked without an answer is not an attempt.
     await expect(tasks.execute(planned.id)).rejects.toThrow("approval_required");
     // A decision row that does not match what would be shown is its approver's.
-    const shown = tasks.plan(put("shown"));
+    const shown = await tasks.plan(put("shown"));
     store.recordApprovalDecision({
       approvalId: shown.approval!.approvalId,
       taskId: shown.id,
@@ -740,13 +740,13 @@ describe("refused answers (#424)", () => {
     });
     await expect(tasks.execute(shown.id)).rejects.toThrow("approval_render_mismatch");
     // A stored challenge that no longer binds the operation.
-    const bound = tasks.plan(put("bound"));
+    const bound = await tasks.plan(put("bound"));
     store.saveTask({ ...store.getTask(bound.id)!, approval: { ...bound.approval!, actionDigest: "0".repeat(64) } });
     await expect(tasks.execute(bound.id, { approvalId: bound.approval!.approvalId, phrase: bound.approval!.phrase! }))
       .rejects.toThrow("approval_action_digest_mismatch");
     // Planned with no challenge, then asked to run where policy wants one:
     // refused, but nothing was sent, so nothing is recorded.
-    const unasked = tasks.plan(
+    const unasked = await tasks.plan(
       // `../outside`, not `/etc`: Windows reads `/etc` as a switch, not a path.
       TaskRequestSchema.parse({ goal: "List", operation: { kind: "terminal", action: "run", command: "ls", args: ["../outside"] } }),
     );
@@ -800,7 +800,7 @@ describe("refused answers (#424)", () => {
       client: { kind: "harness" as const, id: "C" },
     };
     const before = JSON.stringify(store.getTask(asked.taskId));
-    expect(() => tasks.judge({ ...asked, verdict: "yes" }, judge)).toThrow("judgement_in_band_refused");
+    await expect(tasks.judge({ ...asked, verdict: "yes" }, judge)).rejects.toThrow("judgement_in_band_refused");
     expect(JSON.stringify(store.getTask(asked.taskId))).toBe(before);
     expect(store.listRefusals(5)).toEqual([
       expect.objectContaining({ subjectId: asked.taskId, code: "judgement_in_band_refused", principal: "agent:grader", client: "harness:C" }),
@@ -843,7 +843,7 @@ describe("refused answers (#424)", () => {
 describe("a plan-time policy deny", () => {
   it("is certified POLICY_BLOCKED, as an execute-time one is", async () => {
     const { tasks, store } = await setup();
-    const planned = tasks.plan({ ...put("ledger"), constraints: ["only the ledger"] });
+    const planned = await tasks.plan({ ...put("ledger"), constraints: ["only the ledger"] });
     expect(planned.status).toBe("policy_blocked");
     const certificate = store.getCertificateForTask(planned.id);
     expect(certificate).toMatchObject({ taskId: planned.id, result: "POLICY_BLOCKED", mode: "developer" });

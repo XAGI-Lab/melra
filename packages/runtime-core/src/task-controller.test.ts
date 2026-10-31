@@ -93,7 +93,7 @@ describe("TaskController", () => {
       goal: "Inspect the runtime after restart",
       operation: { kind: "system", action: "info" },
     });
-    const planned = controllerA.plan(request);
+    const planned = await controllerA.plan(request);
     storeA.close();
     stores.splice(stores.indexOf(storeA), 1);
 
@@ -120,18 +120,21 @@ describe("TaskController", () => {
     stores.push(running, elsewhere);
     const executing = await createController(running, root, key, executor);
     const other = await createController(elsewhere, root, key, executor);
-    const planned = executing.plan(
+    const planned = await executing.plan(
       TaskRequestSchema.parse({ goal: "Inspect the runtime", operation: { kind: "system", action: "info" } }),
     );
     // Another process reads the task, and a workflow advance certifies it,
     // while its certificate is being written.
     const save = running.saveCertificate.bind(running);
     let read: ReturnType<TaskController["receipts"]> | undefined;
-    let certified: ReturnType<TaskController["certify"]>;
+    let certified: ReturnType<TaskController["certifySync"]>;
+    let awaited: ReturnType<TaskController["certify"]> | undefined;
     let seen: string | undefined;
     vi.spyOn(running, "saveCertificate").mockImplementationOnce((certificate, options) => {
       read = other.receipts({ taskId: planned.id });
-      certified = other.certify(planned.id);
+      certified = other.certifySync(planned.id);
+      // Waits for the executor's commit, and hands out its certificate.
+      awaited = other.certify(planned.id);
       seen = elsewhere.getTask(planned.id)?.status;
       return save(certificate, options);
     });
@@ -147,6 +150,7 @@ describe("TaskController", () => {
     const stored = running.getCertificateForTask(planned.id)!;
     expect(executed.certificate?.certificateId).toBe(stored.certificateId);
     expect(running.getTask(planned.id)?.certificateId).toBe(stored.certificateId);
+    expect((await awaited)?.certificateId).toBe(stored.certificateId);
   });
 
   it("keeps exact requests out of SQLite and rejects the wrong key", async () => {
@@ -161,7 +165,7 @@ describe("TaskController", () => {
       Buffer.alloc(32, 23),
       { async execute() { return { success: true }; } },
     );
-    const planned = controllerA.plan(
+    const planned = await controllerA.plan(
       TaskRequestSchema.parse({
         // Secret-shaped, since a goal keeps any words that are not (#385).
         goal: "Inspect with password=one-time-secret",
@@ -190,7 +194,7 @@ describe("TaskController", () => {
 
   it("verifies an authenticated persisted adapter result", async () => {
     const { controller } = await setup();
-    const planned = controller.plan(
+    const planned = await controller.plan(
       TaskRequestSchema.parse({
         goal: "Persist a result for later workflow conditions",
         operation: { kind: "system", action: "info" },
@@ -230,23 +234,20 @@ describe("TaskController", () => {
     const browser = (operation: Record<string, unknown>) =>
       TaskRequestSchema.parse({ goal: "Click", operation: { kind: "browser", ...operation } });
     // A list the runtime ignores would show the approver an effect that does not happen.
-    expect(() =>
-      controller.plan(browser({ action: "click", target: { selector: "#ok" }, filePaths: [".env"] })),
-    ).toThrow("browser_field_unused:filePaths");
-    expect(() =>
-      controller.plan(browser({ action: "fill_form", fields: [{ target: { selector: "#a" }, value: "x" }], values: ["pad"] })),
-    ).toThrow("browser_field_unused:values");
-    expect(() =>
-      controller.plan(browser({ action: "type", target: { selector: "#q" }, value: "x", fields: [{ target: { selector: "#a" }, value: "x" }] })),
-    ).toThrow("browser_field_unused:fields");
+    await expect(controller.plan(browser({ action: "click", target: { selector: "#ok" }, filePaths: [".env"] })),
+    ).rejects.toThrow("browser_field_unused:filePaths");
+    await expect(controller.plan(browser({ action: "fill_form", fields: [{ target: { selector: "#a" }, value: "x" }], values: ["pad"] })),
+    ).rejects.toThrow("browser_field_unused:values");
+    await expect(controller.plan(browser({ action: "type", target: { selector: "#q" }, value: "x", fields: [{ target: { selector: "#a" }, value: "x" }] })),
+    ).rejects.toThrow("browser_field_unused:fields");
     expect(store.listTasks()).toEqual([]);
     // Each list is still accepted by the action that reads it.
-    expect(() => controller.plan(browser({ action: "select", target: { selector: "#s" }, values: ["a"] }))).not.toThrow();
+    await expect(controller.plan(browser({ action: "select", target: { selector: "#s" }, values: ["a"] }))).resolves.toBeDefined();
   });
 
   it("rejects an approval whose stored action digest no longer matches", async () => {
     const { controller, store } = await setup();
-    const planned = controller.plan(
+    const planned = await controller.plan(
       TaskRequestSchema.parse({
         goal: "Store a governed memory",
         operation: {
@@ -278,7 +279,7 @@ describe("TaskController", () => {
   it("uses rechecked policy rather than a stale stored allow decision", async () => {
     const execute = vi.fn(async () => ({ success: true, stored: true }));
     const { controller, store } = await setup({ execute });
-    const planned = controller.plan(
+    const planned = await controller.plan(
       TaskRequestSchema.parse({
         goal: "Store a governed memory",
         operation: {
@@ -309,13 +310,13 @@ describe("TaskController", () => {
   it("recovers interrupted reads for retry and quarantines mutations", async () => {
     const execute = vi.fn(async () => ({ success: true }));
     const { controller, store } = await setup({ execute });
-    const read = controller.plan(
+    const read = await controller.plan(
       TaskRequestSchema.parse({
         goal: "Recover an interrupted read",
         operation: { kind: "system", action: "info" },
       }),
     );
-    const mutation = controller.plan(
+    const mutation = await controller.plan(
       TaskRequestSchema.parse({
         goal: "Recover an interrupted mutation",
         operation: {
@@ -352,7 +353,7 @@ describe("TaskController", () => {
   it("recovers as verified a read that committed its key before the interruption", async () => {
     const execute = vi.fn(async () => ({ success: true }));
     const { controller, store } = await setup({ execute });
-    const planned = controller.plan(
+    const planned = await controller.plan(
       TaskRequestSchema.parse({ goal: "Inspect", operation: { kind: "system", action: "info" } }),
       { idempotencyKey: "c".repeat(64), attempt: 1 },
     );
@@ -372,7 +373,7 @@ describe("TaskController", () => {
   it("does not recover as verified an action that reported failure", async () => {
     const { controller, store } = await setup();
     const root = roots.at(-1)!;
-    const planned = controller.plan(
+    const planned = await controller.plan(
       TaskRequestSchema.parse({
         goal: "A build that failed beside an old output",
         operation: { kind: "file", action: "write", path: "dist.txt", content: "new" },
@@ -396,7 +397,7 @@ describe("TaskController", () => {
     const execute = vi.fn(async () => ({ success: true }));
     const { controller, store } = await setup({ execute });
     const root = roots.at(-1)!;
-    const planned = controller.plan(
+    const planned = await controller.plan(
       TaskRequestSchema.parse({
         goal: "Recover an already completed file write",
         operation: {
@@ -446,7 +447,7 @@ describe("TaskController", () => {
     await rename(join(root, "Readme.md"), join(root, "README.md"));
     // Only a disk that folds case reaches the renamed file by its old name.
     if (!(await lstat(join(root, "Readme.md")).then(() => true, () => false))) return;
-    const planned = controller.plan(
+    const planned = await controller.plan(
       TaskRequestSchema.parse({
         goal: "Rename by case",
         operation: { kind: "file", action: "move", path: "Readme.md", destination: "README.md" },
@@ -476,12 +477,12 @@ describe("TaskController", () => {
       operation: { kind: "system", action: "info" },
     });
     const idempotencyKey = "a".repeat(64);
-    const first = controller.plan(request, {
+    const first = await controller.plan(request, {
       idempotencyKey,
       attempt: 1,
     });
     const firstResult = await controller.execute(first.id);
-    const duplicate = controller.plan(request, {
+    const duplicate = await controller.plan(request, {
       idempotencyKey,
       attempt: 2,
     });
@@ -503,7 +504,7 @@ describe("TaskController", () => {
 
   it("plans, executes, verifies, and persists a read task", async () => {
     const { controller, store } = await setup();
-    const task = controller.plan(
+    const task = await controller.plan(
       TaskRequestSchema.parse({
         goal: "Inspect the system",
         operation: { kind: "system", action: "info" },
@@ -519,7 +520,7 @@ describe("TaskController", () => {
 
   it("requires the exact approval for mutation", async () => {
     const { controller } = await setup();
-    const task = controller.plan(
+    const task = await controller.plan(
       TaskRequestSchema.parse({
         goal: "Store a memory",
         operation: {
@@ -545,7 +546,7 @@ describe("TaskController", () => {
 
   it("derives evidence for a mutation that declared none", async () => {
     const { controller } = await setup();
-    const task = controller.plan(
+    const task = await controller.plan(
       TaskRequestSchema.parse({
         goal: "Write a file",
         operation: {
@@ -566,7 +567,7 @@ describe("TaskController", () => {
 
   it("still blocks a mutation whose evidence cannot be derived", async () => {
     const { controller } = await setup();
-    const task = controller.plan(
+    const task = await controller.plan(
       TaskRequestSchema.parse({
         goal: "Run a build",
         operation: {
@@ -603,7 +604,7 @@ describe("TaskController", () => {
       new CircuitBreaker({ threshold: 2, cooldownMs: 60_000 }),
     );
     const run = async () => {
-      const task = controller.plan(
+      const task = await controller.plan(
         TaskRequestSchema.parse({
           goal: "Ask an unreachable target",
           operation: { kind: "system", action: "info" },
@@ -634,7 +635,7 @@ describe("TaskController", () => {
         return { success: true };
       },
     });
-    const task = controller.plan(
+    const task = await controller.plan(
       TaskRequestSchema.parse({
         goal: "Retry one transient read",
         operation: { kind: "system", action: "info" },
@@ -660,7 +661,7 @@ describe("TaskController", () => {
         return { success: true };
       },
     });
-    const task = controller.plan(
+    const task = await controller.plan(
       TaskRequestSchema.parse({
         goal: "Respect a strict execution budget",
         operation: { kind: "system", action: "info" },
@@ -684,7 +685,7 @@ describe("TaskController", () => {
         };
       },
     });
-    const task = controller.plan(
+    const task = await controller.plan(
       TaskRequestSchema.parse({
         goal: "Persist only redacted evidence",
         operation: { kind: "system", action: "info" },
@@ -717,7 +718,7 @@ describe("TaskController", () => {
         throw new Error(`upstream rejected ${secret}`);
       },
     );
-    const task = controller.plan(
+    const task = await controller.plan(
       TaskRequestSchema.parse({
         goal: "Confirm the provider's state",
         operation: { kind: "system", action: "info" },
@@ -743,7 +744,7 @@ describe("TaskController", () => {
         return { success: true, status: 200 };
       },
     });
-    const task = controller.plan(
+    const task = await controller.plan(
       TaskRequestSchema.parse({
         goal: "Check status",
         operation: { kind: "http", action: "request", method: "GET", url: "https://deploy:S3cretPass@api.example.com/status" },
@@ -761,7 +762,7 @@ describe("TaskController", () => {
       },
     });
     const goal = "Read a.txt to confirm the greeting";
-    const plain = controller.plan(
+    const plain = await controller.plan(
       TaskRequestSchema.parse({ goal, operation: { kind: "system", action: "info" } }),
     );
     expect((await controller.execute(plain.id)).certificate?.goal).toBe(goal);
@@ -770,7 +771,7 @@ describe("TaskController", () => {
 
     // Built at run time so no literal here reads as a leaked credential.
     const secret = `${"ghp"}_${"A1b2C3d4E5".repeat(4)}`;
-    const leaky = controller.plan(
+    const leaky = await controller.plan(
       TaskRequestSchema.parse({ goal: `Deploy with ${secret}`, operation: { kind: "system", action: "info" } }),
     );
     await controller.execute(leaky.id);
@@ -786,7 +787,7 @@ describe("TaskController", () => {
     });
     // Built at run time so no literal here reads as a leaked credential.
     const secret = `S3cr3t${"Passw0rd"}`;
-    const task = controller.plan(
+    const task = await controller.plan(
       TaskRequestSchema.parse({
         goal: `set password := "${secret}" in main.go and 'secret' => '${secret} too' in config.php`,
         operation: { kind: "system", action: "info" },
@@ -813,7 +814,7 @@ describe("TaskController", () => {
       },
     });
     const secretInput = "one-time private form value";
-    const task = controller.plan(
+    const task = await controller.plan(
       TaskRequestSchema.parse({
         goal: "Type a reviewed value",
         operation: {
@@ -848,7 +849,7 @@ describe("effect contract and principal", () => {
       principal: { kind: "agent" as const, id: "claude-code" },
       onBehalfOf: [{ kind: "human" as const, id: "dheeraj" }],
     };
-    const task = controller.plan(
+    const task = await controller.plan(
       TaskRequestSchema.parse({
         goal: "Read a file",
         operation: { kind: "file", action: "read", path: "notes.txt" },
@@ -868,7 +869,7 @@ describe("effect contract and principal", () => {
 
   it("records the local principal when the caller declares none", async () => {
     const { controller } = await setup();
-    const task = controller.plan(
+    const task = await controller.plan(
       TaskRequestSchema.parse({
         goal: "Read a file",
         operation: { kind: "file", action: "read", path: "notes.txt" },
@@ -882,7 +883,7 @@ describe("effect contract and principal", () => {
     const { controller, store } = await setup();
     // Built at run time so no literal here reads as a leaked credential.
     const token = `${"ghp"}_${"A1b2C3d4E5".repeat(4)}`;
-    const task = controller.plan(
+    const task = await controller.plan(
       TaskRequestSchema.parse({
         goal: "Read system info",
         operation: { kind: "system", action: "info" },
@@ -913,7 +914,7 @@ describe("effect contract and principal", () => {
       options: { idempotencyKey?: string } = {},
     ) {
       const { controller, store } = await setup({ execute });
-      const task = controller.plan(
+      const task = await controller.plan(
         TaskRequestSchema.parse({
           goal: "Charge the customer",
           operation: {
@@ -1034,7 +1035,7 @@ describe("effect contract and principal", () => {
         throw outcomeUnknown("socket hang up");
       });
       const { controller, store } = await setup({ execute }, probe);
-      const task = controller.plan(
+      const task = await controller.plan(
         TaskRequestSchema.parse({
           goal: "Charge the customer",
           operation: {
@@ -1270,7 +1271,7 @@ describe("effect contract and principal", () => {
 
     it("refuses at plan time a reconciliation verifier this runtime does not have", async () => {
       const { controller } = await setup();
-      expect(() =>
+      await expect(
         controller.plan(
           TaskRequestSchema.parse({
             goal: "Charge the customer",
@@ -1286,7 +1287,7 @@ describe("effect contract and principal", () => {
             reconciliation: [{ type: "custom", verifier: "ledger_row" }],
           }),
         ),
-      ).toThrow("evidence_verifier_unavailable:ledger_row");
+      ).rejects.toThrow("evidence_verifier_unavailable:ledger_row");
     });
 
     it("refuses at plan time a file path no answer can ever come from", async () => {
@@ -1298,20 +1299,20 @@ describe("effect contract and principal", () => {
           ...evidence,
         });
       for (const path of ["../release.flag", ".", "/etc/hosts"]) {
-        expect(() => controller.plan(write({ requiredEvidence: [{ type: "file_exists", path }] })), path).toThrow(
+        await expect(controller.plan(write({ requiredEvidence: [{ type: "file_exists", path }] })), path).rejects.toThrow(
           "evidence_path_outside_workspace",
         );
         // Asked, it is refused every time, so the task would stay parked.
-        expect(() => controller.plan(write({ reconciliation: [{ type: "file_absent", path }] })), path).toThrow(
+        await expect(controller.plan(write({ reconciliation: [{ type: "file_absent", path }] })), path).rejects.toThrow(
           "evidence_path_outside_workspace",
         );
       }
       // By its spelling: a file that is not there yet is a fair question.
       const later = write({ requiredEvidence: [{ type: "file_exists", path: "dist/../out/release.flag" }] });
-      expect(controller.plan(later).status).toBe("awaiting_approval");
+      expect((await controller.plan(later)).status).toBe("awaiting_approval");
       // A workflow step accepted before this check is not stopped at.
       const accepted = write({ requiredEvidence: [{ type: "file_exists", path: "." }] });
-      expect(controller.plan(accepted, { stored: true }).status).toBe("awaiting_approval");
+      expect((await controller.plan(accepted, { stored: true })).status).toBe("awaiting_approval");
     });
 
     it("parks an unanswered mutation that declared no way to settle it", async () => {
@@ -1319,7 +1320,7 @@ describe("effect contract and principal", () => {
         throw outcomeUnknown("socket hang up");
       });
       const { controller } = await setup({ execute });
-      const task = controller.plan(
+      const task = await controller.plan(
         TaskRequestSchema.parse({
           goal: "Charge the customer",
           operation: {
@@ -1351,7 +1352,7 @@ describe("effect contract and principal", () => {
         throw outcomeUnknown("socket hang up");
       });
       const { controller } = await setup({ execute });
-      const task = controller.plan(
+      const task = await controller.plan(
         TaskRequestSchema.parse({
           goal: "Read the charge",
           operation: {
@@ -1379,7 +1380,7 @@ describe("effect contract and principal", () => {
       }));
       const execute = vi.fn(async () => ({ success: true }));
       const { controller, store } = await setup({ execute }, probe);
-      const task = controller.plan(
+      const task = await controller.plan(
         TaskRequestSchema.parse({
           goal: "Charge the customer",
           operation: {
@@ -1440,31 +1441,31 @@ describe("challenges open per caller (#422)", () => {
 
   it("refuses a challenge past the cap before anything is written, naming the cap and how to make room", async () => {
     const { controller, store } = await capped(2);
-    controller.plan(write("a.txt"));
-    controller.plan(write("b.txt"));
+    await controller.plan(write("a.txt"));
+    await controller.plan(write("b.txt"));
     const before = store.listTasks(100);
-    expect(() => controller.plan(write("c.txt"))).toThrow(
+    await expect(controller.plan(write("c.txt"))).rejects.toThrow(
       /^too_many_pending_approvals: 2 tasks .*\(maxPendingApprovals 2\); plan more once some are approved, denied or cancelled, or their challenges expire$/,
     );
     expect(store.listTasks(100)).toEqual(before);
     // A read asks nobody, and another caller has room of its own.
-    expect(controller.plan(TaskRequestSchema.parse({ goal: "Inspect", operation: { kind: "system", action: "info" } })).status).toBe(
+    expect((await controller.plan(TaskRequestSchema.parse({ goal: "Inspect", operation: { kind: "system", action: "info" } }))).status).toBe(
       "planned",
     );
-    expect(controller.plan(write("c.txt"), { client: "harness:B" }).status).toBe("awaiting_approval");
+    expect((await controller.plan(write("c.txt"), { client: "harness:B" })).status).toBe("awaiting_approval");
     expect([controller.pendingApprovals("operator"), controller.pendingApprovals("harness:B")]).toEqual([2, 1]);
   });
 
   it("counts only a challenge still open: not one cancelled, denied, approved or expired", async () => {
     const { controller, store } = await capped(1);
-    controller.cancel(controller.plan(write("a.txt")).id);
-    controller.deny(controller.plan(write("b.txt")).id, "operator");
-    const approved = controller.plan(write("c.txt"));
-    controller.decide(approved.id, controller.approvalView(approved.id).renderDigest, "operator");
-    const lapsed = store.getTask(controller.plan(write("d.txt")).id)!;
+    await controller.cancel((await controller.plan(write("a.txt"))).id);
+    await controller.deny((await controller.plan(write("b.txt"))).id, "operator");
+    const approved = await controller.plan(write("c.txt"));
+    await controller.decide(approved.id, controller.approvalView(approved.id).renderDigest, "operator");
+    const lapsed = store.getTask((await controller.plan(write("d.txt"))).id)!;
     store.saveTask({ ...lapsed, approval: { ...lapsed.approval!, expiresAt: new Date(Date.now() - 1_000).toISOString() } });
     expect(controller.pendingApprovals("operator")).toBe(0);
-    controller.plan(write("e.txt"));
-    expect(() => controller.plan(write("f.txt"))).toThrow("too_many_pending_approvals");
+    await controller.plan(write("e.txt"));
+    await expect(controller.plan(write("f.txt"))).rejects.toThrow("too_many_pending_approvals");
   });
 });

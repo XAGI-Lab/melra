@@ -116,7 +116,7 @@ describe("AARM self-check", () => {
     try {
       const open = () => createMelraRuntime({ workspaceRoot: box.workspace, dataDirectory: box.data, environment: {} });
       let runtime = await open();
-      const task = runtime.controller.plan({
+      const task = await runtime.controller.plan({
         goal: "tamper track",
         operation: { kind: "system", action: "info" },
         constraints: [],

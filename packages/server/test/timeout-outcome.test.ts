@@ -30,7 +30,7 @@ describe("a terminal mutation stopped by its own timeoutMs", () => {
     const runtime = await createMelraRuntime({ workspaceRoot: workspace, dataDirectory: home, policyPath, environment: {} });
     try {
       // It does its work, then outlives its timeout.
-      const planned = runtime.controller.plan(
+      const planned = await runtime.controller.plan(
         TaskRequestSchema.parse({
           goal: "Write a file, then hang",
           operation: {

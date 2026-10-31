@@ -389,7 +389,7 @@ describe("MELRA over real stdio transport", () => {
       dataDirectory: restartHome,
       environment: {},
     });
-    const task = first.controller.plan({
+    const task = await first.controller.plan({
       goal: "Execute after runtime restart",
       operation: { kind: "system", action: "info" },
       constraints: [],
@@ -727,9 +727,9 @@ describe("MELRA over real stdio transport", () => {
         environment: { MELRA_MODE: "enforced" },
       });
       try {
-        operator.controller.decide(taskId, operator.controller.approvalView(taskId).renderDigest, "cli:e2e");
+        await operator.controller.decide(taskId, operator.controller.approvalView(taskId).renderDigest, "cli:e2e");
         const heldId = String(held.value.taskId);
-        operator.controller.decide(heldId, operator.controller.approvalView(heldId).renderDigest, "cli:e2e");
+        await operator.controller.decide(heldId, operator.controller.approvalView(heldId).renderDigest, "cli:e2e");
       } finally {
         await operator.close();
       }

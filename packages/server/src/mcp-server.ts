@@ -366,7 +366,7 @@ export function createMcpServer(
     },
     async (input) =>
       toolResult(
-        runtime.controller.plan(
+        await runtime.controller.plan(
           TaskRequestSchema.parse(attributed(input, client)),
           { client: caller },
         ),
@@ -435,7 +435,7 @@ export function createMcpServer(
     async (input) => {
       const parsed = MelraTaskCancelInputSchema.parse(input);
       ownTask(parsed.taskId);
-      return toolResult(runtime.controller.cancel(parsed.taskId));
+      return toolResult(await runtime.controller.cancel(parsed.taskId));
     },
   );
 
@@ -495,7 +495,7 @@ export function createMcpServer(
       );
       ownTask(judgement.taskId);
       return toolResult(
-        runtime.controller.judge(judgement, { identity, ...(client === undefined ? {} : { client }) }),
+        await runtime.controller.judge(judgement, { identity, ...(client === undefined ? {} : { client }) }),
       );
     },
   );

@@ -827,7 +827,7 @@ export async function serveHttp(
     if (route[2] === "deny") {
       // Another process may have started it since the page drew it: then it
       // runs, and the page must not say it was denied.
-      const task = runtime.controller.deny(taskId, console_.approver, ((await readBody(request)) ?? {}) as DenialInput);
+      const task = await runtime.controller.deny(taskId, console_.approver, ((await readBody(request)) ?? {}) as DenialInput);
       if (task.status !== "cancelled") throw new Error(`task_not_cancellable:${task.status}`);
       json(response, 200, { task });
       return;
@@ -837,7 +837,7 @@ export async function serveHttp(
     // taken when it drew them, so nothing that changed since redirects this.
     if (body?.taskId !== taskId) throw new Error("approval_task_mismatch");
     if (typeof body.renderDigest !== "string") throw new Error("render_digest_required");
-    const decision = runtime.controller.decide(taskId, body.renderDigest, console_.approver);
+    const decision = await runtime.controller.decide(taskId, body.renderDigest, console_.approver);
     options.onApproved?.(taskId);
     json(response, 200, { decision });
   }

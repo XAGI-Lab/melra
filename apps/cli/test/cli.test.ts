@@ -209,7 +209,7 @@ describe("melra CLI", () => {
             operation: { kind: "file", action: "write", path: "report.txt", content: "x" },
           }),
         );
-      const planned = plan();
+      const planned = await plan();
       const env = {
         ...process.env,
         MELRA_HOME: dataDirectory,
@@ -246,7 +246,7 @@ describe("melra CLI", () => {
 
       // A developer-mode yes would spend the one decision this enforced task
       // can have on a row its kernel refuses, so it is refused unrecorded.
-      const developer = plan();
+      const developer = await plan();
       const refused = (await execute(process.execPath, [entry, "approve", developer.id, "--yes"], {
         cwd: root,
         env: { ...env, MELRA_MODE: "" },
@@ -255,7 +255,7 @@ describe("melra CLI", () => {
       expect(refused.stderr).toContain("approval_needs_enforced_mode");
       expect(server.store.getApprovalDecision(developer.approval!.approvalId)).toBeUndefined();
 
-      const denied = plan();
+      const denied = await plan();
       await execute(
         process.execPath,
         [entry, "approve", denied.id, "--deny", "--reason", "too_broad", "--note", "Only report.txt."],
@@ -267,7 +267,7 @@ describe("melra CLI", () => {
       });
       // A reason beside a yes would read as a no and approve, and one not in the
       // list says nothing: both are refused with nothing recorded.
-      const unsure = plan();
+      const unsure = await plan();
       for (const [args, said] of [
         [["--yes", "--reason", "never"], "--reason and --note go with --deny"],
         [["--deny", "--reason", "someday"], "reason: Invalid option"],
@@ -483,7 +483,7 @@ describe("melra CLI", () => {
     const root = join(base, "workspace");
     await mkdir(root);
     const waiting = async (server: Awaited<ReturnType<typeof createMelraRuntime>>) => {
-      const planned = server.controller.plan(
+      const planned = await server.controller.plan(
         TaskRequestSchema.parse({
           goal: "List the workspace and ask whether it looks tidy",
           operation: { kind: "file", action: "list", path: "." },
@@ -691,7 +691,7 @@ describe("melra CLI", () => {
     // Planned, and so asked about, while the grant was unspent.
     const server = await createMelraRuntime({ workspaceRoot: root, dataDirectory, policyPath, environment: {} });
     try {
-      const other = server.controller.plan(
+      const other = await server.controller.plan(
         TaskRequestSchema.parse({
           goal: "Write another",
           operation: { kind: "file", action: "write", path: "other.txt", content: "y" },
@@ -812,7 +812,7 @@ describe("melra CLI", () => {
 
     it("prints its address before the pairing, even when the page pairs first", async () => {
       const { env, melra, terminal, seen } = await start();
-      const task = melra.controller.plan(
+      const task = await melra.controller.plan(
         TaskRequestSchema.parse({
           goal: "Write the report",
           operation: { kind: "file", action: "write", path: "report.txt", content: "x" },
@@ -848,7 +848,7 @@ describe("melra CLI", () => {
 
     it("names what a tab approved while an opener ran, when the opener then fails", async () => {
       const { env, melra, terminal, seen } = await start();
-      const task = melra.controller.plan(
+      const task = await melra.controller.plan(
         TaskRequestSchema.parse({
           goal: "Write the report",
           operation: { kind: "file", action: "write", path: "report.txt", content: "x" },
@@ -906,7 +906,7 @@ describe("melra CLI", () => {
         const paired = await call(url, "/pair", { body: { code } });
         const session = paired.json.session as string;
         expect(seen.said).toMatch(/Paired with a browser tab at \d\d:\d\d/);
-        const task = melra.controller.plan(
+        const task = await melra.controller.plan(
           TaskRequestSchema.parse({
             goal: "Write the report",
             operation: { kind: "file", action: "write", path: "report.txt", content: "x" },
@@ -1306,7 +1306,7 @@ describe("melra CLI", () => {
     const dataDirectory = join(root, ".melra");
     const server = await createMelraRuntime({ workspaceRoot: root, dataDirectory, environment: {} });
     try {
-      const planned = server.controller.plan(
+      const planned = await server.controller.plan(
         TaskRequestSchema.parse({
           goal: "Write\u009b2J\u202ethe report",
           operation: { kind: "file", action: "write", path: "report.txt", content: "x" },
@@ -1322,7 +1322,7 @@ describe("melra CLI", () => {
       expect(asked.stdout).not.toMatch(/[\u0080-\u009f\u202e]/);
       expect(JSON.parse(asked.stdout).contract.metadata.goal).toBe("Write\u009b2J\u202ethe report");
       // `melra tasks --json`, which the approval hint points at, too.
-      server.controller.plan(
+      await server.controller.plan(
         TaskRequestSchema.parse({
           goal: "Write",
           operation: { kind: "file", action: "write", path: "a\u202eb\u009b.txt", content: "x" },
@@ -1344,12 +1344,14 @@ describe("melra CLI", () => {
     try {
       // Planned reads, so none waits for approval. Seventeen ids over sixteen
       // hex digits: two of them start alike.
-      const ids = Array.from(
-        { length: 17 },
-        (_, index) =>
-          server.controller.plan(
-            TaskRequestSchema.parse({ goal: `List ${index}`, operation: { kind: "file", action: "list", path: "." } }),
-          ).id,
+      const ids = await Promise.all(
+        Array.from(
+          { length: 17 },
+          async (_, index) =>
+            (await server.controller.plan(
+              TaskRequestSchema.parse({ goal: `List ${index}`, operation: { kind: "file", action: "list", path: "." } }),
+            )).id,
+        ),
       );
       const shared = ids.find((id, index) => ids.findIndex((other) => other[0] === id[0]) !== index)![0]!;
       const env = { ...process.env, MELRA_HOME: dataDirectory, MELRA_WORKSPACE: root };
@@ -1390,16 +1392,16 @@ describe("melra CLI", () => {
     const dataDirectory = join(root, ".melra");
     const server = await createMelraRuntime({ workspaceRoot: root, dataDirectory, environment: {} });
     try {
-      const listed = server.controller.plan(
+      const listed = await server.controller.plan(
         TaskRequestSchema.parse({ goal: "List", operation: { kind: "file", action: "list", path: "." } }),
       );
-      const write = server.controller.plan(
+      const write = await server.controller.plan(
         TaskRequestSchema.parse({
           goal: "Write the report",
           operation: { kind: "file", action: "write", path: "report.txt", content: "x" },
         }),
       );
-      const planned = server.controller.plan(
+      const planned = await server.controller.plan(
         TaskRequestSchema.parse({
           goal: "List the workspace and ask whether it looks tidy",
           operation: { kind: "file", action: "list", path: "." },
@@ -1475,9 +1477,9 @@ describe("melra CLI", () => {
     const list = (goal: string) =>
       server.controller.plan(TaskRequestSchema.parse({ goal, operation: { kind: "file", action: "list", path: "." } }));
     try {
-      const old = server.controller.cancel(list("The old one").id);
+      const old = await server.controller.cancel((await list("The old one")).id);
       // More than any one listing reads, so only a search of every task finds it.
-      for (let index = 0; index < 510; index += 1) list(`List ${index}`);
+      for (let index = 0; index < 510; index += 1) await list(`List ${index}`);
       const env = { ...process.env, MELRA_HOME: dataDirectory, MELRA_WORKSPACE: root };
       for (const command of ["inspect", "export"]) {
         const { stdout } = await execute(process.execPath, [entry, command, old.id.slice(0, 8)], { cwd: root, env });
