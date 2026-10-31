@@ -44,7 +44,7 @@ async function setup(adapter: (root: string, operation: Operation) => Promise<Re
     new PayloadCipher(KEY),
   );
   const run = async (request: TaskRequestInput, options?: TaskPlanOptions) => {
-    const planned = controller.plan(TaskRequestSchema.parse(request), options);
+    const planned = await controller.plan(TaskRequestSchema.parse(request), options);
     const done = await controller.execute(
       planned.id,
       planned.approval === undefined ? undefined : { approvalId: planned.approval.approvalId, phrase: planned.approval.phrase! },
@@ -172,7 +172,7 @@ describe("kernel checks", () => {
 
   it("are observed again when recovery finds an interrupted write", async () => {
     const { root, store, controller } = await setup(async () => ({ written: true }));
-    const planned = controller.plan(
+    const planned = await controller.plan(
       TaskRequestSchema.parse({
         goal: "Write the report",
         operation: { kind: "file", action: "write", path: "report.txt", content: "final" },
@@ -193,7 +193,7 @@ describe("kernel checks", () => {
 
   it("hold a reconciliation too, in the same recovery that saw one fail", async () => {
     const { root, store, controller } = await setup(async () => ({ written: true }));
-    const planned = controller.plan(
+    const planned = await controller.plan(
       TaskRequestSchema.parse({
         goal: "Write the report",
         operation: { kind: "file", action: "write", path: "report.txt", content: "final" },
@@ -259,7 +259,7 @@ describe("kernel checks", () => {
       ],
     });
     expect(done.task.status).toBe("waiting_user");
-    const judged = controller.judge(
+    const judged = await controller.judge(
       { taskId: planned.id, judgementId: done.task.judgements![0]!.judgementId, verdict: "yes" },
       { identity: { principal: { kind: "human", id: "reviewer" }, onBehalfOf: [] } },
     );

@@ -112,7 +112,7 @@ const refund = (verifyHost = "127.0.0.1") =>
 
 async function run(request: ReturnType<typeof refund>) {
   seen = [];
-  const planned = runtime.controller.plan(request);
+  const planned = await runtime.controller.plan(request);
   const approval =
     planned.approval === undefined
       ? undefined
@@ -195,7 +195,7 @@ describe("in enforced mode", () => {
         environment: { MELRA_MODE: "enforced" },
       });
       seen = [];
-      const read = enforced.controller.plan(
+      const read = await enforced.controller.plan(
         TaskRequestSchema.parse({
           goal: "Read a note",
           operation: { kind: "file", action: "read", path: "notes.txt" },
@@ -208,7 +208,7 @@ describe("in enforced mode", () => {
       expect(read.policyDecision.reason).toBe("network_read_unlisted_host");
       await expect(enforced.controller.execute(read.id)).rejects.toThrow(/approval_awaiting_operator/);
       expect(seen).toEqual([]);
-      enforced.controller.decide(read.id, enforced.controller.approvalView(read.id).renderDigest, "cli:test");
+      await enforced.controller.decide(read.id, enforced.controller.approvalView(read.id).renderDigest, "cli:test");
       expect((await enforced.controller.execute(read.id)).task.status).toBe("verified_success");
       expect(seen).toEqual(["GET /c?d=workspace-note"]);
     } finally {

@@ -146,7 +146,7 @@ export async function interfaces(): Promise<Record<Need, boolean>> {
   try {
     const runtime = await open(box, undefined);
     try {
-      const task = runtime.controller.plan(
+      const task = await runtime.controller.plan(
         TaskRequestSchema.parse({ goal: "AARM interface probe", operation: { kind: "system", action: "info" } }),
       );
       await runtime.controller.execute(task.id);
@@ -459,7 +459,7 @@ async function runCase(
             break;
           }
           try {
-            planned(step.as, runtime.controller.plan(parsed.value));
+            planned(step.as, await runtime.controller.plan(parsed.value));
           } catch (error) {
             outcomes.set(step.as, refused(message(error)));
           }
@@ -473,7 +473,7 @@ async function runCase(
             break;
           }
           try {
-            runtime.controller.decide(id, runtime.controller.approvalView(id).renderDigest, OPERATOR);
+            await runtime.controller.decide(id, runtime.controller.approvalView(id).renderDigest, OPERATOR);
             outcomes.set(as, { status: "approved", reason: "" });
           } catch (error) {
             outcomes.set(as, refused(message(error)));

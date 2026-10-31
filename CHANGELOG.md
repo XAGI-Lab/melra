@@ -18,18 +18,17 @@ All notable changes are documented here. The format follows
   `transaction`, but waits for another process's write lock by awaiting a
   timer rather than blocking the event loop, for up to the same 5 seconds.
   Only the `BEGIN` is tried again, never `action`; a nested write or an async
-  `action` rolls back. Memory's writes and a task's executing, recovering
-  and settling writes use it; the other task and workflow writes do not yet
-  (#461).
+  `action` rolls back. Memory's writes and a task's writes use it; workflow
+  writes, and the task writes a workflow makes, do not yet (#461).
 
 ### Changed
 
-- A task's writes, from its start to the commit after its adapter ran, and
-  recovery's, now wait for another process's write lock by awaiting
-  `SqliteStore.write` instead of blocking the event loop in SQLite's busy
-  timeout. Other sessions keep running meanwhile, and a commit after an
-  adapter ran no longer fails at the busy timeout's edge and parks a task
-  that ran as `recovery_required` (#461).
+- A task's writes (its plan, approval, denial, cancel, start and verdict, the
+  commit after its adapter ran, and recovery's) now wait for another process's
+  write lock by awaiting `SqliteStore.write` instead of blocking the event loop
+  in SQLite's busy timeout. Other sessions keep running meanwhile, and a commit
+  after an adapter ran no longer fails at the busy timeout's edge and parks a
+  task that ran as `recovery_required` (#461).
 - CI's `framework-examples` job now also runs the LangChain, OpenAI Agents SDK
   and Vercel AI SDK snippets in `examples/frameworks` with `--no-model`, and
   fails unless each gets MELRA's capabilities back (#469). The Vercel AI SDK
@@ -57,7 +56,13 @@ All notable changes are documented here. The format follows
   meanwhile (#461). `LocalMemory.execute` is now async and returns a promise:
   code that imports `@melra/memory` directly must await it. Each write commits
   where it did before: a put and what it supersedes together, then the scope's
-  compaction.
+  compaction. A task's plan, cancel, approval, denial, verdict and refusal now
+  wait the same way: `TaskController`'s `plan`, `cancel`, `decide`, `deny`,
+  `judge`, `refuse` and `certify` return promises, and code that imports
+  `@melra/runtime-core` directly must await them. Each one's checks and its
+  write are one transaction, so a caller's open challenges are counted in the
+  write that adds one, and a cancel stops a task that started while it waited
+  for the lock.
 - **Breaking:** when a durable workflow run fails, its other forward steps
   still planned or waiting for approval are cancelled, with the error
   `workflow_failed:<workflow-id>`. Executing one directly, with its phrase or

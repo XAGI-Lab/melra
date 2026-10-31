@@ -177,7 +177,7 @@ describe("harness tools in enforced mode", () => {
       call(tools, "approve", { taskId: held.taskId, phrase: `APPROVE ${task.approval!.actionDigest.slice(0, 12)}` }),
     ).rejects.toThrow("approval_in_band_refused");
     await expect(call(tools, "approve", { taskId: held.taskId })).rejects.toThrow("approval_awaiting_operator");
-    runtime.controller.decide(task.id, runtime.controller.approvalView(task.id).renderDigest, "cli:test");
+    await runtime.controller.decide(task.id, runtime.controller.approvalView(task.id).renderDigest, "cli:test");
     expect((await call(tools, "approve", { taskId: held.taskId })).status).toBe("verified_success");
     expect(await readFile(join(workspace, "w.txt"), "utf8")).toBe("x");
   });
@@ -185,7 +185,7 @@ describe("harness tools in enforced mode", () => {
   it("runs a held task only for the client that asked for it", async () => {
     const owner = collect(runtime, { kind: "harness", id: "owner" });
     const held = await call(owner, "write_file", { path: "owned.txt", content: "x" });
-    runtime.controller.decide(String(held.taskId), runtime.controller.approvalView(String(held.taskId)).renderDigest, "cli:test");
+    await runtime.controller.decide(String(held.taskId), runtime.controller.approvalView(String(held.taskId)).renderDigest, "cli:test");
     await expect(
       call(collect(runtime, { kind: "harness", id: "other" }), "approve", { taskId: held.taskId }),
     ).rejects.toThrow("task_belongs_to_another_client");
@@ -292,7 +292,7 @@ describe("harness tools in enforced mode", () => {
       expect(waiting.run.status).toBe("awaiting_approval");
       const taskId = waiting.run.nodes.write.taskIds[0]!;
       // What `melra approve <task> --yes`, then `melra workflow pause`, record.
-      runtime.controller.decide(taskId, runtime.controller.approvalView(taskId).renderDigest, "cli:alice");
+      await runtime.controller.decide(taskId, runtime.controller.approvalView(taskId).renderDigest, "cli:alice");
       runtime.workflows.pause(run.id, { operator: "cli:alice" });
 
       for (const [name, args, error] of [

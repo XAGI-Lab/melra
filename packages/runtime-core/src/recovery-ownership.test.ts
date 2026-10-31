@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  callerRef,
   TaskRequestSchema,
   outcomeUnknown,
   WorkflowDefinitionSchema,
@@ -131,7 +132,7 @@ describe("task recovery across processes", () => {
     const a = await side(at, adapter.execute);
     const probe = vi.fn(async () => ({ status: 200, content: JSON.stringify({ status: "applied" }) }));
     const b = await side(at, undefined, probe);
-    const task = a.tasks.plan(charge());
+    const task = await a.tasks.plan(charge());
     const running = a.tasks.execute(task.id, approve(task));
     await adapter.entered.opened;
 
@@ -159,7 +160,7 @@ describe("task recovery across processes", () => {
       return await verify(...args);
     });
     const key = "c".repeat(64);
-    const task = a.tasks.plan(
+    const task = await a.tasks.plan(
       TaskRequestSchema.parse({
         goal: "Write the report",
         operation: { kind: "file", action: "write", path: "report.txt", content: "done" },
@@ -187,7 +188,7 @@ describe("task recovery across processes", () => {
     const adapter = held();
     const a = await side(at, adapter.execute);
     const b = await side(at);
-    const task = a.tasks.plan(
+    const task = await a.tasks.plan(
       TaskRequestSchema.parse({
         goal: "Write the report",
         operation: { kind: "file", action: "write", path: "report.txt", content: "done" },
@@ -212,7 +213,7 @@ describe("task recovery across processes", () => {
     const probe = vi.fn(async () => ({ status: 200, content: JSON.stringify({ status: "applied" }) }));
     const b = await side(at, undefined, probe);
     const c = await side(at, undefined, probe);
-    const task = a.tasks.plan(charge());
+    const task = await a.tasks.plan(charge());
     void a.tasks.execute(task.id, approve(task)).catch(() => undefined);
     await adapter.entered.opened;
     a.store.close();
@@ -235,7 +236,7 @@ describe("task recovery that does not finish", () => {
     const adapter = held();
     const a = await side(at, adapter.execute);
     const b = await side(at);
-    const task = a.tasks.plan(put("ledger"));
+    const task = await a.tasks.plan(put("ledger"));
     void a.tasks.execute(task.id, approve(task)).catch(() => undefined);
     await adapter.entered.opened;
     a.store.close();
@@ -255,7 +256,7 @@ describe("task recovery that does not finish", () => {
     const adapter = held();
     const a = await side(at, adapter.execute);
     const b = await side(at);
-    const [stuck, fine] = [a.tasks.plan(put("stuck")), a.tasks.plan(put("fine"))];
+    const [stuck, fine] = [await a.tasks.plan(put("stuck")), await a.tasks.plan(put("fine"))];
     void a.tasks.execute(stuck.id, approve(stuck)).catch(() => undefined);
     await adapter.entered.opened;
     void a.tasks.execute(fine.id, approve(fine)).catch(() => undefined);
@@ -274,7 +275,7 @@ describe("task recovery that does not finish", () => {
     const at = await home();
     const adapter = held();
     const a = await side(at, adapter.execute);
-    const task = a.tasks.plan(put("ledger"));
+    const task = await a.tasks.plan(put("ledger"));
     const running = a.tasks.execute(task.id, approve(task));
     await adapter.entered.opened;
     // Ownership belongs to the store, so whatever else uses it must see this.
@@ -294,7 +295,7 @@ describe("task recovery that does not finish", () => {
     const at = await home();
     const a = await side(at);
     const b = await side(at);
-    const task = a.tasks.plan(put("ledger"));
+    const task = await a.tasks.plan(put("ledger"));
     const receipts = vi.spyOn(a.store, "saveReceipt").mockImplementation(() => {
       throw new Error("disk full");
     });
@@ -328,23 +329,25 @@ describe("starting and denying a task across processes", () => {
     };
 
     // The deny lands after the execute read the task.
-    const denied = a.tasks.plan(charge());
+    const denied = await a.tasks.plan(charge());
     let cancelled: TaskRecord | undefined;
-    afterRead(a.store, () => (cancelled = b.tasks.cancel(denied.id)));
+    afterRead(a.store, async () => (cancelled = await b.tasks.cancel(denied.id)));
     await expect(a.tasks.execute(denied.id, approve(denied))).rejects.toThrow("task_not_executable:cancelled");
     expect(cancelled?.status).toBe("cancelled");
     expect(a.adapter).not.toHaveBeenCalled();
 
     // The execute lands after the deny read the task.
-    const started = a.tasks.plan(charge());
+    const started = await a.tasks.plan(charge());
     let executing: ReturnType<TaskController["execute"]> | undefined;
     afterRead(b.store, () => (executing = a.tasks.execute(started.id, approve(started))));
-    expect(b.tasks.cancel(started.id).status).toBe("running");
+    // A workflow's cancel, which reads the task outside any write until #461's
+    // next step; `cancel` reads it in its write, where no execute lands between.
+    expect(b.tasks.cancelSync(started.id).status).toBe("running");
     expect((await executing!).task.status).toBe("verified_success");
     expect(a.adapter).toHaveBeenCalledTimes(1);
 
     // Two executes, one in each process.
-    const twice = a.tasks.plan(charge());
+    const twice = await a.tasks.plan(charge());
     afterRead(a.store, () => (executing = b.tasks.execute(twice.id, approve(twice))));
     await expect(a.tasks.execute(twice.id, approve(twice))).rejects.toThrow("task_not_executable:running");
     expect((await executing!).task.status).toBe("verified_success");
@@ -414,7 +417,7 @@ describe("reconciling one task in two processes", () => {
       }),
     );
     const b = await side(at, undefined, vi.fn(async () => ({ status: 200, content: JSON.stringify({ status: "applied" }) })));
-    const task = a.tasks.plan(charge());
+    const task = await a.tasks.plan(charge());
     expect((await a.tasks.execute(task.id, approve(task))).task.status).toBe("recovery_required");
 
     const slow = a.tasks.execute(task.id);
@@ -470,7 +473,7 @@ describe("a task's writes while another process holds the lock", () => {
           return await verify(...args);
         });
       }
-      const task = a.tasks.plan(put("ledger"));
+      const task = await a.tasks.plan(put("ledger"));
 
       // Parked otherwise: the effect ran, and its write said "database is locked".
       expect((await a.tasks.execute(task.id, approve(task))).task.status).toBe("verified_success");
@@ -486,7 +489,7 @@ describe("a task's writes while another process holds the lock", () => {
     const adapter = held();
     const a = await side(at, adapter.execute);
     const b = await side(at);
-    const task = a.tasks.plan(put("ledger"));
+    const task = await a.tasks.plan(put("ledger"));
     void a.tasks.execute(task.id, approve(task)).catch(() => undefined);
     await adapter.entered.opened;
     a.store.close();
@@ -501,7 +504,7 @@ describe("a task's writes while another process holds the lock", () => {
   it("refuses a second execute of a task whose start waits on the lock, and runs it once", async () => {
     const at = await home();
     const a = await side(at);
-    const task = a.tasks.plan(put("ledger"));
+    const task = await a.tasks.plan(put("ledger"));
     const unlock = lock(at.path);
     const first = a.tasks.execute(task.id, approve(task));
     first.catch(() => undefined);
@@ -518,7 +521,7 @@ describe("a task's writes while another process holds the lock", () => {
   it("still stops a task whose start waits on the lock when it is cancelled", async () => {
     const at = await home();
     const a = await side(at);
-    const task = a.tasks.plan(put("ledger"));
+    const task = await a.tasks.plan(put("ledger"));
     const unlock = lock(at.path);
     const executing = a.tasks.execute(task.id, approve(task));
     executing.catch(() => undefined);
@@ -536,6 +539,40 @@ describe("a task's writes while another process holds the lock", () => {
     expect(a.store.getTask(task.id)?.status).toBe("cancelled");
     expect(a.store.inFlight.has(task.id)).toBe(false);
     await a.tasks.settled(task.id);
+  });
+
+  it("stops a task whose start lands while its cancel waits for the lock", async () => {
+    const at = await home();
+    const adapter = held();
+    const a = await side(at, adapter.execute);
+    const task = await a.tasks.plan(put("ledger"));
+    // The execute's start commits after the cancel asked for the lock, and
+    // before it got it.
+    const write = a.store.write.bind(a.store);
+    let executing: ReturnType<TaskController["execute"]> | undefined;
+    vi.spyOn(a.store, "write").mockImplementationOnce((action) => {
+      executing = a.tasks.execute(task.id, approve(task));
+      executing.catch(() => undefined);
+      return write(action);
+    });
+
+    // Dropped otherwise: it saw nothing running, then nothing unstarted.
+    expect((await a.tasks.cancel(task.id)).status).toBe("running");
+    adapter.release.open();
+    expect((await executing!).task).toMatchObject({ status: "cancelled", error: "task_cancelled" });
+  });
+
+  it("counts a caller's open challenges in the write that adds one", async () => {
+    const at = await home();
+    const a = await side(at, undefined, undefined, { maxPendingApprovals: 1 });
+    const unlock = lock(at.path);
+    // Both count while another process holds the lock; at the cap, one lands.
+    const plans = Promise.allSettled([a.tasks.plan(put("one")), a.tasks.plan(put("two"))]);
+    setTimeout(unlock, 50);
+
+    const [one, two] = await plans;
+    expect([one?.status, two?.status].sort()).toEqual(["fulfilled", "rejected"]);
+    expect(a.tasks.pendingApprovals(callerRef())).toBe(1);
   });
 });
 
@@ -741,8 +778,8 @@ describe("workflow recovery across processes", () => {
       repairRuns(abandonedOnly: boolean, tasks: Map<string, unknown>, runs: Map<string, unknown>): WorkflowRun[];
     };
     let repaired: WorkflowRun[] | undefined;
-    const plan = a.tasks.plan.bind(a.tasks);
-    vi.spyOn(a.tasks, "plan").mockImplementation((request, options) => {
+    const plan = a.tasks.planSync.bind(a.tasks);
+    vi.spyOn(a.tasks, "planSync").mockImplementation((request, options) => {
       if (request.goal === "Inspect again") repaired ??= recovery.repairRuns(true, new Map(), new Map());
       return plan(request, options);
     });
@@ -833,7 +870,7 @@ describe("workflow recovery across processes", () => {
     const adapter = held();
     const a = await side(at, adapter.execute);
     const b = await side(at);
-    const stuck = a.tasks.plan(put("stuck"));
+    const stuck = await a.tasks.plan(put("stuck"));
     void a.tasks.execute(stuck.id, approve(stuck)).catch(() => undefined);
     await adapter.entered.opened;
     const { id } = await midFlight(a, adapter);
@@ -934,7 +971,7 @@ describe("workflow recovery across processes", () => {
     const adapter = held();
     const a = await side(at, adapter.execute);
     const b = await side(at);
-    const stuck = a.tasks.plan(put("stuck"));
+    const stuck = await a.tasks.plan(put("stuck"));
     void a.tasks.execute(stuck.id, approve(stuck)).catch(() => undefined);
     await adapter.entered.opened;
     const { id } = await midFlight(a, adapter);

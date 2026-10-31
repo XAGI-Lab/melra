@@ -38,7 +38,7 @@ describe("melra audit", () => {
     try {
       // Each leaves a receipt and a certificate.
       for (const goal of ["Inspect", "Inspect again"]) {
-        const task = melra.controller.plan(TaskRequestSchema.parse({ goal, operation: { kind: "system", action: "info" } }));
+        const task = await melra.controller.plan(TaskRequestSchema.parse({ goal, operation: { kind: "system", action: "info" } }));
         expect((await melra.controller.execute(task.id)).task.status).toBe("verified_success");
       }
     } finally {

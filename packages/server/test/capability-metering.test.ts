@@ -116,7 +116,7 @@ const refund = (amount = 1_000) =>
   });
 
 async function run(runtime: MelraRuntime, request: ReturnType<typeof refund>) {
-  const planned = runtime.controller.plan(request);
+  const planned = await runtime.controller.plan(request);
   if (planned.status === "policy_blocked") return planned;
   const approval =
     planned.approval === undefined
@@ -166,7 +166,7 @@ describe("a grant that runs out", () => {
 
   it("does not let tasks running at once overdraw the grant", async () => {
     const runtime = await open("concurrent");
-    const planned = [refund(), refund(), refund()].map((request) => runtime.controller.plan(request));
+    const planned = await Promise.all([refund(), refund(), refund()].map((request) => runtime.controller.plan(request)));
     // All three planned against an unspent grant, then run together, as a
     // parallel workflow node or three melra_execute calls would.
     const tasks = await Promise.all(

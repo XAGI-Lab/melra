@@ -262,7 +262,7 @@ async function drive(
   if (!parsed.ok) return { status: "schema_rejected", reason: parsed.reason };
   let task;
   try {
-    task = runtime.controller.plan(parsed.value);
+    task = await runtime.controller.plan(parsed.value);
   } catch (error) {
     return { status: "plan_error", reason: message(error) };
   }
@@ -449,7 +449,7 @@ function planOrThrow(runtime: MelraRuntime, request: GovCase["request"], idempot
   );
 }
 
-function challengeOf(task: ReturnType<typeof planOrThrow>): ApprovalResponse {
+function challengeOf(task: Awaited<ReturnType<typeof planOrThrow>>): ApprovalResponse {
   if (task.approval === undefined) throw new Error(`no_challenge:${task.status}`);
   return { approvalId: task.approval.approvalId, phrase: task.approval.phrase! };
 }
@@ -495,7 +495,7 @@ async function approvalCase(
           () => true,
           () => false,
         ));
-  const task = planOrThrow(first, request);
+  const task = await planOrThrow(first, request);
   let observed: string;
   let precondition = "";
   switch (expect.attack) {
@@ -515,12 +515,12 @@ async function approvalCase(
       observed = await attempt(first, task.id, { ...challengeOf(task), approvalId: randomUUID() });
       break;
     case "other_task_challenge":
-      observed = await attempt(first, task.id, challengeOf(planOrThrow(first, request)));
+      observed = await attempt(first, task.id, challengeOf(await planOrThrow(first, request)));
       break;
     case "other_task_phrase":
       observed = await attempt(first, task.id, {
         approvalId: challengeOf(task).approvalId,
-        phrase: challengeOf(planOrThrow(first, request)).phrase,
+        phrase: challengeOf(await planOrThrow(first, request)).phrase,
       });
       break;
     case "expired":
@@ -536,12 +536,12 @@ async function approvalCase(
     case "replay_on_identical_plan": {
       precondition = await attempt(first, task.id, challengeOf(task));
       await removeEffect();
-      const second = planOrThrow(first, request);
+      const second = await planOrThrow(first, request);
       observed = await attempt(first, second.id, challengeOf(task));
       break;
     }
     case "cancelled_then_execute":
-      first.controller.cancel(task.id);
+      await first.controller.cancel(task.id);
       observed = await attempt(first, task.id, challengeOf(task));
       break;
     case "blocked_then_approve":
@@ -553,9 +553,9 @@ async function approvalCase(
     case "flood": {
       // `task` is the first of maxPendingApprovals challenges left open. One
       // more must not be issued at all; one that is is approved and run.
-      for (let open = 1; open < Number(testCase.policy?.maxPendingApprovals); open += 1) planOrThrow(first, request);
+      for (let open = 1; open < Number(testCase.policy?.maxPendingApprovals); open += 1) await planOrThrow(first, request);
       try {
-        const extra = planOrThrow(first, request);
+        const extra = await planOrThrow(first, request);
         observed = await attempt(first, extra.id, challengeOf(extra));
       } catch (error) {
         if (!message(error).startsWith("too_many_pending_approvals")) throw error;
@@ -600,7 +600,7 @@ async function exactlyOnceCase(
   const filePath = expect.file === undefined ? undefined : join(box.workspace, expect.file.path);
   const statuses: string[] = [];
   const run = async (runtime: MelraRuntime, input: GovCase["request"]): Promise<string> => {
-    const task = planOrThrow(runtime, input, key);
+    const task = await planOrThrow(runtime, input, key);
     const outcome = await attempt(runtime, task.id, task.approval === undefined ? undefined : challengeOf(task));
     statuses.push(outcome);
     return task.id;
@@ -617,7 +617,7 @@ async function exactlyOnceCase(
       await run(first, second);
       break;
     case "concurrent_execute": {
-      const task = planOrThrow(first, request);
+      const task = await planOrThrow(first, request);
       const approval = task.approval === undefined ? undefined : challengeOf(task);
       statuses.push(
         ...(await Promise.all([
@@ -727,7 +727,7 @@ async function measureOverhead(fixture: Fixture, iterations = 40): Promise<Overh
         const rawMs = performance.now() - rawStart;
         const governedRequest = TaskRequestSchema.parse(build(index + 20_000));
         const governedStart = performance.now();
-        const task = runtime.controller.plan(governedRequest);
+        const task = await runtime.controller.plan(governedRequest);
         const execution = await runtime.controller.execute(
           task.id,
           task.approval === undefined

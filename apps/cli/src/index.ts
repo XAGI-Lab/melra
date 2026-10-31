@@ -1263,7 +1263,7 @@ async function launch(args: string[], env: CliEnvironment): Promise<number> {
 async function runTask(args: string[], env: CliEnvironment): Promise<number> {
   const melra = await runtime(env);
   try {
-    const task = melra.controller.plan(await readTaskRequest(args));
+    const task = await melra.controller.plan(await readTaskRequest(args));
     if (task.status === "policy_blocked") {
       output({ task });
       return 4;
@@ -1278,7 +1278,7 @@ async function runTask(args: string[], env: CliEnvironment): Promise<number> {
       const approver = approverLabel(env);
       const view = melra.controller.approvalView(task.id);
       if (!(await confirmInTerminal(view))) return 1;
-      melra.controller.decide(task.id, view.renderDigest, approver);
+      await melra.controller.decide(task.id, view.renderDigest, approver);
       return printRun(await melra.controller.execute(task.id), melra.controller.enforced);
     }
     return printRun(await melra.controller.execute(task.id), melra.controller.enforced);
@@ -1354,7 +1354,7 @@ async function approveCommand(args: string[], env: CliEnvironment): Promise<numb
     const view = melra.controller.approvalView(taskId);
     if (args.includes("--deny")) {
       // Not cancelled when another process started it in the meantime.
-      const task = melra.controller.deny(taskId, approver, denial);
+      const task = await melra.controller.deny(taskId, approver, denial);
       output({ task });
       return task.status === "cancelled" ? 0 : 1;
     }
@@ -1370,7 +1370,7 @@ async function approveCommand(args: string[], env: CliEnvironment): Promise<numb
       }
       if (!(await confirmInTerminal(view))) return 1;
     }
-    const decision = melra.controller.decide(taskId, view.renderDigest, approver);
+    const decision = await melra.controller.decide(taskId, view.renderDigest, approver);
     if (decision.channel === "in_band") {
       process.stderr.write(
         "Recorded in band: this process is in developer mode. Set \"mode\": \"enforced\" in the policy file (or MELRA_MODE=enforced) for the server and for this command. An enforced server will not run on this decision: a workflow plans the step again once the challenge expires; a single task needs --deny and planning again.\n",
@@ -1401,9 +1401,9 @@ async function judgeCommand(args: string[], env: CliEnvironment): Promise<number
   const rationale = argument("--rationale", args);
   const melra = await runtime(env);
   try {
-    let judged: ReturnType<typeof melra.controller.judge>;
+    let judged: Awaited<ReturnType<typeof melra.controller.judge>>;
     try {
-      judged = melra.controller.judge(
+      judged = await melra.controller.judge(
         { taskId, judgementId, verdict, ...(rationale === undefined ? {} : { rationale }) },
         { operator },
       );
