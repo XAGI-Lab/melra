@@ -2399,10 +2399,9 @@ describe("melra CLI", () => {
     expect((await sandbox({ MELRA_MODE: "enforced", ...(await sandboxOptOut(root)) })).status).not.toBe("fail");
   });
 
-  // A stdio client ends the server by closing its input, which runs no
-  // shutdown, or its terminal hangs up, with a SIGTERM close behind it: the
-  // npm and pnpm caches made in temp at the first sandboxed command must
-  // still go.
+  // A stdio client ends the server by closing its input, or its terminal hangs up,
+  // with a SIGTERM close behind it: each runs close() once, and the npm and pnpm
+  // caches made in temp at the first sandboxed command must still go.
   it.for(["closes its input", "hangs up", "hangs up and is terminated"])("leaves no package cache in temp when a stdio client %s", { timeout: 60_000 }, async (how, context) => {
     const root = await realpath(await mkdtemp(join(tmpdir(), "melra-cli-")));
     roots.push(root);
@@ -2496,6 +2495,7 @@ describe("melra CLI", () => {
           action: "start",
           command: process.execPath,
           args: ["-e", "setInterval(() => {}, 1000)"],
+          timeoutMs: 120_000,
         },
       });
       const ran = await tool("melra_execute", { taskId: task.id });
@@ -2512,7 +2512,29 @@ describe("melra CLI", () => {
         }
       };
       expect(isAlive()).toBe(true);
-    } catch (error) {
+
+      server.stdin.end();
+      const outcome = await Promise.race([
+        exited,
+        new Promise<"hung">((settle) => setTimeout(() => settle("hung"), 10_000)),
+      ]);
+      expect(outcome).toBe(0);
+
+      const isGone = () => {
+        try {
+          if (process.platform !== "win32") process.kill(-jobPid!, 0);
+          else process.kill(jobPid!, 0);
+          return false;
+        } catch {
+          return true;
+        }
+      };
+      const deadline = Date.now() + 5_000;
+      while (!isGone() && Date.now() < deadline) {
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, 50));
+      }
+      expect(isGone()).toBe(true);
+    } finally {
       server.kill("SIGTERM");
       await exited;
       if (jobPid !== undefined) {
@@ -2521,24 +2543,59 @@ describe("melra CLI", () => {
           else process.kill(jobPid, "SIGKILL");
         } catch {}
       }
-      throw error;
     }
-    server.stdin.end();
-    expect(await exited).toBe(0);
-    const isGone = () => {
-      try {
-        if (process.platform !== "win32") process.kill(-jobPid!, 0);
-        else process.kill(jobPid!, 0);
-        return false;
-      } catch {
-        return true;
+  });
+
+  it("delivers in-flight replies when a stdio client closes stdin right after sending", { timeout: 30_000 }, async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-cli-")));
+    roots.push(root);
+    await mkdir(join(root, "ws"));
+    const server = spawn(process.execPath, [entry, "serve"], {
+      cwd: root,
+      env: { ...process.env, MELRA_HOME: join(root, ".melra"), MELRA_WORKSPACE: join(root, "ws"), MELRA_UNHINGED: "1" },
+      stdio: ["pipe", "pipe", "ignore"],
+    });
+    const exited = new Promise<number | null>((settle) => server.once("exit", settle));
+    const waiting = new Map<number, (reply: { result: { content: Array<{ text: string }> } }) => void>();
+    let buffered = "";
+    server.stdout.setEncoding("utf8").on("data", (chunk: string) => {
+      buffered += chunk;
+      for (let end = buffered.indexOf("\n"); end >= 0; end = buffered.indexOf("\n")) {
+        const reply = JSON.parse(buffered.slice(0, end));
+        buffered = buffered.slice(end + 1);
+        waiting.get(reply.id)?.(reply);
       }
-    };
-    const deadline = Date.now() + 5_000;
-    while (!isGone() && Date.now() < deadline) {
-      await new Promise((resolvePromise) => setTimeout(resolvePromise, 50));
+    });
+    let id = 0;
+    const call = async (method: string, params: unknown) =>
+      await new Promise<{ result: { content: Array<{ text: string }> } }>((settle) => {
+        waiting.set(++id, settle);
+        server.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
+      });
+    try {
+      await call("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "cli-test", version: "1" } });
+      server.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`);
+
+      const replyPromise = new Promise<{ result: unknown }>((settle) => {
+        waiting.set(++id, settle as any);
+        server.stdin.write(
+          `${JSON.stringify({
+            jsonrpc: "2.0",
+            id,
+            method: "tools/call",
+            params: { name: "melra_status", arguments: {} },
+          })}\n`,
+        );
+      });
+      server.stdin.end();
+
+      const reply = await replyPromise;
+      expect(reply).toBeDefined();
+      expect(await exited).toBe(0);
+    } finally {
+      server.kill("SIGTERM");
+      await exited;
     }
-    expect(isGone()).toBe(true);
   });
 
   it("refuses to start in enforced mode with the local bypass", async () => {

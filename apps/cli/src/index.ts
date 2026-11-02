@@ -1996,7 +1996,9 @@ async function main(): Promise<void> {
         process.once(signal, () => void close().finally(() => process.exit(0)));
       }
       if (server !== undefined) {
-        process.stdin.once("end", () => void close().finally(() => process.exit(0)));
+        process.stdin.once("end", () =>
+          void server.drained().then(close).finally(() => process.exit(0)),
+        );
       }
       return;
     }
