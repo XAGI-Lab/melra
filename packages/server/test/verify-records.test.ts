@@ -108,6 +108,7 @@ describe("verifyRecords", () => {
 
       const result = await verifyRecords({
         dataDirectory: dir,
+        environment: {},
         head: { sequence: 999, link: "0".repeat(64) },
       });
       expect(result.ok).toBe(false);
