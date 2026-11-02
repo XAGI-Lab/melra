@@ -436,9 +436,9 @@ what earlier steps did is undone by hand too where it should not stand. A
 restart before the condition is decided reads a step such an advance ran
 whose outcome is unknown as the condition's own, so it halts the run there,
 as any other step's does, rather than let a failed sibling unwind past it.
-When a step under an undecided condition took effect (partial, verified, in flight
-or unknown) after a lost commit, the run stays `running` with compensations parked
-until the condition is decided, and a conflicting answer halts with
+When such a step took effect but its evidence did not hold (`partial`) and a
+sibling failed, the run stays `running` with compensations parked until the
+condition is decided, and a conflicting answer halts with
 `workflow_condition_branch_conflict` (#331).
 Anything else such an advance left waits for the next advance to decide, so
 the run halts or moves on the same with or without a restart. `workflow

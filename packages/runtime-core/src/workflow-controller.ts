@@ -923,7 +923,7 @@ export class WorkflowController {
   /**
    * Conditions that are undecided but have an effect under their keys (#331).
    * An advance that lost its commit ran a step under one that took effect
-   * (partial, verified, in flight or unknown). Unwinding past it would leave
+   * (partial or verified). Unwinding past it would leave
    * the effect off the run's record, so compensations stay parked until the
    * condition is decided.
    */

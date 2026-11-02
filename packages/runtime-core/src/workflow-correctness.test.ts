@@ -1233,6 +1233,10 @@ describe("a partial step under an undecided condition (#331)", () => {
     });
     expect(controller.status(planned.id).status).toBe("failed");
 
+    // The lapsed lease would send this advance through recovery, which re-derives the status.
+    const left = store.getWorkflowLease(planned.id);
+    if (left !== undefined) store.releaseWorkflowLease(planned.id, left.owner);
+
     const run = (await controller.advance(planned.id)).run;
     expect(run.nodes.choose?.taskIds).toEqual([ship!.id]);
     expect(run.nodes.choose?.status).toBe("failed");
