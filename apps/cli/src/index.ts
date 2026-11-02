@@ -1995,6 +1995,11 @@ async function main(): Promise<void> {
       for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
         process.once(signal, () => void close().finally(() => process.exit(0)));
       }
+      if (server !== undefined) {
+        process.stdin.once("end", () =>
+          void server.drained().then(close).finally(() => process.exit(0)),
+        );
+      }
       return;
     }
     case "launch":

@@ -68,6 +68,13 @@ All notable changes are documented here. The format follows
   fails. A run that failed before this version keeps them: cancel it with
   `melra workflow cancel` to close them (#487).
 
+### Fixed
+
+- A stdio `melra serve` whose client closed stdin exited without running
+  MELRA's shutdown path, leaving background jobs and their process groups
+  running until recovery cleaned them up on the next start. Stdin EOF now runs
+  the runtime's `close()` before exiting (#467).
+
 ## [0.4.0-alpha.2] - 2026-10-28
 
 ### Added

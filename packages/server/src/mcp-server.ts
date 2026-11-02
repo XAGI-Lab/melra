@@ -630,9 +630,34 @@ export function createMcpServer(
   return server;
 }
 
-export async function serveStdio(runtime: MelraRuntime): Promise<McpServer> {
+export type StdioServer = McpServer & { drained: () => Promise<void> };
+
+export async function serveStdio(runtime: MelraRuntime): Promise<StdioServer> {
   const server = createMcpServer(runtime);
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  return server;
+  const pending = new Set<string | number>();
+  let idle: (() => void) | undefined;
+  const onmessage = transport.onmessage!;
+  transport.onmessage = (m: unknown) => {
+    if (typeof m === "object" && m !== null && "method" in m && "id" in m) {
+      const id = (m as { id: unknown }).id;
+      if (typeof id === "string" || typeof id === "number") pending.add(id);
+    }
+    (onmessage as (message: unknown) => void)(m);
+  };
+  const send = transport.send.bind(transport);
+  transport.send = async (m: Parameters<typeof transport.send>[0]) => {
+    await send(m);
+    if (typeof m === "object" && m !== null && !("method" in m) && "id" in m) {
+      const id = (m as { id: unknown }).id;
+      if (typeof id === "string" || typeof id === "number") {
+        pending.delete(id);
+        if (pending.size === 0) idle?.();
+      }
+    }
+  };
+  const drained = () =>
+    pending.size === 0 ? Promise.resolve() : new Promise<void>((r) => (idle = r));
+  return Object.assign(server, { drained });
 }
