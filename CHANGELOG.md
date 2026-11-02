@@ -68,6 +68,13 @@ All notable changes are documented here. The format follows
   fails. A run that failed before this version keeps them: cancel it with
   `melra workflow cancel` to close them (#487).
 
+### Fixed
+
+- Standalone tasks left `awaiting_approval` past their challenge's expiry are
+  swept on start and on the recovery interval, moving to `cancelled` with error
+  `approval_expired`. Tasks with a recorded decision, and workflow step tasks
+  the workflow controller still re-asks, are left alone. (#462)
+
 ## [0.4.0-alpha.2] - 2026-10-28
 
 ### Added
