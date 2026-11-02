@@ -67,6 +67,13 @@ All notable changes are documented here. The format follows
   unchanged. A run that is `recovery_required` keeps its waiting steps until it
   fails. A run that failed before this version keeps them: cancel it with
   `melra workflow cancel` to close them (#487).
+### Fixed
+
+- A step that took effect under an undecided condition but failed its evidence
+  (partial) is no longer left off the workflow run's record when its advance
+  lost its commit and a sibling step failed. Compensations remain parked while
+  the condition is undecided, and the condition is offered for resolution so
+  its branch is decided and its effect recorded before unwinding (#331).
 
 ## [0.4.0-alpha.2] - 2026-10-28
 
