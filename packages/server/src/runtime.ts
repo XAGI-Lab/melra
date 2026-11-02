@@ -590,6 +590,12 @@ export async function createMelraRuntime(
         'from "sandbox" in the policy file, or set it to "if-available" to start without one where none works.',
     );
   }
+  if (mode === "enforced" && policy.sandbox.listen.length > 0) {
+    store.close();
+    throw new Error(
+      "enforced_mode_refuses_sandbox_listen: under Seatbelt a listener is reachable on every address of the host; drop sandbox.listen or run in developer mode",
+    );
+  }
   let sandbox: CommandSandbox | undefined;
   if (use !== "off") {
     const found = await commandSandbox(
@@ -616,6 +622,7 @@ export async function createMelraRuntime(
     if (sandbox?.backend === "uid") process.umask(0o002);
   }
   const symlinkers = new Set(policy.sandbox.symlinks.map(normalizeCommandName));
+  const listeners = new Set(policy.sandbox.listen.map(normalizeCommandName));
   // Without links git still exits 0: a clone or init writes core.symlinks=false
   // and checks each link out as a plain file. Developer mode, sandboxed by
   // default, lets it make them; enforced mode only where the policy names it.
@@ -640,6 +647,7 @@ export async function createMelraRuntime(
             return {
               network: traits.includes("network"),
               symlinks: traits.includes("package-install") || symlinkers.has(normalizeCommandName(command)),
+              listen: listeners.has(normalizeCommandName(command)),
             };
           },
         }),

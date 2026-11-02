@@ -127,6 +127,18 @@ export async function sandboxCheck(
       commands: "refused",
     };
   }
+  if (env.mode === "enforced" && settings.listen.length > 0) {
+    return {
+      check: {
+        name,
+        status: "fail",
+        detail:
+          "enforced_mode_refuses_sandbox_listen: under Seatbelt a listener is reachable on every address of the host; drop sandbox.listen or run in developer mode",
+        next: "drop sandbox.listen from the policy file or run in developer mode",
+      },
+      commands: "refused",
+    };
+  }
   const found = await commandSandbox(
     settings,
     { workspaceRoot: env.workspaceRoot, dataDirectory: env.dataDirectory, ...paths },
@@ -183,6 +195,7 @@ export function protectionCheck(
   commands: string | undefined,
   harnessTools?: readonly string[],
   natives: readonly string[] = [],
+  listen: readonly string[] = [],
 ): DoctorCheck {
   const name = "protection";
   if (env.unhinged) {
@@ -203,7 +216,8 @@ export function protectionCheck(
           : commands === "uid"
             ? "commands: as another account, which cannot read MELRA's files; where it writes and connects is the host's to limit"
             : `commands: in ${commands}, writing only the workspace and temp, reading neither MELRA's files nor the logins MELRA lists under home (other files there stay readable), and off the network without the network trait` +
-              (commands === "bubblewrap" ? " (Unix sockets on the filesystem stay reachable)" : "");
+              (commands === "bubblewrap" ? " (Unix sockets on the filesystem stay reachable)" : "") +
+              (commands === "seatbelt" && listen.length > 0 ? `; ${listen.join(", ")} may listen on every address of this Mac (sandbox.listen)` : "");
   const harness =
     harnessTools === undefined
       ? "harness: not inspected here (Claude Code's settings are read once melra is set up there; OpenClaw's and Hermes's get harness lines of their own); a harness that keeps a shell or file tools of its own can go around MELRA"

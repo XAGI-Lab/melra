@@ -426,6 +426,14 @@ describe("per-command sandbox", () => {
         policyPath: await policy({ use: "off" }),
       }),
     ).rejects.toThrow(/^enforced_mode_refuses_sandbox_off: /);
+    await expect(
+      createMelraRuntime({
+        workspaceRoot: workspace,
+        dataDirectory: data,
+        environment: { MELRA_MODE: "enforced" },
+        policyPath: await policy({ listen: ["vitest"] }),
+      }),
+    ).rejects.toThrow(/^enforced_mode_refuses_sandbox_listen: /);
   });
 
   it("starts on the policy file's opt-out, and every receipt says it ran without one", async () => {
@@ -494,12 +502,12 @@ describe("per-command sandbox", () => {
       }),
     });
     const calls: Array<[string, string[], SandboxAllowance]> = [
-      [process.execPath, ["-e", ""], { network: false, symlinks: false }],
-      ["curl", ["--version"], { network: true, symlinks: false }],
+      [process.execPath, ["-e", ""], { network: false, symlinks: false, listen: false }],
+      ["curl", ["--version"], { network: true, symlinks: false, listen: false }],
       // Named in the policy file.
-      ["git", ["status"], { network: false, symlinks: true }],
+      ["git", ["status"], { network: false, symlinks: true, listen: false }],
       // An install makes links whether or not it is named.
-      ["npm", ["--version"], { network: true, symlinks: true }],
+      ["npm", ["--version"], { network: true, symlinks: true, listen: false }],
     ];
     for (const [command, args, allowance] of calls) {
       const result = await runtime.router.execute(TerminalOperationSchema.parse({ kind: "terminal", action: "run", command, args }));
@@ -537,9 +545,31 @@ describe("per-command sandbox", () => {
       runtime = undefined;
     }
     expect(seen).toEqual([
-      { network: false, symlinks: true },
-      { network: false, symlinks: false },
+      { network: false, symlinks: true, listen: false },
+      { network: false, symlinks: false, listen: false },
     ]);
+  });
+
+  it("gives a program named in sandbox.listen the listen allowance", async () => {
+    const seen: SandboxAllowance[] = [];
+    runtime = await createMelraRuntime({
+      workspaceRoot: workspace,
+      dataDirectory: data,
+      policyPath: await policy({ listen: ["vitest"] }),
+      detectSandbox: async () => ({
+        sandbox: {
+          backend: "recording",
+          confine: async (_command, allowance) => {
+            seen.push(allowance);
+            return { file: process.execPath, args: ["-e", "0"] };
+          },
+        },
+      }),
+    });
+    await runtime.router.execute(TerminalOperationSchema.parse({ kind: "terminal", action: "run", command: process.execPath, args: ["-e", "0"] }));
+    expect(seen.at(-1)).toEqual({ network: false, symlinks: false, listen: false });
+    await runtime.router.execute(TerminalOperationSchema.parse({ kind: "terminal", action: "run", command: "vitest", args: ["--version"] }));
+    expect(seen.at(-1)).toEqual({ network: false, symlinks: false, listen: true });
   });
 
   it("keeps MELRA's data, the policy file and the secret files from every command", async () => {
@@ -651,9 +681,10 @@ describe.runIf(backend !== undefined)(`developer mode's default sandbox (${backe
   }, 30_000);
 
   // Seatbelt's only loopback filter, `localhost`, matches every address of the
-  // Mac, so a listener it allowed would serve the network: none is allowed.
-  // Bubblewrap gives the command an empty network namespace, loopback its own,
-  // where a listener serves nobody: it may bind even a port the host holds.
+  // Mac, so a listener it allows serves the network: none is allowed unless
+  // the policy names the command in `sandbox.listen`. Bubblewrap gives the
+  // command an empty network namespace, loopback its own, where a listener
+  // serves nobody: it may bind even a port the host holds.
   it("gives a command without the network trait no listening socket on the host", async () => {
     const workspace = join(base, "workspace");
     const host = createServer();
@@ -682,6 +713,55 @@ describe.runIf(backend !== undefined)(`developer mode's default sandbox (${backe
       host.close();
     }
   }, 30_000);
+
+  it.runIf(backend === "seatbelt")(
+    "lets a program named in sandbox.listen bind a listening socket under Seatbelt",
+    async () => {
+      const workspace = join(base, "workspace");
+      const script =
+        `require("net").createServer().listen(0, "0.0.0.0", () => process.exit(0))` +
+        `.on("error", (e) => { process.stdout.write(e.code); process.exit(1); })`;
+
+      const policyPath = async (listen: string[]) => {
+        const path = join(base, `policy-${listen.join("-")}.json`);
+        await writeFile(path, JSON.stringify({ sandbox: { listen } }), "utf8");
+        return path;
+      };
+
+      runtime = await createRuntime({
+        workspaceRoot: workspace,
+        dataDirectory: join(base, "data"),
+        environment: {},
+        policyPath: await policyPath(["node"]),
+      });
+      const named = await approved({
+        kind: "terminal",
+        action: "run",
+        command: "node",
+        args: ["-e", script],
+      });
+      expect(named.receipt?.sandbox).toBe("seatbelt");
+      expect(named.task.status).toBe("verified_success");
+
+      await runtime.close();
+      runtime = await createRuntime({
+        workspaceRoot: workspace,
+        dataDirectory: join(base, "data"),
+        environment: {},
+        policyPath: await policyPath(["vitest"]),
+      });
+      const unnamed = await approved({
+        kind: "terminal",
+        action: "run",
+        command: "node",
+        args: ["-e", script],
+      });
+      expect(unnamed.receipt?.sandbox).toBe("seatbelt");
+      expect(unnamed.task.status).toBe("failed");
+      expect((unnamed.output as { stdout?: string } | undefined)?.stdout).toBe("EPERM");
+    },
+    30_000,
+  );
 
   // Refused a link, git still exits 0: each link a plain file, and
   // core.symlinks=false written into the clone for every later checkout.
