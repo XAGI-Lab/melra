@@ -678,7 +678,9 @@ describe("TaskController", () => {
     const probe: EvidenceProbe = async (req) => {
       probeSignal = req.signal;
       return new Promise((_resolve, reject) => {
+        const fallback = setTimeout(() => reject(new Error("probe was not aborted")), 2_000);
         req.signal?.addEventListener("abort", () => {
+          clearTimeout(fallback);
           reject(new Error("aborted"));
         });
       });
@@ -725,7 +727,9 @@ describe("TaskController", () => {
     const probe: EvidenceProbe = async (req) => {
       probeSignal = req.signal;
       return new Promise((_resolve, reject) => {
+        const fallback = setTimeout(() => reject(new Error("probe was not aborted")), 2_000);
         req.signal?.addEventListener("abort", () => {
+          clearTimeout(fallback);
           reject(new Error("aborted"));
         });
       });

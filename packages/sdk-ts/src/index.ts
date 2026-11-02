@@ -32,9 +32,11 @@ interface ClientIdentity {
   /**
    * How long `execute()` and `advanceWorkflow()` wait for the server, in whole
    * milliseconds from 1 to 2 147 483 647. The default, 36 minutes, covers a
-   * task's budget (15 minutes at most) and then its built-in evidence reads (20
-   * predicates of up to a minute each), so the client does not give up on an
-   * effect the server is still running and may still verify. Raise it for what
+   * task's budget (15 minutes at most), which also times the reads that verify
+   * its effect, then up to 20 evidence reads of a minute each that no budget
+   * times (a workflow delegation node's evidence, reconciliation, and workflow
+   * condition and loop reads), so the client does not give up on an effect the
+   * server is still running and may still verify. Raise it for what
    * that does not cover: custom verifiers and `file_hash` on a very large file,
    * which have no time limit, and an `advanceWorkflow()` call that runs several
    * tasks in turn (a loop's or a branch's steps, or, when a step fails, every
