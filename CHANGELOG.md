@@ -68,6 +68,15 @@ All notable changes are documented here. The format follows
   fails. A run that failed before this version keeps them: cancel it with
   `melra workflow cancel` to close them (#487).
 
+### Fixed
+
+- In the browser runtime, probing neighbor pages over CDP for an approval
+  surface marker now bounds per-page checks using `approvalSurfaceProbeTimeoutMs`
+  (defaulting to 1,000 ms in production), and see-act test suites allow sufficient
+  budget for attached multi-tab contexts and wait for console pages to settle,
+  preventing flaky `browser_approval_surface_check_unavailable` timeouts under
+  heavy runner load (#495).
+
 ## [0.4.0-alpha.2] - 2026-10-28
 
 ### Added

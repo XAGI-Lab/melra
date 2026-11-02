@@ -72,6 +72,13 @@ export interface BrowserRuntimeOptions extends NetworkPolicy {
    * reading check, so its artifacts may be uploaded and loaded again.
    */
   reserved?: (path: string) => Promise<boolean>;
+  /**
+   * Timeout in milliseconds when probing open pages for an approval surface marker.
+   *
+   * A page that does not answer within this budget is treated as unavailable.
+   * Defaults to 1_000 ms.
+   */
+  approvalSurfaceProbeTimeoutMs?: number;
 }
 
 /**
@@ -2144,11 +2151,12 @@ export class BrowserRuntime {
     if ((operation.action === "close" || operation.action === "tab_switch") && this.options.cdpEndpoint !== undefined) {
       if (operation.tabIndex !== undefined && acted === undefined) throw new Error("browser_tab_not_found");
       const pages = (await this.ensureContext()).pages();
+      const probeTimeoutMs = this.options.approvalSurfaceProbeTimeoutMs ?? 1_000;
       const marks = await Promise.all(
         pages.map((other) =>
           other === acted
             ? 0
-            : bounded(other.locator(`meta[name="${APPROVAL_SURFACE}"]`).count(), 1_000, "count").catch(() =>
+            : bounded(other.locator(`meta[name="${APPROVAL_SURFACE}"]`).count(), probeTimeoutMs, "count").catch(() =>
                 other.isClosed() ? 0 : -1,
               ),
         ),

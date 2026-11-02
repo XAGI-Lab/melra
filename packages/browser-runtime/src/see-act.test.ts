@@ -182,12 +182,14 @@ describe("browser see/act loop", () => {
     const operatorContext = await owner.newContext();
     const operatorConsole = await operatorContext.newPage();
     await operatorConsole.goto(context.url);
+    await operatorConsole.waitForLoadState("domcontentloaded");
     const runtime = new BrowserRuntime({
       workspaceRoot: root,
       artifactDirectory: join(root, "artifacts"),
       allowedDomains: ["127.0.0.1"],
       allowLocalhost: true,
       cdpEndpoint: `http://127.0.0.1:${port}`,
+      approvalSurfaceProbeTimeoutMs: 3_000,
       // Keeps the tab the test opens beside its own below.
       popups: "allow",
     });
@@ -233,6 +235,47 @@ describe("browser see/act loop", () => {
       await owner.close();
     }
   }, 120_000);
+
+  it("honors approvalSurfaceProbeTimeoutMs when probing neighbor tabs for approval surface marker", async () => {
+    const context = await fixture(`<!doctype html><html><head><title>normal</title></head><body>normal</body></html>`);
+    if (context === undefined) return;
+    const executablePath = (await detectBrowserExecutable())!;
+    const root = await mkdtemp(join(tmpdir(), "melra-see-act-cdp-"));
+    roots.push(root);
+    const port = await new Promise<number>((done) => {
+      const probe = createServer().listen(0, "127.0.0.1", () => {
+        const { port: free } = probe.address() as { port: number };
+        probe.close(() => done(free));
+      });
+    });
+    const owner = await chromium.launch({ executablePath, headless: true, args: [`--remote-debugging-port=${port}`] });
+    const operatorContext = await owner.newContext();
+    const runtime = new BrowserRuntime({
+      workspaceRoot: root,
+      artifactDirectory: join(root, "artifacts"),
+      allowedDomains: ["127.0.0.1"],
+      allowLocalhost: true,
+      cdpEndpoint: `http://127.0.0.1:${port}`,
+      approvalSurfaceProbeTimeoutMs: 300,
+      popups: "allow",
+    });
+    const run = (operation: Record<string, unknown>) =>
+      runtime.execute(BrowserOperationSchema.parse({ kind: "browser", ...operation }));
+    try {
+      await run({ action: "tab_new" });
+      const silent = await operatorContext.newPage();
+      await silent.setContent(`<script>setTimeout(() => { for (;;) {} }, 300)</script>`);
+      await new Promise((done) => setTimeout(done, 800));
+      const started = Date.now();
+      const refusal = await run({ action: "close" }).then(() => "", (error: Error) => error.message);
+      expect(refusal).toContain("browser_approval_surface_check_unavailable");
+      // Bounded closely to 300ms probe budget rather than waiting the default 1,000ms
+      expect(Date.now() - started).toBeLessThan(1_500);
+    } finally {
+      await runtime.close();
+      await owner.close();
+    }
+  }, 60_000);
 
   it("switches to the tab it checked, even if a tab before it closes meanwhile", async () => {
     // ?console is marked; ?busy is made to stop answering just before the
@@ -372,6 +415,7 @@ describe("browser see/act loop", () => {
       allowedDomains: ["127.0.0.1", "localhost"],
       allowLocalhost: true,
       cdpEndpoint: `http://127.0.0.1:${port}`,
+      approvalSurfaceProbeTimeoutMs: 5_000,
     });
     const run = (operation: Record<string, unknown>) =>
       runtime.execute(BrowserOperationSchema.parse({ kind: "browser", ...operation }));
@@ -1177,7 +1221,7 @@ describe("browser see/act loop", () => {
     const run = (operation: Record<string, unknown>) =>
       runtime.execute(BrowserOperationSchema.parse({ kind: "browser", ...operation }));
     try {
-      await run({ action: "navigate", url: origin, timeoutMs: 5_000 });
+      await run({ action: "navigate", url: origin, timeoutMs: 5_000, settleTimeoutMs: 3_000 });
       // The check passes those frames by at once; what follows a successful
       // wait (its snapshot) still waits them out, as it always has.
       let started = Date.now();
