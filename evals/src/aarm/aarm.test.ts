@@ -18,6 +18,7 @@ const PINNED = [
   "r1t3.corrupt-policy",
   "r1t3.enforced-unsafe-local",
   "r1t3.approved-then-closed",
+  "r2t2.chain",
   ...["developer", "prior-approval", "grant", "enforced"].flatMap((context) => [
     `r3t1.${context}.contain.cmd.sudo`,
     `r3t1.${context}.contain.path.read.dotdot`,
@@ -32,6 +33,9 @@ const PINNED = [
   "r4t1.deny",
   "r4t1.step-up-held",
   "r4t1.step-up-approved",
+  "r5t3.sqlite.principal",
+  "r5t3.sqlite.policy-digest",
+  "r5t3.sqlite.decision",
   "r6t1.revoked",
   "r6t2.step-up",
   "r9t1.ambient-terminal",
