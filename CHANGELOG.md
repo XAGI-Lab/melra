@@ -68,6 +68,12 @@ All notable changes are documented here. The format follows
   fails. A run that failed before this version keeps them: cancel it with
   `melra workflow cancel` to close them (#487).
 
+### Fixed
+
+- A running MELRA now seals an older MELRA's records at its 30 s recovery
+  sweep, not only at the next start, so `melra audit verify` stops reporting
+  them as `unsealed_rows` within a sweep.
+
 ## [0.4.0-alpha.2] - 2026-10-28
 
 ### Added

@@ -21,7 +21,7 @@ const MEANING: Record<ChainBreak, string> = {
   head_truncated: "the chain ends before the head you kept: its tail was removed",
   unsealed_rows:
     "rows no link seals: an older MELRA's, or rows inserted or links removed outside MELRA; " +
-    "check them before MELRA starts on this home, since a start seals them as they now are",
+    "check them now, since MELRA seals them as they are when it starts and every 30 s while it runs",
 };
 
 /** `<sequence>:<link>`, as `melra audit head` prints it in a terminal. */
@@ -42,7 +42,7 @@ function where({ sequence, table, key }: { sequence?: number; table?: string; ke
 export function renderVerify(report: ChainReport, kept: ChainHead | undefined): string {
   const head = `head ${report.head.sequence}:${report.head.link}`;
   const swept = [
-    ...(report.swept === 0 ? [] : [paint.dim(`${report.swept} sealed at a start, not when written`)]),
+    ...(report.swept === 0 ? [] : [paint.dim(`${report.swept} sealed by a start or sweep, not when written`)]),
     ...(report.late === undefined
       ? []
       : [
