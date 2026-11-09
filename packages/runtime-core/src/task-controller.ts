@@ -561,6 +561,12 @@ export class TaskController {
       return await this.reconcile(taskId);
     }
     if (!UNSTARTED.includes(task.status)) {
+      // Swept at expiry (#462): the stored status is cancelled, but the caller
+      // must still see the documented "plan the task again" signal — the same
+      // answer this method gave before the sweep existed.
+      if (task.status === "cancelled" && task.error === "approval_expired") {
+        throw new Error("approval_expired");
+      }
       throw new Error(`task_not_executable:${task.status}`);
     }
     if (this.starting.has(taskId)) throw new Error("task_not_executable:running");
@@ -1403,8 +1409,27 @@ export class TaskController {
       }
     }
     await this.expireJudgements(failures);
+    this.sweepExpiredApprovals(failures);
     if (failed === undefined && failures.size > 0) throw failures.values().next().value;
     return recovered;
+  }
+
+  /**
+   * Standalone tasks awaiting approval whose challenge has expired without an
+   * operator decision (#462) settle cancelled with error `approval_expired`.
+   * A task with a recorded decision, and a workflow step's task, are left alone.
+   */
+  private sweepExpiredApprovals(failures: Map<string, unknown>): void {
+    for (const listed of this.store.listExpiredApprovalTasks(now())) {
+      try {
+        // Re-check: a decision may have been recorded since the query ran.
+        if (listed.approval === undefined) continue;
+        if (this.store.getApprovalDecision(listed.approval.approvalId) !== undefined) continue;
+        this.cancel(listed.id, "approval_expired");
+      } catch (error) {
+        failures.set(listed.id, error);
+      }
+    }
   }
 
   /**
@@ -1686,6 +1711,11 @@ export class TaskController {
   /** A pending challenge as an operator surface shows it. */
   approvalView(taskId: string) {
     const task = this.status(taskId);
+    // Swept at expiry (#462): report the expiry, not the swept status, so an
+    // operator surface and the caller both see the re-plan signal.
+    if (task.status === "cancelled" && task.error === "approval_expired") {
+      throw new Error("approval_expired");
+    }
     if (task.status !== "awaiting_approval" || task.approval === undefined) {
       throw new Error(`task_not_awaiting_approval:${task.status}`);
     }

@@ -101,7 +101,9 @@ function message(error: unknown): string {
 
 // ------------------------------------------------------------- interfaces
 
-type RecordVerifier = (options: { dataDirectory: string }) => Promise<{ ok: boolean; problems?: string[] }>;
+type RecordVerifier = (
+  options: { dataDirectory: string; environment?: NodeJS.ProcessEnv },
+) => Promise<{ ok: boolean; problems?: string[] }>;
 
 /** The read-only record verifier, as the roadmap's `melra verify` item is to export it. */
 function recordVerifier(): RecordVerifier | undefined {
@@ -548,7 +550,11 @@ async function runCase(
           new OAuthProvider(box.data).revoke(clients.get(step.client)?.id);
           break;
         case "verify": {
-          const verdict = await recordVerifier()!({ dataDirectory: box.data });
+          // An empty environment, for the same reason every runtime in the
+          // self-check gets one: verifyRecords falls back to process.env,
+          // and a MELRA_PAYLOAD_KEY in the shell must not change what is
+          // measured.
+          const verdict = await recordVerifier()!({ dataDirectory: box.data, environment: {} });
           outcomes.set(step.as, { status: verdict.ok ? "ok" : "rejected", reason: (verdict.problems ?? []).join("; ") });
           break;
         }
