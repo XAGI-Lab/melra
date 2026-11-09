@@ -86,12 +86,6 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
-- In the browser runtime, probing neighbor pages over CDP for an approval
-  surface marker now bounds per-page checks using `approvalSurfaceProbeTimeoutMs`
-  (defaulting to 1,000 ms in production), and see-act test suites allow sufficient
-  budget for attached multi-tab contexts and wait for console pages to settle,
-  preventing flaky `browser_approval_surface_check_unavailable` timeouts under
-  heavy runner load (#495).
 - The HTTP server no longer sends an internal failure's message to the client.
   It still answers MELRA's own refusal codes (`task_not_found`,
   `approval_expired`, …) as before. Any other error, such as a SQLite or

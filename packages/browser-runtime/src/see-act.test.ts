@@ -269,8 +269,9 @@ describe("browser see/act loop", () => {
       const started = Date.now();
       const refusal = await run({ action: "close" }).then(() => "", (error: Error) => error.message);
       expect(refusal).toContain("browser_approval_surface_check_unavailable");
-      // Bounded closely to 300ms probe budget rather than waiting the default 1,000ms
-      expect(Date.now() - started).toBeLessThan(1_500);
+      // The 300 ms budget refuses in about 300 ms; the default 1,000 ms budget
+      // would take at least 1,000 ms, so this fails if the option is ignored.
+      expect(Date.now() - started).toBeLessThan(900);
     } finally {
       await runtime.close();
       await owner.close();
