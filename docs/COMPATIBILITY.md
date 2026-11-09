@@ -213,12 +213,12 @@ default applies and the request stays readable.
 
 Releases after `0.4.0-alpha.1` add migration `9`, the
 [record chain](INSTALLATION.md#verify-the-records). An older MELRA sharing the
-home writes its records as before, without links; the next process of a
-newer release to start there seals them, and `melra audit verify` reports
-them as `unsealed_rows` until then, and afterwards counts them as `swept`,
-and as `late` once a newer process has sealed a record when it was written.
-Links are checked under a key derived from the payload key, so they are lost
-with it.
+home writes its records as before, without links; a process of a newer release
+seals them when it starts, or at the sweep a running process makes every 30 s,
+and `melra audit verify` reports them as `unsealed_rows` until then, and
+afterwards counts them as `swept`, and as `late` once a newer process has
+sealed a record when it was written. Links are checked under a key derived from
+the payload key, so they are lost with it.
 
 Releases after `0.4.0-alpha.1` make [kernel
 checks](ARCHITECTURE.md#kernel-checks) and record them in new optional fields:
