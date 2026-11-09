@@ -86,6 +86,14 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- The HTTP server no longer sends an internal failure's message to the client.
+  It still answers MELRA's own refusal codes (`task_not_found`,
+  `approval_expired`, …) as before. Any other error, such as a SQLite or
+  file-system message that can name paths in the data directory, now answers
+  500 `internal_error` (`server_error` on the OAuth routes) and goes to the
+  server's stderr. A request body that is not JSON answers `invalid_json`, and
+  one that fails its schema answers `invalid_request`, instead of the parser's
+  or validator's message.
 - Verification reads made through the independent channel (`http_resource_matches`
   and a registered verifier's `context.probe`) now stop when the task is cancelled
   or its budget runs out, leaving the item inconclusive, instead of waiting out
