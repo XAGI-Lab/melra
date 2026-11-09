@@ -86,6 +86,11 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- A step that took effect under an undecided condition but failed its evidence
+  (partial) is no longer left off the workflow run's record when its advance
+  lost its commit and a sibling step failed. Compensations remain parked while
+  the condition is undecided, and the condition is offered for resolution so
+  its branch is decided and its effect recorded before unwinding (#331).
 - A stdio `melra serve` whose client closed stdin exited without running
   MELRA's shutdown path, leaving background jobs and their process groups
   running until recovery cleaned them up on the next start. Stdin EOF now runs

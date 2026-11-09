@@ -436,6 +436,10 @@ what earlier steps did is undone by hand too where it should not stand. A
 restart before the condition is decided reads a step such an advance ran
 whose outcome is unknown as the condition's own, so it halts the run there,
 as any other step's does, rather than let a failed sibling unwind past it.
+When such a step took effect but its evidence did not hold (`partial`) and a
+sibling failed, the run stays `running` with compensations parked until the
+condition is decided, and a conflicting answer halts with
+`workflow_condition_branch_conflict` (#331).
 Anything else such an advance left waits for the next advance to decide, so
 the run halts or moves on the same with or without a restart. `workflow
 cancel` cancels whatever a lost advance left planned or
@@ -995,7 +999,10 @@ starts, asks the provider whether the effect happened. Once settled, the next
 `advance` fails the run and unwinds, the settled step's own compensation
 included if its effect happened. A step that declares no `reconciliation`
 cannot be settled by MELRA; `workflow cancel` ends such a run, without
-unwinding it. Each
+unwinding it. Nor does it start while an undecided condition has a step under it that took
+effect (#331): the run stays `running`, offering only that condition, until it
+is decided; an answer naming the other branch halts with
+`workflow_condition_branch_conflict`. Each
 compensation is still its own governed task, so one that is a mutation waits for
 its own approval, and denying it stops the unwind as a failed compensation does.
 To end a run without unwinding it, cancel the run (`workflow cancel`,
