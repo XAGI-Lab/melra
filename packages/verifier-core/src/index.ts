@@ -45,6 +45,7 @@ export type EvidenceProbe = (request: {
   url: string;
   method: "GET" | "HEAD";
   timeoutMs: number;
+  signal?: AbortSignal | undefined;
 }) => Promise<Record<string, unknown>>;
 
 /**
@@ -108,6 +109,8 @@ export interface VerificationContext {
   relative(path: string): string;
   /** Absent when the runtime has no independent channel. */
   probe?: EvidenceProbe;
+  /** The signal bounding the verification pass, when one was supplied. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -410,7 +413,11 @@ const httpResourceMatches: Built<"http_resource_matches"> = {
     let observed: Record<string, unknown>;
     try {
       observed = withParsedBody(
-        await context.probe({ url, method: predicate.method, timeoutMs: predicate.timeoutMs }),
+        await context.probe({
+          url,
+          method: predicate.method,
+          timeoutMs: predicate.timeoutMs,
+        }),
       );
     } catch (error) {
       return {
@@ -732,16 +739,43 @@ export class Verifier {
     // A built-in predicate, or one a registered verifier understands.
     predicates: ReadonlyArray<EvidencePredicate | { type: string; [field: string]: unknown }>,
     result: Record<string, unknown>,
+    options?: { signal?: AbortSignal },
   ): Promise<{ verified: boolean; evidence: EvidenceItem[] }> {
     // One per predicate, so a slow one does not age what the next compares
     // with, and none once this returns: a verifier that keeps the context and
     // asks again later gets a check of its own.
     let call: object | undefined;
+    const probe = this.probe;
+    const signal = options?.signal;
     const context: VerificationContext = {
       workspacePath: (input, options) =>
         options?.mayBeAbsent === true ? this.potentiallyAbsentFilePath(input, call) : this.filePath(input, call),
       relative: (path) => relative(this.root, path),
-      ...(this.probe === undefined ? {} : { probe: this.probe }),
+      ...(probe === undefined
+        ? {}
+        : {
+            probe: async (request) => {
+              signal?.throwIfAborted();
+              try {
+                return await probe(
+                  signal === undefined
+                    ? request
+                    : {
+                        ...request,
+                        signal:
+                          request.signal === undefined
+                            ? signal
+                            : AbortSignal.any([request.signal, signal]),
+                      },
+                );
+              } catch (error) {
+                // Name the budget or the cancel, not the HTTP channel's generic abort.
+                if (signal?.aborted === true) throw signal.reason;
+                throw error;
+              }
+            },
+          }),
+      ...(signal === undefined ? {} : { signal }),
     };
     const evidence: EvidenceItem[] = [];
     for (const predicate of predicates) {

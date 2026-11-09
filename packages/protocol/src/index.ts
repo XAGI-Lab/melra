@@ -632,7 +632,7 @@ export const TaskRequestSchema = z
       maxSteps: 10,
       maxDurationMs: 120_000,
       maxRetries: 2,
-    }).describe("maxDurationMs (100-900000, default 120000) is timed from the first attempt: once it passes, no retry starts and a terminal run or browser, computer or http operation is aborted. maxRetries (0-10, default 2) retries only reads whose adapter throws. maxSteps (1-100, default 10) limits nothing."),
+    }).describe("maxDurationMs (100-900000, default 120000) is timed from the first attempt: once it passes, no retry starts, a terminal run or browser, computer or http operation is aborted, and so are the independent reads verifying its effect (http_resource_matches and a registered verifier's probe). maxRetries (0-10, default 2) retries only reads whose adapter throws. maxSteps (1-100, default 10) limits nothing."),
     requiredEvidence: z
       .array(EvidencePredicateSchema)
       .max(20)
