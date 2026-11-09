@@ -859,7 +859,15 @@ async function doctor(env: CliEnvironment): Promise<{
   checks.push(...natives.map(nativeToolsCheck));
   // Last, as the sum of the lines above: what actually guards an effect.
   const keeping = natives.filter((report) => report.present.length > 0 || report.unreadable !== undefined);
-  checks.push(protectionCheck(env, commands, inPlay ? harness.present : undefined, keeping.map((report) => report.client)));
+  checks.push(
+    protectionCheck(
+      env,
+      commands,
+      inPlay ? harness.present : undefined,
+      keeping.map((report) => report.client),
+      sandbox?.settings.listen ?? [],
+    ),
+  );
   const failed = checks.some((check) => check.status === "fail");
   return {
     report: {
