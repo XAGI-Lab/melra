@@ -199,10 +199,12 @@ describe("policy file", () => {
     expect(loaded.sandbox).toEqual({
       use: "if-available",
       symlinks: ["git"],
+      listen: [],
       readable: ["~/.npmrc"],
       user: { uid: 1000, gid: 1000 },
     });
-    expect((await load({ sandbox: { symlinks: ["git"] } })).sandbox).toEqual({ symlinks: ["git"], readable: [] });
+    expect((await load({ sandbox: { symlinks: ["git"] } })).sandbox).toEqual({ symlinks: ["git"], listen: [], readable: [] });
+    expect((await load({ sandbox: { listen: ["vitest"] } })).sandbox).toEqual({ symlinks: [], listen: ["vitest"], readable: [] });
     const defaults = createDefaultPolicy(directory);
     // Developer mode too, wherever one works; `off` is the policy file's to say.
     expect(sandboxUse(defaults)).toBe("if-available");

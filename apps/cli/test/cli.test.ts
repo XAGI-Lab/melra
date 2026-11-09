@@ -209,7 +209,7 @@ describe("melra CLI", () => {
             operation: { kind: "file", action: "write", path: "report.txt", content: "x" },
           }),
         );
-      const planned = plan();
+      const planned = await plan();
       const env = {
         ...process.env,
         MELRA_HOME: dataDirectory,
@@ -246,7 +246,7 @@ describe("melra CLI", () => {
 
       // A developer-mode yes would spend the one decision this enforced task
       // can have on a row its kernel refuses, so it is refused unrecorded.
-      const developer = plan();
+      const developer = await plan();
       const refused = (await execute(process.execPath, [entry, "approve", developer.id, "--yes"], {
         cwd: root,
         env: { ...env, MELRA_MODE: "" },
@@ -255,7 +255,7 @@ describe("melra CLI", () => {
       expect(refused.stderr).toContain("approval_needs_enforced_mode");
       expect(server.store.getApprovalDecision(developer.approval!.approvalId)).toBeUndefined();
 
-      const denied = plan();
+      const denied = await plan();
       await execute(
         process.execPath,
         [entry, "approve", denied.id, "--deny", "--reason", "too_broad", "--note", "Only report.txt."],
@@ -267,7 +267,7 @@ describe("melra CLI", () => {
       });
       // A reason beside a yes would read as a no and approve, and one not in the
       // list says nothing: both are refused with nothing recorded.
-      const unsure = plan();
+      const unsure = await plan();
       for (const [args, said] of [
         [["--yes", "--reason", "never"], "--reason and --note go with --deny"],
         [["--deny", "--reason", "someday"], "reason: Invalid option"],
@@ -483,7 +483,7 @@ describe("melra CLI", () => {
     const root = join(base, "workspace");
     await mkdir(root);
     const waiting = async (server: Awaited<ReturnType<typeof createMelraRuntime>>) => {
-      const planned = server.controller.plan(
+      const planned = await server.controller.plan(
         TaskRequestSchema.parse({
           goal: "List the workspace and ask whether it looks tidy",
           operation: { kind: "file", action: "list", path: "." },
@@ -691,7 +691,7 @@ describe("melra CLI", () => {
     // Planned, and so asked about, while the grant was unspent.
     const server = await createMelraRuntime({ workspaceRoot: root, dataDirectory, policyPath, environment: {} });
     try {
-      const other = server.controller.plan(
+      const other = await server.controller.plan(
         TaskRequestSchema.parse({
           goal: "Write another",
           operation: { kind: "file", action: "write", path: "other.txt", content: "y" },
@@ -812,7 +812,7 @@ describe("melra CLI", () => {
 
     it("prints its address before the pairing, even when the page pairs first", async () => {
       const { env, melra, terminal, seen } = await start();
-      const task = melra.controller.plan(
+      const task = await melra.controller.plan(
         TaskRequestSchema.parse({
           goal: "Write the report",
           operation: { kind: "file", action: "write", path: "report.txt", content: "x" },
@@ -848,7 +848,7 @@ describe("melra CLI", () => {
 
     it("names what a tab approved while an opener ran, when the opener then fails", async () => {
       const { env, melra, terminal, seen } = await start();
-      const task = melra.controller.plan(
+      const task = await melra.controller.plan(
         TaskRequestSchema.parse({
           goal: "Write the report",
           operation: { kind: "file", action: "write", path: "report.txt", content: "x" },
@@ -906,7 +906,7 @@ describe("melra CLI", () => {
         const paired = await call(url, "/pair", { body: { code } });
         const session = paired.json.session as string;
         expect(seen.said).toMatch(/Paired with a browser tab at \d\d:\d\d/);
-        const task = melra.controller.plan(
+        const task = await melra.controller.plan(
           TaskRequestSchema.parse({
             goal: "Write the report",
             operation: { kind: "file", action: "write", path: "report.txt", content: "x" },
@@ -1306,7 +1306,7 @@ describe("melra CLI", () => {
     const dataDirectory = join(root, ".melra");
     const server = await createMelraRuntime({ workspaceRoot: root, dataDirectory, environment: {} });
     try {
-      const planned = server.controller.plan(
+      const planned = await server.controller.plan(
         TaskRequestSchema.parse({
           goal: "Write\u009b2J\u202ethe report",
           operation: { kind: "file", action: "write", path: "report.txt", content: "x" },
@@ -1322,7 +1322,7 @@ describe("melra CLI", () => {
       expect(asked.stdout).not.toMatch(/[\u0080-\u009f\u202e]/);
       expect(JSON.parse(asked.stdout).contract.metadata.goal).toBe("Write\u009b2J\u202ethe report");
       // `melra tasks --json`, which the approval hint points at, too.
-      server.controller.plan(
+      await server.controller.plan(
         TaskRequestSchema.parse({
           goal: "Write",
           operation: { kind: "file", action: "write", path: "a\u202eb\u009b.txt", content: "x" },
@@ -1344,12 +1344,14 @@ describe("melra CLI", () => {
     try {
       // Planned reads, so none waits for approval. Seventeen ids over sixteen
       // hex digits: two of them start alike.
-      const ids = Array.from(
-        { length: 17 },
-        (_, index) =>
-          server.controller.plan(
-            TaskRequestSchema.parse({ goal: `List ${index}`, operation: { kind: "file", action: "list", path: "." } }),
-          ).id,
+      const ids = await Promise.all(
+        Array.from(
+          { length: 17 },
+          async (_, index) =>
+            (await server.controller.plan(
+              TaskRequestSchema.parse({ goal: `List ${index}`, operation: { kind: "file", action: "list", path: "." } }),
+            )).id,
+        ),
       );
       const shared = ids.find((id, index) => ids.findIndex((other) => other[0] === id[0]) !== index)![0]!;
       const env = { ...process.env, MELRA_HOME: dataDirectory, MELRA_WORKSPACE: root };
@@ -1390,16 +1392,16 @@ describe("melra CLI", () => {
     const dataDirectory = join(root, ".melra");
     const server = await createMelraRuntime({ workspaceRoot: root, dataDirectory, environment: {} });
     try {
-      const listed = server.controller.plan(
+      const listed = await server.controller.plan(
         TaskRequestSchema.parse({ goal: "List", operation: { kind: "file", action: "list", path: "." } }),
       );
-      const write = server.controller.plan(
+      const write = await server.controller.plan(
         TaskRequestSchema.parse({
           goal: "Write the report",
           operation: { kind: "file", action: "write", path: "report.txt", content: "x" },
         }),
       );
-      const planned = server.controller.plan(
+      const planned = await server.controller.plan(
         TaskRequestSchema.parse({
           goal: "List the workspace and ask whether it looks tidy",
           operation: { kind: "file", action: "list", path: "." },
@@ -1475,9 +1477,9 @@ describe("melra CLI", () => {
     const list = (goal: string) =>
       server.controller.plan(TaskRequestSchema.parse({ goal, operation: { kind: "file", action: "list", path: "." } }));
     try {
-      const old = server.controller.cancel(list("The old one").id);
+      const old = await server.controller.cancel((await list("The old one")).id);
       // More than any one listing reads, so only a search of every task finds it.
-      for (let index = 0; index < 510; index += 1) list(`List ${index}`);
+      for (let index = 0; index < 510; index += 1) await list(`List ${index}`);
       const env = { ...process.env, MELRA_HOME: dataDirectory, MELRA_WORKSPACE: root };
       for (const command of ["inspect", "export"]) {
         const { stdout } = await execute(process.execPath, [entry, command, old.id.slice(0, 8)], { cwd: root, env });
@@ -2399,10 +2401,9 @@ describe("melra CLI", () => {
     expect((await sandbox({ MELRA_MODE: "enforced", ...(await sandboxOptOut(root)) })).status).not.toBe("fail");
   });
 
-  // A stdio client ends the server by closing its input, which runs no
-  // shutdown, or its terminal hangs up, with a SIGTERM close behind it: the
-  // npm and pnpm caches made in temp at the first sandboxed command must
-  // still go.
+  // A stdio client ends the server by closing its input, or its terminal hangs up,
+  // with a SIGTERM close behind it: each runs close() once, and the npm and pnpm
+  // caches made in temp at the first sandboxed command must still go.
   it.for(["closes its input", "hangs up", "hangs up and is terminated"])("leaves no package cache in temp when a stdio client %s", { timeout: 60_000 }, async (how, context) => {
     const root = await realpath(await mkdtemp(join(tmpdir(), "melra-cli-")));
     roots.push(root);
@@ -2455,6 +2456,203 @@ describe("melra CLI", () => {
     }
     expect(await exited).toBe(0);
     expect(await caches()).toEqual([]);
+  });
+
+  it("stops background job process groups when a stdio client closes its input", { timeout: 60_000 }, async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-cli-")));
+    roots.push(root);
+    await mkdir(join(root, "ws"));
+    const server = spawn(process.execPath, [entry, "serve"], {
+      cwd: root,
+      env: { ...process.env, MELRA_HOME: join(root, ".melra"), MELRA_WORKSPACE: join(root, "ws"), MELRA_UNHINGED: "1" },
+      stdio: ["pipe", "pipe", "ignore"],
+    });
+    const exited = new Promise<number | null>((settle) => server.once("exit", settle));
+    const waiting = new Map<number, (reply: { result: { content: Array<{ text: string }> } }) => void>();
+    let buffered = "";
+    server.stdout.setEncoding("utf8").on("data", (chunk: string) => {
+      buffered += chunk;
+      for (let end = buffered.indexOf("\n"); end >= 0; end = buffered.indexOf("\n")) {
+        const reply = JSON.parse(buffered.slice(0, end));
+        buffered = buffered.slice(end + 1);
+        waiting.get(reply.id)?.(reply);
+      }
+    });
+    let id = 0;
+    const call = async (method: string, params: unknown) =>
+      await new Promise<{ result: { content: Array<{ text: string }> } }>((settle) => {
+        waiting.set(++id, settle);
+        server.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
+      });
+    const tool = async (name: string, args: unknown) =>
+      JSON.parse((await call("tools/call", { name, arguments: args })).result.content[0]!.text);
+    let jobPid: number | undefined;
+    try {
+      await call("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "cli-test", version: "1" } });
+      server.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`);
+      const task = await tool("melra_plan", {
+        goal: "run background worker",
+        operation: {
+          kind: "terminal",
+          action: "start",
+          command: process.execPath,
+          args: ["-e", "setInterval(() => {}, 1000)"],
+          timeoutMs: 120_000,
+        },
+      });
+      const ran = await tool("melra_execute", { taskId: task.id });
+      expect(ran.task.status).toBe("verified_success");
+      jobPid = ran.output?.pid ?? ran.task?.result?.pid;
+      expect(jobPid).toBeTypeOf("number");
+      const isAlive = () => {
+        try {
+          if (process.platform !== "win32") process.kill(-jobPid!, 0);
+          else process.kill(jobPid!, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      expect(isAlive()).toBe(true);
+
+      server.stdin.end();
+      const outcome = await Promise.race([
+        exited,
+        new Promise<"hung">((settle) => setTimeout(() => settle("hung"), 10_000)),
+      ]);
+      expect(outcome).toBe(0);
+
+      const isGone = () => {
+        try {
+          if (process.platform !== "win32") process.kill(-jobPid!, 0);
+          else process.kill(jobPid!, 0);
+          return false;
+        } catch {
+          return true;
+        }
+      };
+      const deadline = Date.now() + 5_000;
+      while (!isGone() && Date.now() < deadline) {
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, 50));
+      }
+      expect(isGone()).toBe(true);
+    } finally {
+      server.kill("SIGTERM");
+      await exited;
+      if (jobPid !== undefined) {
+        try {
+          if (process.platform !== "win32") process.kill(-jobPid, "SIGKILL");
+          else process.kill(jobPid, "SIGKILL");
+        } catch {}
+      }
+    }
+  });
+
+  // A stdio server driven over raw JSON-RPC lines, so a test can close stdin
+  // or cancel a request at exactly the moment it means to.
+  const stdioServer = async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-cli-")));
+    roots.push(root);
+    await mkdir(join(root, "ws"));
+    const server = spawn(process.execPath, [entry, "serve"], {
+      cwd: root,
+      env: { ...process.env, MELRA_HOME: join(root, ".melra"), MELRA_WORKSPACE: join(root, "ws"), MELRA_UNHINGED: "1" },
+      stdio: ["pipe", "pipe", "ignore"],
+    });
+    const exited = new Promise<number | null>((settle) => server.once("exit", settle));
+    const waiting = new Map<number, (reply: { result: { content: Array<{ text: string }> } }) => void>();
+    let buffered = "";
+    server.stdout.setEncoding("utf8").on("data", (chunk: string) => {
+      buffered += chunk;
+      for (let end = buffered.indexOf("\n"); end >= 0; end = buffered.indexOf("\n")) {
+        const reply = JSON.parse(buffered.slice(0, end));
+        buffered = buffered.slice(end + 1);
+        waiting.get(reply.id)?.(reply);
+      }
+    });
+    const write = (message: object) => server.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`);
+    let id = 0;
+    const call = (method: string, params: unknown) => {
+      const sent = ++id;
+      const reply = new Promise<{ result: { content: Array<{ text: string }> } }>((settle) => waiting.set(sent, settle));
+      write({ id: sent, method, params });
+      return { id: sent, reply };
+    };
+    const tool = async (name: string, args: unknown) =>
+      JSON.parse((await call("tools/call", { name, arguments: args }).reply).result.content[0]!.text);
+    const within = async <T>(ms: number, promise: Promise<T>) =>
+      await Promise.race([promise, new Promise<"timed out">((settle) => setTimeout(() => settle("timed out"), ms))]);
+    await call("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "cli-test", version: "1" } }).reply;
+    write({ method: "notifications/initialized" });
+    // A terminal command that runs for `ms`, planned but not yet executed.
+    const planSleep = async (ms: number) =>
+      (await tool("melra_plan", {
+        goal: "wait",
+        operation: { kind: "terminal", action: "run", command: process.execPath, args: ["-e", `setTimeout(() => {}, ${ms})`] },
+        requiredEvidence: [{ type: "exit_code", value: 0 }],
+      })).id as string;
+    return { server, exited, write, call, tool, within, planSleep };
+  };
+
+  it("delivers in-flight replies when a stdio client closes stdin right after sending", { timeout: 30_000 }, async () => {
+    const { server, exited, call, within, planSleep } = await stdioServer();
+    try {
+      const taskId = await planSleep(2_000);
+      const { reply } = call("tools/call", { name: "melra_execute", arguments: { taskId } });
+      server.stdin.end();
+
+      const replied = await within(10_000, reply);
+      expect(replied).not.toBe("timed out");
+      expect(JSON.parse((replied as Awaited<typeof reply>).result.content[0]!.text).task.status).toBe("verified_success");
+      expect(await within(10_000, exited)).toBe(0);
+    } finally {
+      server.kill("SIGTERM");
+      await exited;
+    }
+  });
+
+  // The SDK sends no reply for a cancelled request, so waiting for one would
+  // hold off shutdown, and the background job with it.
+  it("stops background jobs promptly when a stdio client cancels a request and closes stdin", { timeout: 30_000 }, async () => {
+    const { server, exited, write, call, tool, within, planSleep } = await stdioServer();
+    let jobPid: number | undefined;
+    const isAlive = () => {
+      try {
+        process.kill(process.platform === "win32" ? jobPid! : -jobPid!, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    try {
+      const job = await tool("melra_plan", {
+        goal: "run background worker",
+        operation: { kind: "terminal", action: "start", command: process.execPath, args: ["-e", "setInterval(() => {}, 1000)"], timeoutMs: 120_000 },
+      });
+      const started = await tool("melra_execute", { taskId: job.id });
+      jobPid = started.output?.pid ?? started.task?.result?.pid;
+      expect(jobPid).toBeTypeOf("number");
+      expect(isAlive()).toBe(true);
+
+      const taskId = await planSleep(3_000);
+      const { id } = call("tools/call", { name: "melra_execute", arguments: { taskId } });
+      write({ method: "notifications/cancelled", params: { requestId: id, reason: "client gave up" } });
+      server.stdin.end();
+
+      // Well inside the EOF drain's deadline: the cancelled request is not waited for.
+      expect(await within(3_000, exited)).toBe(0);
+      const deadline = Date.now() + 5_000;
+      while (isAlive() && Date.now() < deadline) await new Promise((settle) => setTimeout(settle, 50));
+      expect(isAlive()).toBe(false);
+    } finally {
+      server.kill("SIGTERM");
+      await exited;
+      if (jobPid !== undefined) {
+        try {
+          process.kill(process.platform === "win32" ? jobPid : -jobPid, "SIGKILL");
+        } catch {}
+      }
+    }
   });
 
   it("refuses to start in enforced mode with the local bypass", async () => {

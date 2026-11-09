@@ -3,7 +3,8 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import type { Transport, TransportSendOptions } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { CallToolRequestSchema, type JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 import {
   attributeTo,
   callerRef,
@@ -366,7 +367,7 @@ export function createMcpServer(
     },
     async (input) =>
       toolResult(
-        runtime.controller.plan(
+        await runtime.controller.plan(
           TaskRequestSchema.parse(attributed(input, client)),
           { client: caller },
         ),
@@ -435,7 +436,7 @@ export function createMcpServer(
     async (input) => {
       const parsed = MelraTaskCancelInputSchema.parse(input);
       ownTask(parsed.taskId);
-      return toolResult(runtime.controller.cancel(parsed.taskId));
+      return toolResult(await runtime.controller.cancel(parsed.taskId));
     },
   );
 
@@ -495,7 +496,7 @@ export function createMcpServer(
       );
       ownTask(judgement.taskId);
       return toolResult(
-        runtime.controller.judge(judgement, { identity, ...(client === undefined ? {} : { client }) }),
+        await runtime.controller.judge(judgement, { identity, ...(client === undefined ? {} : { client }) }),
       );
     },
   );
@@ -630,9 +631,44 @@ export function createMcpServer(
   return server;
 }
 
-export async function serveStdio(runtime: MelraRuntime): Promise<McpServer> {
+export type StdioServer = McpServer & { drained: () => Promise<void> };
+
+// How long stdin EOF waits for in-flight replies before shutdown runs anyway,
+// so one long request cannot hold off close() for as long as it runs.
+const STDIO_DRAIN_TIMEOUT_MS = 5_000;
+
+export async function serveStdio(runtime: MelraRuntime): Promise<StdioServer> {
   const server = createMcpServer(runtime);
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  return server;
+  // Requests still owed a reply. The SDK sends none for a cancelled request,
+  // so a cancellation settles it here too.
+  const pending = new Set<string | number>();
+  let idle: (() => void) | undefined;
+  const settle = (id: unknown) => {
+    if ((typeof id === "string" || typeof id === "number") && pending.delete(id) && pending.size === 0) idle?.();
+  };
+  const onmessage = transport.onmessage!;
+  transport.onmessage = (m: JSONRPCMessage) => {
+    if ("method" in m && "id" in m) pending.add(m.id);
+    else if ("method" in m && m.method === "notifications/cancelled") settle(m.params?.requestId);
+    onmessage(m);
+  };
+  const send = transport.send.bind(transport) as Transport["send"];
+  transport.send = async (m: JSONRPCMessage, options?: TransportSendOptions) => {
+    try {
+      await send(m, options);
+    } finally {
+      if (!("method" in m) && "id" in m) settle(m.id);
+    }
+  };
+  const drained = () =>
+    pending.size === 0
+      ? Promise.resolve()
+      : new Promise<void>((resolve) => {
+          idle = resolve;
+          // Unref'd: a drain that finished early must not hold the process open.
+          setTimeout(resolve, STDIO_DRAIN_TIMEOUT_MS).unref();
+        });
+  return Object.assign(server, { drained });
 }

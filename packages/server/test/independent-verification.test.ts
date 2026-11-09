@@ -46,6 +46,10 @@ let state = "pending";
 
 beforeAll(async () => {
   fixture = createServer((req, res) => {
+    if (req.url?.startsWith("/hang")) {
+      seen.push(`${req.method ?? ""} ${req.url ?? ""}`);
+      return;
+    }
     req.resume();
     req.on("end", () => {
       seen.push(`${req.method ?? ""} ${req.url ?? ""}`);
@@ -112,7 +116,7 @@ const refund = (verifyHost = "127.0.0.1") =>
 
 async function run(request: ReturnType<typeof refund>) {
   seen = [];
-  const planned = runtime.controller.plan(request);
+  const planned = await runtime.controller.plan(request);
   const approval =
     planned.approval === undefined
       ? undefined
@@ -177,6 +181,66 @@ describe("a provider's own state, not the provider's answer", () => {
     expect(receipt?.evidence[0]?.passed).toBe(false);
     expect(seen).toEqual(["POST /refunds"]);
   });
+
+  it("settles as partial when verification probe exceeds task budget", async () => {
+    const startedAt = Date.now();
+    const request = TaskRequestSchema.parse({
+      ...refund(),
+      budget: { maxRetries: 0, maxSteps: 1, maxDurationMs: 300 },
+      requiredEvidence: [
+        {
+          type: "http_resource_matches",
+          url: `http://127.0.0.1:${port}/hang/{{json.id}}`,
+          path: "json.state",
+          value: "succeeded",
+          timeoutMs: 10_000,
+        },
+      ],
+    });
+    const { task, receipt } = await run(request);
+    const duration = Date.now() - startedAt;
+    expect(task.status).toBe("partial");
+    expect(receipt?.evidence[0]?.passed).toBe(false);
+    expect(receipt?.evidence[0]?.inconclusive).toBe(true);
+    expect(duration).toBeLessThan(3_000);
+  });
+
+  it("settles as partial when task is cancelled during verification probe", async () => {
+    const startedAt = Date.now();
+    const request = TaskRequestSchema.parse({
+      ...refund(),
+      budget: { maxRetries: 0, maxSteps: 1, maxDurationMs: 10_000 },
+      requiredEvidence: [
+        {
+          type: "http_resource_matches",
+          url: `http://127.0.0.1:${port}/hang/{{json.id}}`,
+          path: "json.state",
+          value: "succeeded",
+          timeoutMs: 10_000,
+        },
+      ],
+    });
+    seen = [];
+    const planned = await runtime.controller.plan(request);
+    const approval =
+      planned.approval === undefined
+        ? undefined
+        : {
+            approvalId: planned.approval.approvalId,
+            phrase: planned.approval.phrase!,
+          };
+    const executing = runtime.controller.execute(planned.id, approval);
+    await vi.waitFor(() => {
+      expect(runtime.controller.status(planned.id).status).toBe("verifying");
+    });
+    await runtime.controller.cancel(planned.id);
+    const { task, receipt } = await executing;
+    const duration = Date.now() - startedAt;
+    expect(task.status).toBe("partial");
+    expect(receipt?.evidence[0]?.passed).toBe(false);
+    expect(receipt?.evidence[0]?.inconclusive).toBe(true);
+    expect(duration).toBeLessThan(3_000);
+  });
 });
 
 describe("in enforced mode", () => {
@@ -195,7 +259,7 @@ describe("in enforced mode", () => {
         environment: { MELRA_MODE: "enforced" },
       });
       seen = [];
-      const read = enforced.controller.plan(
+      const read = await enforced.controller.plan(
         TaskRequestSchema.parse({
           goal: "Read a note",
           operation: { kind: "file", action: "read", path: "notes.txt" },
@@ -208,7 +272,7 @@ describe("in enforced mode", () => {
       expect(read.policyDecision.reason).toBe("network_read_unlisted_host");
       await expect(enforced.controller.execute(read.id)).rejects.toThrow(/approval_awaiting_operator/);
       expect(seen).toEqual([]);
-      enforced.controller.decide(read.id, enforced.controller.approvalView(read.id).renderDigest, "cli:test");
+      await enforced.controller.decide(read.id, enforced.controller.approvalView(read.id).renderDigest, "cli:test");
       expect((await enforced.controller.execute(read.id)).task.status).toBe("verified_success");
       expect(seen).toEqual(["GET /c?d=workspace-note"]);
     } finally {

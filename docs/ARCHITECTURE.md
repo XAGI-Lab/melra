@@ -265,7 +265,7 @@ each one it replaced in `certificate_history`), and every workflow event,
 approval decision, approval denial, refusal, grant draw and idempotency commit
 gets one link: a sequence, the record's table and key, the SHA-256 of the
 columns it was written with as canonical JSON, the link before it, whether a
-later start sealed it rather than the write (`swept`), and the link itself,
+start or sweep sealed it rather than the write (`swept`), and the link itself,
 an HMAC-SHA256 of the link before, that digest and `swept` under a key
 derived from the payload key with a label of its own
 (`melra:record-chain:v1`). The link is written in the transaction that
@@ -278,8 +278,8 @@ with the payload key, and fails, naming the first, on a sealed record changed
 or removed, a link missing, moved or not made with the key, and a row of
 those tables no link seals. It also counts the swept links, and names the
 first that follows a link sealed when written (`late`), without failing,
-since an older MELRA writing beside this one leaves those at every start. A
-removed tail, the newest records taken out with their links, leaves a
+since an older MELRA writing beside this one leaves those at every start or
+sweep. A removed tail, the newest records taken out with their links, leaves a
 shorter chain that still verifies; `melra audit head` prints the last link
 for the operator to keep where MELRA cannot write, and `--head
 <sequence>:<link>` fails unless the chain still passes through it (see
@@ -292,16 +292,16 @@ are. Nor is `certificate_history.replaced_at`, the time a version was
 replaced, which the trigger adds after the version was sealed. Anyone who can
 write `melra.sqlite` can, without the key, remove a record's link and every
 later one, or the whole chain, and change or remove the records from there;
-the next start seals what is left again, as it then is, so the chain
+a start or sweep seals what is left again, as it then is, so the chain
 verifies, those links marked swept and, after one sealed when written, late.
 Whoever holds `payload.key`, in a single-user deployment anyone running as
 MELRA's user, can rebuild the whole chain with no mark. A head kept from
 after the record was sealed shows both. An older MELRA sharing the home
 writes its records without links, and the next process of this version to
-start on the home seals them (`sealRecords`), with any row anyone else
-inserted meanwhile, so the chain shows that a record has not changed since it
-was last sealed, not who wrote it. Until then `melra audit verify` reports
-them as `unsealed_rows`.
+start on the home — or its periodic recovery sweep while running — seals them
+(`sealRecords`), with any row anyone else inserted meanwhile, so the chain
+shows that a record has not changed since it was last sealed, not who wrote it.
+Until then `melra audit verify` reports them as `unsealed_rows`.
 
 Workflow creation persists the redacted definition, encrypted definition,
 initial projection, and first two events atomically. Later transitions use
@@ -603,7 +603,9 @@ however the process ends. Recovery claims a task only when its owner's lock is
 free, with a compare-and-set so two recoverers cannot both take it, and touches
 a workflow run only under that run's lease and only once none of its tasks is
 still running. A running runtime sweeps every 30 seconds for work left by a
-process that died after it started. An advance that finds an expired lease
+process that died after it started; the same passes also cancel standalone
+approval challenges that expired unanswered, with error `approval_expired`, so
+the agent re-plans (`#462`). An advance that finds an expired lease
 recovers the run before taking it over, so it never plans again a task the dead
 advance already started. A process also retakes its own task when nothing in it
 is still working on that task, for example after the task's last write failed.

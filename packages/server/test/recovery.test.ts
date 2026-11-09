@@ -8,13 +8,15 @@
 import { link, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { detectBrowserExecutable } from "@melra/browser-runtime";
 import { BrowserOperationSchema, FileOperationSchema, TaskRequestSchema, TerminalOperationSchema } from "@melra/protocol";
+import { SqliteStore } from "@melra/storage-sqlite";
 // The kernel subpath, as the CLI and an embedder without the MCP interface
 // import it; it must carry the verifier types the package root does.
-import { createMelraRuntime, type MelraRuntime, type PredicateVerifier } from "../src/kernel.js";
+import { createMelraRuntime, homeCipher, type MelraRuntime, type PredicateVerifier } from "../src/kernel.js";
 
 const roots: string[] = [];
 const runtimes: MelraRuntime[] = [];
@@ -56,7 +58,7 @@ async function pair() {
   const options = { workspaceRoot: root, dataDirectory: join(root, ".melra"), environment: {} };
   const first = await createMelraRuntime({ ...options, evidenceVerifiers: [held.verifier] });
   runtimes.push(first);
-  const planned = first.controller.plan(
+  const planned = await first.controller.plan(
     TaskRequestSchema.parse({
       goal: "Write and check",
       operation: { kind: "file", action: "write", path: "out.txt", content: "x" },
@@ -111,7 +113,7 @@ describe("recovery between runtimes sharing a home", () => {
     runtimes.push(runtime);
     const owner = runtime.store.ownerId();
     for (const path of [".melra/melra.sqlite", `.melra/melra.sqlite-owners/${owner}`, ".melra/payload.key"]) {
-      const planned = runtime.controller.plan(
+      const planned = await runtime.controller.plan(
         TaskRequestSchema.parse({ goal: "Read", operation: { kind: "file", action: "read", path } }),
       );
       const { task } = await runtime.controller.execute(planned.id);
@@ -119,7 +121,7 @@ describe("recovery between runtimes sharing a home", () => {
       expect(task.error).toContain("path_reserved");
     }
     // The verifier asks the same question before it opens anything.
-    const write = runtime.controller.plan(
+    const write = await runtime.controller.plan(
       TaskRequestSchema.parse({
         goal: "Write and check",
         operation: { kind: "file", action: "write", path: "out.txt", content: "x" },
@@ -213,7 +215,7 @@ describe("recovery between runtimes sharing a home", () => {
       ),
     ).rejects.toThrow("terminal_path_reserved");
     // The verifier only reads.
-    const write = runtime.controller.plan(
+    const write = await runtime.controller.plan(
       TaskRequestSchema.parse({
         goal: "Write and check",
         operation: { kind: "file", action: "write", path: "out.txt", content: "x" },
@@ -291,5 +293,55 @@ describe("recovery between runtimes sharing a home", () => {
     finish!();
     await closing;
     expect(closed).toBe(true);
+  });
+
+  it("seals an older writer's records during the periodic recovery sweep without restarting (#466)", async () => {
+    const root = await mkdtemp(join(tmpdir(), "melra-runtime-recovery-"));
+    roots.push(root);
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const runtime = await createMelraRuntime({
+      workspaceRoot: root,
+      dataDirectory: join(root, ".melra"),
+      environment: {},
+    });
+    runtimes.push(runtime);
+
+    const database = new DatabaseSync(join(root, ".melra", "melra.sqlite"));
+    try {
+      const taskId = "00000000-0000-4000-8000-0000000000a1";
+      const receiptId = "00000000-0000-4000-8000-0000000000b1";
+      database
+        .prepare(`
+          INSERT INTO receipts(id, task_id, data, created_at)
+          VALUES (?, ?, ?, ?)
+        `)
+        .run(receiptId, taskId, JSON.stringify({ receiptId, taskId, endedAt: "2026-01-01T00:00:00.000Z" }), "2026-01-01T00:00:00.000Z");
+
+      const unsealedBefore = database
+        .prepare("SELECT COUNT(*) AS count FROM record_chain WHERE record_table = 'receipts' AND record_key = ?")
+        .get(JSON.stringify([receiptId])) as { count: number };
+      expect(unsealedBefore.count).toBe(0);
+
+      // Advance timers by 30 seconds to trigger the periodic recovery sweep
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      const sealedAfter = database
+        .prepare("SELECT swept FROM record_chain WHERE record_table = 'receipts' AND record_key = ?")
+        .get(JSON.stringify([receiptId])) as { swept: number } | undefined;
+      expect(sealedAfter).toBeDefined();
+      expect(sealedAfter?.swept).toBe(1);
+
+      const observer = new SqliteStore(join(root, ".melra", "melra.sqlite"), { readOnly: true });
+      try {
+        const cipher = await homeCipher(observer, join(root, ".melra"), {});
+        const report = observer.verifyChain(cipher.chainKey());
+        expect(report).toMatchObject({ ok: true, unsealed: 0 });
+        expect(report.swept).toBeGreaterThanOrEqual(1);
+      } finally {
+        observer.close();
+      }
+    } finally {
+      database.close();
+    }
   });
 });

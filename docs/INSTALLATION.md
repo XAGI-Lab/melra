@@ -1021,13 +1021,14 @@ your rights. Under Seatbelt and bubblewrap, a command in the sandbox:
 - reaches no network unless policy gives the command the `network`
   [trait](#local-configuration) (`git fetch`, `curl`, an install). Under
   Seatbelt it opens no socket at all without it, a listening one or one to
-  loopback included, and with it only IP sockets and DNS, never a Unix socket
-  such as an SSH agent's or Docker's. (Seatbelt cannot open the loopback
-  alone: its `localhost` filter matches every address of the Mac, so a
-  listener it allowed would be reachable from the network.) Under bubblewrap
-  it gets an empty network namespace with a loopback of its own, so neither
-  the host's network nor the host's loopback; Unix sockets on the filesystem
-  stay reachable, with the trait or without;
+  loopback included (unless the program is named in `sandbox.listen`, which
+  permits listening on every address of the Mac), and with it only IP sockets and
+  DNS, never a Unix socket such as an SSH agent's or Docker's. (Seatbelt cannot
+  open the loopback alone: its `localhost` filter matches every address of the
+  Mac, so a listener it allowed would be reachable from the network.) Under
+  bubblewrap it gets an empty network namespace with a loopback of its own, so
+  neither the host's network nor the host's loopback; Unix sockets on the
+  filesystem stay reachable, with the trait or without;
 - makes no symbolic link unless the command carries the `package-install`
   trait, the policy file names it in `sandbox.symlinks`, or, in developer
   mode, it is `git`. Refused links do not make git fail: a `git clone` or
@@ -1064,6 +1065,7 @@ The policy file sets it under `sandbox`:
 |---|---|
 | `use` | `on`: every command runs sandboxed, and MELRA refuses to start (`sandbox_unavailable`) where none works. `off`: none, which enforced mode refuses (`enforced_mode_refuses_sandbox_off`). `if-available`: sandboxed where one works, and started without one where none does; in enforced mode this is the operator's recorded opt-out, and every receipt then says `"sandbox": "none"`. Left out, `on` in enforced mode and `if-available` in developer mode. Unsafe-local turns it off |
 | `symlinks` | Commands, by name as in `allowedCommands`, that may make symbolic links; in developer mode `git` may without being named |
+| `listen` | Commands, by name as in `allowedCommands` (the program MELRA runs, so `npm` for `npm test`, not `vitest`), that may listen under Seatbelt. The allowance covers everything that program starts. Seatbelt cannot limit this to loopback: the listener is reachable on every address of the Mac (LAN, VPN). Bubblewrap ignores it |
 | `readable` | Entries of the list above to let commands read again, written exactly as listed |
 | `user` | `{ "uid": ..., "gid": ... }`, the account the `uid` sandbox runs commands as; never 0 |
 
@@ -1131,8 +1133,9 @@ project depends on it:
 
 - listening or connecting without the `network` trait. `npm test` and `npm
   run` carry none, so under Seatbelt a test suite or dev server that opens a
-  loopback port fails with `EPERM`; under bubblewrap it gets a loopback of
-  its own, which nothing outside the command reaches;
+  loopback port fails with `EPERM` unless the command is named in `sandbox.listen`
+  (reachable on every address of the Mac) or the sandbox is off; under bubblewrap
+  it gets a loopback of its own, which nothing outside the command reaches;
 - a checkout whose `.git` names a git directory outside the workspace, as a
   git worktree's does: `git status` reads it, but `git add` and `git commit`
   write there and fail;
@@ -1741,9 +1744,9 @@ Every receipt, every version of a certificate, and every workflow event,
 approval decision and denial, refused answer, grant draw and idempotency
 commit is sealed into one chain in the transaction that writes it: each link
 is an HMAC-SHA256, under a key derived from the payload key, of the link
-before it, the record's digest and whether a later start sealed the record
-instead (below). Task rows and workflow runs, which change
-as a task or run moves, are not sealed. Two commands read the chain, opening
+before it, the record's digest and whether a later start or sweep sealed
+the record instead (below). Task rows and workflow runs, which change as a
+task or run moves, are not sealed. Two commands read the chain, opening
 the database read-only:
 
 ```bash
@@ -1772,26 +1775,28 @@ found it:
 An older MELRA sharing the home writes its records without links. The next
 process of this version to start on the home seals them: `serve`, `run`,
 `approve`, `inspect` and every other command that starts the runtime. Until
-then `verify` reports them as `unsealed_rows`; check those before starting
-MELRA on the home, because a start seals them as they then are. Anything else
-inserted into the file meanwhile, and any record whose link was removed, is
-sealed with them, so the chain shows that a record has not changed since it
-was last sealed, not who wrote it.
+then `verify` reports them as `unsealed_rows`. A process of this version seals
+them as they then are when it starts and, while it runs, within 30 s. So on a
+home where `serve` runs, `unsealed_rows` shows only briefly, and what shows a
+change afterwards is `swept`, `late` and a head kept with `melra audit head`.
+Anything else inserted into the file meanwhile, and any record whose link was
+removed, is sealed with them, so the chain shows that a record has not changed
+since it was last sealed, not who wrote it.
 
 A write seals only a record holding exactly what it wrote: a row under the
 same key holding anything else, one planted there first or stored in place of
-MELRA's by a trigger added to the file, is left for the next start to seal.
+MELRA's by a trigger added to the file, is left for a start or sweep to seal.
 
-Each link records whether a start sealed it rather than the write. `verify`
-counts those in `swept`, and in `late` gives the first of them that follows a
-link sealed when written, with `count`, how many do. Neither fails `verify`:
-a home first sealed when it was migrated has swept links and none late, and
-an older MELRA writing beside this version leaves late ones at every start.
-Compare both with what an earlier `verify` printed.
+Each link records whether a start or sweep sealed it rather than the write.
+`verify` counts those in `swept`, and in `late` gives the first of them that
+follows a link sealed when written, with `count`, how many do. Neither fails
+`verify`: a home first sealed when it was migrated has swept links and none late,
+and an older MELRA writing beside this version leaves late ones at every start or
+sweep. Compare both with what an earlier `verify` printed.
 
 Three changes pass `verify` on its own. Anyone who can write `melra.sqlite`
 can, without the key, remove a record's link and every later one, change or
-remove the records from there, and leave the next start to seal what is left
+remove the records from there, and leave a start or sweep to seal what is left
 again; that shows only in `swept`, and in `late` when a link sealed when
 written comes before the removed ones. The newest
 records can be removed together with their links, which leaves no mark. And

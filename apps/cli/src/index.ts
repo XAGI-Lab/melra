@@ -859,7 +859,15 @@ async function doctor(env: CliEnvironment): Promise<{
   checks.push(...natives.map(nativeToolsCheck));
   // Last, as the sum of the lines above: what actually guards an effect.
   const keeping = natives.filter((report) => report.present.length > 0 || report.unreadable !== undefined);
-  checks.push(protectionCheck(env, commands, inPlay ? harness.present : undefined, keeping.map((report) => report.client)));
+  checks.push(
+    protectionCheck(
+      env,
+      commands,
+      inPlay ? harness.present : undefined,
+      keeping.map((report) => report.client),
+      sandbox?.settings.listen ?? [],
+    ),
+  );
   const failed = checks.some((check) => check.status === "fail");
   return {
     report: {
@@ -1263,7 +1271,7 @@ async function launch(args: string[], env: CliEnvironment): Promise<number> {
 async function runTask(args: string[], env: CliEnvironment): Promise<number> {
   const melra = await runtime(env);
   try {
-    const task = melra.controller.plan(await readTaskRequest(args));
+    const task = await melra.controller.plan(await readTaskRequest(args));
     if (task.status === "policy_blocked") {
       output({ task });
       return 4;
@@ -1278,7 +1286,7 @@ async function runTask(args: string[], env: CliEnvironment): Promise<number> {
       const approver = approverLabel(env);
       const view = melra.controller.approvalView(task.id);
       if (!(await confirmInTerminal(view))) return 1;
-      melra.controller.decide(task.id, view.renderDigest, approver);
+      await melra.controller.decide(task.id, view.renderDigest, approver);
       return printRun(await melra.controller.execute(task.id), melra.controller.enforced);
     }
     return printRun(await melra.controller.execute(task.id), melra.controller.enforced);
@@ -1354,7 +1362,7 @@ async function approveCommand(args: string[], env: CliEnvironment): Promise<numb
     const view = melra.controller.approvalView(taskId);
     if (args.includes("--deny")) {
       // Not cancelled when another process started it in the meantime.
-      const task = melra.controller.deny(taskId, approver, denial);
+      const task = await melra.controller.deny(taskId, approver, denial);
       output({ task });
       return task.status === "cancelled" ? 0 : 1;
     }
@@ -1370,7 +1378,7 @@ async function approveCommand(args: string[], env: CliEnvironment): Promise<numb
       }
       if (!(await confirmInTerminal(view))) return 1;
     }
-    const decision = melra.controller.decide(taskId, view.renderDigest, approver);
+    const decision = await melra.controller.decide(taskId, view.renderDigest, approver);
     if (decision.channel === "in_band") {
       process.stderr.write(
         "Recorded in band: this process is in developer mode. Set \"mode\": \"enforced\" in the policy file (or MELRA_MODE=enforced) for the server and for this command. An enforced server will not run on this decision: a workflow plans the step again once the challenge expires; a single task needs --deny and planning again.\n",
@@ -1401,9 +1409,9 @@ async function judgeCommand(args: string[], env: CliEnvironment): Promise<number
   const rationale = argument("--rationale", args);
   const melra = await runtime(env);
   try {
-    let judged: ReturnType<typeof melra.controller.judge>;
+    let judged: Awaited<ReturnType<typeof melra.controller.judge>>;
     try {
-      judged = melra.controller.judge(
+      judged = await melra.controller.judge(
         { taskId, judgementId, verdict, ...(rationale === undefined ? {} : { rationale }) },
         { operator },
       );
@@ -1660,10 +1668,10 @@ other records an effect leaves: every link was made with this home's key and
 every sealed record is still there as it was. It reads the database
 read-only and the payload key as the server does, and exits 0 when the chain
 holds and 1 naming the first break, rows not sealed yet included. It also
-counts records a start sealed rather than the write, and names the first
-sealed late, after one sealed when written: an older MELRA beside this one
-leaves those, and so do links removed outside MELRA, the records sealed again
-as they then were. A removed tail shows only against a head kept from before:
+counts records a start or the recovery sweep sealed rather than the write, and
+names the first sealed late, after one sealed when written: an older MELRA
+beside this one leaves those, and so do links removed outside MELRA, the
+records sealed again as they then were. A removed tail shows only against a head kept from before:
 'melra audit head' prints the last link, to keep where MELRA cannot write,
 and '--head' checks that the chain still passes through it.
 
@@ -1994,6 +2002,11 @@ async function main(): Promise<void> {
       // with no exit event, leaving the package caches in temp.
       for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
         process.once(signal, () => void close().finally(() => process.exit(0)));
+      }
+      if (server !== undefined) {
+        process.stdin.once("end", () =>
+          void server.drained().then(close).finally(() => process.exit(0)),
+        );
       }
       return;
     }

@@ -332,6 +332,35 @@ describe("melra http server", () => {
     expect(task.status).toBe(404);
   });
 
+  it("keeps an internal failure's text out of the response", async () => {
+    const leak = new Error("SQLITE_IOERR: disk I/O error at /home/operator/.melra/melra.sqlite");
+    const status = vi.spyOn(runtime.controller, "status").mockImplementation(() => {
+      throw leak;
+    });
+    const logged = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const response = await authed("/api/tasks/00000000-0000-4000-8000-000000000000");
+      expect(response.status).toBe(500);
+      const text = await response.text();
+      expect(JSON.parse(text)).toEqual({ error: "internal_error" });
+      expect(text).not.toContain("/home/operator");
+      expect(logged).toHaveBeenCalledWith("melra http: internal error", leak);
+    } finally {
+      status.mockRestore();
+      logged.mockRestore();
+    }
+  });
+
+  it("names malformed JSON as invalid_json, not the parser's prose", async () => {
+    const response = await fetch(`${base}/oauth/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{not json",
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "invalid_json" });
+  });
+
   it("rejects a write to the read-only API", async () => {
     const response = await fetch(`${base}/api/workflows`, {
       method: "POST",
@@ -626,7 +655,7 @@ describe("melra http server in enforced mode", () => {
         requiredEvidence: [{ type: "file_exists", path }],
       });
     try {
-      const task = runtime.controller.plan(write("w.txt"));
+      const task = await runtime.controller.plan(write("w.txt"));
       const planned = runtime.workflows.plan(
         WorkflowDefinitionSchema.parse({
           schemaVersion: "1.0.0",

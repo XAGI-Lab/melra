@@ -38,7 +38,7 @@ describe("melra audit", () => {
     try {
       // Each leaves a receipt and a certificate.
       for (const goal of ["Inspect", "Inspect again"]) {
-        const task = melra.controller.plan(TaskRequestSchema.parse({ goal, operation: { kind: "system", action: "info" } }));
+        const task = await melra.controller.plan(TaskRequestSchema.parse({ goal, operation: { kind: "system", action: "info" } }));
         expect((await melra.controller.execute(task.id)).task.status).toBe("verified_success");
       }
     } finally {
@@ -92,15 +92,15 @@ describe("melra audit", () => {
     expect(malformed.stderr).toContain("--head takes <sequence>:<link>");
   });
 
-  it("tells a person how many records a start sealed, and where the first sealed late is", () => {
+  it("tells a person how many records a start or sweep sealed, and where the first sealed late is", () => {
     const head = { sequence: 10, link: "a".repeat(64) };
     const human = renderVerify(
       { ok: true, head, unsealed: 0, swept: 9, late: { count: 8, sequence: 3, table: "receipts", key: '["r3"]' } },
       undefined,
     );
     expect(human).toContain("10 records sealed and intact");
-    expect(human).toContain("9 sealed at a start, not when written");
+    expect(human).toContain("9 sealed by a start or sweep, not when written");
     expect(human).toContain('8 sealed late, the first at 3, receipts ["r3"]: written by an older MELRA');
-    expect(renderVerify({ ok: true, head, unsealed: 0, swept: 0 }, undefined)).not.toContain("sealed at a start");
+    expect(renderVerify({ ok: true, head, unsealed: 0, swept: 0 }, undefined)).not.toContain("sealed by a start or sweep");
   });
 });

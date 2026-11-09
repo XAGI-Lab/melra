@@ -225,7 +225,10 @@ function recordDigest(table: ChainedTable, record: Record<string, unknown>): str
   return sha256([table, record]);
 }
 
-/** `swept` (1 or 0) is whether a start sealed the record rather than the write that stored it. */
+/**
+ * `swept` (1 or 0) is whether a start or the recovery sweep sealed the record
+ * rather than the write that stored it.
+ */
 function chainLink(key: Buffer, previous: string, digest: string, swept: number): string {
   return createHmac("sha256", key).update(`${previous}\0${digest}\0${swept}`).digest("hex");
 }
@@ -646,12 +649,13 @@ export class SqliteStore {
     );
     // Migration 9 chains the records migrations 7 and 8 keep (see CHAINED):
     // each link is an HMAC, under a key derived from the payload key, of the
-    // link before it, its record's digest and whether a start swept it, so
-    // rewriting, removing or reordering a sealed record breaks the chain for
-    // anyone without the key, and a head kept outside MELRA shows a removed
-    // tail. Sealing happens in the transaction that writes the record, and for
-    // what an older MELRA writes, which knows no chain, at the next start of one
-    // that does (`sealRecords`), marked swept. Nothing here touches the chained
+    // link before it, its record's digest and whether a start or the recovery
+    // sweep sealed it, so rewriting, removing or reordering a sealed record
+    // breaks the chain for anyone without the key, and a head kept outside
+    // MELRA shows a removed tail. Sealing happens in the transaction that
+    // writes the record, and for what an older MELRA writes, which knows no
+    // chain, at the next start or recovery sweep of one that does
+    // (`sealRecords`), marked swept. Nothing here touches the chained
     // tables, so an older MELRA writes them as before; the index finds a
     // replaced certificate.
     this.applyMigration(
@@ -788,10 +792,10 @@ export class SqliteStore {
   /**
    * Seals, under `key`, every chained record no link seals yet, and from now
    * on each one this store writes, in the transaction that writes it. What an
-   * older MELRA wrote is sealed here, by the next start that has the key, and
-   * so is anything else written to the file meanwhile, or left without its
-   * link: the chain shows what changed after it was last sealed, not who wrote
-   * it, and marks these links swept. Returns how many it found unsealed.
+   * older MELRA wrote is sealed here, by the next start or recovery sweep that
+   * has the key, and so is anything else written to the file meanwhile, or
+   * left without its link: the chain shows what changed after it was last
+   * sealed, not who wrote it, and marks these links swept. Returns how many it found unsealed.
    */
   sealRecords(key: Buffer): number {
     this.chainKey = Buffer.from(key);
@@ -1177,7 +1181,7 @@ export class SqliteStore {
   /**
    * One caller's tasks awaiting approval whose challenge has not expired, by
    * the caller `callerRef` names (#422). Read on every challenge planned, so
-   * the expired ones, which stay awaiting_approval and which nothing sweeps,
+   * the expired ones, which stay awaiting_approval until swept,
    * are left in SQL; `expiresAt` is an ISO string, compared as one.
    */
   listOpenChallenges(client: string, now: string): TaskRecord[] {
@@ -1189,6 +1193,27 @@ export class SqliteStore {
           AND json_extract(data, '$.approval.expiresAt') > ?
       `)
       .all(client, now) as unknown as JsonRow[];
+    return rows.map((row) => JSON.parse(row.data) as TaskRecord);
+  }
+
+  /**
+   * Standalone tasks awaiting approval whose challenge has expired without an
+   * operator decision (#462), oldest first. Workflow steps are left to the
+   * workflow controller, which re-asks or unwinds under its run's lease; tasks
+   * already decided are left for execute to take up or refuse.
+   */
+  listExpiredApprovalTasks(now: string): TaskRecord[] {
+    const rows = this.database
+      .prepare(`
+        SELECT data FROM tasks
+        WHERE json_extract(data, '$.status') = 'awaiting_approval'
+          AND json_extract(data, '$.workflowId') IS NULL
+          AND json_extract(data, '$.approval.expiresAt') <= ?
+          AND json_extract(data, '$.denial') IS NULL
+          AND json_extract(data, '$.approval.approvalId') NOT IN (SELECT approval_id FROM approval_decisions)
+        ORDER BY updated_at ASC
+      `)
+      .all(now) as unknown as JsonRow[];
     return rows.map((row) => JSON.parse(row.data) as TaskRecord);
   }
 
