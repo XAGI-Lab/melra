@@ -1306,6 +1306,59 @@ describe("a partial step under an undecided condition (#331)", () => {
     expect(wTask!.status).toBe("cancelled");
     await expect(tasks.execute(wTask!.id)).rejects.toThrow("task_not_executable:cancelled");
   });
+
+  it("cancels a parked forward step while the run waits on the undecided condition after a failure", async () => {
+    let answer = { success: true, status: 200, content: JSON.stringify({ status: "applied" }) };
+    const { controller, root, store, tasks, done, on } = await setup({
+      policy: { unhinged: true },
+      probe: async () => answer,
+    });
+    await writeFile(join(root, "flag"), "on");
+    const base = definition({
+      type: "http_resource_matches",
+      url: "https://payments.example.test/charges/1",
+      method: "GET",
+      path: "json.status",
+      value: "applied",
+    });
+    const planned = controller.plan(
+      WorkflowDefinitionSchema.parse({
+        ...base,
+        nodes: [
+          ...base.nodes,
+          { id: "approve-w", type: "approval", dependsOn: ["pay"], forNodeId: "w" },
+          { id: "w", type: "operation", dependsOn: ["pay", "approve-w"], request: put("w") },
+        ],
+      }),
+    );
+    await controller.advance(planned.id);
+    on.put = (key) => {
+      if (key === "ship") lapseAndPause(controller, store, planned.id);
+    };
+    await expect(controller.advance(planned.id)).rejects.toThrow("workflow_lease_lost");
+    delete on.put;
+    const parked = store
+      .listTasks(20)
+      .find((task) => (task.request as { operation?: { key?: string } }).operation?.key === "w");
+    expect(parked?.status).toBe("planned");
+    controller.resume(planned.id);
+
+    answer = { success: true, status: 503, content: "{}" };
+    await expect(controller.advance(planned.id)).rejects.toThrow("workflow_check_inconclusive:choose");
+    // Held for the condition, not failed: but no forward step of it runs.
+    expect(controller.status(planned.id).status).toBe("running");
+    expect(tasks.status(parked!.id)).toMatchObject({ status: "cancelled", error: `workflow_failed:${planned.id}` });
+    await expect(tasks.execute(parked!.id)).rejects.toThrow("task_not_executable:cancelled");
+    expect(controller.status(planned.id).nodes.refund?.status).toBe("pending");
+
+    // Once decided, the run records ship, fails and unwinds as before.
+    answer = { success: true, status: 200, content: JSON.stringify({ status: "applied" }) };
+    const run = (await controller.advance(planned.id)).run;
+    expect(run.status).toBe("failed");
+    expect(run.nodes.choose?.status).toBe("failed");
+    expect(run.nodes.refund?.status).toBe("compensated");
+    expect([...done].sort()).toEqual(["pay", "refund", "ship", "x"]);
+  });
 });
 
 describe("a step an operator denies", () => {

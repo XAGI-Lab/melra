@@ -1498,32 +1498,29 @@ export class WorkflowController {
     // that will not advance. Not on recovery_required, which may resume.
     // Also runs once the run has a failure even while waiting on an undecided
     // condition with an effect, skipping that condition's own keys (#331).
-    if (rebuilt.status === "failed" || rebuilt.status === "running") {
-      let definition: WorkflowDefinition | undefined;
-      try {
-        definition = this.loadDefinition(rebuilt);
-      } catch {
-        definition = undefined;
-      }
-      if (definition !== undefined) {
-        const hasFailure =
-          rebuilt.status === "failed" || this.hasFailure(definition, rebuilt.nodes);
-        const hadFailure =
-          current.status === "failed" || this.hasFailure(definition, current.nodes);
-        if ((hasFailure && !hadFailure) || (rebuilt.status === "failed" && current.status !== "failed")) {
-          const undecidedKeys = new Set(
-            this.undecidedConditionsWithEffect(definition, rebuilt).flatMap((node) =>
-              expectedTaskKeys(rebuilt.id, node, definition),
-            ),
-          );
-          this.cancelChallenges(
-            definition.nodes
-              .filter((node) => node.type !== "compensation")
-              .flatMap((node) => expectedTaskKeys(rebuilt.id, node, definition))
-              .filter((key) => !undecidedKeys.has(key)),
-            `workflow_failed:${rebuilt.id}`,
-          );
-        }
+    if (
+      rebuilt.status === "failed" ||
+      (rebuilt.status === "running" &&
+        Object.values(rebuilt.nodes).some((node) =>
+          ["failed", "cancelled", "recovery_required"].includes(node.status),
+        ))
+    ) {
+      const definition = this.loadDefinition(rebuilt);
+      const hasFailure = rebuilt.status === "failed" || this.hasFailure(definition, rebuilt.nodes);
+      const hadFailure = current.status === "failed" || this.hasFailure(definition, current.nodes);
+      if ((hasFailure && !hadFailure) || (rebuilt.status === "failed" && current.status !== "failed")) {
+        const undecidedKeys = new Set(
+          this.undecidedConditionsWithEffect(definition, rebuilt).flatMap((node) =>
+            expectedTaskKeys(rebuilt.id, node, definition),
+          ),
+        );
+        this.cancelChallenges(
+          definition.nodes
+            .filter((node) => node.type !== "compensation")
+            .flatMap((node) => expectedTaskKeys(rebuilt.id, node, definition))
+            .filter((key) => !undecidedKeys.has(key)),
+          `workflow_failed:${rebuilt.id}`,
+        );
       }
     }
     return rebuilt;
