@@ -8,6 +8,12 @@ All notable changes are documented here. The format follows
 
 ### Added
 
+- `@melra/server` and `@melra/server/kernel` export `verifyRecords`, which opens
+  the home's database read-only, loads the key with `mint: false`, and returns
+  `verifyChain`'s result mapped to `{ ok, problems, report }`. This enables
+  offline and evaluation harnesses like AARM to verify record chain integrity
+  (`r2t2.chain` and `r5t3.sqlite.*`) without starting a full server (#465).
+
 - CI's `bubblewrap` job installs bubblewrap on Linux, lets it make user
   namespaces as the systemd recipe's smoke does, and runs the terminal-runtime,
   server and CLI suites against it, so developer mode's real-sandbox tests
