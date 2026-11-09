@@ -1317,15 +1317,16 @@ describe("WorkflowController execution", () => {
   ) {
     let result = await controller.advance(id);
     for (let round = 0; round < 12; round += 1) {
-      const approvals = Object.entries(result.run.nodes).flatMap(([nodeId, state]) => {
-        if (state.status !== "awaiting_approval" || state.approval === undefined) return [];
+      const approvals: { approvalId: string; phrase: string }[] = [];
+      for (const [nodeId, state] of Object.entries(result.run.nodes)) {
+        if (state.status !== "awaiting_approval" || state.approval === undefined) continue;
         if (deny?.nodeIds.includes(nodeId) === true) {
           // What Deny and melra_task_cancel reach: the step's task, cancelled.
-          deny.tasks.cancel(state.taskIds[0]!);
-          return [];
+          await deny.tasks.cancel(state.taskIds[0]!);
+          continue;
         }
-        return [{ approvalId: state.approval.approvalId, phrase: state.approval.phrase! }];
-      });
+        approvals.push({ approvalId: state.approval.approvalId, phrase: state.approval.phrase! });
+      }
       const next = await controller.advance(id, approvals);
       if (next.events.length === 0) return next;
       result = next;
@@ -1485,7 +1486,7 @@ describe("WorkflowController execution", () => {
     const ship = definition.nodes.find((node) => node.id === "ship");
     if (ship?.type !== "operation") throw new Error("expected_operation_node");
     const key = sha256({ workflowId: planned.id, nodeId: "ship", iteration: 0, branch: "operation", request: ship.request });
-    const ran = tasks.plan(ship.request, { idempotencyKey: key, attempt: 1, stored: true });
+    const ran = await tasks.plan(ship.request, { idempotencyKey: key, attempt: 1, stored: true });
     await tasks.execute(ran.id, { approvalId: ran.approval!.approvalId, phrase: ran.approval!.phrase! });
 
     // Planned again, ship is cancelled as a duplicate. That is not a denial:
@@ -1563,7 +1564,7 @@ describe("WorkflowController execution", () => {
     // Denied before that wave, so the run fails with `ship` still pending. An
     // approval sent with the denial runs nothing (#330), so the step ran in
     // the advance before.
-    tasks.cancel(run.nodes.notify!.taskIds[0]!);
+    await tasks.cancel(run.nodes.notify!.taskIds[0]!);
     const result = await settle(controller, planned.id);
 
     // Read as not done, its cancellation was skipped and the charge refunded
@@ -1929,7 +1930,7 @@ describe("WorkflowController execution", () => {
     // the denial would run nothing (#330).
     run = (await controller.advance(planned.id, approveOne(run, "ship"))).run;
     expect(run.nodes.ship?.status).toBe("recovery_required");
-    tasks.cancel(run.nodes.notify!.taskIds[0]!);
+    await tasks.cancel(run.nodes.notify!.taskIds[0]!);
 
     const result = await settle(controller, planned.id);
 
@@ -2903,7 +2904,7 @@ describe("WorkflowController execution", () => {
     expect(() => controller.cancel(planned.id)).toThrow("workflow_lease_held");
     // What melra_workflow_cancel once advised: stop the step's task first.
     const shipment = store.listTasks(10, "running").find((task) => JSON.stringify(task.request).includes("/shipments"));
-    tasks.cancel(shipment!.id);
+    await tasks.cancel(shipment!.id);
     expect((await advancing).run.status).toBe("failed");
     expect(controller.cancel(planned.id).status).toBe("cancelled");
     expect(calls).toContain("/refunds");
@@ -2969,7 +2970,7 @@ describe("WorkflowController execution", () => {
       expect(parked.run.nodes.gate?.status).toBe("awaiting_approval");
       // Denied out of band (`melra approve --deny`, the console's Deny): the
       // run still records gate as awaiting until an advance reads its task.
-      tasks.cancel(parked.run.nodes.gate!.taskIds[0]!);
+      await tasks.cancel(parked.run.nodes.gate!.taskIds[0]!);
 
       const next = await controller.advance(planned.id);
       expect(next.run.status).toBe("failed");
@@ -2992,7 +2993,7 @@ describe("WorkflowController recovery", () => {
     if (operationNode.type !== "operation") {
       throw new Error("expected_operation_node");
     }
-    const task = tasks.plan(operationNode.request, {
+    const task = await tasks.plan(operationNode.request, {
       idempotencyKey: sha256({
         workflowId: planned.id,
         nodeId: operationNode.id,
@@ -3263,7 +3264,7 @@ describe("WorkflowController operator controls", () => {
     );
     const taskId = (await controller.advance(planned.id)).run.nodes.put!.taskIds[0]!;
     // Approved, then halted to look again before it runs.
-    tasks.decide(taskId, tasks.approvalView(taskId).renderDigest, "cli:alice");
+    await tasks.decide(taskId, tasks.approvalView(taskId).renderDigest, "cli:alice");
     controller.pause(planned.id, operator);
 
     expect(() => controller.resume(planned.id)).toThrow("workflow_resume_needs_operator");

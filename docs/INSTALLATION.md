@@ -1021,13 +1021,14 @@ your rights. Under Seatbelt and bubblewrap, a command in the sandbox:
 - reaches no network unless policy gives the command the `network`
   [trait](#local-configuration) (`git fetch`, `curl`, an install). Under
   Seatbelt it opens no socket at all without it, a listening one or one to
-  loopback included, and with it only IP sockets and DNS, never a Unix socket
-  such as an SSH agent's or Docker's. (Seatbelt cannot open the loopback
-  alone: its `localhost` filter matches every address of the Mac, so a
-  listener it allowed would be reachable from the network.) Under bubblewrap
-  it gets an empty network namespace with a loopback of its own, so neither
-  the host's network nor the host's loopback; Unix sockets on the filesystem
-  stay reachable, with the trait or without;
+  loopback included (unless the program is named in `sandbox.listen`, which
+  permits listening on every address of the Mac), and with it only IP sockets and
+  DNS, never a Unix socket such as an SSH agent's or Docker's. (Seatbelt cannot
+  open the loopback alone: its `localhost` filter matches every address of the
+  Mac, so a listener it allowed would be reachable from the network.) Under
+  bubblewrap it gets an empty network namespace with a loopback of its own, so
+  neither the host's network nor the host's loopback; Unix sockets on the
+  filesystem stay reachable, with the trait or without;
 - makes no symbolic link unless the command carries the `package-install`
   trait, the policy file names it in `sandbox.symlinks`, or, in developer
   mode, it is `git`. Refused links do not make git fail: a `git clone` or
@@ -1064,6 +1065,7 @@ The policy file sets it under `sandbox`:
 |---|---|
 | `use` | `on`: every command runs sandboxed, and MELRA refuses to start (`sandbox_unavailable`) where none works. `off`: none, which enforced mode refuses (`enforced_mode_refuses_sandbox_off`). `if-available`: sandboxed where one works, and started without one where none does; in enforced mode this is the operator's recorded opt-out, and every receipt then says `"sandbox": "none"`. Left out, `on` in enforced mode and `if-available` in developer mode. Unsafe-local turns it off |
 | `symlinks` | Commands, by name as in `allowedCommands`, that may make symbolic links; in developer mode `git` may without being named |
+| `listen` | Commands, by name as in `allowedCommands` (the program MELRA runs, so `npm` for `npm test`, not `vitest`), that may listen under Seatbelt. The allowance covers everything that program starts. Seatbelt cannot limit this to loopback: the listener is reachable on every address of the Mac (LAN, VPN). Bubblewrap ignores it |
 | `readable` | Entries of the list above to let commands read again, written exactly as listed |
 | `user` | `{ "uid": ..., "gid": ... }`, the account the `uid` sandbox runs commands as; never 0 |
 
@@ -1131,8 +1133,9 @@ project depends on it:
 
 - listening or connecting without the `network` trait. `npm test` and `npm
   run` carry none, so under Seatbelt a test suite or dev server that opens a
-  loopback port fails with `EPERM`; under bubblewrap it gets a loopback of
-  its own, which nothing outside the command reaches;
+  loopback port fails with `EPERM` unless the command is named in `sandbox.listen`
+  (reachable on every address of the Mac) or the sandbox is off; under bubblewrap
+  it gets a loopback of its own, which nothing outside the command reaches;
 - a checkout whose `.git` names a git directory outside the workspace, as a
   git worktree's does: `git status` reads it, but `git add` and `git commit`
   write there and fail;

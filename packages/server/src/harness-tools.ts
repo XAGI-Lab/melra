@@ -308,7 +308,7 @@ export function registerHarnessTools(
         // through, it could keep part of a secret no pattern then matches, so
         // it keeps only its verb; the operation still carries the input.
         const goal = definition.goal(parsed);
-        const task = runtime.controller.plan(
+        const task = await runtime.controller.plan(
           TaskRequestSchema.parse({
             goal: goal.length <= 10_000 ? goal : `${goal.split(" ", 1)[0]} (input too long to restate)`,
             operation: definition.operation(parsed),
