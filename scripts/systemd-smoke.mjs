@@ -61,7 +61,6 @@ const run = (args, setenv = []) =>
       `--setenv=MELRA_WORKSPACE=${workspace}`,
       `--setenv=MELRA_HOME=${data}`,
       `--working-directory=${workspace}`,
-      ...(expected === "refused" ? ["--setenv=PATH=/no-bwrap"] : []),
       process.execPath,
       join(root, "apps/cli/dist/bin.js"),
       ...args,
