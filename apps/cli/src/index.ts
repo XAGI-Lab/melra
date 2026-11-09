@@ -1668,10 +1668,10 @@ other records an effect leaves: every link was made with this home's key and
 every sealed record is still there as it was. It reads the database
 read-only and the payload key as the server does, and exits 0 when the chain
 holds and 1 naming the first break, rows not sealed yet included. It also
-counts records a start sealed rather than the write, and names the first
-sealed late, after one sealed when written: an older MELRA beside this one
-leaves those, and so do links removed outside MELRA, the records sealed again
-as they then were. A removed tail shows only against a head kept from before:
+counts records a start or the recovery sweep sealed rather than the write, and
+names the first sealed late, after one sealed when written: an older MELRA
+beside this one leaves those, and so do links removed outside MELRA, the
+records sealed again as they then were. A removed tail shows only against a head kept from before:
 'melra audit head' prints the last link, to keep where MELRA cannot write,
 and '--head' checks that the chain still passes through it.
 

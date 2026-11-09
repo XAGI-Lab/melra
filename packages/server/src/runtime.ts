@@ -800,11 +800,25 @@ export async function createMelraRuntime(
   // The workflow pass runs the task pass first.
   await workflows.recoverInterrupted();
   // Startup only sees processes that died before it. The sweep picks up work
-  // left by ones that die later, while this one keeps running.
+  // left by ones that die later, and seals what older writers wrote to the home
+  // meanwhile without a link (#466), while this one keeps running.
+  const runRecoverySweep = async () => {
+    let firstError: unknown;
+    try {
+      await workflows.recoverInterrupted({ abandonedOnly: true });
+    } catch (error) {
+      firstError = error;
+    }
+    try {
+      store.sealRecords(cipher.chainKey());
+    } catch (error) {
+      firstError ??= error;
+    }
+    if (firstError !== undefined) throw firstError;
+  };
   let sweeping: Promise<unknown> | undefined;
   const sweep = setInterval(() => {
-    sweeping ??= workflows
-      .recoverInterrupted({ abandonedOnly: true })
+    sweeping ??= runRecoverySweep()
       .catch((error: unknown) =>
         process.emitWarning(
           `melra recovery sweep: ${error instanceof Error ? error.message : String(error)}`,

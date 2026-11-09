@@ -92,6 +92,9 @@ All notable changes are documented here. The format follows
   the runtime's `close()` before exiting. It first waits for replies to
   requests still in flight, for up to 5 seconds; a request the client
   cancelled is not waited for (#467).
+- A running MELRA now seals an older MELRA's records at its 30 s recovery
+  sweep, not only at the next start, so `melra audit verify` stops reporting
+  them as `unsealed_rows` within a sweep.
 - The HTTP server no longer sends an internal failure's message to the client.
   It still answers MELRA's own refusal codes (`task_not_found`,
   `approval_expired`, …) as before. Any other error, such as a SQLite or
