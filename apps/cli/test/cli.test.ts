@@ -2401,10 +2401,9 @@ describe("melra CLI", () => {
     expect((await sandbox({ MELRA_MODE: "enforced", ...(await sandboxOptOut(root)) })).status).not.toBe("fail");
   });
 
-  // A stdio client ends the server by closing its input, which runs no
-  // shutdown, or its terminal hangs up, with a SIGTERM close behind it: the
-  // npm and pnpm caches made in temp at the first sandboxed command must
-  // still go.
+  // A stdio client ends the server by closing its input, or its terminal hangs up,
+  // with a SIGTERM close behind it: each runs close() once, and the npm and pnpm
+  // caches made in temp at the first sandboxed command must still go.
   it.for(["closes its input", "hangs up", "hangs up and is terminated"])("leaves no package cache in temp when a stdio client %s", { timeout: 60_000 }, async (how, context) => {
     const root = await realpath(await mkdtemp(join(tmpdir(), "melra-cli-")));
     roots.push(root);
@@ -2457,6 +2456,203 @@ describe("melra CLI", () => {
     }
     expect(await exited).toBe(0);
     expect(await caches()).toEqual([]);
+  });
+
+  it("stops background job process groups when a stdio client closes its input", { timeout: 60_000 }, async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-cli-")));
+    roots.push(root);
+    await mkdir(join(root, "ws"));
+    const server = spawn(process.execPath, [entry, "serve"], {
+      cwd: root,
+      env: { ...process.env, MELRA_HOME: join(root, ".melra"), MELRA_WORKSPACE: join(root, "ws"), MELRA_UNHINGED: "1" },
+      stdio: ["pipe", "pipe", "ignore"],
+    });
+    const exited = new Promise<number | null>((settle) => server.once("exit", settle));
+    const waiting = new Map<number, (reply: { result: { content: Array<{ text: string }> } }) => void>();
+    let buffered = "";
+    server.stdout.setEncoding("utf8").on("data", (chunk: string) => {
+      buffered += chunk;
+      for (let end = buffered.indexOf("\n"); end >= 0; end = buffered.indexOf("\n")) {
+        const reply = JSON.parse(buffered.slice(0, end));
+        buffered = buffered.slice(end + 1);
+        waiting.get(reply.id)?.(reply);
+      }
+    });
+    let id = 0;
+    const call = async (method: string, params: unknown) =>
+      await new Promise<{ result: { content: Array<{ text: string }> } }>((settle) => {
+        waiting.set(++id, settle);
+        server.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
+      });
+    const tool = async (name: string, args: unknown) =>
+      JSON.parse((await call("tools/call", { name, arguments: args })).result.content[0]!.text);
+    let jobPid: number | undefined;
+    try {
+      await call("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "cli-test", version: "1" } });
+      server.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`);
+      const task = await tool("melra_plan", {
+        goal: "run background worker",
+        operation: {
+          kind: "terminal",
+          action: "start",
+          command: process.execPath,
+          args: ["-e", "setInterval(() => {}, 1000)"],
+          timeoutMs: 120_000,
+        },
+      });
+      const ran = await tool("melra_execute", { taskId: task.id });
+      expect(ran.task.status).toBe("verified_success");
+      jobPid = ran.output?.pid ?? ran.task?.result?.pid;
+      expect(jobPid).toBeTypeOf("number");
+      const isAlive = () => {
+        try {
+          if (process.platform !== "win32") process.kill(-jobPid!, 0);
+          else process.kill(jobPid!, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      expect(isAlive()).toBe(true);
+
+      server.stdin.end();
+      const outcome = await Promise.race([
+        exited,
+        new Promise<"hung">((settle) => setTimeout(() => settle("hung"), 10_000)),
+      ]);
+      expect(outcome).toBe(0);
+
+      const isGone = () => {
+        try {
+          if (process.platform !== "win32") process.kill(-jobPid!, 0);
+          else process.kill(jobPid!, 0);
+          return false;
+        } catch {
+          return true;
+        }
+      };
+      const deadline = Date.now() + 5_000;
+      while (!isGone() && Date.now() < deadline) {
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, 50));
+      }
+      expect(isGone()).toBe(true);
+    } finally {
+      server.kill("SIGTERM");
+      await exited;
+      if (jobPid !== undefined) {
+        try {
+          if (process.platform !== "win32") process.kill(-jobPid, "SIGKILL");
+          else process.kill(jobPid, "SIGKILL");
+        } catch {}
+      }
+    }
+  });
+
+  // A stdio server driven over raw JSON-RPC lines, so a test can close stdin
+  // or cancel a request at exactly the moment it means to.
+  const stdioServer = async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "melra-cli-")));
+    roots.push(root);
+    await mkdir(join(root, "ws"));
+    const server = spawn(process.execPath, [entry, "serve"], {
+      cwd: root,
+      env: { ...process.env, MELRA_HOME: join(root, ".melra"), MELRA_WORKSPACE: join(root, "ws"), MELRA_UNHINGED: "1" },
+      stdio: ["pipe", "pipe", "ignore"],
+    });
+    const exited = new Promise<number | null>((settle) => server.once("exit", settle));
+    const waiting = new Map<number, (reply: { result: { content: Array<{ text: string }> } }) => void>();
+    let buffered = "";
+    server.stdout.setEncoding("utf8").on("data", (chunk: string) => {
+      buffered += chunk;
+      for (let end = buffered.indexOf("\n"); end >= 0; end = buffered.indexOf("\n")) {
+        const reply = JSON.parse(buffered.slice(0, end));
+        buffered = buffered.slice(end + 1);
+        waiting.get(reply.id)?.(reply);
+      }
+    });
+    const write = (message: object) => server.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`);
+    let id = 0;
+    const call = (method: string, params: unknown) => {
+      const sent = ++id;
+      const reply = new Promise<{ result: { content: Array<{ text: string }> } }>((settle) => waiting.set(sent, settle));
+      write({ id: sent, method, params });
+      return { id: sent, reply };
+    };
+    const tool = async (name: string, args: unknown) =>
+      JSON.parse((await call("tools/call", { name, arguments: args }).reply).result.content[0]!.text);
+    const within = async <T>(ms: number, promise: Promise<T>) =>
+      await Promise.race([promise, new Promise<"timed out">((settle) => setTimeout(() => settle("timed out"), ms))]);
+    await call("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "cli-test", version: "1" } }).reply;
+    write({ method: "notifications/initialized" });
+    // A terminal command that runs for `ms`, planned but not yet executed.
+    const planSleep = async (ms: number) =>
+      (await tool("melra_plan", {
+        goal: "wait",
+        operation: { kind: "terminal", action: "run", command: process.execPath, args: ["-e", `setTimeout(() => {}, ${ms})`] },
+        requiredEvidence: [{ type: "exit_code", value: 0 }],
+      })).id as string;
+    return { server, exited, write, call, tool, within, planSleep };
+  };
+
+  it("delivers in-flight replies when a stdio client closes stdin right after sending", { timeout: 30_000 }, async () => {
+    const { server, exited, call, within, planSleep } = await stdioServer();
+    try {
+      const taskId = await planSleep(2_000);
+      const { reply } = call("tools/call", { name: "melra_execute", arguments: { taskId } });
+      server.stdin.end();
+
+      const replied = await within(10_000, reply);
+      expect(replied).not.toBe("timed out");
+      expect(JSON.parse((replied as Awaited<typeof reply>).result.content[0]!.text).task.status).toBe("verified_success");
+      expect(await within(10_000, exited)).toBe(0);
+    } finally {
+      server.kill("SIGTERM");
+      await exited;
+    }
+  });
+
+  // The SDK sends no reply for a cancelled request, so waiting for one would
+  // hold off shutdown, and the background job with it.
+  it("stops background jobs promptly when a stdio client cancels a request and closes stdin", { timeout: 30_000 }, async () => {
+    const { server, exited, write, call, tool, within, planSleep } = await stdioServer();
+    let jobPid: number | undefined;
+    const isAlive = () => {
+      try {
+        process.kill(process.platform === "win32" ? jobPid! : -jobPid!, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    try {
+      const job = await tool("melra_plan", {
+        goal: "run background worker",
+        operation: { kind: "terminal", action: "start", command: process.execPath, args: ["-e", "setInterval(() => {}, 1000)"], timeoutMs: 120_000 },
+      });
+      const started = await tool("melra_execute", { taskId: job.id });
+      jobPid = started.output?.pid ?? started.task?.result?.pid;
+      expect(jobPid).toBeTypeOf("number");
+      expect(isAlive()).toBe(true);
+
+      const taskId = await planSleep(3_000);
+      const { id } = call("tools/call", { name: "melra_execute", arguments: { taskId } });
+      write({ method: "notifications/cancelled", params: { requestId: id, reason: "client gave up" } });
+      server.stdin.end();
+
+      // Well inside the EOF drain's deadline: the cancelled request is not waited for.
+      expect(await within(3_000, exited)).toBe(0);
+      const deadline = Date.now() + 5_000;
+      while (isAlive() && Date.now() < deadline) await new Promise((settle) => setTimeout(settle, 50));
+      expect(isAlive()).toBe(false);
+    } finally {
+      server.kill("SIGTERM");
+      await exited;
+      if (jobPid !== undefined) {
+        try {
+          process.kill(process.platform === "win32" ? jobPid : -jobPid, "SIGKILL");
+        } catch {}
+      }
+    }
   });
 
   it("refuses to start in enforced mode with the local bypass", async () => {

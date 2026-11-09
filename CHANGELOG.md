@@ -86,6 +86,12 @@ All notable changes are documented here. The format follows
 
 ### Fixed
 
+- A stdio `melra serve` whose client closed stdin exited without running
+  MELRA's shutdown path, leaving background jobs and their process groups
+  running until recovery cleaned them up on the next start. Stdin EOF now runs
+  the runtime's `close()` before exiting. It first waits for replies to
+  requests still in flight, for up to 5 seconds; a request the client
+  cancelled is not waited for (#467).
 - A running MELRA now seals an older MELRA's records at its 30 s recovery
   sweep, not only at the next start, so `melra audit verify` stops reporting
   them as `unsealed_rows` within a sweep.
