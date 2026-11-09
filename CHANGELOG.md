@@ -89,7 +89,9 @@ All notable changes are documented here. The format follows
 - A stdio `melra serve` whose client closed stdin exited without running
   MELRA's shutdown path, leaving background jobs and their process groups
   running until recovery cleaned them up on the next start. Stdin EOF now runs
-  the runtime's `close()` before exiting (#467).
+  the runtime's `close()` before exiting. It first waits for replies to
+  requests still in flight, for up to 5 seconds; a request the client
+  cancelled is not waited for (#467).
 - The HTTP server no longer sends an internal failure's message to the client.
   It still answers MELRA's own refusal codes (`task_not_found`,
   `approval_expired`, …) as before. Any other error, such as a SQLite or
