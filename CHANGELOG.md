@@ -8,6 +8,11 @@ All notable changes are documented here. The format follows
 
 ### Added
 
+- `sandbox.listen`: an opt-in list of commands in the policy file that may bind
+  and listen on localhost under Seatbelt on macOS. Under Seatbelt, commands
+  without the `network` trait cannot open sockets; `sandbox.listen` permits
+  dev servers and test runners to bind localhost, noting that under Seatbelt
+  a listener is reachable from the network on every address of the Mac. Closes [#471](https://github.com/XAGI-Lab/melra/issues/471).
 - `@melra/server` and `@melra/server/kernel` export `verifyRecords`, which opens
   the home's database read-only, loads the key with `mint: false`, and returns
   `verifyChain`'s result mapped to `{ ok, problems, report }`. This enables
@@ -73,6 +78,7 @@ All notable changes are documented here. The format follows
   unchanged. A run that is `recovery_required` keeps its waiting steps until it
   fails. A run that failed before this version keeps them: cancel it with
   `melra workflow cancel` to close them (#487).
+
 ### Fixed
 
 - Verification reads made through the independent channel (`http_resource_matches`
@@ -83,8 +89,6 @@ All notable changes are documented here. The format follows
   `effect_outcome_unknown:task_budget_exhausted` rather than
   `effect_outcome_unknown:task_cancelled`.
 
-### Fixed
-
 - Standalone tasks left `awaiting_approval` past their challenge's expiry are
   swept on start and on the recovery interval, moving to `cancelled` with error
   `approval_expired`. Tasks with a recorded decision, and workflow step tasks
@@ -94,11 +98,6 @@ All notable changes are documented here. The format follows
 
 ### Added
 
-- `sandbox.listen`: an opt-in list of commands in the policy file that may bind
-  and listen on localhost under Seatbelt on macOS. Under Seatbelt, commands
-  without the `network` trait cannot open sockets; `sandbox.listen` permits
-  dev servers and test runners to bind localhost, noting that under Seatbelt
-  a listener is reachable from the network on every address of the Mac. Closes [#471](https://github.com/XAGI-Lab/melra/issues/471).
 - Two policy file keys bound how hard one caller can lean on the kernel.
   `maxPendingApprovals` (default `64`) is how many approval challenges one
   caller may have open at once: awaiting a decision and not expired.
