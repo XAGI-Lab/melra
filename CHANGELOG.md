@@ -8,6 +8,17 @@ All notable changes are documented here. The format follows
 
 ### Added
 
+- `sandbox.listen`: an opt-in list of commands in the policy file that may bind
+  and listen on localhost under Seatbelt on macOS. Under Seatbelt, commands
+  without the `network` trait cannot open sockets; `sandbox.listen` permits
+  dev servers and test runners to bind localhost, noting that under Seatbelt
+  a listener is reachable from the network on every address of the Mac. Closes [#471](https://github.com/XAGI-Lab/melra/issues/471).
+- `@melra/server` and `@melra/server/kernel` export `verifyRecords`, which opens
+  the home's database read-only, loads the key with `mint: false`, and returns
+  `verifyChain`'s result mapped to `{ ok, problems, report }`. This enables
+  offline and evaluation harnesses like AARM to verify record chain integrity
+  (`r2t2.chain` and `r5t3.sqlite.*`) without starting a full server (#465).
+
 - CI's `bubblewrap` job installs bubblewrap on Linux, lets it make user
   namespaces as the systemd recipe's smoke does, and runs the terminal-runtime,
   server and CLI suites against it, so developer mode's real-sandbox tests
@@ -72,6 +83,21 @@ All notable changes are documented here. The format follows
   unchanged. A run that is `recovery_required` keeps its waiting steps until it
   fails. A run that failed before this version keeps them: cancel it with
   `melra workflow cancel` to close them (#487).
+
+### Fixed
+
+- Verification reads made through the independent channel (`http_resource_matches`
+  and a registered verifier's `context.probe`) now stop when the task is cancelled
+  or its budget runs out, leaving the item inconclusive, instead of waiting out
+  the predicate's `timeoutMs` (#407). Registered verifiers can read the same
+  signal as `context.signal`. An HTTP mutation cut off by its budget now reports
+  `effect_outcome_unknown:task_budget_exhausted` rather than
+  `effect_outcome_unknown:task_cancelled`.
+
+- Standalone tasks left `awaiting_approval` past their challenge's expiry are
+  swept on start and on the recovery interval, moving to `cancelled` with error
+  `approval_expired`. Tasks with a recorded decision, and workflow step tasks
+  the workflow controller still re-asks, are left alone. (#462)
 
 ## [0.4.0-alpha.2] - 2026-10-28
 
