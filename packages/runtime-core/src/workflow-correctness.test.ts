@@ -1243,6 +1243,69 @@ describe("a partial step under an undecided condition (#331)", () => {
     expect(run.nodes.refund?.status).toBe("compensated");
     expect([...done].sort()).toEqual(["pay", "refund", "ship", "x"]);
   });
+
+  it("cancels parked forward steps when a failure occurs while an undecided condition is pending", async () => {
+    let answer = { success: true, status: 200, content: JSON.stringify({ status: "applied" }) };
+    const { controller, root, store, tasks, on } = await setup({
+      policy: { unhinged: true },
+      probe: async () => answer,
+    });
+    await writeFile(join(root, "flag"), "on");
+    const planned = controller.plan(
+      workflow([
+        { id: "pay", type: "operation", request: put("pay") },
+        {
+          id: "choose",
+          type: "condition",
+          dependsOn: ["pay"],
+          sourceNodeId: "pay",
+          predicate: {
+            type: "http_resource_matches",
+            url: "https://payments.example.test/charges/1",
+            method: "GET",
+            path: "json.status",
+            value: "applied",
+          },
+          whenTrue: [
+            TaskRequestSchema.parse({
+              ...put("ship"),
+              requiredEvidence: [{ type: "result_equals", path: "stored", value: false }],
+            }),
+          ],
+          whenFalse: [put("other")],
+        },
+        {
+          id: "x",
+          type: "operation",
+          dependsOn: ["pay"],
+          request: TaskRequestSchema.parse({
+            ...put("x"),
+            requiredEvidence: [{ type: "result_equals", path: "stored", value: false }],
+          }),
+        },
+        { id: "approve-w", type: "approval", dependsOn: ["pay"], forNodeId: "w" },
+        { id: "w", type: "operation", dependsOn: ["approve-w", "pay"], request: put("w") },
+        { id: "refund", type: "compensation", forNodeId: "pay", request: put("refund") },
+      ]),
+    );
+    await controller.advance(planned.id);
+    on.put = (key) => {
+      if (key === "ship") lapseAndPause(controller, store, planned.id);
+    };
+    await expect(controller.advance(planned.id)).rejects.toThrow("workflow_lease_lost");
+    delete on.put;
+
+    controller.resume(planned.id);
+    answer = { success: true, status: 503, content: "{}" };
+    await expect(controller.advance(planned.id)).rejects.toThrow("workflow_check_inconclusive:choose");
+
+    const wTask = store
+      .listTasks(10)
+      .find((task) => (task.request as { operation?: { key?: string } }).operation?.key === "w");
+    expect(wTask).toBeDefined();
+    expect(wTask!.status).toBe("cancelled");
+    await expect(tasks.execute(wTask!.id)).rejects.toThrow("task_not_executable:cancelled");
+  });
 });
 
 describe("a step an operator denies", () => {

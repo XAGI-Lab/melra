@@ -991,16 +991,16 @@ compensations are left open, since the unwind runs them on the failed run. A
 `recovery_required` run keeps them, as it may still resume. Neither unwind
 starts while another step's outcome is unknown or unsettled (an effect that
 may have happened, or a task still running): the run is `recovery_required` and waits, starting no further step,
-rather than undo what that effect may depend on. Nor does it start while an undecided condition has a step under it that took
-effect (#331): the run stays `running`, offering only that condition, until it
-is decided; an answer naming the other branch halts with
-`workflow_condition_branch_conflict`. That step is settled by its
+rather than undo what that effect may depend on. That step is settled by its
 `reconciliation`: `melra_execute` on its task, or recovery when a process
 starts, asks the provider whether the effect happened. Once settled, the next
 `advance` fails the run and unwinds, the settled step's own compensation
 included if its effect happened. A step that declares no `reconciliation`
 cannot be settled by MELRA; `workflow cancel` ends such a run, without
-unwinding it. Each
+unwinding it. Nor does it start while an undecided condition has a step under it that took
+effect (#331): the run stays `running`, offering only that condition, until it
+is decided; an answer naming the other branch halts with
+`workflow_condition_branch_conflict`. Each
 compensation is still its own governed task, so one that is a mutation waits for
 its own approval, and denying it stops the unwind as a failed compensation does.
 To end a run without unwinding it, cancel the run (`workflow cancel`,

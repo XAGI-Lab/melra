@@ -1496,14 +1496,35 @@ export class WorkflowController {
     // the one denied, one a lost advance left) are cancelled once the failure
     // is recorded, as a cancelled run's are, so none runs directly on a run
     // that will not advance. Not on recovery_required, which may resume.
-    if (rebuilt.status === "failed" && current.status !== "failed") {
-      const definition = this.loadDefinition(rebuilt);
-      this.cancelChallenges(
-        definition.nodes
-          .filter((node) => node.type !== "compensation")
-          .flatMap((node) => expectedTaskKeys(rebuilt.id, node, definition)),
-        `workflow_failed:${rebuilt.id}`,
-      );
+    // Also runs once the run has a failure even while waiting on an undecided
+    // condition with an effect, skipping that condition's own keys (#331).
+    if (rebuilt.status === "failed" || rebuilt.status === "running") {
+      let definition: WorkflowDefinition | undefined;
+      try {
+        definition = this.loadDefinition(rebuilt);
+      } catch {
+        definition = undefined;
+      }
+      if (definition !== undefined) {
+        const hasFailure =
+          rebuilt.status === "failed" || this.hasFailure(definition, rebuilt.nodes);
+        const hadFailure =
+          current.status === "failed" || this.hasFailure(definition, current.nodes);
+        if ((hasFailure && !hadFailure) || (rebuilt.status === "failed" && current.status !== "failed")) {
+          const undecidedKeys = new Set(
+            this.undecidedConditionsWithEffect(definition, rebuilt).flatMap((node) =>
+              expectedTaskKeys(rebuilt.id, node, definition),
+            ),
+          );
+          this.cancelChallenges(
+            definition.nodes
+              .filter((node) => node.type !== "compensation")
+              .flatMap((node) => expectedTaskKeys(rebuilt.id, node, definition))
+              .filter((key) => !undecidedKeys.has(key)),
+            `workflow_failed:${rebuilt.id}`,
+          );
+        }
+      }
     }
     return rebuilt;
   }

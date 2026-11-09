@@ -67,6 +67,7 @@ All notable changes are documented here. The format follows
   unchanged. A run that is `recovery_required` keeps its waiting steps until it
   fails. A run that failed before this version keeps them: cancel it with
   `melra workflow cancel` to close them (#487).
+
 ### Fixed
 
 - A step that took effect under an undecided condition but failed its evidence
