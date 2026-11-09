@@ -276,7 +276,7 @@ describe("an older MELRA writing the same home", () => {
     ).toEqual([{ data: JSON.stringify(first) }]);
   });
 
-  it("keeps writing records beside a sealing store, and has them sealed by the next start with the key", () => {
+  it("keeps writing records beside a sealing store, and has them sealed by the next start or sweep with the key", () => {
     const path = newHome();
     const key = randomBytes(32);
     const store = open(path);

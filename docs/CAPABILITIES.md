@@ -708,8 +708,7 @@ and every later one are removed too: anyone who can write the file can do
 that without the payload key, and a start or recovery sweep of MELRA seals what
 is left again, as it then is, so `verify` passes, counting those links as sealed
 by a start or sweep and naming the first after one sealed when written as late.
-Removing
-the newest with their links, or rebuilding the chain with the payload key,
+Removing the newest with their links, or rebuilding the chain with the payload key,
 leaves no mark; a head kept from after the record was sealed shows all three
 (see [verify the records](INSTALLATION.md#verify-the-records)). An
 `http_resource_matches` item names the URL it read without its query or

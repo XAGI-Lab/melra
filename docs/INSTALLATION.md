@@ -1744,9 +1744,9 @@ Every receipt, every version of a certificate, and every workflow event,
 approval decision and denial, refused answer, grant draw and idempotency
 commit is sealed into one chain in the transaction that writes it: each link
 is an HMAC-SHA256, under a key derived from the payload key, of the link
-before it, the record's digest and whether a later start sealed the record
-instead (below). Task rows and workflow runs, which change
-as a task or run moves, are not sealed. Two commands read the chain, opening
+before it, the record's digest and whether a later start or sweep sealed
+the record instead (below). Task rows and workflow runs, which change as a
+task or run moves, are not sealed. Two commands read the chain, opening
 the database read-only:
 
 ```bash
