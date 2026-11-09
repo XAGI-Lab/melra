@@ -674,6 +674,42 @@ describe("TaskController", () => {
     expect(result.certificate?.result).toBe("BUDGET_EXHAUSTED");
   });
 
+  it("stops a task running here at once, even while another process holds the write lock", async () => {
+    let started!: () => void;
+    const running = new Promise<void>((resolve) => (started = resolve));
+    let aborted: unknown;
+    const { controller, store } = await setup({
+      async execute(_operation, signal?: AbortSignal) {
+        started();
+        await new Promise<void>((_resolve, reject) => {
+          signal?.addEventListener(
+            "abort",
+            () => {
+              aborted = signal.reason;
+              reject(signal.reason);
+            },
+            { once: true },
+          );
+        });
+        return { success: true };
+      },
+    });
+    const task = await controller.plan(
+      TaskRequestSchema.parse({
+        goal: "Cancel a running read",
+        operation: { kind: "system", action: "info" },
+        budget: { maxRetries: 0, maxSteps: 1, maxDurationMs: 60_000 },
+      }),
+    );
+    const outcome = controller.execute(task.id).catch((error: unknown) => error);
+    await running;
+    const write = vi.spyOn(store, "write").mockRejectedValue(new Error("database is locked"));
+    await expect(controller.cancel(task.id)).resolves.toMatchObject({ id: task.id });
+    expect(aborted).toEqual(new Error("task_cancelled"));
+    write.mockRestore();
+    await outcome;
+  });
+
   it("redacts executor secrets before task or receipt persistence", async () => {
     const { controller, store } = await setup({
       async execute() {

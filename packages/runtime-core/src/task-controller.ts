@@ -1046,6 +1046,13 @@ export class TaskController {
    * start lands first has the task running by then, and is stopped instead.
    */
   async cancel(taskId: string, reason?: string): Promise<TaskRecord> {
+    // Running here: stop it now. Waiting on the write lock first would let
+    // another process holding it keep the effect running, or fail the cancel.
+    const here = this.active.get(taskId);
+    if (here !== undefined) {
+      here.abort(new Error("task_cancelled"));
+      return this.status(taskId);
+    }
     const { task, running } = await this.store.write(() => this.cancelling(taskId, reason));
     // Outside the write: whatever listens to the signal may write too.
     running?.abort(new Error("task_cancelled"));
