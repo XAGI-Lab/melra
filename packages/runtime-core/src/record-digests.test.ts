@@ -125,11 +125,11 @@ describe("digests stored beside redacted records", () => {
     const content = "door:4821";
     const plaintexts: Array<{ id: string; request: TaskRequest; contract?: string }> = [];
     const approve = async (request: TaskRequest, decide = false) => {
-      const planned = tasks.plan(request);
+      const planned = await tasks.plan(request);
       const contract = plainRender(store.getTask(planned.id)!, planned.request);
       plaintexts.push({ id: planned.id, request: planned.request, contract });
       if (decide) {
-        tasks.decide(planned.id, tasks.approvalView(planned.id).renderDigest, "cli:test");
+        await tasks.decide(planned.id, tasks.approvalView(planned.id).renderDigest, "cli:test");
         return await tasks.execute(planned.id);
       }
       return await tasks.execute(planned.id, { approvalId: planned.approval!.approvalId, phrase: planned.approval!.phrase! });
@@ -146,7 +146,7 @@ describe("digests stored beside redacted records", () => {
     expect(write.task.status).toBe("partial");
     expect(write.output).toMatchObject({ sha256: hex(content) });
     // A read of it, and a second write decided by an operator.
-    const read = tasks.plan(TaskRequestSchema.parse({ goal: "Read the door code", operation: { kind: "file", action: "read", path: "pin.txt" } }));
+    const read = await tasks.plan(TaskRequestSchema.parse({ goal: "Read the door code", operation: { kind: "file", action: "read", path: "pin.txt" } }));
     plaintexts.push({ id: read.id, request: read.request });
     const readDone = await tasks.execute(read.id);
     expect(readDone.output).toMatchObject({ content, sha256: hex(content) });
@@ -159,7 +159,7 @@ describe("digests stored beside redacted records", () => {
       true,
     )).task.status).toBe("verified_success");
     // A form fill planned and never run.
-    const form = tasks.plan(
+    const form = await tasks.plan(
       TaskRequestSchema.parse({
         goal: "Enter the door code",
         operation: { kind: "browser", action: "fill_form", fields: [{ target: { selector: "#pin" }, value: content }] },
@@ -213,7 +213,7 @@ describe("digests stored beside redacted records", () => {
 
   it("mask a failed file hash alike on the receipt and the certificate", async () => {
     const { store, tasks } = await setup();
-    const planned = tasks.plan(
+    const planned = await tasks.plan(
       TaskRequestSchema.parse({
         goal: "Write the door code",
         operation: { kind: "file", action: "write", path: "pin.txt", content: "4821" },
@@ -235,7 +235,7 @@ describe("digests stored beside redacted records", () => {
 
   it("are keyed, with the phrase still the action digest's first twelve digits", async () => {
     const { store, tasks, cipher } = await setup();
-    const planned = tasks.plan(pin);
+    const planned = await tasks.plan(pin);
     const view = tasks.approvalView(planned.id);
     const done = await tasks.execute(planned.id, { approvalId: planned.approval!.approvalId, phrase: planned.approval!.phrase! });
     expect(done.task.status).toBe("verified_success");
@@ -251,14 +251,14 @@ describe("digests stored beside redacted records", () => {
     const receipt = store.getReceipt(stored.receiptIds[0]!)!;
     expect(receipt.policyDecision.approval!.renderDigest).toBe(view.renderDigest);
     // Bound to the task: the same input in another task digests apart.
-    const other = tasks.plan(pin);
+    const other = await tasks.plan(pin);
     await tasks.execute(other.id, { approvalId: other.approval!.approvalId, phrase: other.approval!.phrase! });
     expect(store.getReceiptsForTask(other.id)[0]!.inputDigest).not.toBe(receipt.inputDigest);
   });
 
   it("refuse a challenge whose digest is neither form", async () => {
     const { store, tasks, calls } = await setup();
-    const planned = tasks.plan(pin);
+    const planned = await tasks.plan(pin);
     const task = store.getTask(planned.id)!;
     store.saveTask({ ...task, approval: { ...task.approval!, actionDigest: "0".repeat(64) } });
     await expect(
@@ -271,7 +271,7 @@ describe("digests stored beside redacted records", () => {
 describe("a home shared with 0.3.0-alpha.17 or alpha.18", () => {
   it("runs once a challenge an older process planned, on its phrase", async () => {
     const { store, tasks, calls, cipher } = await setup();
-    const planned = tasks.plan(pin);
+    const planned = await tasks.plan(pin);
     const phrase = plannedBefore(store, planned.id);
     const { contract } = tasks.approvalView(planned.id);
     const done = await tasks.execute(planned.id, { approvalId: planned.approval!.approvalId, phrase });
@@ -286,11 +286,11 @@ describe("a home shared with 0.3.0-alpha.17 or alpha.18", () => {
   it("decides an older process's task in the digest its executor recomputes", async () => {
     const env = await setup({ mode: "enforced" });
     const { store, tasks, calls, cipher } = env;
-    const planned = tasks.plan(pin);
+    const planned = await tasks.plan(pin);
     plannedBefore(store, planned.id);
     const view = tasks.approvalView(planned.id);
     expect(view.renderDigest).toBe(sha256(view.contract));
-    tasks.decide(planned.id, view.renderDigest, "cli:new");
+    await tasks.decide(planned.id, view.renderDigest, "cli:new");
     expect(store.getApprovalDecision(planned.approval!.approvalId)!.renderDigest).toBe(sha256(view.contract));
     // The older executor accepts it; so does this one, and either runs it once.
     await priorExecute(env, planned.id);
@@ -314,7 +314,7 @@ describe("a home shared with 0.3.0-alpha.17 or alpha.18", () => {
           approver: "cli:old",
           decidedAt: new Date().toISOString(),
         });
-      const planned = tasks.plan(pin);
+      const planned = await tasks.plan(pin);
       const keyed = tasks.approvalView(planned.id).renderDigest;
       decide(planned.id, planned.approval!.approvalId, plainRender(store.getTask(planned.id)!, pin));
       const done = await tasks.execute(planned.id);
@@ -323,7 +323,7 @@ describe("a home shared with 0.3.0-alpha.17 or alpha.18", () => {
       expect(done.task.approvedBy!.renderDigest).toBe(keyed);
       expect(done.receipt!.policyDecision.approval!.renderDigest).toBe(keyed);
 
-      const forged = tasks.plan(pin);
+      const forged = await tasks.plan(pin);
       decide(forged.id, forged.approval!.approvalId, "0".repeat(64));
       await expect(tasks.execute(forged.id)).rejects.toThrow("approval_render_mismatch");
       expect(calls).toHaveLength(1);
@@ -333,7 +333,7 @@ describe("a home shared with 0.3.0-alpha.17 or alpha.18", () => {
   it("fails closed when an older process executes a new challenge, with nothing run", async () => {
     const env = await setup();
     const { store, tasks, calls } = env;
-    const planned = tasks.plan(pin);
+    const planned = await tasks.plan(pin);
     await expect(priorExecute(env, planned.id)).rejects.toThrow("approval_action_digest_mismatch");
     expect(calls).toEqual([]);
     expect(store.getTask(planned.id)!.status).toBe("awaiting_approval");

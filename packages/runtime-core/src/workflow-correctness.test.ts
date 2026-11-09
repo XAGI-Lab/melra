@@ -209,9 +209,9 @@ describe("a parallel branch's steps, in order (#245)", () => {
     const { controller, tasks, done } = await setup({ policy: { unhinged: true } });
     const planned = controller.plan(workflow([{ id: "fan", type: "parallel", branches: [[put("a1"), put("a2")], [put("b1")]] }]));
     // A transient store error planning a2, once: a1 and b1 have run.
-    const plan = tasks.plan.bind(tasks);
+    const plan = tasks.planSync.bind(tasks);
     let thrown = false;
-    vi.spyOn(tasks, "plan").mockImplementation((request, options) => {
+    vi.spyOn(tasks, "planSync").mockImplementation((request, options) => {
       if (!thrown && request.goal === "Put a2") {
         thrown = true;
         throw new Error("database is locked");
@@ -291,8 +291,8 @@ describe("workflow recovery", () => {
     await controller.advance(planned.id);
     const trueKey = sha256({ workflowId: planned.id, nodeId: "choose", iteration: 0, branch: "true:0", request: put("patch") });
     const falseKey = sha256({ workflowId: planned.id, nodeId: "choose", iteration: 0, branch: "false:0", request: put("create") });
-    const abandoned = tasks.plan(put("patch"), { idempotencyKey: trueKey, attempt: 1, stored: true });
-    const committed = tasks.plan(put("create"), { idempotencyKey: falseKey, attempt: 1, stored: true });
+    const abandoned = await tasks.plan(put("patch"), { idempotencyKey: trueKey, attempt: 1, stored: true });
+    const committed = await tasks.plan(put("create"), { idempotencyKey: falseKey, attempt: 1, stored: true });
     await tasks.execute(committed.id, {
       approvalId: committed.approval!.approvalId,
       phrase: committed.approval!.phrase!,
@@ -334,7 +334,7 @@ describe("workflow recovery", () => {
     );
     // Iteration 0 ran under its own idempotency key, then the process died.
     const key = sha256({ workflowId: planned.id, nodeId: "loop", iteration: 0, branch: "loop:0", request: body });
-    const first = tasks.plan(body, { idempotencyKey: key, attempt: 1 });
+    const first = await tasks.plan(body, { idempotencyKey: key, attempt: 1 });
     await tasks.execute(first.id, { approvalId: first.approval!.approvalId, phrase: first.approval!.phrase! });
     const restarted = new WorkflowController(store, tasks, cipher);
     const [recovered] = await restarted.recoverInterrupted();
@@ -360,7 +360,7 @@ describe("workflow recovery", () => {
       run = (await controller.advance(planned.id, approvalsFor(run))).run;
     }
     const denied = run.nodes.next!.taskIds[0]!;
-    tasks.cancel(denied);
+    await tasks.cancel(denied);
     // What an earlier version recorded on the next advance: the node
     // cancelled and the run `running`, with nothing left that could run.
     type Emit = (type: string, data: Record<string, unknown>) => void;
@@ -405,9 +405,9 @@ describe("a condition's branch not taken (#268)", () => {
     ]);
   /** An advance that plans a challenge, under which an operator's pause lands before it commits. */
   const losingCommit = async (controller: WorkflowController, store: SqliteStore, tasks: TaskController, id: string) => {
-    const plan = tasks.plan.bind(tasks);
+    const plan = tasks.planSync.bind(tasks);
     let planned: TaskRecord | undefined;
-    vi.spyOn(tasks, "plan").mockImplementationOnce((request, options) => {
+    vi.spyOn(tasks, "planSync").mockImplementationOnce((request, options) => {
       const task = plan(request, options);
       planned = task;
       lapseAndPause(controller, store, id);
@@ -525,7 +525,7 @@ describe("a condition's branch not taken (#268)", () => {
       if (name === "patch") throw outcomeUnknown("socket hang up");
     };
     for (const [branch, request] of [["true:0", patch], ["false:0", put("create")]] as const) {
-      const task = tasks.plan(request, { idempotencyKey: key(branch, request), attempt: 1, stored: true });
+      const task = await tasks.plan(request, { idempotencyKey: key(branch, request), attempt: 1, stored: true });
       await tasks.execute(task.id, { approvalId: task.approval!.approvalId, phrase: task.approval!.phrase! });
     }
     const [unknown] = store.listTasks(10, "recovery_required");
@@ -553,8 +553,8 @@ describe("a condition's branch not taken (#268)", () => {
     await controller.advance(planned.id);
     const key = (branch: string, request: TaskRequest) =>
       sha256({ workflowId: planned.id, nodeId: "choose", iteration: 0, branch, request });
-    const patch = tasks.plan(put("patch"), { idempotencyKey: key("true:0", put("patch")), attempt: 1, stored: true });
-    const create = tasks.plan(put("create"), { idempotencyKey: key("false:0", put("create")), attempt: 1, stored: true });
+    const patch = await tasks.plan(put("patch"), { idempotencyKey: key("true:0", put("patch")), attempt: 1, stored: true });
+    const create = await tasks.plan(put("create"), { idempotencyKey: key("false:0", put("create")), attempt: 1, stored: true });
     await tasks.execute(create.id, { approvalId: create.approval!.approvalId, phrase: create.approval!.phrase! });
     // What an earlier version's recovery recorded: both branches' tasks, in key order.
     type Emit = (type: string, data: Record<string, unknown>) => void;
@@ -589,11 +589,11 @@ describe("a condition's branch not taken (#268)", () => {
     await controller.advance(planned.id);
     const key = (branch: string, request: TaskRequest) =>
       sha256({ workflowId: planned.id, nodeId: "choose", iteration: 0, branch, request });
-    const abandoned = tasks.plan(put("patch"), { idempotencyKey: key("true:0", put("patch")), attempt: 1, stored: true });
-    const committed = tasks.plan(put("create"), { idempotencyKey: key("false:0", put("create")), attempt: 1, stored: true });
+    const abandoned = await tasks.plan(put("patch"), { idempotencyKey: key("true:0", put("patch")), attempt: 1, stored: true });
+    const committed = await tasks.plan(put("create"), { idempotencyKey: key("false:0", put("create")), attempt: 1, stored: true });
     await tasks.execute(committed.id, { approvalId: committed.approval!.approvalId, phrase: committed.approval!.phrase! });
     // An approver starts it through melra_execute as recovery goes to cancel it.
-    vi.spyOn(tasks, "cancel").mockImplementationOnce((taskId) => {
+    vi.spyOn(tasks, "cancelSync").mockImplementationOnce((taskId) => {
       store.saveTask({ ...tasks.status(taskId), status: "running" });
       return tasks.status(taskId);
     });
@@ -676,9 +676,9 @@ describe("a condition's branch not taken (#268)", () => {
     const planned = controller.plan(workflow([{ id: "op", type: "operation", request: put("op") }]));
     const other = controller.plan(workflow([{ id: "op", type: "operation", request: put("op") }]));
     const waiting = (await controller.advance(other.id)).run.nodes.op!.taskIds[0]!;
-    const plan = tasks.plan.bind(tasks);
+    const plan = tasks.planSync.bind(tasks);
     let leftover: TaskRecord | undefined;
-    vi.spyOn(tasks, "plan").mockImplementationOnce((request, options) => {
+    vi.spyOn(tasks, "planSync").mockImplementationOnce((request, options) => {
       const task = plan(request, options);
       leftover = task;
       lapseAndPause(controller, store, planned.id);
@@ -697,9 +697,9 @@ describe("a condition's branch not taken (#268)", () => {
   it("reports a sweep that fails once the run is cancelled, so cancelling again sweeps", async () => {
     const { controller, store, tasks, done } = await setup();
     const planned = controller.plan(workflow([{ id: "op", type: "operation", request: put("op") }]));
-    const plan = tasks.plan.bind(tasks);
+    const plan = tasks.planSync.bind(tasks);
     let leftover: TaskRecord | undefined;
-    vi.spyOn(tasks, "plan").mockImplementationOnce((request, options) => {
+    vi.spyOn(tasks, "planSync").mockImplementationOnce((request, options) => {
       const task = plan(request, options);
       leftover = task;
       lapseAndPause(controller, store, planned.id);
@@ -707,8 +707,8 @@ describe("a condition's branch not taken (#268)", () => {
     });
     await expect(controller.advance(planned.id)).rejects.toThrow("workflow_lease_lost");
     controller.resume(planned.id);
-    const cancel = tasks.cancel.bind(tasks);
-    vi.spyOn(tasks, "cancel").mockImplementationOnce(() => {
+    const cancel = tasks.cancelSync.bind(tasks);
+    vi.spyOn(tasks, "cancelSync").mockImplementationOnce(() => {
       throw new Error("database is locked");
     });
     // Swallowed, the run read cancelled with the challenge still approvable,
@@ -717,7 +717,7 @@ describe("a condition's branch not taken (#268)", () => {
     expect(() => controller.cancel(planned.id)).toThrow("database is locked");
     expect(controller.status(planned.id).status).toBe("cancelled");
     expect(tasks.status(leftover!.id).status).toBe("awaiting_approval");
-    vi.mocked(tasks.cancel).mockImplementation(cancel);
+    vi.mocked(tasks.cancelSync).mockImplementation(cancel);
     expect(controller.cancel(planned.id).status).toBe("cancelled");
     expect(tasks.status(leftover!.id).status).toBe("cancelled");
     expect(done).toEqual([]);
@@ -767,9 +767,9 @@ describe("a condition's branch not taken (#268)", () => {
   it("ends a run whose event history no longer replays, and still cancels what a lost advance left", async () => {
     const { controller, store, tasks, done } = await setup();
     const planned = controller.plan(workflow([{ id: "op", type: "operation", request: put("op") }]));
-    const plan = tasks.plan.bind(tasks);
+    const plan = tasks.planSync.bind(tasks);
     let leftover: TaskRecord | undefined;
-    vi.spyOn(tasks, "plan").mockImplementationOnce((request, options) => {
+    vi.spyOn(tasks, "planSync").mockImplementationOnce((request, options) => {
       const task = plan(request, options);
       leftover = task;
       lapseAndPause(controller, store, planned.id);
@@ -987,7 +987,7 @@ describe("a step an operator denies", () => {
     const { controller, tasks, done } = await setup();
     const planned = controller.plan(fanOut());
     const [a, b] = await waitingOnBoth(controller, planned.id);
-    tasks.cancel(a);
+    await tasks.cancel(a);
 
     let run = (await controller.advance(planned.id)).run;
     // It kept b's challenge on offer, and approving it ran b on a doomed run.
@@ -1019,7 +1019,7 @@ describe("a step an operator denies", () => {
       const { controller, tasks, done } = await setup();
       const planned = controller.plan(gates());
       const [gate1, gate2] = await bothWaiting(controller, planned.id);
-      tasks.deny(gate1, "cli:alice");
+      await tasks.deny(gate1, "cli:alice");
       const { approvalId, phrase } = tasks.status(gate2).approval!;
 
       const run = (await controller.advance(planned.id, [{ approvalId, phrase: phrase! }])).run;
@@ -1036,8 +1036,8 @@ describe("a step an operator denies", () => {
       const { controller, tasks, done } = await setup({ policy: { mode: "enforced" } });
       const planned = controller.plan(gates());
       const [gate1, gate2] = await bothWaiting(controller, planned.id);
-      tasks.deny(gate1, "cli:alice");
-      tasks.decide(gate2, tasks.approvalView(gate2).renderDigest, "cli:alice");
+      await tasks.deny(gate1, "cli:alice");
+      await tasks.decide(gate2, tasks.approvalView(gate2).renderDigest, "cli:alice");
 
       const run = (await controller.advance(planned.id)).run;
       expect(done).toEqual([]);
@@ -1052,7 +1052,7 @@ describe("a step an operator denies", () => {
       const { controller, tasks, done } = await setup();
       const planned = controller.plan(fanOut());
       const [a, b] = await waitingOnBoth(controller, planned.id);
-      tasks.cancel(a);
+      await tasks.cancel(a);
       const other = tasks.status(b).approval!;
 
       const run = (await controller.advance(planned.id, [{ approvalId: other.approvalId, phrase: other.phrase! }])).run;
@@ -1080,7 +1080,7 @@ describe("a step an operator denies", () => {
       const { controller, tasks, done } = await setup();
       const planned = controller.plan(gates());
       const [gate1, gate2] = await bothWaiting(controller, planned.id);
-      tasks.deny(gate1, "cli:alice");
+      await tasks.deny(gate1, "cli:alice");
       expect((await controller.advance(planned.id)).run.status).toBe("failed");
 
       // Left awaiting_approval, its phrase ran gate2 on a run that never advances.
@@ -1096,8 +1096,8 @@ describe("a step an operator denies", () => {
       const { controller, tasks, done } = await setup({ policy: { mode: "enforced" } });
       const planned = controller.plan(gates());
       const [gate1, gate2] = await bothWaiting(controller, planned.id);
-      tasks.deny(gate1, "cli:alice");
-      tasks.decide(gate2, tasks.approvalView(gate2).renderDigest, "cli:alice");
+      await tasks.deny(gate1, "cli:alice");
+      await tasks.decide(gate2, tasks.approvalView(gate2).renderDigest, "cli:alice");
       expect((await controller.advance(planned.id)).run.status).toBe("failed");
 
       await expect(tasks.execute(gate2)).rejects.toThrow("task_not_executable:cancelled");
@@ -1108,7 +1108,7 @@ describe("a step an operator denies", () => {
       const { controller, tasks, done } = await setup();
       const planned = controller.plan(fanOut());
       const [a, b] = await waitingOnBoth(controller, planned.id);
-      tasks.deny(a, "cli:alice");
+      await tasks.deny(a, "cli:alice");
       let run = (await controller.advance(planned.id)).run;
       expect(run.status).toBe("failed");
       expect(run.nodes.refund?.status).toBe("awaiting_approval");
@@ -1154,8 +1154,8 @@ describe("a step an operator denies", () => {
     // What an advance does with an expired challenge: cancel it and ask again.
     // Its commit was lost (a pause landed), so the run still names attempt 1.
     const first = tasks.status(run.nodes.next!.taskIds[0]!);
-    tasks.cancel(first.id);
-    const again = tasks.plan(put("next"), { idempotencyKey: first.idempotencyKey!, attempt: 2, stored: true });
+    await tasks.cancel(first.id);
+    const again = await tasks.plan(put("next"), { idempotencyKey: first.idempotencyKey!, attempt: 2, stored: true });
 
     run = (await controller.advance(planned.id)).run;
     expect(run.status).toBe("awaiting_approval");
@@ -1187,7 +1187,7 @@ describe("a step an operator denies", () => {
     // advance then lost its commit, and the branch's own effect has since
     // made the predicate false. Nothing on the run says which branch it was.
     const key = sha256({ workflowId: planned.id, nodeId: "choose", iteration: 0, branch: "true:0", request: put("patch") });
-    const ran = tasks.plan(put("patch"), { idempotencyKey: key, attempt: 1, stored: true });
+    const ran = await tasks.plan(put("patch"), { idempotencyKey: key, attempt: 1, stored: true });
     await tasks.execute(ran.id, { approvalId: ran.approval!.approvalId, phrase: ran.approval!.phrase! });
 
     run = (await controller.advance(planned.id)).run;
@@ -1212,7 +1212,7 @@ describe("a step an operator denies", () => {
     // the flag that ends the loop; that advance then lost its commit.
     for (const iteration of [0, 1]) {
       const key = sha256({ workflowId: planned.id, nodeId: "spin", iteration, branch: "loop:0", request: tick });
-      const ran = tasks.plan(tick, { idempotencyKey: key, attempt: 1, stored: true });
+      const ran = await tasks.plan(tick, { idempotencyKey: key, attempt: 1, stored: true });
       await tasks.execute(ran.id, { approvalId: ran.approval!.approvalId, phrase: ran.approval!.phrase! });
     }
     await writeFile(join(root, "flag"), "");
@@ -1246,13 +1246,13 @@ describe("a step an operator denies", () => {
     // earlier version's next advance planned it again, under the same key and
     // attempt, and this one takes up the newer.
     const key = sha256({ workflowId: planned.id, nodeId: "next", iteration: 0, branch: "operation", request: put("next") });
-    const stale = tasks.plan(put("next"), { idempotencyKey: key, attempt: 1, stored: true });
+    const stale = await tasks.plan(put("next"), { idempotencyKey: key, attempt: 1, stored: true });
     await new Promise((resolve) => setTimeout(resolve, 5));
-    const live = tasks.plan(put("next"), { idempotencyKey: key, attempt: 1, stored: true }).id;
+    const live = (await tasks.plan(put("next"), { idempotencyKey: key, attempt: 1, stored: true })).id;
     run = (await controller.advance(planned.id)).run;
     expect(run.nodes.next?.taskIds).toEqual([live]);
     // The operator clears the stale one; any later melra process recovers.
-    tasks.cancel(stale.id);
+    await tasks.cancel(stale.id);
     const restarted = new WorkflowController(store, tasks, cipher);
     await restarted.recoverInterrupted();
     run = restarted.status(planned.id);
@@ -1305,7 +1305,7 @@ describe("a step an operator denies", () => {
     const { controller, store, tasks, cipher, done } = await setup();
     const planned = controller.plan(fanOut());
     const [a, b] = await waitingOnBoth(controller, planned.id);
-    tasks.cancel(a);
+    await tasks.cancel(a);
 
     const restarted = new WorkflowController(store, tasks, cipher);
     await restarted.recoverInterrupted();
@@ -1819,7 +1819,7 @@ describe("a step whose advance lost its commit (#319)", () => {
     await expect(controller.advance(planned.id)).rejects.toThrow("database is locked");
     const [left] = store.listTasks(10, "awaiting_approval");
     // `melra approve --deny`, or the console's Deny.
-    tasks.cancel(left!.id);
+    await tasks.cancel(left!.id);
     run = (await controller.advance(planned.id)).run;
     // Planned afresh: ship's challenge offered again, the deny ignored.
     expect(run.nodes.ship).toEqual({ status: "cancelled", taskIds: [left!.id] });
@@ -1956,11 +1956,11 @@ describe("a step past maxPendingApprovals (#422)", () => {
 
   it("stays pending, its advance refused, and is planned once there is room", async () => {
     const { controller, tasks, done } = await setup({ policy: { maxPendingApprovals: 1 } });
-    const elsewhere = tasks.plan(put("elsewhere"));
+    const elsewhere = await tasks.plan(put("elsewhere"));
     const planned = controller.plan(workflow([{ id: "op", type: "operation", request: put("op") }]));
     await expect(controller.advance(planned.id)).rejects.toThrow("too_many_pending_approvals");
     expect(controller.status(planned.id).nodes.op).toMatchObject({ status: "pending", taskIds: [] });
-    tasks.cancel(elsewhere.id);
+    await tasks.cancel(elsewhere.id);
     let run = (await controller.advance(planned.id)).run;
     expect(run.nodes.op?.status).toBe("awaiting_approval");
     run = (await controller.advance(planned.id, approvalsFor(run))).run;
@@ -1974,11 +1974,11 @@ describe("a step past maxPendingApprovals (#422)", () => {
     let run = (await controller.advance(planned.id)).run;
     const first = run.nodes.op!.taskIds[0]!;
     lapse(store, first);
-    const elsewhere = tasks.plan(put("elsewhere"));
+    const elsewhere = await tasks.plan(put("elsewhere"));
     await expect(controller.advance(planned.id)).rejects.toThrow("too_many_pending_approvals");
     expect(tasks.status(first).status).toBe("awaiting_approval");
     expect(tasks.pendingApprovals("operator")).toBe(1);
-    tasks.cancel(elsewhere.id);
+    await tasks.cancel(elsewhere.id);
     run = (await controller.advance(planned.id)).run;
     expect(run.nodes.op?.status).toBe("awaiting_approval");
     expect(run.nodes.op?.taskIds).not.toContain(first);
@@ -2000,10 +2000,10 @@ describe("a step past maxPendingApprovals (#422)", () => {
     for (let step = 0; step < 4 && run.nodes.next?.status !== "awaiting_approval"; step += 1) {
       run = (await controller.advance(planned.id, approvalsFor(run))).run;
     }
-    tasks.cancel(run.nodes.next!.taskIds[0]!);
-    const elsewhere = tasks.plan(put("elsewhere"));
+    await tasks.cancel(run.nodes.next!.taskIds[0]!);
+    const elsewhere = await tasks.plan(put("elsewhere"));
     await expect(controller.advance(planned.id)).rejects.toThrow("too_many_pending_approvals");
-    tasks.cancel(elsewhere.id);
+    await tasks.cancel(elsewhere.id);
     run = (await controller.advance(planned.id)).run;
     expect(run.nodes.undo?.status).toBe("awaiting_approval");
     run = (await controller.advance(planned.id, approvalsFor(run))).run;
@@ -2026,12 +2026,12 @@ describe("a step past maxPendingApprovals (#422)", () => {
     for (let step = 0; step < 6 && run.nodes.next?.status !== "awaiting_approval"; step += 1) {
       run = (await controller.advance(planned.id, approvalsFor(run))).run;
     }
-    tasks.cancel(run.nodes.next!.taskIds[0]!);
+    await tasks.cancel(run.nodes.next!.taskIds[0]!);
     run = (await controller.advance(planned.id)).run;
     const undo2 = run.nodes.undo2!.taskIds[0]!;
     expect(run.nodes.undo2?.status).toBe("awaiting_approval");
-    tasks.decide(undo2, tasks.approvalView(undo2).renderDigest, "cli:test");
-    tasks.plan(put("elsewhere"));
+    await tasks.decide(undo2, tasks.approvalView(undo2).renderDigest, "cli:test");
+    await tasks.plan(put("elsewhere"));
     await expect(controller.advance(planned.id)).rejects.toThrow("too_many_pending_approvals");
     expect(done).toEqual(["w1", "w2", "undo2"]);
     expect(controller.status(planned.id).nodes.undo2?.status).toBe("compensated");

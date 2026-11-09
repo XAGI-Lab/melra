@@ -626,7 +626,7 @@ describe("melra http server in enforced mode", () => {
         requiredEvidence: [{ type: "file_exists", path }],
       });
     try {
-      const task = runtime.controller.plan(write("w.txt"));
+      const task = await runtime.controller.plan(write("w.txt"));
       const planned = runtime.workflows.plan(
         WorkflowDefinitionSchema.parse({
           schemaVersion: "1.0.0",

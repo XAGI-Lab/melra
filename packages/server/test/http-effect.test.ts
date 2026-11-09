@@ -111,7 +111,7 @@ const post = (url: string, content: string) =>
 
 describe("a governed API call", () => {
   it("plans, waits for the exact phrase, executes, and verifies", async () => {
-    const planned = runtime.controller.plan(post(`${origin}/orders`, '{"item":"widget"}'));
+    const planned = await runtime.controller.plan(post(`${origin}/orders`, '{"item":"widget"}'));
     expect(planned.status).toBe("awaiting_approval");
     expect(planned.policyDecision.effect).toBe("mutate");
     // Stated before the caller approves anything: HTTP is at-least-once at the
@@ -134,7 +134,7 @@ describe("a governed API call", () => {
 
   it("refuses the wrong approval phrase without opening a socket", async () => {
     const before = orders.length;
-    const planned = runtime.controller.plan(post(`${origin}/orders`, '{"item":"forged"}'));
+    const planned = await runtime.controller.plan(post(`${origin}/orders`, '{"item":"forged"}'));
     await expect(
       runtime.controller.execute(planned.id, {
         approvalId: planned.approval!.approvalId,
@@ -145,7 +145,7 @@ describe("a governed API call", () => {
   });
 
   it("records a call the server refused as failed, and does not retry it", async () => {
-    const planned = runtime.controller.plan(post(`${origin}/broken`, "{}"));
+    const planned = await runtime.controller.plan(post(`${origin}/broken`, "{}"));
     const { task, receipt } = await runtime.controller.execute(planned.id, {
       approvalId: planned.approval!.approvalId,
       phrase: planned.approval!.phrase!,
@@ -174,7 +174,7 @@ describe("a governed API call", () => {
       // verification can see.
       requiredEvidence: [{ type: "result_equals", path: "status", value: 202 }],
     });
-    const planned = runtime.controller.plan(request);
+    const planned = await runtime.controller.plan(request);
     const { task, receipt } = await runtime.controller.execute(planned.id, {
       approvalId: planned.approval!.approvalId,
       phrase: planned.approval!.phrase!,
@@ -197,7 +197,7 @@ describe("a governed API call", () => {
     await new Promise<void>((resolve) => switching.listen(0, "127.0.0.1", resolve));
     try {
       const port = (switching.address() as AddressInfo).port;
-      const planned = runtime.controller.plan(post(`http://127.0.0.1:${port}/orders`, "{}"));
+      const planned = await runtime.controller.plan(post(`http://127.0.0.1:${port}/orders`, "{}"));
       const { task, receipt } = await runtime.controller.execute(planned.id, {
         approvalId: planned.approval!.approvalId,
         phrase: planned.approval!.phrase!,
@@ -216,7 +216,7 @@ describe("a governed API call", () => {
   });
 
   it("does not settle a lost charge as never made while its provider does not show it yet", async () => {
-    const planned = runtime.controller.plan(
+    const planned = await runtime.controller.plan(
       TaskRequestSchema.parse({
         goal: "Charge the customer",
         operation: {
@@ -259,30 +259,29 @@ describe("a governed API call", () => {
     expect(charges).toHaveLength(1);
   });
 
-  it("denies a host outside the allowlist at plan time", () => {
-    const planned = runtime.controller.plan(post("https://attacker.test/orders", "{}"));
+  it("denies a host outside the allowlist at plan time", async () => {
+    const planned = await runtime.controller.plan(post("https://attacker.test/orders", "{}"));
     expect(planned.status).toBe("policy_blocked");
     expect(planned.policyDecision.reason).toBe("destination_domain_not_allowed");
   });
 
   it("rejects an unknown field rather than ignoring it", () => {
+    // Refused by the schema, before anything is planned.
     expect(() =>
-      runtime.controller.plan(
-        TaskRequestSchema.parse({
-          goal: "Follow redirects",
-          operation: {
-            kind: "http",
-            action: "request",
-            url: `${origin}/orders`,
-            followRedirects: true,
-          },
-        }),
-      ),
+      TaskRequestSchema.parse({
+        goal: "Follow redirects",
+        operation: {
+          kind: "http",
+          action: "request",
+          url: `${origin}/orders`,
+          followRedirects: true,
+        },
+      }),
     ).toThrow();
   });
 
   it("puts the response status in the receipt and keeps the body out of it", async () => {
-    const planned = runtime.controller.plan(post(`${origin}/orders`, '{"item":"receipted"}'));
+    const planned = await runtime.controller.plan(post(`${origin}/orders`, '{"item":"receipted"}'));
     const { task } = await runtime.controller.execute(planned.id, {
       approvalId: planned.approval!.approvalId,
       phrase: planned.approval!.phrase!,
@@ -297,7 +296,7 @@ describe("a governed API call", () => {
   });
 
   it("reads a GET without an approval at all", async () => {
-    const planned = runtime.controller.plan(
+    const planned = await runtime.controller.plan(
       TaskRequestSchema.parse({
         goal: "Count the orders",
         operation: { kind: "http", action: "request", url: `${origin}/orders` },

@@ -32,7 +32,7 @@ describe("verifyRecords", () => {
         dataDirectory: dir,
         environment: {},
       });
-      const task = runtime.controller.plan(
+      const task = await runtime.controller.plan(
         TaskRequestSchema.parse({
           goal: "verify records test",
           operation: { kind: "system", action: "info" },
@@ -62,7 +62,7 @@ describe("verifyRecords", () => {
         dataDirectory: dir,
         environment: {},
       });
-      const task = runtime.controller.plan(
+      const task = await runtime.controller.plan(
         TaskRequestSchema.parse({
           goal: "tamper test",
           operation: { kind: "system", action: "info" },
@@ -97,7 +97,7 @@ describe("verifyRecords", () => {
         dataDirectory: dir,
         environment: {},
       });
-      const task = runtime.controller.plan(
+      const task = await runtime.controller.plan(
         TaskRequestSchema.parse({
           goal: "head test",
           operation: { kind: "system", action: "info" },
@@ -129,7 +129,7 @@ describe("verifyRecords", () => {
         dataDirectory: dir,
         environment: {},
       });
-      const task = runtime.controller.plan(
+      const task = await runtime.controller.plan(
         TaskRequestSchema.parse({
           goal: "key test",
           operation: { kind: "system", action: "info" },
