@@ -93,7 +93,7 @@ describe("unhinged runtime", () => {
     expect(runtime.policy.unhinged).toBe(false);
 
     // A shell is denied unconditionally under policy, before any adapter runs.
-    const shell = runtime.controller.plan(
+    const shell = await runtime.controller.plan(
       request({
         operation: { kind: "terminal", action: "run", command: "sh", args: [] },
         requiredEvidence: [{ type: "exit_code", value: 0 }],
@@ -104,7 +104,7 @@ describe("unhinged runtime", () => {
 
     // Confined runtime, absolute path outside it: the read is refused by the
     // file runtime even though policy allows reads.
-    const read = runtime.controller.plan(
+    const read = await runtime.controller.plan(
       request({ operation: { kind: "file", action: "read", path: outside } }),
     );
     const result = await runtime.controller.execute(read.id);
@@ -138,7 +138,7 @@ describe("unhinged runtime", () => {
     });
     expect(narrowed.policy.workspaceRoot).toBe(resolve(workspace, "app"));
     await narrowed.close();
-    const read = runtime.controller.plan(
+    const read = await runtime.controller.plan(
       request({ operation: { kind: "file", action: "read", path: "secret.txt" } }),
     );
     const result = await runtime.controller.execute(read.id);
@@ -155,7 +155,7 @@ describe("unhinged runtime", () => {
     });
     expect(runtime.policy.unhinged).toBe(true);
 
-    const read = runtime.controller.plan(
+    const read = await runtime.controller.plan(
       request({ operation: { kind: "file", action: "read", path: outside } }),
     );
     expect(read.policyDecision.outcome).toBe("allow");
@@ -164,7 +164,7 @@ describe("unhinged runtime", () => {
 
     // Evidence-free destruction: allowed, unapproved, and still reported as
     // destructive so the receipt does not understate what was permitted.
-    const destroy = runtime.controller.plan(
+    const destroy = await runtime.controller.plan(
       request({
         operation: { kind: "file", action: "delete", path: "anything" },
       }),
@@ -174,7 +174,7 @@ describe("unhinged runtime", () => {
     expect(destroy.policyDecision.effect).toBe("destructive");
     expect(destroy.approval).toBeUndefined();
 
-    const shell = runtime.controller.plan(
+    const shell = await runtime.controller.plan(
       request({
         operation: {
           kind: "terminal",
@@ -205,7 +205,7 @@ describe("unhinged runtime", () => {
       vi.stubEnv("PATH", `${join(workspace, "bin")}${delimiter}${process.env.PATH ?? ""}`);
       try {
         const ls = async () => {
-          const planned = runtime!.controller.plan(
+          const planned = await runtime!.controller.plan(
             request({ operation: { kind: "terminal", action: "run", command: "ls", args: [] } }),
           );
           const output = ((await runtime!.controller.execute(planned.id)).output ?? {}) as Record<string, unknown>;
@@ -305,7 +305,7 @@ describe("enforced mode", () => {
       dataDirectory: data,
       environment: { MELRA_MODE: "enforced" },
     });
-    const task = runtime.controller.plan(
+    const task = await runtime.controller.plan(
       request({ operation: { kind: "system", action: "info" } }),
     );
     const { receipt } = await runtime.controller.execute(task.id);
@@ -354,7 +354,7 @@ describe("enforced mode", () => {
     await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
     const { port } = server.address() as AddressInfo;
     const status = async (host: string) => {
-      const task = runtime!.controller.plan(
+      const task = await runtime!.controller.plan(
         request({
           operation: { kind: "http", action: "request", method: "GET", url: `http://${host}:${port}/`, timeoutMs: 2_000 },
           budget: { maxRetries: 0 },
@@ -398,7 +398,7 @@ describe("per-command sandbox", () => {
     return path;
   };
   const receiptOf = async (melra: MelraRuntime) =>
-    (await melra.controller.execute(melra.controller.plan(request({ operation: { kind: "system", action: "info" } })).id)).receipt;
+    (await melra.controller.execute((await melra.controller.plan(request({ operation: { kind: "system", action: "info" } }))).id)).receipt;
 
   beforeEach(async () => {
     base = await mkdtemp(join(tmpdir(), "melra-sandbox-"));
@@ -426,6 +426,14 @@ describe("per-command sandbox", () => {
         policyPath: await policy({ use: "off" }),
       }),
     ).rejects.toThrow(/^enforced_mode_refuses_sandbox_off: /);
+    await expect(
+      createMelraRuntime({
+        workspaceRoot: workspace,
+        dataDirectory: data,
+        environment: { MELRA_MODE: "enforced" },
+        policyPath: await policy({ listen: ["vitest"] }),
+      }),
+    ).rejects.toThrow(/^enforced_mode_refuses_sandbox_listen: /);
   });
 
   it("starts on the policy file's opt-out, and every receipt says it ran without one", async () => {
@@ -494,12 +502,12 @@ describe("per-command sandbox", () => {
       }),
     });
     const calls: Array<[string, string[], SandboxAllowance]> = [
-      [process.execPath, ["-e", ""], { network: false, symlinks: false }],
-      ["curl", ["--version"], { network: true, symlinks: false }],
+      [process.execPath, ["-e", ""], { network: false, symlinks: false, listen: false }],
+      ["curl", ["--version"], { network: true, symlinks: false, listen: false }],
       // Named in the policy file.
-      ["git", ["status"], { network: false, symlinks: true }],
+      ["git", ["status"], { network: false, symlinks: true, listen: false }],
       // An install makes links whether or not it is named.
-      ["npm", ["--version"], { network: true, symlinks: true }],
+      ["npm", ["--version"], { network: true, symlinks: true, listen: false }],
     ];
     for (const [command, args, allowance] of calls) {
       const result = await runtime.router.execute(TerminalOperationSchema.parse({ kind: "terminal", action: "run", command, args }));
@@ -537,9 +545,31 @@ describe("per-command sandbox", () => {
       runtime = undefined;
     }
     expect(seen).toEqual([
-      { network: false, symlinks: true },
-      { network: false, symlinks: false },
+      { network: false, symlinks: true, listen: false },
+      { network: false, symlinks: false, listen: false },
     ]);
+  });
+
+  it("gives a program named in sandbox.listen the listen allowance", async () => {
+    const seen: SandboxAllowance[] = [];
+    runtime = await createMelraRuntime({
+      workspaceRoot: workspace,
+      dataDirectory: data,
+      policyPath: await policy({ listen: ["vitest"] }),
+      detectSandbox: async () => ({
+        sandbox: {
+          backend: "recording",
+          confine: async (_command, allowance) => {
+            seen.push(allowance);
+            return { file: process.execPath, args: ["-e", "0"] };
+          },
+        },
+      }),
+    });
+    await runtime.router.execute(TerminalOperationSchema.parse({ kind: "terminal", action: "run", command: process.execPath, args: ["-e", "0"] }));
+    expect(seen.at(-1)).toEqual({ network: false, symlinks: false, listen: false });
+    await runtime.router.execute(TerminalOperationSchema.parse({ kind: "terminal", action: "run", command: "vitest", args: ["--version"] }));
+    expect(seen.at(-1)).toEqual({ network: false, symlinks: false, listen: true });
   });
 
   it("keeps MELRA's data, the policy file and the secret files from every command", async () => {
@@ -611,7 +641,7 @@ describe.runIf(backend !== undefined)(`developer mode's default sandbox (${backe
   const outside = join(homedir(), `.melra-sandbox-test-${randomUUID()}`);
   // Planned, then run with the phrase the plan response hands the agent.
   const approved = async (operation: Record<string, unknown>) => {
-    const task = runtime!.controller.plan(request({ operation, requiredEvidence: [{ type: "exit_code", value: 0 }] }));
+    const task = await runtime!.controller.plan(request({ operation, requiredEvidence: [{ type: "exit_code", value: 0 }] }));
     expect(task.status).toBe("awaiting_approval");
     return await runtime!.controller.execute(task.id, { approvalId: task.approval!.approvalId, phrase: task.approval!.phrase! });
   };
@@ -651,9 +681,10 @@ describe.runIf(backend !== undefined)(`developer mode's default sandbox (${backe
   }, 30_000);
 
   // Seatbelt's only loopback filter, `localhost`, matches every address of the
-  // Mac, so a listener it allowed would serve the network: none is allowed.
-  // Bubblewrap gives the command an empty network namespace, loopback its own,
-  // where a listener serves nobody: it may bind even a port the host holds.
+  // Mac, so a listener it allows serves the network: none is allowed unless
+  // the policy names the command in `sandbox.listen`. Bubblewrap gives the
+  // command an empty network namespace, loopback its own, where a listener
+  // serves nobody: it may bind even a port the host holds.
   it("gives a command without the network trait no listening socket on the host", async () => {
     const workspace = join(base, "workspace");
     const host = createServer();
@@ -682,6 +713,55 @@ describe.runIf(backend !== undefined)(`developer mode's default sandbox (${backe
       host.close();
     }
   }, 30_000);
+
+  it.runIf(backend === "seatbelt")(
+    "lets a program named in sandbox.listen bind a listening socket under Seatbelt",
+    async () => {
+      const workspace = join(base, "workspace");
+      const script =
+        `require("net").createServer().listen(0, "0.0.0.0", () => process.exit(0))` +
+        `.on("error", (e) => { process.stdout.write(e.code); process.exit(1); })`;
+
+      const policyPath = async (listen: string[]) => {
+        const path = join(base, `policy-${listen.join("-")}.json`);
+        await writeFile(path, JSON.stringify({ sandbox: { listen } }), "utf8");
+        return path;
+      };
+
+      runtime = await createRuntime({
+        workspaceRoot: workspace,
+        dataDirectory: join(base, "data"),
+        environment: {},
+        policyPath: await policyPath(["node"]),
+      });
+      const named = await approved({
+        kind: "terminal",
+        action: "run",
+        command: "node",
+        args: ["-e", script],
+      });
+      expect(named.receipt?.sandbox).toBe("seatbelt");
+      expect(named.task.status).toBe("verified_success");
+
+      await runtime.close();
+      runtime = await createRuntime({
+        workspaceRoot: workspace,
+        dataDirectory: join(base, "data"),
+        environment: {},
+        policyPath: await policyPath(["vitest"]),
+      });
+      const unnamed = await approved({
+        kind: "terminal",
+        action: "run",
+        command: "node",
+        args: ["-e", script],
+      });
+      expect(unnamed.receipt?.sandbox).toBe("seatbelt");
+      expect(unnamed.task.status).toBe("failed");
+      expect((unnamed.output as { stdout?: string } | undefined)?.stdout).toBe("EPERM");
+    },
+    30_000,
+  );
 
   // Refused a link, git still exits 0: each link a plain file, and
   // core.symlinks=false written into the clone for every later checkout.
@@ -739,7 +819,7 @@ describe("policy digest", () => {
       environment: {},
       ...(policyPath === undefined ? {} : { policyPath }),
     });
-    const task = runtime.controller.plan(request({ operation: { kind: "system", action: "info" } }));
+    const task = await runtime.controller.plan(request({ operation: { kind: "system", action: "info" } }));
     const { receipt, certificate } = await runtime.controller.execute(task.id);
     const published = (capabilitiesPayload(runtime) as { policy: { digest?: string } }).policy.digest;
     return [receipt?.policyDecision.policyDigest, certificate?.policyDigest, published];
@@ -835,7 +915,7 @@ describe("terminal arguments", () => {
     });
   /** Plans and runs a task, echoing the phrase back when one is asked for. */
   const run = async (task: TaskRequest) => {
-    const planned = runtime!.controller.plan(task);
+    const planned = await runtime!.controller.plan(task);
     const approval =
       planned.approval === undefined
         ? undefined
@@ -916,13 +996,13 @@ describe("terminal arguments", () => {
       dataDirectory: data,
       environment: { MELRA_MODE: "enforced" },
     });
-    const outside = runtime.controller.plan(terminal("cat", [join(base, "outside.txt")]));
+    const outside = await runtime.controller.plan(terminal("cat", [join(base, "outside.txt")]));
     expect(outside.status).toBe("awaiting_approval");
     expect(outside.policyDecision.reason).toBe("read_outside_workspace");
     expect(outside.approval).not.toHaveProperty("phrase");
     await expect(runtime.controller.execute(outside.id)).rejects.toThrow(/approval_awaiting_operator/);
     if (process.platform !== "win32") {
-      runtime.controller.decide(outside.id, runtime.controller.approvalView(outside.id).renderDigest, "cli:test");
+      await runtime.controller.decide(outside.id, runtime.controller.approvalView(outside.id).renderDigest, "cli:test");
       const approved = await runtime.controller.execute(outside.id);
       expect(approved.task.status).toBe("verified_success");
     }
@@ -1128,9 +1208,9 @@ describe("terminal arguments", () => {
         policyPath: await policyWith(join(outside, "billing.key")),
         browserProfileDir: join(outside, "profile"),
       });
-      const planned = runtime.controller.plan(terminal("cat", [join(outside, "billing.key")]));
+      const planned = await runtime.controller.plan(terminal("cat", [join(outside, "billing.key")]));
       expect(planned.policyDecision.reason).toBe("read_outside_workspace");
-      runtime.controller.decide(planned.id, runtime.controller.approvalView(planned.id).renderDigest, "cli:test");
+      await runtime.controller.decide(planned.id, runtime.controller.approvalView(planned.id).renderDigest, "cli:test");
       expect((await runtime.controller.execute(planned.id)).task.error).toMatch(/terminal_path_reserved/);
     });
 
@@ -1287,7 +1367,7 @@ describe("git read hardening", () => {
           const ran = async () => (await readFile(marker, "utf8").catch(() => "")) !== "";
 
           const readGit = async (args: string[]) => {
-            const planned = runtime.controller.plan(
+            const planned = await runtime.controller.plan(
               request({ operation: { kind: "terminal", action: "run", command: "git", args } }),
             );
             // Approval-free: policy allows the read and asks for no phrase.
@@ -1347,7 +1427,7 @@ describe("git read hardening", () => {
     const runtime = await createMelraRuntime({ workspaceRoot: workspace, dataDirectory: data, environment: {} });
     try {
       const readGit = async (args: string[]) => {
-        const planned = runtime.controller.plan(
+        const planned = await runtime.controller.plan(
           request({ operation: { kind: "terminal", action: "run", command: "git", args } }),
         );
         const result = await runtime.controller.execute(planned.id);
@@ -1414,7 +1494,7 @@ describe("the payload key (#417)", () => {
 
   it("is never minted for a home already sealed under another key", async () => {
     const runtime = await start("sealed", keyed);
-    runtime.controller.plan(request({ operation: { kind: "system", action: "info" } }));
+    await runtime.controller.plan(request({ operation: { kind: "system", action: "info" } }));
     await runtime.close();
 
     await expect(start("sealed", {})).rejects.toThrow(/^payload_key_missing: .*MELRA_PAYLOAD_KEY/);
@@ -1444,7 +1524,7 @@ describe("the payload key (#417)", () => {
     // Minted while the home held nothing, before a keyed process sealed there.
     await (await start("split", {})).close();
     const runtime = await start("split", keyed);
-    runtime.controller.plan(request({ operation: { kind: "system", action: "info" } }));
+    await runtime.controller.plan(request({ operation: { kind: "system", action: "info" } }));
     await runtime.close();
 
     await expect(start("split", {})).rejects.toThrow(/^payload_key_mismatch: .*MELRA_PAYLOAD_KEY/);

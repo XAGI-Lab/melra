@@ -465,7 +465,7 @@ async function interruptedReadRetry(
   const planned = runtime.workflows.plan(definition);
   const node = definition.nodes[0]!;
   if (node.type !== "operation") throw new Error("operation_node_missing");
-  const task = runtime.controller.plan(node.request, {
+  const task = await runtime.controller.plan(node.request, {
     idempotencyKey: taskKey(planned.id, node.id, node.request),
     attempt: 1,
   });

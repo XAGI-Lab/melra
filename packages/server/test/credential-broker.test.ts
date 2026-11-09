@@ -131,7 +131,7 @@ const charge = (host: string, method = "POST", path = "/charges") =>
   });
 
 async function run(request: ReturnType<typeof charge>) {
-  const planned = runtime.controller.plan(request);
+  const planned = await runtime.controller.plan(request);
   const approval =
     planned.approval === undefined
       ? undefined

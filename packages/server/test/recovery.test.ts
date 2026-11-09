@@ -58,7 +58,7 @@ async function pair() {
   const options = { workspaceRoot: root, dataDirectory: join(root, ".melra"), environment: {} };
   const first = await createMelraRuntime({ ...options, evidenceVerifiers: [held.verifier] });
   runtimes.push(first);
-  const planned = first.controller.plan(
+  const planned = await first.controller.plan(
     TaskRequestSchema.parse({
       goal: "Write and check",
       operation: { kind: "file", action: "write", path: "out.txt", content: "x" },
@@ -113,7 +113,7 @@ describe("recovery between runtimes sharing a home", () => {
     runtimes.push(runtime);
     const owner = runtime.store.ownerId();
     for (const path of [".melra/melra.sqlite", `.melra/melra.sqlite-owners/${owner}`, ".melra/payload.key"]) {
-      const planned = runtime.controller.plan(
+      const planned = await runtime.controller.plan(
         TaskRequestSchema.parse({ goal: "Read", operation: { kind: "file", action: "read", path } }),
       );
       const { task } = await runtime.controller.execute(planned.id);
@@ -121,7 +121,7 @@ describe("recovery between runtimes sharing a home", () => {
       expect(task.error).toContain("path_reserved");
     }
     // The verifier asks the same question before it opens anything.
-    const write = runtime.controller.plan(
+    const write = await runtime.controller.plan(
       TaskRequestSchema.parse({
         goal: "Write and check",
         operation: { kind: "file", action: "write", path: "out.txt", content: "x" },
@@ -215,7 +215,7 @@ describe("recovery between runtimes sharing a home", () => {
       ),
     ).rejects.toThrow("terminal_path_reserved");
     // The verifier only reads.
-    const write = runtime.controller.plan(
+    const write = await runtime.controller.plan(
       TaskRequestSchema.parse({
         goal: "Write and check",
         operation: { kind: "file", action: "write", path: "out.txt", content: "x" },

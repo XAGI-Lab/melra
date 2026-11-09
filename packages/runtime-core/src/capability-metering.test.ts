@@ -82,11 +82,11 @@ function request(
   return TaskRequestSchema.parse({ goal: "Spend a grant", operation, requiredEvidence, ...extra });
 }
 
-const approve = (task: ReturnType<TaskController["plan"]>) =>
+const approve = (task: Awaited<ReturnType<TaskController["plan"]>>) =>
   task.approval === undefined ? undefined : { approvalId: task.approval.approvalId, phrase: task.approval.phrase! };
 
 async function run(controller: TaskController, task: ReturnType<typeof request>) {
-  const planned = controller.plan(task);
+  const planned = await controller.plan(task);
   return await controller.execute(planned.id, approve(planned));
 }
 
@@ -100,7 +100,7 @@ describe("capability metering", () => {
     const { controller, store } = await setup();
     expect((await run(controller, request(operation))).task.status).toBe("partial");
     expect(drawn(store, id).operations).toBe(1);
-    const next = controller.plan(request(operation));
+    const next = await controller.plan(request(operation));
     expect(next.status).toBe("policy_blocked");
     expect(next.policyDecision.reason).toBe(`capability_usage_exhausted:${id}`);
   });
@@ -112,7 +112,7 @@ describe("capability metering", () => {
     const evidence = [{ type: "result_equals", path: "status", value: 201 }] as const;
     expect((await run(controller, request(REFUND, [...evidence]))).task.status).toBe("partial");
     expect(drawn(store, "pay").amountInWindow).toBe(1_000);
-    expect(controller.plan(request(REFUND, [...evidence])).policyDecision.reason).toBe(
+    expect((await controller.plan(request(REFUND, [...evidence]))).policyDecision.reason).toBe(
       "capability_daily_limit_exceeded:pay",
     );
   });
@@ -123,7 +123,7 @@ describe("capability metering", () => {
     const parked = await run(controller, request(WRITE));
     expect(parked.task.status).toBe("recovery_required");
     expect(drawn(store, "write").operations).toBe(1);
-    expect(controller.plan(request(WRITE)).status).toBe("policy_blocked");
+    expect((await controller.plan(request(WRITE))).status).toBe("policy_blocked");
   });
 
   it("charges nothing for an adapter that did not run, and charges one that ran and reported failure", async () => {
@@ -141,7 +141,7 @@ describe("capability metering", () => {
   it("charges nothing for a task policy blocks at execution", async () => {
     const { controller, store, executor } = await setup();
     // Both planned while the grant was unspent, and the first spends it.
-    const [first, second] = [controller.plan(request(WRITE)), controller.plan(request(WRITE))];
+    const [first, second] = [await controller.plan(request(WRITE)), await controller.plan(request(WRITE))];
     expect((await controller.execute(first!.id, approve(first!))).task.status).toBe("partial");
     const blocked = await controller.execute(second!.id, approve(second!));
     expect(blocked.task.status).toBe("policy_blocked");
@@ -181,7 +181,7 @@ describe("capability metering", () => {
       await expect(run(controller, request(operation))).rejects.toThrow("database is locked");
       expect(drawn(store, id).operations).toBe(0);
       // Not durable yet, and still not free to fund a second effect.
-      expect(controller.plan(request(operation)).status).toBe("policy_blocked");
+      expect((await controller.plan(request(operation))).status).toBe("policy_blocked");
       record.mockRestore();
       const [recovered] = await controller.recoverInterrupted();
       expect(recovered?.status).toBe(status);
@@ -204,14 +204,14 @@ describe("capability metering", () => {
     });
     await expect(run(controller, request(WRITE))).rejects.toThrow("database is locked");
     expect(drawn(store, "write").operations).toBe(0);
-    expect(controller.plan(request(WRITE)).status).toBe("policy_blocked");
+    expect((await controller.plan(request(WRITE))).status).toBe("policy_blocked");
   });
 
   it.each(["running", "verifying"] as const)(
     "charges a read cut off while %s, and its re-run needs room in the grant",
     async (status) => {
       const { controller, store, executor } = await setup();
-      const planned = controller.plan(request(READ));
+      const planned = await controller.plan(request(READ));
       // The process died with the read in flight, or its answer back.
       store.saveTask({ ...store.getTask(planned.id)!, status });
       const [recovered] = await controller.recoverInterrupted();

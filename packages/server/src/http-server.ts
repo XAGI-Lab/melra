@@ -207,7 +207,27 @@ function suppliedToken(
 
 async function readBody(request: IncomingMessage): Promise<unknown> {
   const text = await readText(request);
-  return text === "" ? undefined : JSON.parse(text);
+  if (text === "") return undefined;
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error("invalid_json");
+  }
+}
+
+/**
+ * The code a client may read: MELRA refuses with one (`task_not_found`,
+ * `approval_expired`, `effect_outcome_unknown:<detail>`). Anything else is an
+ * internal failure, a SQLite or file-system message that can name paths, so
+ * it goes to the operator's stderr and the client learns only that it failed.
+ */
+function refusalCode(error: unknown): string | undefined {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/^[a-z][a-z0-9_]*(?::|$)/.test(message)) return message;
+  // A body that failed its schema is the client's mistake, not ours.
+  if (error instanceof Error && error.name === "ZodError") return "invalid_request";
+  console.error("melra http: internal error", error);
+  return undefined;
 }
 
 async function readText(request: IncomingMessage): Promise<string> {
@@ -452,11 +472,11 @@ export async function serveHttp(
 
   const server = createServer((request, response) => {
     void handle(request, response).catch((error: unknown) => {
-      const message = error instanceof Error ? error.message : String(error);
+      const code = refusalCode(error);
       // An id that resolves to nothing is a 404, not a malformed request. The
       // controllers signal that the only way they can, by throwing.
-      const status = message.endsWith("_not_found") ? 404 : 400;
-      if (!response.headersSent) json(response, status, { error: message });
+      const status = code === undefined ? 500 : code.endsWith("_not_found") ? 404 : 400;
+      if (!response.headersSent) json(response, status, { error: code ?? "internal_error" });
       else response.end();
     });
   });
@@ -631,7 +651,11 @@ export async function serveHttp(
     } catch (error) {
       // OAuth names its own failures, and a client reads that name rather than
       // the prose: `invalid_grant` is what makes it re-run the flow.
-      const message = error instanceof Error ? error.message : String(error);
+      const message = refusalCode(error);
+      if (message === undefined) {
+        json(response, 500, { error: "server_error" });
+        return true;
+      }
       const [code, ...rest] = message.split(":");
       json(response, 400, {
         error: code ?? "invalid_request",
@@ -827,7 +851,7 @@ export async function serveHttp(
     if (route[2] === "deny") {
       // Another process may have started it since the page drew it: then it
       // runs, and the page must not say it was denied.
-      const task = runtime.controller.deny(taskId, console_.approver, ((await readBody(request)) ?? {}) as DenialInput);
+      const task = await runtime.controller.deny(taskId, console_.approver, ((await readBody(request)) ?? {}) as DenialInput);
       if (task.status !== "cancelled") throw new Error(`task_not_cancellable:${task.status}`);
       json(response, 200, { task });
       return;
@@ -837,7 +861,7 @@ export async function serveHttp(
     // taken when it drew them, so nothing that changed since redirects this.
     if (body?.taskId !== taskId) throw new Error("approval_task_mismatch");
     if (typeof body.renderDigest !== "string") throw new Error("render_digest_required");
-    const decision = runtime.controller.decide(taskId, body.renderDigest, console_.approver);
+    const decision = await runtime.controller.decide(taskId, body.renderDigest, console_.approver);
     options.onApproved?.(taskId);
     json(response, 200, { decision });
   }
