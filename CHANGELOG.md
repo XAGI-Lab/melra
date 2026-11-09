@@ -8,6 +8,17 @@ All notable changes are documented here. The format follows
 
 ### Added
 
+- `sandbox.listen`: an opt-in list of commands in the policy file that may bind
+  and listen on localhost under Seatbelt on macOS. Under Seatbelt, commands
+  without the `network` trait cannot open sockets; `sandbox.listen` permits
+  dev servers and test runners to bind localhost, noting that under Seatbelt
+  a listener is reachable from the network on every address of the Mac. Closes [#471](https://github.com/XAGI-Lab/melra/issues/471).
+- `@melra/server` and `@melra/server/kernel` export `verifyRecords`, which opens
+  the home's database read-only, loads the key with `mint: false`, and returns
+  `verifyChain`'s result mapped to `{ ok, problems, report }`. This enables
+  offline and evaluation harnesses like AARM to verify record chain integrity
+  (`r2t2.chain` and `r5t3.sqlite.*`) without starting a full server (#465).
+
 - CI's `bubblewrap` job installs bubblewrap on Linux, lets it make user
   namespaces as the systemd recipe's smoke does, and runs the terminal-runtime,
   server and CLI suites against it, so developer mode's real-sandbox tests
@@ -18,18 +29,17 @@ All notable changes are documented here. The format follows
   `transaction`, but waits for another process's write lock by awaiting a
   timer rather than blocking the event loop, for up to the same 5 seconds.
   Only the `BEGIN` is tried again, never `action`; a nested write or an async
-  `action` rolls back. Memory's writes and a task's executing, recovering
-  and settling writes use it; the other task and workflow writes do not yet
-  (#461).
+  `action` rolls back. Memory's writes and a task's writes use it; workflow
+  writes, and the task writes a workflow makes, do not yet (#461).
 
 ### Changed
 
-- A task's writes, from its start to the commit after its adapter ran, and
-  recovery's, now wait for another process's write lock by awaiting
-  `SqliteStore.write` instead of blocking the event loop in SQLite's busy
-  timeout. Other sessions keep running meanwhile, and a commit after an
-  adapter ran no longer fails at the busy timeout's edge and parks a task
-  that ran as `recovery_required` (#461).
+- A task's writes (its plan, approval, denial, cancel, start and verdict, the
+  commit after its adapter ran, and recovery's) now wait for another process's
+  write lock by awaiting `SqliteStore.write` instead of blocking the event loop
+  in SQLite's busy timeout. Other sessions keep running meanwhile, and a commit
+  after an adapter ran no longer fails at the busy timeout's edge and parks a
+  task that ran as `recovery_required` (#461).
 - CI's `framework-examples` job now also runs the LangChain, OpenAI Agents SDK
   and Vercel AI SDK snippets in `examples/frameworks` with `--no-model`, and
   fails unless each gets MELRA's capabilities back (#469). The Vercel AI SDK
@@ -57,7 +67,13 @@ All notable changes are documented here. The format follows
   meanwhile (#461). `LocalMemory.execute` is now async and returns a promise:
   code that imports `@melra/memory` directly must await it. Each write commits
   where it did before: a put and what it supersedes together, then the scope's
-  compaction.
+  compaction. A task's plan, cancel, approval, denial, verdict and refusal now
+  wait the same way: `TaskController`'s `plan`, `cancel`, `decide`, `deny`,
+  `judge`, `refuse` and `certify` return promises, and code that imports
+  `@melra/runtime-core` directly must await them. Each one's checks and its
+  write are one transaction, so a caller's open challenges are counted in the
+  write that adds one, and a cancel stops a task that started while it waited
+  for the lock.
 - **Breaking:** when a durable workflow run fails, its other forward steps
   still planned or waiting for approval are cancelled, with the error
   `workflow_failed:<workflow-id>`. Executing one directly, with its phrase or
@@ -76,6 +92,26 @@ All notable changes are documented here. The format follows
   budget for attached multi-tab contexts and wait for console pages to settle,
   preventing flaky `browser_approval_surface_check_unavailable` timeouts under
   heavy runner load (#495).
+- The HTTP server no longer sends an internal failure's message to the client.
+  It still answers MELRA's own refusal codes (`task_not_found`,
+  `approval_expired`, …) as before. Any other error, such as a SQLite or
+  file-system message that can name paths in the data directory, now answers
+  500 `internal_error` (`server_error` on the OAuth routes) and goes to the
+  server's stderr. A request body that is not JSON answers `invalid_json`, and
+  one that fails its schema answers `invalid_request`, instead of the parser's
+  or validator's message.
+- Verification reads made through the independent channel (`http_resource_matches`
+  and a registered verifier's `context.probe`) now stop when the task is cancelled
+  or its budget runs out, leaving the item inconclusive, instead of waiting out
+  the predicate's `timeoutMs` (#407). Registered verifiers can read the same
+  signal as `context.signal`. An HTTP mutation cut off by its budget now reports
+  `effect_outcome_unknown:task_budget_exhausted` rather than
+  `effect_outcome_unknown:task_cancelled`.
+
+- Standalone tasks left `awaiting_approval` past their challenge's expiry are
+  swept on start and on the recovery interval, moving to `cancelled` with error
+  `approval_expired`. Tasks with a recorded decision, and workflow step tasks
+  the workflow controller still re-asks, are left alone. (#462)
 
 ## [0.4.0-alpha.2] - 2026-10-28
 

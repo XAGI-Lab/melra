@@ -301,7 +301,7 @@ export class WorkflowController {
     if (this.tasks.enforced && approvals.length > 0) {
       throw "operator" in by
         ? new Error("approval_in_band_refused")
-        : this.tasks.refuse("approval_in_band_refused", { kind: "workflow", subjectId: workflowId, client: by.agent });
+        : await this.tasks.refuse("approval_in_band_refused", { kind: "workflow", subjectId: workflowId, client: by.agent });
     }
     // So is the agent's answer to a node that asks for an operator's: an
     // enforced kernel takes that one only out of band.
@@ -314,7 +314,7 @@ export class WorkflowController {
       );
       if (operatorNode !== undefined) {
         // Recorded without the node id, which is the definition's.
-        this.tasks.refuse("workflow_input_in_band_refused", { kind: "workflow", subjectId: workflowId, client: by.agent });
+        await this.tasks.refuse("workflow_input_in_band_refused", { kind: "workflow", subjectId: workflowId, client: by.agent });
         throw new Error(`workflow_input_in_band_refused:${operatorNode.id}`);
       }
     }
@@ -938,7 +938,7 @@ export class WorkflowController {
         // Read again: the listing can predate an approver starting it.
         const task = this.tasks.status(listed.id);
         if (task.status !== "planned" && task.status !== "awaiting_approval") return task;
-        this.tasks.cancel(task.id, reason);
+        this.tasks.cancelSync(task.id, reason);
         return this.tasks.status(task.id);
       });
   }
@@ -1314,7 +1314,7 @@ export class WorkflowController {
       // that then failed, a step's challenge read as a denial on a run that
       // went on, and the run unwound.
       const here = stopped.filter((taskId) => this.store.inFlight.has(taskId));
-      for (const taskId of stopped) this.tasks.cancel(taskId);
+      for (const taskId of stopped) this.tasks.cancelSync(taskId);
       // One running in this process is only told to stop. Its step is read
       // again once it has ended, as recorded: cancelled, or done all the same.
       // One running in another process, or whose process died, stays in
@@ -1789,7 +1789,7 @@ export class WorkflowController {
       // Planned only when its key holds no task at all.
       task =
         this.takenUp(key) ??
-        this.tasks.plan(request, { idempotencyKey: key, attempt: 1, ...step });
+        this.tasks.planSync(request, { idempotencyKey: key, attempt: 1, ...step });
     }
     // A challenge this run asked again after it expired leaves its first
     // attempt cancelled; when the advance that asked again did not commit, the
@@ -1817,11 +1817,11 @@ export class WorkflowController {
       // cancelled, so no cancel reads as a denial; it is asked again on a
       // later advance once there is room.
       if (planner !== undefined) this.tasks.assertChallengeRoom(planner);
-      const expired = this.tasks.cancel(task.id);
+      const expired = this.tasks.cancelSync(task.id);
       task =
         expired.status !== "cancelled"
           ? expired
-          : this.tasks.plan(request, {
+          : this.tasks.planSync(request, {
               idempotencyKey: key,
               attempt: (task.attempt ?? 1) + 1,
               ...step,
@@ -2225,7 +2225,7 @@ export class WorkflowController {
           // Every caller writes the run, so a step's certificate that
           // failed to write is written here rather than on a read.
           state.taskIds.every(
-            (taskId) => this.tasks.certify(taskId)?.result === "VERIFIED_SUCCESS",
+            (taskId) => this.tasks.certifySync(taskId)?.result === "VERIFIED_SUCCESS",
           )
         );
       })

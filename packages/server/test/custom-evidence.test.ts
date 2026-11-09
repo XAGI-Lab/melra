@@ -62,7 +62,7 @@ const write = (verifier: string, id: string) =>
   });
 
 async function run(verifier: string, id: string) {
-  const planned = runtime.controller.plan(write(verifier, id));
+  const planned = await runtime.controller.plan(write(verifier, id));
   return await runtime.controller.execute(
     planned.id,
     planned.approval && { approvalId: planned.approval.approvalId, phrase: planned.approval.phrase! },
@@ -87,12 +87,12 @@ describe("custom evidence", () => {
     expect((await run("row_exists", "r2")).task.status).toBe("partial");
   });
 
-  it("refuses at plan time a verifier this runtime does not have", () => {
-    expect(() => runtime.controller.plan(write("not_registered", "r3"))).toThrow(
+  it("refuses at plan time a verifier this runtime does not have", async () => {
+    await expect(runtime.controller.plan(write("not_registered", "r3"))).rejects.toThrow(
       "evidence_verifier_unavailable:not_registered",
     );
     // `custom` is not a way round a built-in's own schema.
-    expect(() => runtime.controller.plan(write("file_hash", "r4"))).toThrow(
+    await expect(runtime.controller.plan(write("file_hash", "r4"))).rejects.toThrow(
       "evidence_verifier_unavailable:file_hash",
     );
   });

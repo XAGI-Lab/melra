@@ -116,10 +116,12 @@ network, pass `allowInsecureHttp: true`. A wrong token fails `connect()` with
 `melra_unauthorized`.
 
 `execute()` and `advanceWorkflow()` wait up to 36 minutes for the server: a
-task's 15-minute budget cap, then up to 20 built-in evidence reads of a minute
-each. So the SDK does not give up on an effect the server is still running. Set
-`runTimeoutMs` in `connect()`, in whole milliseconds up to 2147483647, for what
-that does not cover:
+task's 15-minute budget cap, which also times the reads that verify its effect,
+then up to 20 evidence reads of a minute each that no budget times: a workflow
+delegation node's evidence, reconciliation, and workflow condition and loop
+reads. So the SDK does not give up on an effect the server is still running.
+Set `runTimeoutMs` in `connect()`, in whole milliseconds up to 2147483647, for
+what that does not cover:
 
 - custom verifiers and `file_hash` on a very large file, which have no time limit;
 - an `advanceWorkflow()` call that runs several tasks in turn: a loop's or a

@@ -3,9 +3,9 @@
 
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
-import { createServer, type AddressInfo } from "node:net";
-import { tmpdir } from "node:os";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { connect as netConnect, createServer, type AddressInfo } from "node:net";
+import { networkInterfaces, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { HOME_SECRETS, TerminalOperationSchema } from "@melra/protocol";
@@ -30,7 +30,7 @@ describe("sandbox generators", () => {
     ];
     // A quote in a path is escaped, so no path ends its string and adds a rule.
     const denied = '(deny file-read* file-write* (subpath "/d") (subpath "/q\\"x"))';
-    expect(seatbeltProfile(paths, { network: false, symlinks: false })).toBe(
+    expect(seatbeltProfile(paths, { network: false, symlinks: false, listen: false })).toBe(
       [...head, denied, "(deny file-write-create (vnode-type SYMLINK))"].join("\n"),
     );
     // IP and DNS, not every Unix socket: no SSH agent, no Docker daemon.
@@ -38,7 +38,11 @@ describe("sandbox generators", () => {
       '(allow network-outbound (remote ip) (literal "/private/var/run/mDNSResponder"))',
       "(allow network-inbound network-bind (local ip))",
     ];
-    expect(seatbeltProfile(paths, { network: true, symlinks: true })).toBe([...head, ...network, denied].join("\n"));
+    expect(seatbeltProfile(paths, { network: true, symlinks: true, listen: false })).toBe([...head, ...network, denied].join("\n"));
+    const listen = ['(allow network-inbound network-bind (local ip "localhost:*"))'];
+    expect(seatbeltProfile(paths, { network: false, symlinks: false, listen: true })).toBe(
+      [...head, ...listen, denied, "(deny file-write-create (vnode-type SYMLINK))"].join("\n"),
+    );
   });
 
   it("writes a bubblewrap argv that hides MELRA's files and the network", () => {
@@ -49,10 +53,10 @@ describe("sandbox generators", () => {
       "--tmpfs", "/d", "--ro-bind", "/dev/null", "/f",
       "--unshare-pid", "--die-with-parent", "--new-session",
     ];
-    expect(bwrapArgv(bwrap, { network: false, symlinks: false }, "/w/sub", ["/bin/ls", "-l"])).toEqual([
+    expect(bwrapArgv(bwrap, { network: false, symlinks: false, listen: false }, "/w/sub", ["/bin/ls", "-l"])).toEqual([
       ...mounts, "--unshare-net", "--seccomp", "3", "--chdir", "/w/sub", "--", "/bin/ls", "-l",
     ]);
-    expect(bwrapArgv(bwrap, { network: true, symlinks: true }, "/w", ["/bin/ls"])).toEqual([
+    expect(bwrapArgv(bwrap, { network: true, symlinks: true, listen: false }, "/w", ["/bin/ls"])).toEqual([
       ...mounts, "--chdir", "/w", "--", "/bin/ls",
     ]);
   });
@@ -211,7 +215,7 @@ const probed = await (async () => {
 describe.runIf(probed !== undefined)(`commands in the ${probed} sandbox`, () => {
   let base: string;
   let [workspace, temp, outside, data, home] = ["", "", "", "", ""];
-  let runtime: (allowance: { network: boolean; symlinks: boolean }) => Promise<TerminalRuntime>;
+  let runtime: (allowance: { network: boolean; symlinks: boolean; listen: boolean }) => Promise<TerminalRuntime>;
   let confined: TerminalRuntime;
   const node = async (script: string, within = confined) =>
     await within.execute(
@@ -234,7 +238,7 @@ describe.runIf(probed !== undefined)(`commands in the ${probed} sandbox`, () => 
     if (!("sandbox" in found)) throw new Error(found.problems.join("; "));
     const { sandbox } = found;
     runtime = (allowance) => TerminalRuntime.create({ root: workspace, sandbox, allowance: () => allowance });
-    confined = await runtime({ network: false, symlinks: false });
+    confined = await runtime({ network: false, symlinks: false, listen: false });
   });
   afterAll(async () => {
     await rm(base, { recursive: true, force: true });
@@ -275,7 +279,7 @@ describe.runIf(probed !== undefined)(`commands in the ${probed} sandbox`, () => 
     try {
       const refused = await node(connect);
       expect(refused.exitCode).toBe(3);
-      const allowed = await node(connect, await runtime({ network: true, symlinks: false }));
+      const allowed = await node(connect, await runtime({ network: true, symlinks: false, listen: false }));
       expect(allowed.stdout).toBe("hello");
     } finally {
       server.close();
@@ -292,7 +296,7 @@ describe.runIf(probed !== undefined)(`commands in the ${probed} sandbox`, () => 
       const result = await node(
         `require("net").connect(${JSON.stringify(path)}).on("data", (d) => { process.stdout.write(String(d)); process.exit(0); })` +
           `.on("error", (e) => { process.stdout.write(e.code); process.exit(3); })`,
-        await runtime({ network: true, symlinks: false }),
+        await runtime({ network: true, symlinks: false, listen: false }),
       );
       expect(result.stdout).toBe("EPERM");
     } finally {
@@ -316,12 +320,80 @@ describe.runIf(probed !== undefined)(`commands in the ${probed} sandbox`, () => 
     30_000,
   );
 
+  it.runIf(probed === "seatbelt")(
+    "lets a program named in sandbox.listen bind 0.0.0.0, reachable from the LAN, but route nowhere off the Mac",
+    async () => {
+      const bind =
+        `require("net").createServer().listen(0, "0.0.0.0", () => process.exit(0))` +
+        `.on("error", (e) => { process.stdout.write(e.code); process.exit(3); })`;
+      const refused = await node(bind);
+      expect([refused.exitCode, refused.stdout]).toEqual([3, "EPERM"]);
+
+      const listener = await runtime({ network: false, symlinks: false, listen: true });
+      expect((await node(bind, listener)).exitCode).toBe(0);
+
+      // Still no route off the Mac.
+      const out = await node(
+        `require("net").connect(80, "192.0.2.1").on("error", (e) => { process.stdout.write(e.code); process.exit(3); })`,
+        listener,
+      );
+      expect(out.stdout).toBe("EPERM");
+
+      const loopback = await node(
+        `require("net").connect(80, "127.0.0.1").on("error", (e) => { process.stdout.write(e.code); process.exit(3); })`,
+        listener,
+      );
+      expect(loopback.stdout).toBe("EPERM");
+
+      const lan = Object.values(networkInterfaces())
+        .flat()
+        .find((a) => a?.family === "IPv4" && !a.internal)?.address;
+      if (lan) {
+        const portFile = join(workspace, "port.txt");
+        await rm(portFile, { force: true });
+        const serveScript =
+          `const net = require("net"); const fs = require("fs"); ` +
+          `const server = net.createServer((c) => { c.end("pong"); server.close(); }); ` +
+          `server.listen(0, "0.0.0.0", () => { fs.writeFileSync(${JSON.stringify(portFile)}, String(server.address().port)); });`;
+        const serverPromise = node(serveScript, listener);
+
+        let port = 0;
+        for (let i = 0; i < 50; i++) {
+          if (existsSync(portFile)) {
+            const content = await readFile(portFile, "utf8");
+            if (content.length > 0) {
+              port = Number.parseInt(content, 10);
+              break;
+            }
+          }
+          await new Promise((r) => setTimeout(r, 100));
+        }
+        expect(port).toBeGreaterThan(0);
+
+        const reply = await new Promise<string>((resolve, reject) => {
+          const client = netConnect(port, lan, () => {});
+          let data = "";
+          client.on("data", (chunk) => {
+            data += chunk.toString();
+          });
+          client.on("end", () => resolve(data));
+          client.on("error", reject);
+        });
+        expect(reply).toBe("pong");
+
+        const serverResult = await serverPromise;
+        expect(serverResult.exitCode).toBe(0);
+      }
+    },
+    30_000,
+  );
+
   it("makes a symbolic link only where it is allowed one", async () => {
     const link = (name: string) => `require("fs").symlinkSync("made.txt", ${JSON.stringify(name)})`;
     const refused = await node(link("refused-link"));
     expect(refused.exitCode).not.toBe(0);
     expect(refused.stderr).toMatch(/EPERM/);
-    const allowed = await node(link("allowed-link"), await runtime({ network: false, symlinks: true }));
+    const allowed = await node(link("allowed-link"), await runtime({ network: false, symlinks: true, listen: false }));
     expect(allowed.exitCode).toBe(0);
   }, 30_000);
 
@@ -330,7 +402,8 @@ describe.runIf(probed !== undefined)(`commands in the ${probed} sandbox`, () => 
   it.runIf(spawnSync("npm", ["--version"]).status === 0)(
     "packs with npm, its cache in a folder of its own in temp that goes when the runtime closes",
     async () => {
-      const own = await runtime({ network: false, symlinks: false });
+      const own = await runtime({ network: false, symlinks: false, listen: false });
+
       await mkdir(join(workspace, "pack-me"));
       await writeFile(join(workspace, "pack-me", "package.json"), JSON.stringify({ name: "pack-me", version: "1.0.0" }));
       const where = await node("process.stdout.write(JSON.stringify([process.env.npm_config_cache, process.env.PNPM_HOME]))", own);
