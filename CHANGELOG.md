@@ -22,6 +22,7 @@ All notable changes are documented here. The format follows
   `docs/RELEASES.md` run it.
 ### Security
 
+- `melra_execute` accepts a decision holding the plain (unkeyed) render digest only for a challenge a 0.3.0-alpha.17 or alpha.18 process issued. A plain digest needs no payload key, so before, anyone able to write `melra.sqlite` without the key could plant a decision that ran a current challenge, recorded as an operator's out-of-band yes in enforced mode. A decision an older `melra approve` or `melra console` records for a newer challenge is now refused with `approval_render_mismatch`; decide it from a newer process.
 - A recorded approval is usable until the deadline stamped on it when it was made (decidedAt plus the TTL then in force, in a new append-only `approval_terms` table, migration 10), or a shorter TTL in force at execute. Raising `approvalTtlMs` or switching to a mode with a longer default no longer revives or lengthens a yes already given. A decision an older MELRA recorded is judged as before.
 - A workflow `approval` node over a step the policy would run with no challenge is refused at plan and again at advance (`workflow_approval_target_not_gated:<node>`), instead of completing as approved with nobody asked. Unsafe-local mode, which lifts every approval, passes it through as before.
 

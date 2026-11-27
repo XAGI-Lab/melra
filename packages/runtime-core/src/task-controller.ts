@@ -685,9 +685,11 @@ export class TaskController {
         );
       }
       if (decision !== undefined) {
-        // A row a 0.3.0-alpha.17 or alpha.18 `melra approve` or console wrote
-        // holds the plain digest of the same contract.
-        if (decision.renderDigest !== render && decision.renderDigest !== sha256(contract)) {
+        // `render` is the plain digest only for a challenge a 0.3.0-alpha.17
+        // or alpha.18 process issued (approvalRender); a current challenge's
+        // decision must hold the keyed one, which a writer of the database
+        // without the payload key cannot compute.
+        if (decision.renderDigest !== render) {
           // Sent by whoever recorded the decision, not by this caller.
           throw await this.refuse("approval_render_mismatch", {
             kind: "task",

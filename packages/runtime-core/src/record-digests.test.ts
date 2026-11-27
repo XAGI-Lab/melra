@@ -303,7 +303,11 @@ describe("a home shared with 0.3.0-alpha.17 or alpha.18", () => {
   });
 
   for (const mode of ["developer", "enforced"] as const) {
-    it(`accepts an older process's decision on a new challenge, and nothing else (${mode})`, async () => {
+    // An older `melra approve` records the plain digest. Accepted on a new
+    // (keyed) challenge before, it let anyone who could write the database
+    // without the payload key approve one; now only a challenge an older
+    // process issued takes the plain form.
+    it(`refuses an older process's decision on a new challenge, and a forged one (${mode})`, async () => {
       const { store, tasks, calls } = await setup({ mode });
       const decide = (taskId: string, approvalId: string, renderDigest: string) =>
         store.recordApprovalDecision({
@@ -315,17 +319,18 @@ describe("a home shared with 0.3.0-alpha.17 or alpha.18", () => {
           decidedAt: new Date().toISOString(),
         });
       const planned = await tasks.plan(pin);
-      const keyed = tasks.approvalView(planned.id).renderDigest;
       decide(planned.id, planned.approval!.approvalId, plainRender(store.getTask(planned.id)!, pin));
-      const done = await tasks.execute(planned.id);
-      expect(done.task.status).toBe("verified_success");
-      // What this kernel bound, not the row's plain form.
-      expect(done.task.approvedBy!.renderDigest).toBe(keyed);
-      expect(done.receipt!.policyDecision.approval!.renderDigest).toBe(keyed);
+      await expect(tasks.execute(planned.id)).rejects.toThrow("approval_render_mismatch");
 
       const forged = await tasks.plan(pin);
       decide(forged.id, forged.approval!.approvalId, "0".repeat(64));
       await expect(tasks.execute(forged.id)).rejects.toThrow("approval_render_mismatch");
+      expect(calls).toHaveLength(0);
+
+      // The keyed digest this version shows still runs it.
+      const keyed = await tasks.plan(pin);
+      decide(keyed.id, keyed.approval!.approvalId, tasks.approvalView(keyed.id).renderDigest);
+      expect((await tasks.execute(keyed.id)).task.status).toBe("verified_success");
       expect(calls).toHaveLength(1);
     });
   }
