@@ -306,6 +306,11 @@ export class TaskController {
     return this.policy.mode === "enforced";
   }
 
+  /** Whether unsafe-local mode has lifted every approval. */
+  get unhinged(): boolean {
+    return this.policy.unhinged;
+  }
+
   constructor(
     private readonly store: SqliteStore,
     private readonly policy: LocalPolicy,

@@ -20,6 +20,9 @@ All notable changes are documented here. The format follows
   recovers and the false-success and duplicate-execution rates are 0. CI's
   durable gates job, the release workflow and the maintainer checklist in
   `docs/RELEASES.md` run it.
+### Security
+
+- A workflow `approval` node over a step the policy would run with no challenge is refused at plan and again at advance (`workflow_approval_target_not_gated:<node>`), instead of completing as approved with nobody asked. Unsafe-local mode, which lifts every approval, passes it through as before.
 
 ## [0.4.0-alpha.3] - 2026-11-27
 

@@ -369,7 +369,7 @@ enforced process.
 | Node | Implemented semantics and bounds |
 |---|---|
 | `operation` | One governed task request |
-| `approval` | Plans the target operation and pauses for its exact scoped challenge |
+| `approval` | Plans the target operation and pauses for its exact scoped challenge; a node over a step the policy would run with no challenge is refused at plan and again at advance (`workflow_approval_target_not_gated`), except in unsafe-local mode, which lifts every approval |
 | `condition` | Re-verifies a persisted source result, then executes at most 50 requests from the selected branch |
 | `parallel` | Executes 2–20 independent branches concurrently, each with 1–50 sequential requests |
 | `bounded_loop` | Executes 1–50 body requests for at most 100 iterations and may stop on a persisted predicate |

@@ -1619,7 +1619,7 @@ describe("WorkflowController execution", () => {
     expect(run.nodes["undo-ship"]?.status).toBe("skipped");
   });
 
-  it("does not undo, on a later advance, a read its approval only let through", async () => {
+  it("does not undo, on a later advance, a step still parked for its approval", async () => {
     const calls: string[] = [];
     const { controller } = await setup(async (operation) => {
       if (operation.kind !== "http") throw new Error("unexpected_operation");
@@ -1636,22 +1636,16 @@ describe("WorkflowController execution", () => {
         nodes: [
           { id: "charge", type: "operation", request: call("Charge", `${PAYMENTS}/charges`) },
           { id: "approve-ship", type: "approval", forNodeId: "ship", dependsOn: ["charge"] },
-          {
-            id: "ship",
-            type: "operation",
-            dependsOn: ["approve-ship"],
-            // A read: policy lets the approval pass its task through planned.
-            request: TaskRequestSchema.parse({
-              goal: "Look up the shipment",
-              operation: { kind: "http", action: "request", method: "GET", url: `${LOGISTICS}/shipments` },
-            }),
-          },
+          // A mutation, so its approval node parks for a yes. (It was a read
+          // the approval passed through planned, unasked, before such a node
+          // was refused as not gated: workflow_approval_target_not_gated.)
+          { id: "ship", type: "operation", dependsOn: ["approve-ship"], request: call("Ship", `${LOGISTICS}/shipments`) },
           {
             id: "notify",
             type: "operation",
             dependsOn: ["charge"],
-            // A read too, so it fails in the wave the approval passes ship
-            // through, before ship is ever ready.
+            // A read, so it fails in the wave ship's approval parks in,
+            // before ship is ever approved.
             request: TaskRequestSchema.parse({
               goal: "Check the notification",
               operation: { kind: "http", action: "request", method: "GET", url: `${PAYMENTS}/notify` },

@@ -138,6 +138,16 @@ export class WorkflowController {
           throw new Error(`workflow_policy_blocked:${node.id}`);
         }
       }
+      // An approval node is a person's gate. Over a step the policy lets run
+      // with no challenge it asked nobody and still read as approved, so it
+      // is refused rather than shown as a yes no one gave. Unsafe-local mode,
+      // which lifts every approval, passes it through as before.
+      if (node.type === "approval" && !this.tasks.unhinged) {
+        const target = graph.nodes.get(node.forNodeId);
+        if (target?.type === "operation" && this.tasks.preflight(target.request).outcome === "allow") {
+          throw new Error(`workflow_approval_target_not_gated:${node.id}`);
+        }
+      }
       // A check no registered verifier can ask is never answered. Refused
       // here, as a step's evidence is, not found out mid-run with effects done.
       this.tasks.assertVerifiable(
@@ -1649,19 +1659,27 @@ export class WorkflowController {
         if (target === undefined || target.type !== "operation") {
           throw new Error(`workflow_approval_target_missing:${node.id}`);
         }
-        return await this.runTask(
-          target.request,
-          state.taskIds[0],
-          approvals,
-          by,
-          false,
-          {
-            workflowId: run.id,
-            nodeId: target.id,
-            iteration: 0,
-            branch: "operation",
-          },
-        );
+        const identity = { workflowId: run.id, nodeId: target.id, iteration: 0, branch: "operation" };
+        // Asked again here, as at plan: the run may advance under a policy or
+        // mode that no longer asks for this step, and a task planned with no
+        // challenge is not a yes. Checked before planning one, so a refused
+        // node leaves no runnable task behind, and after, for a task an
+        // earlier advance left.
+        const gated = !this.tasks.unhinged;
+        if (
+          gated &&
+          state.taskIds[0] === undefined &&
+          this.takenUp(taskIdempotencyKey(identity, target.request)) === undefined &&
+          this.tasks.preflight(target.request, { stored: true }).outcome === "allow"
+        ) {
+          throw new Error(`workflow_approval_target_not_gated:${node.id}`);
+        }
+        const advanced = await this.runTask(target.request, state.taskIds[0], approvals, by, false, identity);
+        const task = advanced.tasks[0];
+        if (gated && task?.status === "planned" && task.approval === undefined) {
+          throw new Error(`workflow_approval_target_not_gated:${node.id}`);
+        }
+        return advanced;
       }
       case "condition": {
         const sourceTaskId = run.nodes[node.sourceNodeId]?.taskIds[0];
