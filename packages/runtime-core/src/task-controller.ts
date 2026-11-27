@@ -1181,6 +1181,9 @@ export class TaskController {
     // right: a task that declared a semantic predicate stays parked with its
     // cause unchanged (#54).
     if (asksSemantic(request)) return { task };
+    // A read whose yes was spent on a dispatch cut off: nothing to ask a
+    // provider, and only a new plan and a new yes run it again.
+    if (task.error === "approval_consumed") return { task };
     if (request.reconciliation.length === 0) {
       return park("reconciliation_not_declared");
     }
@@ -1722,11 +1725,17 @@ export class TaskController {
       if (committed !== undefined) return committed.task;
     }
     const effect = classified.effect;
-    task.status = effect === "read" ? "planned" : "recovery_required";
+    // A read that ran on a person's yes spent it when it was dispatched: run
+    // again, one yes would send it twice. Parked for an operator, who plans
+    // it again for a new yes, rather than retried on the old one.
+    const consumed = effect === "read" && task.approvedBy !== undefined;
+    task.status = effect === "read" && !consumed ? "planned" : "recovery_required";
     task.error =
-      effect === "read"
-        ? "interrupted_read_ready_for_retry"
-        : "interrupted_mutation_requires_reconciliation";
+      effect !== "read"
+        ? "interrupted_mutation_requires_reconciliation"
+        : consumed
+          ? "approval_consumed"
+          : "interrupted_read_ready_for_retry";
     task.updatedAt = now();
     if (task.status === "recovery_required") task.parkedAt = task.updatedAt;
     // Cut off mid-flight, read or change, it may have run, so it is paid for
@@ -1737,7 +1746,7 @@ export class TaskController {
     // A crash mid-flight is the same unknown a dropped reply is, so a task
     // that declared how to settle one gets asked here rather than waiting for
     // someone to notice it. Still parked if the provider cannot answer.
-    if (task.status === "recovery_required" && request.reconciliation.length > 0) {
+    if (task.status === "recovery_required" && !consumed && request.reconciliation.length > 0) {
       return (await this.reconcile(task.id)).task;
     }
     return task;

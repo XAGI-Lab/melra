@@ -76,7 +76,9 @@ Node types: `operation`, `approval`, `condition`, `parallel`, `bounded_loop`,
   with `melra_workflow_advance` is refused (`workflow_input_in_band_refused`)
   and the node keeps waiting.
 - Workflow events and the current projection commit atomically.
-- Interrupted reads may retry. Mutations are never silently repeated: they
+- Interrupted reads may retry, except one that ran on an approval: it parks
+  as `recovery_required` (`approval_consumed`) for a new plan and a new yes,
+  so one yes never dispatches it twice. Mutations are never silently repeated: they
   reconcile from independent evidence — a file re-read, or a declared
   `reconciliation` predicate asking the provider — or enter `recovery_required`.
 - Compensations unwind newest effect first, one at a time, across as many

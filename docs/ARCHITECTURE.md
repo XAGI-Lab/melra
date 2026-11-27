@@ -540,7 +540,10 @@ interface is served.
 - Interrupted reads return to `planned` and may retry within their original
   budget and idempotency identity, unless the read had already verified and
   committed its key: then it recovers as `verified_success`
-  (`committed_before_interruption`) and is not run again.
+  (`committed_before_interruption`) and is not run again. A read that ran on
+  an approval spent that yes when it was dispatched: interrupted, it parks as
+  `recovery_required` (`approval_consumed`), which `execute` and `reconcile`
+  leave as it is, so running it again takes a new plan and a new yes.
 - A mutation in `verifying` may become `verified_success` only when all
   required predicates are independent filesystem observations
   (`file_exists`, `file_absent`, or `file_hash`) and its
