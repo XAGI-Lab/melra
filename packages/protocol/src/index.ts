@@ -1414,6 +1414,14 @@ export interface ApprovalDecision {
   channel: "in_band" | "out_of_band";
   approver: string;
   decidedAt: string;
+  /**
+   * The terms the decision was made under, fixed when it was made: until when
+   * it may be acted on, and the policy digest and mode then in force. Absent
+   * on a decision an older MELRA recorded.
+   */
+  usableUntil?: string;
+  policyDigest?: string;
+  mode?: "developer" | "enforced";
 }
 
 /** Why an operator said no to a challenge. */

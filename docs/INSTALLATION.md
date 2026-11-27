@@ -941,6 +941,8 @@ also bounds how long a task waits on a `semantic` question before it settles
 closed. A
 `policy.json` that `melra init` or `melra setup` wrote with an earlier release
 pins `"approvalTtlMs": 300000`; delete that key to get the mode's default.
+A change to `approvalTtlMs` applies to decisions made after it: one already
+made keeps the window it was given, or a shorter new one.
 
 A bare name in `allowedCommands` runs the program `PATH` finds there, looked
 up only in `PATH` entries outside the workspace: an entry inside it (a

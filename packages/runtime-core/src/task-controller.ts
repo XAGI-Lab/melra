@@ -700,8 +700,13 @@ export class TaskController {
         // developer-mode kernel cannot vouch that nothing the agent touched
         // wrote it, whatever mode the process that recorded it was in. The
         // digest is keyed, whichever form the row holds.
+        // The decision as an older MELRA reading this task knows it: its
+        // terms stay on the decision's own row.
         task.approvedBy = {
-          ...decision,
+          approvalId: decision.approvalId,
+          taskId: decision.taskId,
+          approver: decision.approver,
+          decidedAt: decision.decidedAt,
           renderDigest: bound,
           channel:
             decision.channel === "out_of_band" && this.policy.mode === "enforced"
@@ -1799,13 +1804,18 @@ export class TaskController {
       }
       if (Date.parse(task.approval!.expiresAt) <= Date.now()) throw new Error("approval_expired");
       if (renderDigest !== current) return undefined;
+      const decidedAt = now();
       const decision: ApprovalDecision = {
         approvalId: task.approval!.approvalId,
         taskId,
         renderDigest,
         channel: this.policy.mode === "enforced" ? "out_of_band" : "in_band",
         approver,
-        decidedAt: now(),
+        decidedAt,
+        // Fixed now, so a TTL raised later does not lengthen this yes.
+        usableUntil: new Date(Date.parse(decidedAt) + approvalTtl(this.policy)).toISOString(),
+        ...(this.policy.digest === undefined ? {} : { policyDigest: this.policy.digest }),
+        mode: this.policy.mode,
       };
       if (!this.store.recordApprovalDecision(decision)) throw new Error("approval_already_decided");
       return decision;
@@ -1929,10 +1939,15 @@ export class TaskController {
    */
   private usable(task: TaskRecord, decision: ApprovalDecision): boolean {
     const decidedAt = Date.parse(decision.decidedAt);
+    // The deadline stamped when the yes was given; a TTL lowered since
+    // shortens it, a TTL raised since does not lengthen it. A decision an
+    // older MELRA recorded has none, and is judged by the current TTL.
+    const current = decidedAt + approvalTtl(this.policy);
+    const until = decision.usableUntil === undefined ? current : Math.min(Date.parse(decision.usableUntil), current);
     return (
       task.approval !== undefined &&
       decidedAt <= Date.parse(task.approval.expiresAt) &&
-      Date.now() < decidedAt + approvalTtl(this.policy)
+      Date.now() < until
     );
   }
 

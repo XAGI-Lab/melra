@@ -211,6 +211,7 @@ MELRA uses `<MELRA_HOME>/melra.sqlite` in WAL mode. Schema migration version
 | `workflow_snapshots` | Validated checkpoint projections |
 | `idempotency_commits` | Unique committed logical task attempts |
 | `approval_decisions` | Operator approval decisions, one per challenge |
+| `approval_terms` | The terms each decision was made under (usable until, policy digest, mode), one per decision |
 | `approval_denials` | Operator denials with their reason and note, one per challenge |
 | `refusals` | Answers refused for their channel or for not matching, one per task or run and code |
 | `capability_usage` | Capability grant draws, one per grant and task |
@@ -838,7 +839,11 @@ read the task can read it. A decision recorded through an operator surface
 `out_of_band` only in enforced mode, and is bound to the render: a request that
 changed after it was shown cannot run on it.
 Decisions live in their own insert-once table, and one made before the
-challenge expired stays usable for a TTL after it was made. A no is recorded
+challenge expired stays usable for a TTL after it was made: the TTL in force
+when it was made, stamped beside it in `approval_terms` (migration `10`,
+append-only and chained like the decision), or a shorter one in force at
+execute. A TTL raised later does not lengthen a yes already given; a decision
+an older MELRA recorded, with no terms, is judged by the current TTL. A no is recorded
 the same way (`TaskController.deny`): once per challenge in `approval_denials`,
 with a reason, a redacted note MELRA never reads, the approver and the channel,
 and on the task it cancels as `denial`. The agent's own `melra_task_cancel`
