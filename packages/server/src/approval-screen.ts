@@ -153,6 +153,27 @@ export function approvalSummary(view: ApprovalScreenView): string {
 }
 
 /**
+ * The fields the summary does not show in full: an operation field with a
+ * value cut short or list entries left out, and the target or goal when cut.
+ * An approver who reads only the summary has not seen these, so a surface
+ * asks for the full contract to be looked at before a yes. Agent text that
+ * looks like a cut mark only adds a field here, never hides one.
+ */
+export function approvalElisions(view: ApprovalScreenView): string[] {
+  const found = new Set<string>();
+  for (const line of operationLines(view.contract.operation)) {
+    const more = /^…\(\+\d+ more (.+) entries, all in the JSON above\)$/.exec(line);
+    if (more !== null) found.add(more[1]!);
+    else if (/…\(\+\d+ chars\)/.test(line)) found.add(line.split(/[.[:]/, 1)[0]!);
+  }
+  const cut = (text: string, limit: number) => screened(text).length > limit;
+  if (cut(view.contract.capability, 60) || cut(view.contract.effect, 20) || cut(view.contract.risk, 20)) found.add("effect");
+  if (cut(view.contract.target, 160)) found.add("target");
+  if (cut(view.contract.metadata.goal, 200)) found.add("goal");
+  return [...found];
+}
+
+/**
  * The approval screen, ending with what MELRA itself vouches for: the full
  * contract first, so however long the agent's content runs it cannot push the
  * effect off the screen, then the summary right above the question. `terminal`

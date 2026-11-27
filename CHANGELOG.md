@@ -22,6 +22,7 @@ All notable changes are documented here. The format follows
   `docs/RELEASES.md` run it.
 ### Changed
 
+- When the approval summary cuts a value (160 characters) or leaves out list entries, `melra console` names the shortened fields and keeps Approve off until the full contract is opened, and the terminal prompt (`melra approve`, `melra run`) names them and asks a second y/N. The console's pending-approval payload carries them as `elided`, and `approvalElisions()` is exported beside `approvalSummary()`. Before, two contracts differing only past the shown prefix had identical summaries beside a live Approve.
 - `melra approve --yes` approves only with `--render <digest>`, the `renderDigest` of the contract the caller reviewed (`melra approve <id> --json` prints it). A bare `--yes` records nothing, prints the contract and the digest to pin, and exits 3; a digest that is not the task's contract is refused with `approval_render_mismatch`. `melra approve` takes a full task id or a prefix of at least eight characters (`task_id_too_short`). Before, `--yes` bound whatever contract the command read at that moment, so a prefix pasted from an agent's message, down to one character, approved a task nobody had seen.
 
 ### Security

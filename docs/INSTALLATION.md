@@ -2257,7 +2257,11 @@ one character, which would draw over the lines around them) as `\uXXXX`, as
 the terminal screen does. Approve and Deny show as not yet active, and ignore clicks, for a second
 after they appear and after the page is raised, refocused or scrolled (in a
 browser an agent's runtime is attached to, after it is scrolled or resized:
-see below).
+see below). The summary cuts a value at 160 characters and leaves out the
+middle of a long list; when it has cut or left out anything, the page names
+those fields and keeps Approve off until the full contract has been opened.
+`melra approve` and `melra run` name them too, and ask a second y/N before a
+yes covers what the summary did not show.
 
 An approve or a deny is a POST from that page: its `Origin` must be the
 console's own, it carries the session as `Authorization: Bearer`, its body is

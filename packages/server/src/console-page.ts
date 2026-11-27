@@ -663,15 +663,20 @@ async function approvalPanel(id, pending) {
   const drawn = { taskId: id, renderDigest: pending.renderDigest };
   const drawnAt = performance.now();
   const status = el("p", { role: "status" });
+  // A summary that cut or left out part of the contract is not the whole of
+  // what a yes covers: Approve stays off until the full contract is opened.
+  const elided = pending.elided ?? [];
+  let contractSeen = elided.length === 0;
   const answer = async (action, body) => {
     if (!settled(drawnAt)) return;
+    if (action === "approve" && !contractSeen) return;
     for (const button of buttons) button.disabled = true;
     const response = await fetch(path + action, { method: "POST",
       headers: { ...auth.headers, "content-type": "application/json" }, body: JSON.stringify(body ?? {}) }).catch(() => null);
     // The console stopped: nothing here can record a decision any more.
     if (response === null) { status.textContent = "Not sent: the console has stopped. Run 'melra console' again."; return; }
     const result = await response.json().catch(() => ({}));
-    if (!response.ok) for (const button of buttons) button.disabled = false;
+    if (!response.ok) for (const button of buttons) button.disabled = button === buttons[0] && !contractSeen;
     status.textContent = !response.ok ? "Refused: " + (result.error ?? response.status)
       : action === "deny" ? "Denied; the task is cancelled."
       : "Approved, " + human(result.decision.channel) + ". The agent's next call runs it.";
@@ -682,14 +687,20 @@ async function approvalPanel(id, pending) {
   const note = el("input", { type: "text", maxlength: 1000, placeholder: "Note (optional)", "aria-label": "Note with a deny" });
   const denial = () => ({ reason: reason.value, ...(note.value.trim() === "" ? {} : { note: note.value }) });
   const buttons = pending.decision ? [] : [
-    el("button", { type: "button", class: "filter", text: "Approve", "data-drawn": drawnAt, "aria-disabled": "true", onclick: () => answer("approve", drawn) }),
+    el("button", { type: "button", class: "filter", text: "Approve", "data-drawn": drawnAt, "aria-disabled": "true", disabled: !contractSeen, onclick: () => answer("approve", drawn) }),
     el("button", { type: "button", class: "filter", text: "Deny", "data-drawn": drawnAt, "aria-disabled": "true", onclick: () => answer("deny", denial()) }),
   ];
   showSettling();
   return el("div", { class: "section" }, el("h2", { text: "Approve this effect?" }),
     pending.mode === "enforced" ? null : el("div", { class: "callout", text: "Developer mode: this records an in-band decision, which an enforced server will not act on." }),
-    el("details", {}, el("summary", { text: "Full contract (JSON)" }),
+    el("details", { ontoggle: (event) => {
+      if (!event.target.open || contractSeen) return;
+      contractSeen = true;
+      if (buttons[0]) buttons[0].disabled = false;
+    } }, el("summary", { text: "Full contract (JSON)" }),
       el("pre", {}, pending.contract.split("\n").map((line) => el("span", { class: "line", text: line })))),
+    elided.length === 0 || pending.decision ? null : el("div", { class: "callout", role: "note",
+      text: "The summary below shortens " + elided.join(", ") + ". Open the full contract above to see all of it before approving." }),
     // One block per line, each with a hanging indent, here and in the contract
     // above: however agent text in a line wraps, the wrapped part starts
     // indented, so it can never stand at the left edge looking like a line
