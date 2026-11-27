@@ -14,7 +14,17 @@ All notable changes are documented here. The format follows
   and listen on localhost under Seatbelt on macOS. Under Seatbelt, commands
   without the `network` trait cannot open sockets; `sandbox.listen` permits
   dev servers and test runners to bind localhost, noting that under Seatbelt
-  a listener is reachable from the network on every address of the Mac. Closes [#471](https://github.com/XAGI-Lab/melra/issues/471).
+  a listener is reachable from the network on every address of the Mac.
+  Enforced mode refuses to start with `sandbox.listen` set
+  (`enforced_mode_refuses_sandbox_listen`), and `melra doctor` names the
+  listed commands. Under bubblewrap it changes nothing, since each command
+  already has a loopback of its own. Closes [#471](https://github.com/XAGI-Lab/melra/issues/471).
+- `BrowserRuntimeOptions.approvalSurfaceProbeTimeoutMs`: how long
+  `@melra/browser-runtime` waits for each other open tab to answer when it
+  looks for an approval surface before a `close` or `tab_switch` on an
+  attached browser, a whole number of milliseconds from 1 to 60,000 (default
+  1,000, as before). Anything else throws
+  `browser_approval_surface_probe_timeout_invalid` (#495).
 - `@melra/server` and `@melra/server/kernel` export `verifyRecords`, which opens
   the home's database read-only, loads the key with `mint: false`, and returns
   `verifyChain`'s result mapped to `{ ok, problems, report }`. This enables
@@ -35,20 +45,6 @@ All notable changes are documented here. The format follows
   writes, and the task writes a workflow makes, do not yet (#461).
 
 ### Changed
-
-- A task's writes (its plan, approval, denial, cancel, start and verdict, the
-  commit after its adapter ran, and recovery's) now wait for another process's
-  write lock by awaiting `SqliteStore.write` instead of blocking the event loop
-  in SQLite's busy timeout. Other sessions keep running meanwhile, and a commit
-  after an adapter ran no longer fails at the busy timeout's edge and parks a
-  task that ran as `recovery_required` (#461).
-- CI's `framework-examples` job now also runs the LangChain, OpenAI Agents SDK
-  and Vercel AI SDK snippets in `examples/frameworks` with `--no-model`, and
-  fails unless each gets MELRA's capabilities back (#469). The Vercel AI SDK
-  packages are pinned in that folder's `package.json` and lockfile; LangChain
-  and the OpenAI Agents SDK come from a new hashed
-  `requirements-frameworks.txt`, compiled from `requirements-frameworks.in`.
-  Dependabot keeps the folder's npm pins current.
 
 - **Breaking:** On a loopback listener, every route now refuses foreign `Host`
   headers with `421 Misdirected Request` before routing, and `/mcp` and
@@ -85,6 +81,24 @@ All notable changes are documented here. The format follows
   unchanged. A run that is `recovery_required` keeps its waiting steps until it
   fails. A run that failed before this version keeps them: cancel it with
   `melra workflow cancel` to close them (#487).
+- **Breaking:** `LocalPolicy.sandbox` in `@melra/policy-core` and
+  `SandboxAllowance` in `@melra/terminal-runtime` have a new required `listen`
+  field (#471). Code that builds either by hand must add it (`listen: []`,
+  `listen: false`). Policy files are unaffected: `sandbox.listen` is optional
+  there, and `createDefaultPolicy` fills it in.
+- A task's writes (its plan, approval, denial, cancel, start and verdict, the
+  commit after its adapter ran, and recovery's) now wait for another process's
+  write lock by awaiting `SqliteStore.write` instead of blocking the event loop
+  in SQLite's busy timeout. Other sessions keep running meanwhile, and a commit
+  after an adapter ran no longer fails at the busy timeout's edge and parks a
+  task that ran as `recovery_required` (#461).
+- CI's `framework-examples` job now also runs the LangChain, OpenAI Agents SDK
+  and Vercel AI SDK snippets in `examples/frameworks` with `--no-model`, and
+  fails unless each gets MELRA's capabilities back (#469). The Vercel AI SDK
+  packages are pinned in that folder's `package.json` and lockfile; LangChain
+  and the OpenAI Agents SDK come from a new hashed
+  `requirements-frameworks.txt`, compiled from `requirements-frameworks.in`.
+  Dependabot keeps the folder's npm pins current.
 
 ### Fixed
 
@@ -101,7 +115,7 @@ All notable changes are documented here. The format follows
   cancelled is not waited for (#467).
 - A running MELRA now seals an older MELRA's records at its 30 s recovery
   sweep, not only at the next start, so `melra audit verify` stops reporting
-  them as `unsealed_rows` within a sweep.
+  them as `unsealed_rows` within a sweep (#466).
 - The HTTP server no longer sends an internal failure's message to the client.
   It still answers MELRA's own refusal codes (`task_not_found`,
   `approval_expired`, …) as before. Any other error, such as a SQLite or
@@ -109,7 +123,7 @@ All notable changes are documented here. The format follows
   500 `internal_error` (`server_error` on the OAuth routes) and goes to the
   server's stderr. A request body that is not JSON answers `invalid_json`, and
   one that fails its schema answers `invalid_request`, instead of the parser's
-  or validator's message.
+  or validator's message (#503).
 - Verification reads made through the independent channel (`http_resource_matches`
   and a registered verifier's `context.probe`) now stop when the task is cancelled
   or its budget runs out, leaving the item inconclusive, instead of waiting out
