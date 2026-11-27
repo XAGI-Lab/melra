@@ -25,7 +25,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { WorkflowDefinitionSchema, type TaskRequest } from "@melra/protocol";
+import { WorkflowDefinitionSchema, type TaskRequestInput } from "@melra/protocol";
 import { createDefaultPolicy, type LocalPolicy } from "@melra/policy-core";
 import { SqliteStore } from "@melra/storage-sqlite";
 import { Verifier } from "@melra/verifier-core";
@@ -62,7 +62,7 @@ async function setup(mode: LocalPolicy["mode"]) {
 }
 
 // A read every mode's policy allows with no challenge.
-const read: TaskRequest = {
+const read: TaskRequestInput = {
   goal: "Read system info (gated behind an approval node by the author)",
   operation: { kind: "system", action: "info" },
   constraints: [],
@@ -83,7 +83,7 @@ const gated = WorkflowDefinitionSchema.parse({
   ],
 });
 
-const put: TaskRequest = {
+const put: TaskRequestInput = {
   goal: "Put a key (gated behind an approval node)",
   operation: { kind: "memory", action: "put", key: "ledger", value: "ledger" },
   constraints: [],
@@ -118,7 +118,7 @@ describe("WPY [workflow-approval-node]: an approval node over an ungated step is
     // Planned in enforced mode, where a GET to a host allowedDomains does not
     // name needs an operator; advanced by a process whose policy lists it.
     const { root, controller, store, dispatched } = await setup("enforced");
-    const fetch: TaskRequest = {
+    const fetch: TaskRequestInput = {
       ...read,
       goal: "Fetch a report (gated behind an approval node)",
       operation: { kind: "http", action: "request", method: "GET", url: "https://reports.example.test/q3" },
