@@ -1038,7 +1038,7 @@ export async function serveHttp(
     }
     const task = /^\/api\/tasks\/([^/]+)$/.exec(path);
     if (task?.[1] !== undefined) {
-      json(response, 200, runtime.controller.status(task[1]));
+      json(response, 200, runtime.controller.view(task[1]));
       return;
     }
     json(response, 404, { error: "not_found", path });

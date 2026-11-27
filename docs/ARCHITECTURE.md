@@ -875,7 +875,10 @@ task id, the action digest and the expiry, and nothing the agent could echo.
 `melra_execute` refuses any approval a caller sends
 (`approval_in_band_refused`) and runs only on an `out_of_band` decision;
 without one it answers `approval_awaiting_operator`, or `approval_expired` once
-the challenge has expired. An in-band decision row counts as none there, and a
+the challenge has expired. Once a usable decision is recorded the task still
+reads `awaiting_approval`, and `melra_task_status` and `GET /api/tasks/:id` add
+`approvalDecision` (channel, approver, decidedAt, usableUntil; no digest), so
+the agent learns it may call `melra_execute` with no approval. An in-band decision row counts as none there, and a
 developer-mode process asked to decide a task that has no phrase refuses
 (`approval_needs_enforced_mode`) rather than spend its one decision on a row
 the enforced kernel would ignore. The certificate

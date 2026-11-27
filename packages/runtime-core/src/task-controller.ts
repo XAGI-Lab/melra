@@ -561,6 +561,24 @@ export class TaskController {
   }
 
   /**
+   * The task as its agent reads it: `status`, plus `approvalDecision` while it
+   * awaits approval and a yes recorded for it is usable, so an agent waiting
+   * on an operator learns it may execute. Never saved. The render and policy
+   * digests stay out: the agent needs to know that it may run, not what to
+   * approve with.
+   */
+  view(taskId: string): TaskRecord {
+    const task = this.status(taskId);
+    const decision = task.status === "awaiting_approval" ? this.approvalDecision(task) : undefined;
+    if (decision === undefined) return task;
+    const { channel, approver, decidedAt, usableUntil } = decision;
+    return {
+      ...task,
+      approvalDecision: { channel, approver, decidedAt, ...(usableUntil === undefined ? {} : { usableUntil }) },
+    };
+  }
+
+  /**
    * Refuses an authenticated client a task someone else planned: an id is a
    * handle, not a credential. `caller` is as `callerRef` names it; the
    * operator is refused nothing, and an id naming no task is left for the

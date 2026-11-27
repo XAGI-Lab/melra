@@ -1947,7 +1947,9 @@ closing every door it owns:
   operator recorded from a process in enforced mode, with
   [`melra approve`](#approving-from-the-command-line),
   [`melra console`](#approving-in-a-browser) or `melra run`'s prompt in a
-  terminal; until then the answer is `approval_awaiting_operator`, and
+  terminal; until then the answer is `approval_awaiting_operator`, and once
+  it is recorded `melra_task_status` shows `approvalDecision` on the still
+  `awaiting_approval` task and a bare `melra_execute` runs it; the answer is
   `approval_expired` once the challenge has expired, which means plan the task
   again. A developer-mode `melra approve` on a task with no phrase records
   nothing and fails with `approval_needs_enforced_mode`. The same holds for an

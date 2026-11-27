@@ -1526,6 +1526,13 @@ export interface TaskRecord {
    */
   denial?: Pick<ApprovalDenial, "reason" | "note" | "channel" | "approver" | "decidedAt">;
   /**
+   * An approver's yes, recorded and usable now, on a task still
+   * `awaiting_approval`: `melra_execute` with no approval runs it. Added when
+   * the task is read (`melra_task_status`, `GET /api/tasks/:id`), never
+   * stored; once the task runs, `approvedBy` holds the decision instead.
+   */
+  approvalDecision?: Pick<ApprovalDecision, "channel" | "approver" | "decidedAt" | "usableUntil">;
+  /**
    * The deployment mode the effect ran under, written in that same save, so a
    * receipt or certificate written later by recovery or reconciliation in a
    * process deployed differently still says how the effect was governed.
