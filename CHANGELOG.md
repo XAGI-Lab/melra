@@ -6,6 +6,8 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0-alpha.3] - 2026-11-27
+
 ### Added
 
 - `sandbox.listen`: an opt-in list of commands in the policy file that may bind
@@ -120,6 +122,19 @@ All notable changes are documented here. The format follows
   swept on start and on the recovery interval, moving to `cancelled` with error
   `approval_expired`. Tasks with a recorded decision, and workflow step tasks
   the workflow controller still re-asks, are left alone. (#462)
+
+### Security
+
+- Raised the `hono` floor to `^4.13.16` and the `@hono/node-server` floor to
+  `^2.1.6` in the workspace overrides, for the moderate and low advisories
+  `pnpm audit --prod` reports against the copies the MCP SDK pulls in
+  ([GHSA-4h7h-rv7c-7m2v](https://github.com/advisories/GHSA-4h7h-rv7c-7m2v),
+  [GHSA-46wx-v44x-9hh2](https://github.com/advisories/GHSA-46wx-v44x-9hh2),
+  [GHSA-4m76-xfj5-7975](https://github.com/advisories/GHSA-4m76-xfj5-7975),
+  [GHSA-h7mg-cq63-vhpq](https://github.com/advisories/GHSA-h7mg-cq63-vhpq),
+  [GHSA-3gg2-335m-rxc6](https://github.com/advisories/GHSA-3gg2-335m-rxc6),
+  [GHSA-qv5m-9pm6-hqp3](https://github.com/advisories/GHSA-qv5m-9pm6-hqp3),
+  [GHSA-jpvv-r467-5p4w](https://github.com/advisories/GHSA-jpvv-r467-5p4w)).
 
 ## [0.4.0-alpha.2] - 2026-10-28
 
@@ -4575,7 +4590,8 @@ All notable changes are documented here. The format follows
 - Cross-scope memory overwrite and deletion protection.
 - Patched transitive HTTP adapter enforced through a package override.
 
-[Unreleased]: https://github.com/XAGI-Lab/melra/compare/v0.4.0-alpha.2...HEAD
+[Unreleased]: https://github.com/XAGI-Lab/melra/compare/v0.4.0-alpha.3...HEAD
+[0.4.0-alpha.3]: https://github.com/XAGI-Lab/melra/compare/v0.4.0-alpha.2...v0.4.0-alpha.3
 [0.4.0-alpha.2]: https://github.com/XAGI-Lab/melra/compare/v0.4.0-alpha.1...v0.4.0-alpha.2
 [0.4.0-alpha.1]: https://github.com/XAGI-Lab/melra/compare/v0.4.0-alpha.0...v0.4.0-alpha.1
 [0.4.0-alpha.0]: https://github.com/XAGI-Lab/melra/compare/v0.3.0-alpha.22...v0.4.0-alpha.0
