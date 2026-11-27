@@ -20,6 +20,10 @@ All notable changes are documented here. The format follows
   recovers and the false-success and duplicate-execution rates are 0. CI's
   durable gates job, the release workflow and the maintainer checklist in
   `docs/RELEASES.md` run it.
+### Changed
+
+- `melra approve --yes` approves only with `--render <digest>`, the `renderDigest` of the contract the caller reviewed (`melra approve <id> --json` prints it). A bare `--yes` records nothing, prints the contract and the digest to pin, and exits 3; a digest that is not the task's contract is refused with `approval_render_mismatch`. `melra approve` takes a full task id or a prefix of at least eight characters (`task_id_too_short`). Before, `--yes` bound whatever contract the command read at that moment, so a prefix pasted from an agent's message, down to one character, approved a task nobody had seen.
+
 ### Security
 
 - `melra_execute` accepts a decision holding the plain (unkeyed) render digest only for a challenge a 0.3.0-alpha.17 or alpha.18 process issued. A plain digest needs no payload key, so before, anyone able to write `melra.sqlite` without the key could plant a decision that ran a current challenge, recorded as an operator's out-of-band yes in enforced mode. A decision an older `melra approve` or `melra console` records for a newer challenge is now refused with `approval_render_mismatch`; decide it from a newer process.

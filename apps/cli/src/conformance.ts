@@ -126,8 +126,8 @@ export interface ConformanceOptions {
   claim?: number;
   /**
    * Records an operator's out-of-band yes to a task, for an endpoint in
-   * enforced mode. Defaults to this CLI's own `approve <id> --yes --mode
-   * enforced` when the suite spawned the server itself; any other endpoint has
+   * enforced mode. Defaults to this CLI's own `approve <id> --yes --render <digest>
+   * --mode enforced` when the suite spawned the server itself; any other endpoint has
    * no default, and so cannot earn L3 in enforced mode.
    */
   approve?: (taskId: string) => Promise<void>;
@@ -689,9 +689,17 @@ async function connect(
     options.approve ??
     (ownServer
       ? async (taskId: string) => {
-          await promisify(execFile)(process.execPath, [...self, "approve", taskId, "--yes", "--mode", "enforced"], {
-            env: { ...env, MELRA_APPROVER: "melra-conformance" },
-          });
+          const options = { env: { ...env, MELRA_APPROVER: "melra-conformance" } };
+          // --yes approves only a contract named by its digest: read it first
+          // (the review answers with exit 3 and the contract), then pin it.
+          const review = await promisify(execFile)(process.execPath, [...self, "approve", taskId, "--json", "--mode", "enforced"], options)
+            .then((result) => result.stdout, (error: { stdout?: string }) => error.stdout ?? "");
+          const { renderDigest } = JSON.parse(review) as { renderDigest: string };
+          await promisify(execFile)(
+            process.execPath,
+            [...self, "approve", taskId, "--yes", "--render", renderDigest, "--mode", "enforced"],
+            options,
+          );
         }
       : undefined);
   return { target: { transport: "stdio", command, args }, ...(approve === undefined ? {} : { approve }) };

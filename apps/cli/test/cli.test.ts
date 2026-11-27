@@ -229,7 +229,25 @@ describe("melra CLI", () => {
       });
       expect(server.store.getApprovalDecision(planned.approval!.approvalId)).toBeUndefined();
 
-      const approved = await execute(process.execPath, [entry, "approve", planned.id, "--yes"], {
+      // --yes alone approves nothing: it answers with the digest to pin.
+      const unpinned = (await execute(process.execPath, [entry, "approve", planned.id, "--yes"], { cwd: root, env }).catch(
+        (error: unknown) => error,
+      )) as { code: number; stdout: string };
+      expect(unpinned.code).toBe(3);
+      const reviewed = JSON.parse(asked.stdout).renderDigest as string;
+      expect(JSON.parse(unpinned.stdout)).toMatchObject({ renderDigest: reviewed, next: expect.stringContaining(`--render ${reviewed}`) });
+      expect(server.store.getApprovalDecision(planned.approval!.approvalId)).toBeUndefined();
+      // A digest that is not this contract's is refused, recorded nowhere.
+      await expect(
+        execute(process.execPath, [entry, "approve", planned.id, "--yes", "--render", "0".repeat(64)], { cwd: root, env }),
+      ).rejects.toMatchObject({ code: 1, stderr: expect.stringContaining("approval_render_mismatch") });
+      // A prefix shorter than eight characters names nothing.
+      await expect(
+        execute(process.execPath, [entry, "approve", planned.id.slice(0, 7), "--yes", "--render", reviewed], { cwd: root, env }),
+      ).rejects.toMatchObject({ code: 1, stderr: expect.stringContaining("task_id_too_short") });
+      expect(server.store.getApprovalDecision(planned.approval!.approvalId)).toBeUndefined();
+
+      const approved = await execute(process.execPath, [entry, "approve", planned.id.slice(0, 8), "--yes", "--render", reviewed], {
         cwd: root,
         env: { ...env, MELRA_APPROVER: "alice" },
       });
@@ -247,7 +265,7 @@ describe("melra CLI", () => {
       // A developer-mode yes would spend the one decision this enforced task
       // can have on a row its kernel refuses, so it is refused unrecorded.
       const developer = await plan();
-      const refused = (await execute(process.execPath, [entry, "approve", developer.id, "--yes"], {
+      const refused = (await execute(process.execPath, [entry, "approve", developer.id, "--yes", "--render", server.controller.approvalView(developer.id).renderDigest], {
         cwd: root,
         env: { ...env, MELRA_MODE: "" },
       }).catch((error: unknown) => error)) as { code: number; stderr: string };
@@ -319,7 +337,7 @@ describe("melra CLI", () => {
         MELRA_APPROVER: "alice",
         ...(await sandboxOptOut(base)),
       };
-      await execute(process.execPath, [entry, "approve", taskId, "--yes"], { cwd: root, env });
+      await execute(process.execPath, [entry, "approve", taskId, "--yes", "--render", server.controller.approvalView(taskId).renderDigest], { cwd: root, env });
       await execute(process.execPath, [entry, "workflow", "pause", run.id], { cwd: root, env });
       expect(server.workflows.events(run.id).at(-1)).toMatchObject({
         type: "workflow.paused",

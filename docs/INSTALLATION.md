@@ -2049,11 +2049,20 @@ decision bound to exactly what was shown; it does not run anything. The agent
 that planned the task runs it with `melra_execute`, and the decision lets it.
 
 ```bash
-melra approve 3f2a…        # shows the effect, asks y/N
-melra approve 3f2a… --yes  # no question, for a script that already decided
-melra approve 3f2a… --deny # cancel the task instead
-melra approve 3f2a… --deny --reason too_broad --note "Only report.txt"
+melra approve 3f2a91c0        # shows the effect, asks y/N
+melra approve 3f2a91c0 --json # off a terminal: prints the contract and its renderDigest, exit 3
+melra approve 3f2a91c0 --yes --render <renderDigest>  # no question, for a script that reviewed that contract
+melra approve 3f2a91c0 --deny # cancel the task instead
+melra approve 3f2a91c0 --deny --reason too_broad --note "Only report.txt"
 ```
+
+`--yes` asks nothing, so it approves only the contract named by `--render`,
+the `renderDigest` the review printed: a digest that is not the task's
+contract is refused (`approval_render_mismatch`) and nothing is recorded. A
+bare `--yes` decides nothing; it prints the contract and the digest to pin,
+and exits 3. The task id is the full id or a prefix of at least eight
+characters (`task_id_too_short`), so a one- or two-character prefix pasted
+from someone else's message names nothing.
 
 A deny records the operator's no and cancels the task in one write.
 `--reason` is one of `wrong_target`, `too_broad`, `not_now`, `never` and
