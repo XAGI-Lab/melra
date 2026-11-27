@@ -152,6 +152,10 @@ describe("operator approval decisions", () => {
   it("claims out of band only where the kernel running the effect enforces it", async () => {
     // One home, two processes: the server in developer mode, a shell in
     // enforced mode recording the decision. Or simply a row the agent wrote.
+    // A decision records the mode it was made in, so the developer server
+    // refuses the shell's (approval_policy_changed; it ran as in_band before);
+    // a row with no terms, as an older MELRA or the agent writes, is still
+    // only ever in band here.
     const developer = await setup();
     const enforced = new TaskController(
       developer.store,
@@ -162,7 +166,18 @@ describe("operator approval decisions", () => {
     );
     const planned = await developer.tasks.plan(put("ledger"));
     await enforced.decide(planned.id, enforced.approvalView(planned.id).renderDigest, "cli:test");
-    const done = await developer.tasks.execute(planned.id);
+    await expect(developer.tasks.execute(planned.id)).rejects.toThrow("approval_policy_changed");
+
+    const planted = await developer.tasks.plan(put("ledger-2"));
+    developer.store.recordApprovalDecision({
+      approvalId: planted.approval!.approvalId,
+      taskId: planted.id,
+      renderDigest: developer.tasks.approvalView(planted.id).renderDigest,
+      channel: "out_of_band",
+      approver: "cli:test",
+      decidedAt: new Date().toISOString(),
+    });
+    const done = await developer.tasks.execute(planted.id);
     expect(done.receipt?.policyDecision.approval?.channel).toBe("in_band");
     expect(done.certificate).toMatchObject({ mode: "developer", approvalChannel: "in_band" });
   });

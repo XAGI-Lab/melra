@@ -845,8 +845,12 @@ Decisions live in their own insert-once table, and one made before the
 challenge expired stays usable for a TTL after it was made: the TTL in force
 when it was made, stamped beside it in `approval_terms` (migration `10`,
 append-only and chained like the decision), or a shorter one in force at
-execute. A TTL raised later does not lengthen a yes already given; a decision
-an older MELRA recorded, with no terms, is judged by the current TTL. A no is recorded
+execute. A TTL raised later does not lengthen a yes already given. The terms
+also name the policy digest and mode the decision was made under, and a
+kernel running another refuses it with `approval_policy_changed` (a workflow
+node reads it as no decision), so the operator's shell and the server must
+load the same policy file. A decision an older MELRA recorded, with no terms,
+is judged by the current TTL and policy. A no is recorded
 the same way (`TaskController.deny`): once per challenge in `approval_denials`,
 with a reason, a redacted note MELRA never reads, the approver and the channel,
 and on the task it cancels as `denial`. The agent's own `melra_task_cancel`

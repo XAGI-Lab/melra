@@ -698,6 +698,7 @@ export class TaskController {
           });
         }
         if (!this.usable(task, decision)) throw new Error("approval_expired");
+        if (this.policyChanged(decision)) throw new Error("approval_policy_changed");
         // Out of band is this kernel's claim to make, not the row's: a
         // developer-mode kernel cannot vouch that nothing the agent touched
         // wrote it, whatever mode the process that recorded it was in. The
@@ -1937,11 +1938,20 @@ export class TaskController {
   approvalDecision(task: TaskRecord): ApprovalDecision | undefined {
     if (task.approval === undefined) return undefined;
     const decision = this.store.getApprovalDecision(task.approval.approvalId);
-    if (decision === undefined || !this.usable(task, decision)) return undefined;
+    if (decision === undefined || !this.usable(task, decision) || this.policyChanged(decision)) return undefined;
     // In enforced mode an in-band row is no decision at all, so a workflow node
     // waits for an operator and is re-planned at expiry instead of failing on
     // every advance.
     return this.policy.mode === "enforced" && decision.channel !== "out_of_band" ? undefined : decision;
+  }
+
+  /**
+   * Whether the policy or mode in force now is not the one the decision was
+   * made under: a yes is given under the rules then in force, and is not
+   * carried into others. A decision an older MELRA recorded names neither.
+   */
+  private policyChanged(decision: ApprovalDecision): boolean {
+    return decision.mode !== undefined && (decision.mode !== this.policy.mode || decision.policyDigest !== this.policy.digest);
   }
 
   /**

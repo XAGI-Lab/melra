@@ -720,10 +720,12 @@ describe("MELRA over real stdio transport", () => {
       expect(early.ok).toBe(false);
       expect(early.text).toContain("approval_awaiting_operator");
 
-      // The operator: another process on the same data directory.
+      // The operator: another process on the same data directory, under the
+      // same policy file (a decision is refused under any other).
       const operator = await createMelraRuntime({
         workspaceRoot: workspace,
         dataDirectory: home,
+        policyPath: policy,
         environment: { MELRA_MODE: "enforced" },
       });
       try {

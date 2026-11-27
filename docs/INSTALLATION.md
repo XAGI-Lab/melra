@@ -2056,6 +2056,11 @@ melra approve 3f2a91c0 --deny # cancel the task instead
 melra approve 3f2a91c0 --deny --reason too_broad --note "Only report.txt"
 ```
 
+A decision records the policy digest and mode it was made under, and a
+server running another policy file or mode refuses it with
+`approval_policy_changed`: run `melra approve` with the same `MELRA_POLICY`
+and `--mode` as the server.
+
 `--yes` asks nothing, so it approves only the contract named by `--render`,
 the `renderDigest` the review printed: a digest that is not the task's
 contract is refused (`approval_render_mismatch`) and nothing is recorded. A

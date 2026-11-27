@@ -196,10 +196,14 @@ describe("melra CLI", () => {
     const root = join(base, "workspace");
     await mkdir(root);
     const dataDirectory = join(base, "data");
+    // The server and the operator's shell load one policy file: a decision
+    // is refused under a policy other than the one it was made under.
+    const optOut = await sandboxOptOut(base);
     const server = await createMelraRuntime({
       workspaceRoot: root,
       dataDirectory,
       environment: { MELRA_MODE: "enforced" },
+      policyPath: optOut.MELRA_POLICY,
     });
     try {
       const plan = () =>
@@ -215,7 +219,7 @@ describe("melra CLI", () => {
         MELRA_HOME: dataDirectory,
         MELRA_WORKSPACE: root,
         MELRA_MODE: "enforced",
-        ...(await sandboxOptOut(base)),
+        ...optOut,
       };
 
       // Off a terminal and without --yes: shown, never decided.
@@ -307,7 +311,8 @@ describe("melra CLI", () => {
     const root = join(base, "workspace");
     await mkdir(root);
     const dataDirectory = join(base, "data");
-    const server = await createMelraRuntime({ workspaceRoot: root, dataDirectory, environment: { MELRA_MODE: "enforced" } });
+    const optOut = await sandboxOptOut(base);
+    const server = await createMelraRuntime({ workspaceRoot: root, dataDirectory, environment: { MELRA_MODE: "enforced" }, policyPath: optOut.MELRA_POLICY });
     try {
       const run = server.workflows.plan(
         WorkflowDefinitionSchema.parse({
@@ -335,7 +340,7 @@ describe("melra CLI", () => {
         MELRA_WORKSPACE: root,
         MELRA_MODE: "enforced",
         MELRA_APPROVER: "alice",
-        ...(await sandboxOptOut(base)),
+        ...optOut,
       };
       await execute(process.execPath, [entry, "approve", taskId, "--yes", "--render", server.controller.approvalView(taskId).renderDigest], { cwd: root, env });
       await execute(process.execPath, [entry, "workflow", "pause", run.id], { cwd: root, env });
