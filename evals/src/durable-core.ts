@@ -623,7 +623,7 @@ async function runScenario(
   }
 }
 
-async function implementationCommit(): Promise<string> {
+export async function implementationCommit(): Promise<string> {
   const { stdout } = await executeFile("git", ["rev-parse", "HEAD"], {
     cwd: repositoryRoot,
   });
@@ -654,7 +654,7 @@ async function readRawRuns(): Promise<DurableCoreRun[]> {
     .map((line) => JSON.parse(line) as DurableCoreRun);
 }
 
-async function assertPublishableWorktree(): Promise<void> {
+export async function assertPublishableWorktree(): Promise<void> {
   const { stdout } = await executeFile("git", ["status", "--porcelain"], {
     cwd: repositoryRoot,
   });

@@ -74,15 +74,27 @@ importers:
       '@melra/computer-runtime':
         specifier: workspace:*
         version: link:../packages/computer-runtime
+      '@melra/policy-core':
+        specifier: workspace:*
+        version: link:../packages/policy-core
       '@melra/protocol':
         specifier: workspace:*
         version: link:../packages/protocol
       '@melra/receipt-schema':
         specifier: workspace:*
         version: link:../packages/receipt-schema
+      '@melra/runtime-core':
+        specifier: workspace:*
+        version: link:../packages/runtime-core
       '@melra/server':
         specifier: workspace:*
         version: link:../packages/server
+      '@melra/storage-sqlite':
+        specifier: workspace:*
+        version: link:../packages/storage-sqlite
+      '@melra/verifier-core':
+        specifier: workspace:*
+        version: link:../packages/verifier-core
 
   packages/browser-runtime:
     dependencies:

@@ -1,0 +1,69 @@
+{
+  "schemaVersion": "1.0.0",
+  "suiteId": "melra-hosted-effects-v1",
+  "cases": [
+    {
+      "id": "accepted_with_message_id",
+      "fault": "the provider accepts the message and returns its id",
+      "expectedStatuses": ["verified_success"],
+      "expectedMaximumDispatches": 1,
+      "expectedDelivered": true
+    },
+    {
+      "id": "refused_before_sending",
+      "fault": "the provider refuses before sending; the host tries again under the same key",
+      "expectedStatuses": ["failed", "verified_success"],
+      "expectedMaximumDispatches": 2,
+      "expectedDelivered": true
+    },
+    {
+      "id": "unknown_then_reconciled_found",
+      "fault": "no answer after dispatch; the provider's record shows the message",
+      "expectedStatuses": ["recovery_required", "verified_success"],
+      "expectedMaximumDispatches": 1,
+      "expectedDelivered": true
+    },
+    {
+      "id": "unknown_then_reconciled_absent",
+      "fault": "no answer after dispatch; the provider's record has no such message",
+      "expectedStatuses": ["recovery_required", "failed"],
+      "expectedMaximumDispatches": 1,
+      "expectedDelivered": false
+    },
+    {
+      "id": "unknown_then_reconcile_unreachable",
+      "fault": "no answer after dispatch; the provider's record cannot be read",
+      "expectedStatuses": ["recovery_required", "recovery_required", "recovery_required"],
+      "expectedMaximumDispatches": 1,
+      "expectedDelivered": true
+    },
+    {
+      "id": "crash_after_dispatch",
+      "fault": "the host process dies after dispatch, before the provider answers",
+      "expectedStatuses": ["verified_success", "cancelled"],
+      "expectedMaximumDispatches": 1,
+      "expectedDelivered": true
+    },
+    {
+      "id": "duplicate_after_success",
+      "fault": "the host plans the same send again under the same key after it verified",
+      "expectedStatuses": ["verified_success", "cancelled"],
+      "expectedMaximumDispatches": 1,
+      "expectedDelivered": true
+    },
+    {
+      "id": "accepted_then_bounced",
+      "fault": "the provider returns a message id with an error acknowledgement",
+      "expectedStatuses": ["partial"],
+      "expectedMaximumDispatches": 1,
+      "expectedDelivered": false
+    },
+    {
+      "id": "async_plan_awaited",
+      "fault": "the host executes a plan it did not await, then the awaited one",
+      "expectedStatuses": ["refused", "verified_success"],
+      "expectedMaximumDispatches": 1,
+      "expectedDelivered": true
+    }
+  ]
+}

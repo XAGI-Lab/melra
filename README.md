@@ -720,6 +720,7 @@ an official OSWorld, WebArena or LongMemEval submission.
 # the full validation gate
 pnpm check && pnpm evals && pnpm e2e && pnpm pack:check && pnpm security:audit
 pnpm --filter @melra/evals evaluate:durable-core -- --publishable
+pnpm --filter @melra/evals evaluate:hosted-effects -- --publishable
 
 # memory, browser, terminal and computer microbenchmarks
 pnpm benchmark:core

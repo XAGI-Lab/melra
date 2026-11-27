@@ -11,13 +11,18 @@
     "evaluate": "tsx src/runner.ts",
     "evaluate:durable-core": "node dist/durable-core.js run",
     "summarize:durable-core": "node dist/durable-core.js summarize",
+    "evaluate:hosted-effects": "node dist/hosted-effects.js run",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.test.json"
   },
   "dependencies": {
     "@melra/computer-runtime": "workspace:*",
+    "@melra/policy-core": "workspace:*",
     "@melra/protocol": "workspace:*",
     "@melra/receipt-schema": "workspace:*",
-    "@melra/server": "workspace:*"
+    "@melra/runtime-core": "workspace:*",
+    "@melra/server": "workspace:*",
+    "@melra/storage-sqlite": "workspace:*",
+    "@melra/verifier-core": "workspace:*"
   }
 }
