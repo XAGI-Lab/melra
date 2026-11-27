@@ -4,7 +4,7 @@
 import { z } from "zod";
 
 export const PROTOCOL_VERSION = "2025-11-25";
-export const PRODUCT_VERSION = "0.4.0-alpha.2";
+export const PRODUCT_VERSION = "0.4.0-alpha.3";
 
 const boundedPath = z.string().min(1).max(4096);
 const boundedText = z.string().max(200_000);
