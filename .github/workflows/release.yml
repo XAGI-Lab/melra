@@ -66,6 +66,7 @@ jobs:
       - run: pnpm security:audit
       - run: pnpm evals
       - run: pnpm --filter @melra/evals evaluate:durable-core -- --publishable
+      - run: pnpm --filter @melra/evals evaluate:hosted-effects -- --publishable
       - run: pnpm pack:check
       - name: Validate tag and package versions
         shell: bash

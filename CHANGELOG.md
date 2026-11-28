@@ -6,6 +6,21 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- A hosted-effects evaluation, `pnpm --filter @melra/evals
+  evaluate:hosted-effects`, for effects an embedding host runs through its
+  own executor and registered custom verifiers on a `TaskController` it
+  builds itself, which the built-in-adapter evaluations cannot reach. Nine
+  synthetic cases against a fake messaging provider (accepted, refused before
+  sending and retried, outcome unknown then reconciled found, absent or
+  unreadable, crash after dispatch, duplicate attempt after success, bounced
+  acknowledgement, un-awaited `plan`), from a manifest pinned by digest
+  (`evals/manifests/hosted-effects-v1.json`). It fails unless every case
+  recovers and the false-success and duplicate-execution rates are 0. CI's
+  durable gates job, the release workflow and the maintainer checklist in
+  `docs/RELEASES.md` run it.
+
 ## [0.4.0-alpha.3] - 2026-11-27
 
 ### Added

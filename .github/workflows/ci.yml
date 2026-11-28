@@ -101,8 +101,9 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - run: pnpm e2e
-      - run: pnpm --filter @melra/evals test -- durable-core.test.ts
+      - run: pnpm --filter @melra/evals test -- durable-core.test.ts hosted-effects.test.ts
       - run: pnpm --filter @melra/evals evaluate:durable-core -- --publishable
+      - run: pnpm --filter @melra/evals evaluate:hosted-effects -- --publishable
       - run: pnpm pack:check
 
   # The framework examples that run with no model and no API key, as a user

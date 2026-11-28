@@ -21,6 +21,7 @@ alpha once betas begin.
    package.
 2. Run `pnpm check`, `pnpm evals`,
    `pnpm --filter @melra/evals evaluate:durable-core -- --publishable`,
+   `pnpm --filter @melra/evals evaluate:hosted-effects -- --publishable`,
    `pnpm e2e`, `pnpm pack:check`, and `pnpm security:audit`.
 3. Build the image, run `melra doctor`, then run `pnpm docker:smoke` to
    exercise an actual stdio MCP session inside the hardened container.

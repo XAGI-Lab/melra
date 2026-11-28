@@ -67,6 +67,17 @@ eight scenarios, crash points and terminal classes, except that three restart
 scenarios no longer expect a `workflow.recovered` event, which recovery stopped
 recording for a run it leaves as it was (#406).
 
+The hosted-effects manifest (`evals/manifests/hosted-effects-v1.json`, pinned
+by digest in `evals/src/hosted-effects.ts`) covers effects an embedding host
+runs itself: a `TaskController` built over the host's own executor and
+registered custom verifiers, against a fake provider. Its nine synthetic
+cases are an accepted send, a refusal before sending retried under the same
+key, an unanswered send that reconciliation finds, does not find, or cannot
+read, a crash after dispatch, a duplicate attempt after success, a bounced
+acknowledgement, and an un-awaited `plan`. It fails unless every case ends as
+the manifest expects, with a false-success rate and a duplicate-execution rate
+of 0.
+
 ### Local candidate artifacts
 
 The following artifacts were built from signed commit `72f7e21`. They are
@@ -163,6 +174,7 @@ pnpm check
 pnpm evals
 pnpm conformance
 pnpm --filter @melra/evals evaluate:durable-core -- --publishable
+pnpm --filter @melra/evals evaluate:hosted-effects -- --publishable
 pnpm e2e
 pnpm pack:check
 pnpm security:audit
