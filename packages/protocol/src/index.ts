@@ -1414,6 +1414,14 @@ export interface ApprovalDecision {
   channel: "in_band" | "out_of_band";
   approver: string;
   decidedAt: string;
+  /**
+   * The terms the decision was made under, fixed when it was made: until when
+   * it may be acted on, and the policy digest and mode then in force. Absent
+   * on a decision an older MELRA recorded.
+   */
+  usableUntil?: string;
+  policyDigest?: string;
+  mode?: "developer" | "enforced";
 }
 
 /** Why an operator said no to a challenge. */
@@ -1517,6 +1525,13 @@ export interface TaskRecord {
    * agent cancelled has none.
    */
   denial?: Pick<ApprovalDenial, "reason" | "note" | "channel" | "approver" | "decidedAt">;
+  /**
+   * An approver's yes, recorded and usable now, on a task still
+   * `awaiting_approval`: `melra_execute` with no approval runs it. Added when
+   * the task is read (`melra_task_status`, `GET /api/tasks/:id`), never
+   * stored; once the task runs, `approvedBy` holds the decision instead.
+   */
+  approvalDecision?: Pick<ApprovalDecision, "channel" | "approver" | "decidedAt" | "usableUntil">;
   /**
    * The deployment mode the effect ran under, written in that same save, so a
    * receipt or certificate written later by recovery or reconciliation in a

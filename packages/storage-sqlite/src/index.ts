@@ -198,6 +198,10 @@ const CHAINED = {
     key: ["idempotency_key"],
     columns: ["idempotency_key", "task_id", "attempt", "committed_at"],
   },
+  approval_terms: {
+    key: ["approval_id"],
+    columns: ["approval_id", "usable_until", "policy_digest", "mode"],
+  },
 } as const;
 type ChainedTable = keyof typeof CHAINED;
 
@@ -674,6 +678,24 @@ export class SqliteStore {
       CREATE INDEX IF NOT EXISTS certificate_history_certificate ON certificate_history(certificate_id);
       ${appendOnly("record_chain")}
       ${keyedOnce("record_chain", "record_table = NEW.record_table AND record_key = NEW.record_key", "ABORT, 'record_append_only'")}
+    `,
+    );
+    // Migration 10: the terms a decision was made under, fixed when it is
+    // made: until when it may be acted on, and the policy and mode that
+    // governed it. Beside the decision rather than in it, so the decision's
+    // chained digest and an older MELRA's writes stay as they were; a
+    // decision with no terms (an older MELRA's) is judged as before.
+    this.applyMigration(
+      10,
+      `
+      CREATE TABLE IF NOT EXISTS approval_terms (
+        approval_id TEXT PRIMARY KEY,
+        usable_until TEXT NOT NULL,
+        policy_digest TEXT,
+        mode TEXT NOT NULL
+      );
+      ${appendOnly("approval_terms")}
+      ${keyedOnce("approval_terms", "approval_id = NEW.approval_id", "IGNORE")}
     `,
     );
   }
@@ -1778,28 +1800,51 @@ export class SqliteStore {
       decision.approver,
       decision.decidedAt,
     ];
-    return this.sealing("approval_decisions", values, (bound) => {
-      const result = this.database
-        .prepare(`
-          INSERT OR IGNORE INTO approval_decisions(
-            approval_id, task_id, render_digest, channel, approver, decided_at
-          )
-          VALUES (?, ?, ?, ?, ?, ?)
-        `)
-        .run(...bound);
-      return Number(result.changes) === 1;
+    return this.joined(() => {
+      const recorded = this.sealing("approval_decisions", values, (bound) => {
+        const result = this.database
+          .prepare(`
+            INSERT OR IGNORE INTO approval_decisions(
+              approval_id, task_id, render_digest, channel, approver, decided_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+          `)
+          .run(...bound);
+        return Number(result.changes) === 1;
+      });
+      if (recorded && decision.usableUntil !== undefined && decision.mode !== undefined) {
+        const terms = [decision.approvalId, decision.usableUntil, decision.policyDigest ?? null, decision.mode];
+        this.sealing("approval_terms", terms, (bound) =>
+          this.database
+            .prepare("INSERT OR IGNORE INTO approval_terms(approval_id, usable_until, policy_digest, mode) VALUES (?, ?, ?, ?)")
+            .run(...bound),
+        );
+      }
+      return recorded;
     });
   }
 
   getApprovalDecision(approvalId: string): ApprovalDecision | undefined {
-    return this.database
+    const row = this.database
       .prepare(`
-        SELECT approval_id AS approvalId, task_id AS taskId,
-          render_digest AS renderDigest, channel, approver,
-          decided_at AS decidedAt
-        FROM approval_decisions WHERE approval_id = ?
+        SELECT d.approval_id AS approvalId, d.task_id AS taskId,
+          d.render_digest AS renderDigest, d.channel, d.approver,
+          d.decided_at AS decidedAt, t.usable_until AS usableUntil,
+          t.policy_digest AS policyDigest, t.mode
+        FROM approval_decisions d
+        LEFT JOIN approval_terms t ON t.approval_id = d.approval_id
+        WHERE d.approval_id = ?
       `)
-      .get(approvalId) as ApprovalDecision | undefined;
+      .get(approvalId) as (ApprovalDecision & Record<"usableUntil" | "policyDigest" | "mode", string | null>) | undefined;
+    if (row === undefined) return undefined;
+    // Only what was recorded: a decision with no terms reads as before.
+    const { usableUntil, policyDigest, mode, ...decision } = row;
+    return {
+      ...decision,
+      ...(usableUntil === null ? {} : { usableUntil }),
+      ...(policyDigest === null ? {} : { policyDigest }),
+      ...(mode === null ? {} : { mode: mode as NonNullable<ApprovalDecision["mode"]> }),
+    };
   }
 
   /** False when this challenge already has a denial. */

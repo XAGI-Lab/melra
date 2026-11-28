@@ -211,6 +211,7 @@ MELRA uses `<MELRA_HOME>/melra.sqlite` in WAL mode. Schema migration version
 | `workflow_snapshots` | Validated checkpoint projections |
 | `idempotency_commits` | Unique committed logical task attempts |
 | `approval_decisions` | Operator approval decisions, one per challenge |
+| `approval_terms` | The terms each decision was made under (usable until, policy digest, mode), one per decision |
 | `approval_denials` | Operator denials with their reason and note, one per challenge |
 | `refusals` | Answers refused for their channel or for not matching, one per task or run and code |
 | `capability_usage` | Capability grant draws, one per grant and task |
@@ -369,7 +370,7 @@ enforced process.
 | Node | Implemented semantics and bounds |
 |---|---|
 | `operation` | One governed task request |
-| `approval` | Plans the target operation and pauses for its exact scoped challenge |
+| `approval` | Plans the target operation and pauses for its exact scoped challenge; a node over a step the policy would run with no challenge is refused at plan and again at advance (`workflow_approval_target_not_gated`), except in unsafe-local mode, which lifts every approval |
 | `condition` | Re-verifies a persisted source result, then executes at most 50 requests from the selected branch |
 | `parallel` | Executes 2–20 independent branches concurrently, each with 1–50 sequential requests |
 | `bounded_loop` | Executes 1–50 body requests for at most 100 iterations and may stop on a persisted predicate |
@@ -539,7 +540,10 @@ interface is served.
 - Interrupted reads return to `planned` and may retry within their original
   budget and idempotency identity, unless the read had already verified and
   committed its key: then it recovers as `verified_success`
-  (`committed_before_interruption`) and is not run again.
+  (`committed_before_interruption`) and is not run again. A read that ran on
+  an approval spent that yes when it was dispatched: interrupted, it parks as
+  `recovery_required` (`approval_consumed`), which `execute` and `reconcile`
+  leave as it is, so running it again takes a new plan and a new yes.
 - A mutation in `verifying` may become `verified_success` only when all
   required predicates are independent filesystem observations
   (`file_exists`, `file_absent`, or `file_hash`) and its
@@ -838,7 +842,15 @@ read the task can read it. A decision recorded through an operator surface
 `out_of_band` only in enforced mode, and is bound to the render: a request that
 changed after it was shown cannot run on it.
 Decisions live in their own insert-once table, and one made before the
-challenge expired stays usable for a TTL after it was made. A no is recorded
+challenge expired stays usable for a TTL after it was made: the TTL in force
+when it was made, stamped beside it in `approval_terms` (migration `10`,
+append-only and chained like the decision), or a shorter one in force at
+execute. A TTL raised later does not lengthen a yes already given. The terms
+also name the policy digest and mode the decision was made under, and a
+kernel running another refuses it with `approval_policy_changed` (a workflow
+node reads it as no decision), so the operator's shell and the server must
+load the same policy file. A decision an older MELRA recorded, with no terms,
+is judged by the current TTL and policy. A no is recorded
 the same way (`TaskController.deny`): once per challenge in `approval_denials`,
 with a reason, a redacted note MELRA never reads, the approver and the channel,
 and on the task it cancels as `denial`. The agent's own `melra_task_cancel`
@@ -863,7 +875,10 @@ task id, the action digest and the expiry, and nothing the agent could echo.
 `melra_execute` refuses any approval a caller sends
 (`approval_in_band_refused`) and runs only on an `out_of_band` decision;
 without one it answers `approval_awaiting_operator`, or `approval_expired` once
-the challenge has expired. An in-band decision row counts as none there, and a
+the challenge has expired. Once a usable decision is recorded the task still
+reads `awaiting_approval`, and `melra_task_status` and `GET /api/tasks/:id` add
+`approvalDecision` (channel, approver, decidedAt, usableUntil; no digest), so
+the agent learns it may call `melra_execute` with no approval. An in-band decision row counts as none there, and a
 developer-mode process asked to decide a task that has no phrase refuses
 (`approval_needs_enforced_mode`) rather than spend its one decision on a row
 the enforced kernel would ignore. The certificate

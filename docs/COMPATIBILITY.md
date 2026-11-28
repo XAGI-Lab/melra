@@ -185,8 +185,13 @@ keep their plain digests, and older certificates verify unchanged.
 
 In a home shared with `0.3.0-alpha.17` or `0.3.0-alpha.18`, a newer process
 still runs a challenge an older one issued, and accepts a decision an older
-`melra approve` or `melra console` recorded, until the challenge expires; it
-shows such a challenge the digest the older executor checks. A decision it
+`melra approve` or `melra console` recorded for it, until the challenge
+expires; it shows such a challenge the digest the older executor checks. A
+decision an older `melra approve` or `melra console` records for a challenge a
+newer process issued holds the plain digest, and is refused with
+`approval_render_mismatch`: a plain digest needs no payload key, so accepting
+it let anyone able to write the database approve a current challenge. Decide
+those from a newer process. A decision it
 records for that challenge keeps that plain render digest, so an older
 executor accepts it; the task's `approvedBy` and its receipt hold the keyed
 one. The reverse fails closed: an

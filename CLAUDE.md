@@ -228,7 +228,7 @@ Invariants worth knowing before touching this code:
 - Events are append-only and ordered; projections and snapshots are derived. Read state through `status()`/`events()` rather than querying tables directly.
 - Exact workflow definitions and adapter results are sealed with AES-256-GCM (`payload-cipher.ts`) bound to record identity and purpose. Keys come from `MELRA_PAYLOAD_KEY` or a mode-`0600` file (`packages/server/src/payload-key.ts`); permissive key files fail closed.
 
-All of this lives in SQLite migrations 1–9 (`packages/storage-sqlite/src/index.ts`).
+All of this lives in SQLite migrations 1–10 (`packages/storage-sqlite/src/index.ts`).
 Migration 7's triggers make receipts, workflow events, approval decisions, grant draws,
 idempotency commits and `certificate_history` append-only and let a certificate change only
 in place on its own task (`record_append_only`), and migration 8 adds `approval_denials` and

@@ -282,7 +282,7 @@ export const SERVER_INSTRUCTIONS = [
  * unchanged byte for byte.
  */
 const ENFORCED_APPROVAL =
-  "Enforced mode: a challenge has no phrase and you cannot approve it. Anything you send as an approval is refused (approval_in_band_refused). An operator approves with `melra approve <taskId>` outside this conversation; until then melra_execute answers approval_awaiting_operator and melra_task_status keeps showing awaiting_approval, so call melra_execute again later: only the operator's decision lets this task run. Do not reach the same effect through another tool. approval_expired means plan the task again. No verdict you send is recorded as a verdict: one on a question still waiting is refused (judgement_in_band_refused); an operator judges with `melra judge <taskId> --judgement <judgementId> --verdict yes|no|cannot_tell`. A workflow's human_input node whose answeredBy is operator is answered only by an operator, with `melra workflow advance <workflowId> --input <nodeId>=<value>`; an answer you send for one is refused (workflow_input_in_band_refused).";
+  "Enforced mode: a challenge has no phrase and you cannot approve it. Anything you send as an approval is refused (approval_in_band_refused). An operator approves with `melra approve <taskId>` outside this conversation; until then melra_execute answers approval_awaiting_operator. Once the operator has approved, melra_task_status still shows awaiting_approval and adds approvalDecision (who approved and until when): then call melra_execute again with no approval. Only the operator's decision lets this task run. Do not reach the same effect through another tool. approval_expired means plan the task again. No verdict you send is recorded as a verdict: one on a question still waiting is refused (judgement_in_band_refused); an operator judges with `melra judge <taskId> --judgement <judgementId> --verdict yes|no|cannot_tell`. A workflow's human_input node whose answeredBy is operator is answered only by an operator, with `melra workflow advance <workflowId> --input <nodeId>=<value>`; an answer you send for one is refused (workflow_input_in_band_refused).";
 
 export function createMcpServer(
   runtime: MelraRuntime,
@@ -403,7 +403,7 @@ export function createMcpServer(
     {
       title: "Inspect MELRA task status",
       description:
-        "Read one task's stored record by taskId (from melra_plan, or a workflow node's taskIds), in any status, policy_blocked and cancelled included, without changing or waiting on it. Returns the task: status, policyDecision, any approval challenge and approvedBy, denial when an operator denied it (reason, note, channel, approver, decidedAt; a task cancelled with melra_task_cancel has none), the redacted request and result, error, attempts, receiptIds, certificateId, judgements (with judgedBy once answered), kernelChecks (what MELRA checks itself after a file change or memory delete, beside requiredEvidence) and timestamps. Use it to re-check a task after melra_task_cancel or from another session, or to re-read a pending challenge. Use melra_receipt for receipts and the certificate, and melra_workflow_status for a whole workflow run.",
+        "Read one task's stored record by taskId (from melra_plan, or a workflow node's taskIds), in any status, policy_blocked and cancelled included, without changing or waiting on it. Returns the task: status, policyDecision, any approval challenge, approvalDecision (an approver's yes recorded for a task still awaiting_approval: melra_execute with no approval runs it) and approvedBy (once it ran on one), denial when an operator denied it (reason, note, channel, approver, decidedAt; a task cancelled with melra_task_cancel has none), the redacted request and result, error, attempts, receiptIds, certificateId, judgements (with judgedBy once answered), kernelChecks (what MELRA checks itself after a file change or memory delete, beside requiredEvidence) and timestamps. Use it to re-check a task after melra_task_cancel or from another session, or to re-read a pending challenge. Use melra_receipt for receipts and the certificate, and melra_workflow_status for a whole workflow run.",
       inputSchema: MelraTaskStatusInputSchema,
       annotations: {
         readOnlyHint: true,
@@ -415,7 +415,7 @@ export function createMcpServer(
     async (input) => {
       const parsed = MelraTaskStatusInputSchema.parse(input);
       ownTask(parsed.taskId);
-      return toolResult(runtime.controller.status(parsed.taskId));
+      return toolResult(runtime.controller.view(parsed.taskId));
     },
   );
 

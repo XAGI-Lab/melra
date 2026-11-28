@@ -941,6 +941,8 @@ also bounds how long a task waits on a `semantic` question before it settles
 closed. A
 `policy.json` that `melra init` or `melra setup` wrote with an earlier release
 pins `"approvalTtlMs": 300000`; delete that key to get the mode's default.
+A change to `approvalTtlMs` applies to decisions made after it: one already
+made keeps the window it was given, or a shorter new one.
 
 A bare name in `allowedCommands` runs the program `PATH` finds there, looked
 up only in `PATH` entries outside the workspace: an entry inside it (a
@@ -1945,7 +1947,9 @@ closing every door it owns:
   operator recorded from a process in enforced mode, with
   [`melra approve`](#approving-from-the-command-line),
   [`melra console`](#approving-in-a-browser) or `melra run`'s prompt in a
-  terminal; until then the answer is `approval_awaiting_operator`, and
+  terminal; until then the answer is `approval_awaiting_operator`, and once
+  it is recorded `melra_task_status` shows `approvalDecision` on the still
+  `awaiting_approval` task and a bare `melra_execute` runs it; the answer is
   `approval_expired` once the challenge has expired, which means plan the task
   again. A developer-mode `melra approve` on a task with no phrase records
   nothing and fails with `approval_needs_enforced_mode`. The same holds for an
@@ -2047,11 +2051,25 @@ decision bound to exactly what was shown; it does not run anything. The agent
 that planned the task runs it with `melra_execute`, and the decision lets it.
 
 ```bash
-melra approve 3f2a…        # shows the effect, asks y/N
-melra approve 3f2a… --yes  # no question, for a script that already decided
-melra approve 3f2a… --deny # cancel the task instead
-melra approve 3f2a… --deny --reason too_broad --note "Only report.txt"
+melra approve 3f2a91c0        # shows the effect, asks y/N
+melra approve 3f2a91c0 --json # off a terminal: prints the contract and its renderDigest, exit 3
+melra approve 3f2a91c0 --yes --render <renderDigest>  # no question, for a script that reviewed that contract
+melra approve 3f2a91c0 --deny # cancel the task instead
+melra approve 3f2a91c0 --deny --reason too_broad --note "Only report.txt"
 ```
+
+A decision records the policy digest and mode it was made under, and a
+server running another policy file or mode refuses it with
+`approval_policy_changed`: run `melra approve` with the same `MELRA_POLICY`
+and `--mode` as the server.
+
+`--yes` asks nothing, so it approves only the contract named by `--render`,
+the `renderDigest` the review printed: a digest that is not the task's
+contract is refused (`approval_render_mismatch`) and nothing is recorded. A
+bare `--yes` decides nothing; it prints the contract and the digest to pin,
+and exits 3. The task id is the full id or a prefix of at least eight
+characters (`task_id_too_short`), so a one- or two-character prefix pasted
+from someone else's message names nothing.
 
 A deny records the operator's no and cancels the task in one write.
 `--reason` is one of `wrong_target`, `too_broad`, `not_now`, `never` and
@@ -2241,7 +2259,11 @@ one character, which would draw over the lines around them) as `\uXXXX`, as
 the terminal screen does. Approve and Deny show as not yet active, and ignore clicks, for a second
 after they appear and after the page is raised, refocused or scrolled (in a
 browser an agent's runtime is attached to, after it is scrolled or resized:
-see below).
+see below). The summary cuts a value at 160 characters and leaves out the
+middle of a long list; when it has cut or left out anything, the page names
+those fields and keeps Approve off until the full contract has been opened.
+`melra approve` and `melra run` name them too, and ask a second y/N before a
+yes covers what the summary did not show.
 
 An approve or a deny is a POST from that page: its `Origin` must be the
 console's own, it carries the session as `Authorization: Bearer`, its body is

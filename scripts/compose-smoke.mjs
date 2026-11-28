@@ -107,7 +107,9 @@ const commands = {
     "--json",
   ],
   plan: (what) => [...sdk, what],
-  approve: (taskId) => [
+  // Off a terminal: prints the contract and its renderDigest, exit 3.
+  review: (taskId) => [...compose, "exec", "-T", "melra", "node", "/opt/melra/dist/bin.js", "approve", taskId, "--json"],
+  approve: (taskId, render) => [
     ...compose,
     "exec",
     "-T",
@@ -117,6 +119,8 @@ const commands = {
     "approve",
     taskId,
     "--yes",
+    "--render",
+    render,
     "--json",
   ],
   execute: (taskId) => [...sdk, taskId],
@@ -133,7 +137,8 @@ if (process.argv[2] === "--agent") {
     commands.agentNetwork,
     commands.probe("<bridge-gateway>", "<agent-gateway>", "<port>"),
     commands.plan("write"),
-    commands.approve("<task-id>"),
+    commands.review("<task-id>"),
+    commands.approve("<task-id>", "<render-digest>"),
     commands.execute("<task-id>"),
     commands.plan("command"),
     commands.plan("into"),
@@ -160,6 +165,11 @@ async function smoke() {
       throw new Error(`compose_smoke_failed: docker ${args.join(" ")} exited ${result.status ?? result.error}`);
     }
     return result.stdout;
+  };
+  // --yes approves only the contract it names: review it, then pin its digest.
+  const approve = (taskId) => {
+    const { renderDigest } = JSON.parse(docker(commands.review(taskId), false));
+    return docker(commands.approve(taskId, renderDigest));
   };
   // A port on the host that answers when nothing is in the way, on every
   // address. public-connect dials it at docker0's gateway, which any container
@@ -191,7 +201,7 @@ async function smoke() {
     if (planned.status !== "awaiting_approval" || planned.approval?.phrase !== undefined) {
       throw new Error(`compose_smoke_not_enforced:${JSON.stringify(planned)}`);
     }
-    const approved = JSON.parse(docker(commands.approve(planned.id)));
+    const approved = JSON.parse(approve(planned.id));
     if (approved.decision?.channel !== "out_of_band") {
       throw new Error(`compose_smoke_not_out_of_band:${JSON.stringify(approved)}`);
     }
@@ -208,7 +218,7 @@ async function smoke() {
     // A command runs as the image's node, which MELRA's data keeps out, and
     // changes what MELRA made; MELRA then writes in what the command made.
     const command = JSON.parse(docker(commands.plan("command")));
-    docker(commands.approve(command.id));
+    approve(command.id);
     const ran = JSON.parse(docker(commands.execute(command.id)));
     // The live output: the stored task keeps stdout redacted.
     const confined = String(ran.output?.stdout ?? "").trim();
@@ -220,7 +230,7 @@ async function smoke() {
       throw new Error(`compose_smoke_command_cannot_edit:${JSON.stringify(edited)}`);
     }
     const into = JSON.parse(docker(commands.plan("into")));
-    docker(commands.approve(into.id));
+    approve(into.id);
     const wrote = JSON.parse(docker(commands.execute(into.id)));
     if (wrote.task?.status !== "verified_success") {
       throw new Error(`compose_smoke_melra_cannot_write_into:${JSON.stringify(wrote.task)}`);

@@ -20,7 +20,8 @@ against a remote endpoint: the probe effect is verified by reading it back
 One exception, in enforced mode only: the agent may not approve anything there,
 so the L3 checks need an operator's yes. When the suite spawned the server
 itself, it gives that yes by running its own
-`melra approve <task-id> --yes --mode enforced` (approver
+`melra approve <task-id> --json --mode enforced` to read the contract's
+digest and `melra approve <task-id> --yes --render <digest> --mode enforced` (approver
 `cli:melra-conformance`), which writes the decision through the local data
 directory, so that run is no longer purely black-box. Against `--url` there is
 no such approver, and an enforced endpoint stops at L2.

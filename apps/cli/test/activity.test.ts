@@ -510,7 +510,11 @@ describe("melra tasks, status, and watch", { timeout: 60_000 }, () => {
     const { task } = await run(fileWrite);
     // Answered in band while the deployment was in developer mode; enforced
     // now, that answer counts for nothing and a second one is refused.
-    await execute(process.execPath, [entry, "approve", task.id, "--yes"], options).catch(() => undefined);
+    const shown = await execute(process.execPath, [entry, "approve", task.id, "--json"], options).catch(
+      (error: { stdout: string }) => error,
+    );
+    const render = (JSON.parse(shown.stdout) as { renderDigest: string }).renderDigest;
+    await execute(process.execPath, [entry, "approve", task.id, "--yes", "--render", render], options).catch(() => undefined);
     const enforced = { ...options, env: { ...options.env, MELRA_MODE: "enforced" } };
     const status = await statusOf(enforced);
     expect([status.awaitingApproval, status.expiredApprovals]).toEqual([0, 1]);

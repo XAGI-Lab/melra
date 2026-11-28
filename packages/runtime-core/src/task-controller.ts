@@ -306,6 +306,11 @@ export class TaskController {
     return this.policy.mode === "enforced";
   }
 
+  /** Whether unsafe-local mode has lifted every approval. */
+  get unhinged(): boolean {
+    return this.policy.unhinged;
+  }
+
   constructor(
     private readonly store: SqliteStore,
     private readonly policy: LocalPolicy,
@@ -556,6 +561,24 @@ export class TaskController {
   }
 
   /**
+   * The task as its agent reads it: `status`, plus `approvalDecision` while it
+   * awaits approval and a yes recorded for it is usable, so an agent waiting
+   * on an operator learns it may execute. Never saved. The render and policy
+   * digests stay out: the agent needs to know that it may run, not what to
+   * approve with.
+   */
+  view(taskId: string): TaskRecord {
+    const task = this.status(taskId);
+    const decision = task.status === "awaiting_approval" ? this.approvalDecision(task) : undefined;
+    if (decision === undefined) return task;
+    const { channel, approver, decidedAt, usableUntil } = decision;
+    return {
+      ...task,
+      approvalDecision: { channel, approver, decidedAt, ...(usableUntil === undefined ? {} : { usableUntil }) },
+    };
+  }
+
+  /**
    * Refuses an authenticated client a task someone else planned: an id is a
    * handle, not a credential. `caller` is as `callerRef` names it; the
    * operator is refused nothing, and an id naming no task is left for the
@@ -680,9 +703,11 @@ export class TaskController {
         );
       }
       if (decision !== undefined) {
-        // A row a 0.3.0-alpha.17 or alpha.18 `melra approve` or console wrote
-        // holds the plain digest of the same contract.
-        if (decision.renderDigest !== render && decision.renderDigest !== sha256(contract)) {
+        // `render` is the plain digest only for a challenge a 0.3.0-alpha.17
+        // or alpha.18 process issued (approvalRender); a current challenge's
+        // decision must hold the keyed one, which a writer of the database
+        // without the payload key cannot compute.
+        if (decision.renderDigest !== render) {
           // Sent by whoever recorded the decision, not by this caller.
           throw await this.refuse("approval_render_mismatch", {
             kind: "task",
@@ -691,12 +716,18 @@ export class TaskController {
           });
         }
         if (!this.usable(task, decision)) throw new Error("approval_expired");
+        if (this.policyChanged(decision)) throw new Error("approval_policy_changed");
         // Out of band is this kernel's claim to make, not the row's: a
         // developer-mode kernel cannot vouch that nothing the agent touched
         // wrote it, whatever mode the process that recorded it was in. The
         // digest is keyed, whichever form the row holds.
+        // The decision as an older MELRA reading this task knows it: its
+        // terms stay on the decision's own row.
         task.approvedBy = {
-          ...decision,
+          approvalId: decision.approvalId,
+          taskId: decision.taskId,
+          approver: decision.approver,
+          decidedAt: decision.decidedAt,
           renderDigest: bound,
           channel:
             decision.channel === "out_of_band" && this.policy.mode === "enforced"
@@ -1169,6 +1200,9 @@ export class TaskController {
     // right: a task that declared a semantic predicate stays parked with its
     // cause unchanged (#54).
     if (asksSemantic(request)) return { task };
+    // A read whose yes was spent on a dispatch cut off: nothing to ask a
+    // provider, and only a new plan and a new yes run it again.
+    if (task.error === "approval_consumed") return { task };
     if (request.reconciliation.length === 0) {
       return park("reconciliation_not_declared");
     }
@@ -1710,11 +1744,17 @@ export class TaskController {
       if (committed !== undefined) return committed.task;
     }
     const effect = classified.effect;
-    task.status = effect === "read" ? "planned" : "recovery_required";
+    // A read that ran on a person's yes spent it when it was dispatched: run
+    // again, one yes would send it twice. Parked for an operator, who plans
+    // it again for a new yes, rather than retried on the old one.
+    const consumed = effect === "read" && task.approvedBy !== undefined;
+    task.status = effect === "read" && !consumed ? "planned" : "recovery_required";
     task.error =
-      effect === "read"
-        ? "interrupted_read_ready_for_retry"
-        : "interrupted_mutation_requires_reconciliation";
+      effect !== "read"
+        ? "interrupted_mutation_requires_reconciliation"
+        : consumed
+          ? "approval_consumed"
+          : "interrupted_read_ready_for_retry";
     task.updatedAt = now();
     if (task.status === "recovery_required") task.parkedAt = task.updatedAt;
     // Cut off mid-flight, read or change, it may have run, so it is paid for
@@ -1725,7 +1765,7 @@ export class TaskController {
     // A crash mid-flight is the same unknown a dropped reply is, so a task
     // that declared how to settle one gets asked here rather than waiting for
     // someone to notice it. Still parked if the provider cannot answer.
-    if (task.status === "recovery_required" && request.reconciliation.length > 0) {
+    if (task.status === "recovery_required" && !consumed && request.reconciliation.length > 0) {
       return (await this.reconcile(task.id)).task;
     }
     return task;
@@ -1794,13 +1834,18 @@ export class TaskController {
       }
       if (Date.parse(task.approval!.expiresAt) <= Date.now()) throw new Error("approval_expired");
       if (renderDigest !== current) return undefined;
+      const decidedAt = now();
       const decision: ApprovalDecision = {
         approvalId: task.approval!.approvalId,
         taskId,
         renderDigest,
         channel: this.policy.mode === "enforced" ? "out_of_band" : "in_band",
         approver,
-        decidedAt: now(),
+        decidedAt,
+        // Fixed now, so a TTL raised later does not lengthen this yes.
+        usableUntil: new Date(Date.parse(decidedAt) + approvalTtl(this.policy)).toISOString(),
+        ...(this.policy.digest === undefined ? {} : { policyDigest: this.policy.digest }),
+        mode: this.policy.mode,
       };
       if (!this.store.recordApprovalDecision(decision)) throw new Error("approval_already_decided");
       return decision;
@@ -1911,11 +1956,20 @@ export class TaskController {
   approvalDecision(task: TaskRecord): ApprovalDecision | undefined {
     if (task.approval === undefined) return undefined;
     const decision = this.store.getApprovalDecision(task.approval.approvalId);
-    if (decision === undefined || !this.usable(task, decision)) return undefined;
+    if (decision === undefined || !this.usable(task, decision) || this.policyChanged(decision)) return undefined;
     // In enforced mode an in-band row is no decision at all, so a workflow node
     // waits for an operator and is re-planned at expiry instead of failing on
     // every advance.
     return this.policy.mode === "enforced" && decision.channel !== "out_of_band" ? undefined : decision;
+  }
+
+  /**
+   * Whether the policy or mode in force now is not the one the decision was
+   * made under: a yes is given under the rules then in force, and is not
+   * carried into others. A decision an older MELRA recorded names neither.
+   */
+  private policyChanged(decision: ApprovalDecision): boolean {
+    return decision.mode !== undefined && (decision.mode !== this.policy.mode || decision.policyDigest !== this.policy.digest);
   }
 
   /**
@@ -1924,10 +1978,15 @@ export class TaskController {
    */
   private usable(task: TaskRecord, decision: ApprovalDecision): boolean {
     const decidedAt = Date.parse(decision.decidedAt);
+    // The deadline stamped when the yes was given; a TTL lowered since
+    // shortens it, a TTL raised since does not lengthen it. A decision an
+    // older MELRA recorded has none, and is judged by the current TTL.
+    const current = decidedAt + approvalTtl(this.policy);
+    const until = decision.usableUntil === undefined ? current : Math.min(Date.parse(decision.usableUntil), current);
     return (
       task.approval !== undefined &&
       decidedAt <= Date.parse(task.approval.expiresAt) &&
-      Date.now() < decidedAt + approvalTtl(this.policy)
+      Date.now() < until
     );
   }
 

@@ -1330,8 +1330,9 @@ function printRun(execution: ExecutionResult, enforced: boolean): number {
  * however old it is. A prefix two tasks share, or none, is refused rather than
  * guessed; an empty argument, as an unset `"$ID"` sends, names nothing.
  */
-function resolveTaskId(melra: MelraRuntime, given: string, status?: TaskStatus): string {
+function resolveTaskId(melra: MelraRuntime, given: string, status?: TaskStatus, minimum = 0): string {
   if (given.length >= 36) return given;
+  if (given.length < minimum) throw new Error(`task_id_too_short:${given}: give at least ${minimum} characters of the id`);
   const matching = given === "" ? [] : melra.store.taskIdsWithPrefix(given, 2, status);
   if (matching.length > 1) throw new Error(`task_id_ambiguous:${given}`);
   if (matching.length === 0) throw new Error(`task_not_found:${given}`);
@@ -1343,13 +1344,15 @@ function resolveTaskId(melra: MelraRuntime, given: string, status?: TaskStatus):
  * the agent that planned it runs it, and the decision lets it.
  */
 async function approveCommand(args: string[], env: CliEnvironment): Promise<number> {
-  const [given] = positionals(args, ["--reason", "--note"]);
+  const [given] = positionals(args, ["--reason", "--note", "--render"]);
   if (given === undefined) throw new Error("approve requires a task ID");
   const reason = argument("--reason", args);
   const note = argument("--note", args);
+  const pinned = argument("--render", args);
   if (!args.includes("--deny") && (reason !== undefined || note !== undefined)) {
     throw new Error("--reason and --note go with --deny");
   }
+  if (args.includes("--deny") && pinned !== undefined) throw new Error("--render goes with an approval, not --deny");
   // Checked before anything opens the store, so a typo records nothing.
   const denial = DenialInputSchema.parse({
     ...(reason === undefined ? {} : { reason }),
@@ -1358,7 +1361,9 @@ async function approveCommand(args: string[], env: CliEnvironment): Promise<numb
   const approver = approverLabel(env);
   const melra = await runtime(env);
   try {
-    const taskId = resolveTaskId(melra, given, "awaiting_approval");
+    // A short prefix, pasted from someone else's text, can name a task
+    // nobody meant: eight characters at least.
+    const taskId = resolveTaskId(melra, given, "awaiting_approval", 8);
     const view = melra.controller.approvalView(taskId);
     if (args.includes("--deny")) {
       // Not cancelled when another process started it in the meantime.
@@ -1366,19 +1371,26 @@ async function approveCommand(args: string[], env: CliEnvironment): Promise<numb
       output({ task });
       return task.status === "cancelled" ? 0 : 1;
     }
+    // --yes asks nothing, so it approves only the contract the caller
+    // reviewed, named by its digest: without one, a yes binds whatever this
+    // command read, which nobody saw. Refused with the digest to pin and the
+    // contract it covers.
+    const review = (next: string) => {
+      output({ taskId, renderDigest: view.renderDigest, contract: view.contract, next });
+      return 3;
+    };
+    if (args.includes("--yes") && pinned === undefined) {
+      return review(`approve_render_unpinned: --yes approves only a reviewed contract; rerun with --yes --render ${view.renderDigest}`);
+    }
     if (!args.includes("--yes")) {
       if (!process.stdin.isTTY || args.includes("--json")) {
-        output({
-          taskId,
-          renderDigest: view.renderDigest,
-          contract: view.contract,
-          next: "rerun with --yes to approve, or in a terminal to be asked",
-        });
-        return 3;
+        return review(`rerun with --yes --render ${view.renderDigest} to approve, or in a terminal to be asked`);
       }
       if (!(await confirmInTerminal(view))) return 1;
     }
-    const decision = await melra.controller.decide(taskId, view.renderDigest, approver);
+    // A pinned digest that is not this contract's is refused by decide
+    // (approval_render_mismatch).
+    const decision = await melra.controller.decide(taskId, pinned ?? view.renderDigest, approver);
     if (decision.channel === "in_band") {
       process.stderr.write(
         "Recorded in band: this process is in developer mode. Set \"mode\": \"enforced\" in the policy file (or MELRA_MODE=enforced) for the server and for this command. An enforced server will not run on this decision: a workflow plans the step again once the challenge expires; a single task needs --deny and planning again.\n",
@@ -1604,7 +1616,7 @@ Usage:
   melra probe [--socket <path> | --url <loopback-url>] [--public <host:port>]
               [--local <host:port>] [--json]
   melra run --request <task.json>
-  melra approve <task-id> [--yes] [--json]
+  melra approve <task-id> [--yes --render <digest>] [--json]
   melra approve <task-id> --deny [--reason wrong_target|too_broad|not_now|never|other]
                                  [--note <text>]
   melra judge <task-id> --judgement <id> --verdict yes|no|cannot_tell
@@ -2077,7 +2089,7 @@ async function main(): Promise<void> {
       return;
     }
     case "approve":
-      rejectUnknownFlags(args, ["--yes", "--deny", "--reason", "--note", "--json"]);
+      rejectUnknownFlags(args, ["--yes", "--render", "--deny", "--reason", "--note", "--json"]);
       process.exitCode = await approveCommand(args, env);
       return;
     case "judge":

