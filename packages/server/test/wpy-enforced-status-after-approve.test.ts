@@ -30,7 +30,7 @@ async function home() {
   const base = mkdtempSync(join(tmpdir(), "melra-wpy-status-"));
   directories.push(base);
   mkdirSync(join(base, "ws"));
-  writeFileSync(join(base, "policy.json"), JSON.stringify({ mode: "enforced" }));
+  writeFileSync(join(base, "policy.json"), JSON.stringify({ mode: "enforced", sandbox: { use: "if-available" } }));
   const open = async () => {
     const runtime = await createMelraRuntime({
       workspaceRoot: join(base, "ws"),
